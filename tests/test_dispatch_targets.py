@@ -63,6 +63,34 @@ class TestLocalProcessDispatchTarget:
         with patch("orchestune.dispatch_targets._is_pid_alive", return_value=True):
             assert target.is_complete(DispatchHandle(pid=123)) is False
 
+    def test_launch_with_local_cmd_templates(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="agy --issue {issue_number} --subtask '{subtask_id}' --branch {branch_name} --path {worktree_path}",
+        )
+        with patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(
+                _task(issue_number=42, subtask_id="sub-x"),
+                "claude/issue-42-sub-x",
+                tmp_path / "wt",
+            )
+
+        mock_popen.assert_called_once()
+        args, _ = mock_popen.call_args
+        cmd = args[0]
+        assert cmd == [
+            "agy",
+            "--issue",
+            "42",
+            "--subtask",
+            "sub-x",
+            "--branch",
+            "claude/issue-42-sub-x",
+            "--path",
+            str(tmp_path / "wt"),
+        ]
+
 
 class TestClaudeCodeCloudRoutineDispatchTarget:
     def _response(
@@ -278,3 +306,10 @@ class TestBuildDispatchTarget:
         monkeypatch.delenv("ORCHESTUNE_ROUTINE_TOKEN", raising=False)
         target = build_dispatch_target("cloud-routine", None, None, tmp_path / "logs")
         assert isinstance(target, LocalProcessDispatchTarget)
+
+    def test_local_with_local_cmd_propagates_to_target(self, tmp_path):
+        target = build_dispatch_target(
+            "local", None, None, tmp_path / "logs", local_cmd="agy {issue_number}"
+        )
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == "agy {issue_number}"
