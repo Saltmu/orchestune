@@ -84,6 +84,7 @@ orchestune-dispatch
 | `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or just preview them (dry-run). |
 | `--max-concurrent <int>` | `2` | Maximum number of subtask agents running concurrently. |
 | `--dispatch-target {local,cloud-routine}` | `local` | Target environment to launch agents. Run locally or dispatch to Claude Code Cloud Routine. |
+| `--local-cmd <template>` | - | When using `--dispatch-target local`, a command template for dispatching to a local CLI (e.g. `agy`). Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}` (e.g. `agy --issue {issue_number}`). If omitted, the default dry-run stub command is used. |
 | `--parent-issue <int>` | - | The parent GitHub Issue number that coordinates this plan. Created sub-issues will link to this parent. |
 | `--deviation-buffer-lines <int>` | `50` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
 | `--max-launches-per-window <int>` | `10` | Rate limiting: maximum number of agent launches allowed in `--window-seconds`. |
