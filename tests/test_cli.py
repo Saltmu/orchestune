@@ -27,6 +27,19 @@ def test_cli_delegates_to_dispatch():
         assert sys.argv == ["orchestune", "--apply"]
 
 
+def test_cli_delegates_to_bootstrap():
+    from orchestune.cli import main
+
+    test_args = ["orchestune", "bootstrap"]
+    with (
+        patch("sys.argv", test_args),
+        patch("orchestune.bootstrap.main") as mock_bootstrap_main,
+    ):
+        main()
+        mock_bootstrap_main.assert_called_once()
+        assert sys.argv == ["orchestune"]
+
+
 def test_cli_no_args_exits(capsys):
     from orchestune.cli import main
 

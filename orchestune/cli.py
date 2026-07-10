@@ -8,6 +8,7 @@ def main() -> None:
         print("  dag       DAG validation tool")
         print("  dispatch  Dispatcher/scheduler tool")
         print("  setup     Setup skills symlinks for AI assistants")
+        print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -25,6 +26,10 @@ def main() -> None:
         from orchestune.setup_skills import setup_skills
 
         setup_skills()
+    elif cmd == "bootstrap":
+        from orchestune.bootstrap import main as bootstrap_main
+
+        bootstrap_main()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
