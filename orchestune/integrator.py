@@ -41,6 +41,7 @@ class Integrator:
         if self.config.ci_command is None:
             self.config.ci_command = ["./scripts/local-ci.sh"]
         self.original_root = Path(self.config.repository_root).resolve()
+        self.config.repository_root = self.original_root
         self.failed_reasons: dict[str, str] = {}
 
     def run(self) -> dict:
