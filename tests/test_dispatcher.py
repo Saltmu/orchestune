@@ -1734,6 +1734,13 @@ class TestBranchStacking:
 
             mock_list.side_effect = list_issues_by_label_mock
 
+            def kill_mock(pid, sig):
+                if sig == 0:
+                    raise ProcessLookupError()
+                return None
+
+            mock_kill.side_effect = kill_mock
+
             # subprocess.runのモック動作
             def run_mock(args, **kwargs):
                 if "merge-base" in args:
@@ -1750,7 +1757,7 @@ class TestBranchStacking:
             run_dispatch_cycle(config)
 
         # プロセスがkillされ、rebaseされ、再起動されたことを確認
-        mock_kill.assert_called_with(12345, 9)  # SIGKILL (or SIGTERM)
+        mock_kill.assert_any_call(12345, 9)  # SIGKILL (or SIGTERM)
         # rebase実行の引数チェック
         rebase_call = mock_run.call_args_list[1]
         assert "rebase" in rebase_call.args[0]
@@ -1880,9 +1887,12 @@ class TestBranchStacking:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_rebase.os.kill"),
+            patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatcher.subprocess.run") as mock_run,
         ):
+            mock_kill.side_effect = lambda pid, sig: (
+                ProcessLookupError() if sig == 0 else None
+            )
             # 1. git merge-base -> 戻り値 1
             # 2. git rebase -> 戻り値 128 (競合発生で失敗)
             # 3. git rebase --abort -> 戻り値 0
