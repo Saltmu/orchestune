@@ -9,6 +9,7 @@ from orchestune.dag import FootprintConflict
 from orchestune.dispatch_targets import DispatchHandle, LocalProcessDispatchTarget
 from orchestune.dispatcher import (
     ActiveWorktree,
+    CompletedWorktree,
     CycleReport,
     DispatcherConfig,
     RunState,
@@ -149,6 +150,7 @@ class TestCreateWorktreeAndLaunch:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
             patch("orchestune.dispatcher.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
@@ -188,6 +190,7 @@ class TestCreateWorktreeAndLaunch:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
             patch("orchestune.dispatcher.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
@@ -216,7 +219,10 @@ class TestCreateWorktreeAndLaunch:
             external_url="https://claude.ai/code/session_1",
             branch_name="claude/issue-1-task-1",
         )
-        with patch("orchestune.dispatcher.subprocess.run") as mock_run:
+        with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
+            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -232,6 +238,73 @@ class TestCreateWorktreeAndLaunch:
         assert result.pid is None
         assert result.external_id == "session_1"
         assert result.external_url == "https://claude.ai/code/session_1"
+
+    @patch("orchestune.dispatcher._branch_exists", return_value=True)
+    def test_apply_reuses_existing_branch_without_overwriting(
+        self, mock_exists, tmp_path
+    ):
+        task = _task(1)
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        with (
+            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            mock_popen.return_value.pid = 4242
+            result = create_worktree_and_launch(
+                task,
+                branch_name="claude/issue-1-task-1",
+                worktree_root=tmp_path / "worktrees",
+                dispatch_target=dispatch_target,
+                apply=True,
+            )
+        assert result.launched is True
+        # git worktree add に -B や -b が含まれていない（既存ブランチのチェックアウト）ことを確認
+        worktree_add_call = mock_run.call_args_list[1]
+        args = worktree_add_call.args[0]
+        assert "add" in args
+        assert "-B" not in args
+        assert "-b" not in args
+        assert "claude/issue-1-task-1" in args
+
+
+class TestBranchExists:
+    @patch("orchestune.dispatcher.subprocess.run")
+    def test_branch_exists_local(self, mock_run):
+        # 1回目の subprocess.run が returncode=0 を返せば True
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+        from orchestune.dispatcher import _branch_exists
+
+        assert _branch_exists("my-branch") is True
+        mock_run.assert_called_once()
+
+    @patch("orchestune.dispatcher.subprocess.run")
+    def test_branch_exists_remote(self, mock_run):
+        # 1回目が returncode=1（ローカル存在せず）、2回目が returncode=0（リモート存在）
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=1),
+            subprocess.CompletedProcess(args=[], returncode=0),
+        ]
+        from orchestune.dispatcher import _branch_exists
+
+        assert _branch_exists("my-branch") is True
+        assert mock_run.call_count == 2
+
+    @patch("orchestune.dispatcher.subprocess.run")
+    def test_branch_does_not_exist(self, mock_run):
+        # 1回目も2回目も returncode=1（存在せず）
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=1),
+            subprocess.CompletedProcess(args=[], returncode=1),
+        ]
+        from orchestune.dispatcher import _branch_exists
+
+        assert _branch_exists("my-branch") is False
+        assert mock_run.call_count == 2
 
 
 class TestRunDispatchCycle:
@@ -281,6 +354,7 @@ class TestRunDispatchCycle:
         )
         queued_issue = _issue(1)
         with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
@@ -1027,6 +1101,7 @@ class TestRunDispatchCycleCompletion:
         )
         queued_issue = _issue(2, footprint=("src/bar.py",), subtask_id="task-b")
         with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
@@ -1453,6 +1528,7 @@ class TestRunDispatchCycleBlockedPromotion:
         )
         issue = _issue(1)
         with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
@@ -2221,6 +2297,7 @@ class TestLaunchOrderingCrashSafety:
                 raise RuntimeError("simulated crash during label transition")
 
         with (
+            patch("orchestune.dispatcher._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
@@ -2431,6 +2508,72 @@ class TestPreventDuplicateSessions:
         assert mock_popen.call_count == 0
 
         # ラベル遷移とコメント追加が行われていること
+        mock_remove_label.assert_any_call(1, "status:queued")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert "重複起動防止" in mock_add_comment.call_args[0][1]
+
+    def test_ls_remote_failure_transitions_to_blocked_human_review(self, tmp_path):
+        """ls-remoteが例外等で失敗した場合は、安全のため重複とみなして起動をスキップする。"""
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        # すでに過去の完了履歴があり、かつオープンなPRがあるタスク
+        queued_issue = _issue(1, subtask_id="task-1")
+        run_state = RunState(
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=1,
+                    subtask_id="task-1",
+                    branch="claude/issue-1-task-1",
+                    started_at=100.0,
+                    completed_at=200.0,
+                    commit_sha="old-sha",
+                )
+            ]
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatcher.github.list_open_prs",
+                return_value=[
+                    PrRecord(
+                        number=101,
+                        head_ref="claude/issue-1-task-1",
+                        changed_files=(),
+                        review_decision="",
+                        is_ci_passing=False,
+                        closes_issue_numbers=(1,),
+                    )
+                ],
+            ),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
+            patch(
+                "orchestune.dispatcher.subprocess.run",
+                side_effect=subprocess.CalledProcessError(
+                    returncode=128, cmd="git ls-remote"
+                ),
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        # 起動はスキップされ、status:blocked-human-review ラベルが付与されている
+        assert report.selected == []
         mock_remove_label.assert_any_call(1, "status:queued")
         mock_add_label.assert_any_call(1, "status:blocked-human-review")
         mock_add_comment.assert_called_once()
