@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import orchestune.dispatch_scoring as dispatch_scoring
 from orchestune.dispatch_scoring import (
     Task,
     compute_priority_score,
@@ -230,6 +231,26 @@ class TestQuotaAvailable:
 
 
 class TestComputePriorityScore:
+    def test_zulu_created_at_is_normalized_for_legacy_fromisoformat(self, monkeypatch):
+        class LegacyDatetime(datetime):
+            @classmethod
+            def fromisoformat(cls, date_string):
+                if date_string.endswith("Z"):
+                    raise ValueError("Invalid isoformat string")
+                return super().fromisoformat(date_string)
+
+        monkeypatch.setattr(dispatch_scoring, "datetime", LegacyDatetime)
+        task = _task(1, created_at="2023-01-01T00:00:00Z")
+
+        score = compute_priority_score(
+            task,
+            [task],
+            RunState(active_worktrees={}, launch_history=[]),
+            now=1_700_000_000.0,
+        )
+
+        assert score == pytest.approx(2.0)
+
     def test_higher_priority_scores_higher(self):
         now = 1_700_000_000.0
         state = RunState(active_worktrees={}, launch_history=[])
