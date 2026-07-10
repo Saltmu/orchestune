@@ -61,3 +61,32 @@ class TestRunState:
         path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))
         loaded = load_run_state(path)
         assert loaded.completed_worktrees == []
+
+    def test_load_backwards_compatibility_for_base_branch(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        old_data = {
+            "active_worktrees": {
+                "10": {
+                    "issue_number": 10,
+                    "branch": "claude/issue-10-x",
+                    "worktree_path": "worktrees/claude-issue-10-x",
+                    "pid": 12345,
+                    "started_at": 1700000000.0,
+                    "declared_footprint": ["src/foo.py"],
+                }
+            },
+            "launch_history": [],
+            "completed_worktrees": [
+                {
+                    "issue_number": 11,
+                    "subtask_id": "task-b",
+                    "branch": "claude/issue-11-task-b",
+                    "started_at": 1700000000.0,
+                    "completed_at": 1700003600.0,
+                }
+            ],
+        }
+        path.write_text(json.dumps(old_data))
+        loaded = load_run_state(path)
+        assert loaded.active_worktrees["10"].base_branch == "origin/main"
+        assert loaded.completed_worktrees[0].base_branch == "origin/main"

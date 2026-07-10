@@ -96,8 +96,11 @@ class TestIntegrator:
         # 統合ブランチからmainへのPRが作成され、成功時の統合作業はここで完結する
         # （最終マージは常に人間が行う）。
         mock_create_pr.assert_called_once()
-        assert mock_create_pr.call_args.kwargs["head"] == "integration/temp-main"
-        assert mock_create_pr.call_args.kwargs["base"] == "main"
+        assert (
+            mock_create_pr.call_args.kwargs["head"]
+            == "integration/temp-parent-issue-100"
+        )
+        assert mock_create_pr.call_args.kwargs["base"] == "parent/issue-100"
         assert "task-1" in mock_create_pr.call_args.kwargs["body"]
         assert "人間が行ってください" in mock_create_pr.call_args.kwargs["body"]
 
@@ -632,7 +635,7 @@ class TestIntegrator:
         # 状態を記録したりはしない（自動マージ等の後続処理が無くなったため）。
         assert len(calls) == 1
         assert calls[0]["merged_subtask_ids"] == ["task-1"]
-        assert calls[0]["temp_branch"] == "integration/temp-main"
+        assert calls[0]["temp_branch"] == "integration/temp-parent-issue-100"
         assert calls[0]["pr_number"] == 315
 
         # ブランチのforce pushは行われる（起動セッションがレビューできるように）
