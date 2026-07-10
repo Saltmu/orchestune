@@ -420,8 +420,9 @@ def _promote_blocked_tasks(
 @contextlib.contextmanager
 def file_lock(lock_path: Path) -> Iterator[None]:
     if fcntl is None:
-        yield
-        return
+        raise RuntimeError(
+            "fcntl is not supported on this platform. File locking is required."
+        )
 
     lock_fd = None
     try:
@@ -434,12 +435,10 @@ def file_lock(lock_path: Path) -> Iterator[None]:
         raise RuntimeError(
             f"Another instance is already running (locked on {lock_path})"
         ) from None
-    except Exception as e:
-        print(f"Warning: Failed to acquire lock: {e}", file=sys.stderr)
+    except Exception:
         if lock_fd:
             lock_fd.close()
-        yield
-        return
+        raise
 
     # #227: ロック取得成功後のbody実行は別のtry/finallyに分離する。
     # ロック取得(mkdir/open/flock)の例外処理と同じtry内でyieldしていると、
