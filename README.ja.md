@@ -60,8 +60,13 @@ poetry add --group dev git+https://github.com/Saltmu/ochestune.git
     ]
   }
   ```
-- **ルールファイル**（Claude Code、Cursor、Codex CLI向け）: 必要なスキルフォルダ（例: `skills/orchestune/`）を導入先プロジェクトの`skills/`ディレクトリにコピーし、そのプロジェクトの`.clauderules` / `.cursorrules` / `.codexrules`（または`CLAUDE.md`）に、コピーした`SKILL.md`へのエントリを追加します。ローカル環境固有の絶対パスではなく、相対パスで記述してください。
-- **グローバルスキルディレクトリ**: プロジェクトごとの設定なしにどこでも使えるようにしたい場合は、スキルフォルダをエージェントのグローバルスキルディレクトリに配置（またはシンボリックリンク作成）します（例: Claude Codeの場合 `~/.claude/skills/orchestune/`。他のエージェントについては、それぞれのドキュメントで該当パスを確認してください）。
+- **プロジェクトスキル**（Claude Code、Codex CLI向け）: 両エージェントとも、`.claude/skills/<name>/`・`.codex/skills/<name>/`配下に置かれたスキルをネイティブに自動検出します（`SKILL.md`はエージェント間で共通のフォーマットなので、同じファイルがそのまま両方で使えます）。導入先プロジェクトで、スキルフォルダをコピーまたはシンボリックリンクしてください：
+  ```bash
+  ln -s ../path/to/cloned/ochestune/skills/orchestune .claude/skills/orchestune
+  ln -s ../path/to/cloned/ochestune/skills/orchestune .codex/skills/orchestune
+  ```
+  本リポジトリ自身も同様の構成を採用しています。動作例として`.claude/skills/`・`.codex/skills/`を参照してください。
+- **グローバルスキルディレクトリ**: プロジェクトごとの設定なしにどこでも使えるようにしたい場合は、スキルフォルダをエージェントのグローバルスキルディレクトリに配置（またはシンボリックリンク作成）します（例: Claude Codeの場合 `~/.claude/skills/orchestune/`、Codex CLIの場合 `~/.codex/skills/orchestune/`）。
 
 ---
 
