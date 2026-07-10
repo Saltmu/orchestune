@@ -10,6 +10,7 @@ python = "^3.12"
 pyyaml = "^6.0.3"
 
 [tool.poetry.scripts]
+orchestune = "orchestune.cli:main"
 orchestune-dispatch = "orchestune.dispatcher:main"
 orchestune-dag = "orchestune.dag:main"
 
