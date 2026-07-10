@@ -34,15 +34,21 @@ def setup_skills() -> None:
     home = Path.home()
 
     targets = {
-        "Claude Code": home / ".claude" / "skills",
-        "Codex CLI": home / ".codex" / "skills",
-        "Antigravity": home / ".gemini" / "config" / "skills",
+        "Claude Code": (home / ".claude", home / ".claude" / "skills"),
+        "Codex CLI": (home / ".codex", home / ".codex" / "skills"),
+        "Antigravity": (home / ".gemini", home / ".gemini" / "config" / "skills"),
     }
 
     skills_to_link = ["orchestune", "orchestune-dispatch", "local-ci-developer"]
+    setup_any = False
 
-    for assistant_name, target_dir in targets.items():
+    for assistant_name, (base_dir, target_dir) in targets.items():
+        if not base_dir.is_dir():
+            print(f"Skipping {assistant_name} (base directory {base_dir} not found).")
+            continue
+
         print(f"Setting up skills for {assistant_name}...")
+        setup_any = True
 
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -94,4 +100,10 @@ def setup_skills() -> None:
                     file=sys.stderr,
                 )
 
-    print("\nSetup completed.")
+    if not setup_any:
+        print(
+            "\nNo supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory."
+        )
+        print("Please ensure at least one assistant is installed before running setup.")
+    else:
+        print("\nSetup completed.")
