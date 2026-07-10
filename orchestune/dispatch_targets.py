@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -81,15 +82,27 @@ class LocalProcessDispatchTarget(DispatchTarget):
             [Task, Path], list[str]
         ] = default_dry_run_command_builder,
         log_dir: str | Path = Path("logs"),
+        local_cmd: str | None = None,
     ):
         self._command_builder = command_builder
         self._log_dir = Path(log_dir)
+        self._local_cmd = local_cmd
 
     def launch(
         self, task: Task, branch_name: str, worktree_path: Path
     ) -> DispatchHandle:
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        cmd = self._command_builder(task, worktree_path)
+        if self._local_cmd:
+            formatted_cmd = self._local_cmd.format(
+                issue_number=task.issue_number,
+                subtask_id=task.subtask_id or "",
+                branch_name=branch_name,
+                worktree_path=str(worktree_path),
+            )
+            cmd = shlex.split(formatted_cmd)
+        else:
+            cmd = self._command_builder(task, worktree_path)
+
         slug = branch_name.replace("/", "-")
         log_path = self._log_dir / f"{slug}.log"
         with open(log_path, "ab") as log_fh:
@@ -223,6 +236,7 @@ def build_dispatch_target(
     routine_id: str | None,
     routine_token: str | None,
     log_dir: str | Path,
+    local_cmd: str | None = None,
 ) -> DispatchTarget:
     """#215: CLI引数・環境変数からディスパッチターゲットを組み立てる。
 
@@ -241,4 +255,4 @@ def build_dispatch_target(
             "ローカルのダミー起動にフォールバックします。",
             file=sys.stderr,
         )
-    return LocalProcessDispatchTarget(log_dir=log_dir)
+    return LocalProcessDispatchTarget(log_dir=log_dir, local_cmd=local_cmd)
