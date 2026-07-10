@@ -39,10 +39,10 @@ If you want your agent to run `orchestune-dag` / `orchestune-dispatch` inside a 
 
 ```bash
 # Globally, with pipx (recommended)
-pipx install git+https://github.com/Saltmu/ochestune.git
+pipx install git+https://github.com/Saltmu/orchestune.git
 
 # Or as a dev dependency of the target project (Poetry)
-poetry add --group dev git+https://github.com/Saltmu/ochestune.git
+poetry add --group dev git+https://github.com/Saltmu/orchestune.git
 ```
 
 This makes `orchestune-dag` and `orchestune-dispatch` runnable as plain commands from that project's directory.
@@ -55,14 +55,14 @@ The agent needs to know the `orchestune` / `orchestune-dispatch` / `local-ci-dev
   ```json
   {
     "entries": [
-      { "path": "../path/to/cloned/ochestune/skills" }
+      { "path": "../path/to/cloned/orchestune/skills" }
     ]
   }
   ```
 - **Project skills** (Claude Code, Codex CLI): both agents natively auto-discover skills placed under `.claude/skills/<name>/` and `.codex/skills/<name>/` respectively (`SKILL.md` is a cross-agent format, so the same file works for both). In the target project, copy or symlink the skill folder there, e.g.:
   ```bash
-  ln -s ../path/to/cloned/ochestune/skills/orchestune .claude/skills/orchestune
-  ln -s ../path/to/cloned/ochestune/skills/orchestune .codex/skills/orchestune
+  ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
+  ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
   ```
   This repo does the same for its own skills — see `.claude/skills/` and `.codex/skills/` for a working example.
 - **Global skill directory**: place or symlink the skill folder under your agent's global skills directory so it's available in every project without per-project setup (e.g. Claude Code: `~/.claude/skills/orchestune/`; Codex CLI: `~/.codex/skills/orchestune/`).
