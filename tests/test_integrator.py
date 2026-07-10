@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch_targets import DispatchHandle
 from orchestune.github import IssueRecord, PrRecord
-from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator import Integrator, IntegratorConfig, _worktree_dir_name
+
+
+@pytest.fixture(autouse=True)
+def _no_real_integration_lock():
+    """既定の`repository_root=Path(".")`（このリポジトリ自身に解決される）を
+    使うテストがxdistの並列ワーカー間で本物のOS flockを取り合い、意図せず
+    `failed_to_acquire_lock`にならないよう、file_lockを既定で無効化する。
+    ロックの実挙動自体を検証する`TestIntegratorWorktreeConcurrency`では、
+    同名のfixtureで上書きして本物のfile_lockを使う。"""
+    with patch(
+        "orchestune.integrator.file_lock",
+        side_effect=lambda _path: contextlib.nullcontext(),
+    ):
+        yield
 
 
 def _issue(
@@ -953,16 +971,20 @@ class TestIntegrator:
 class TestIntegratorWorktreeIsolation:
     """#254: repository_rootの一時差し替え・ワークツリー分離・クリーンアップの検証。"""
 
+    @patch("orchestune.integrator.file_lock")
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch("orchestune.integrator.github.create_pull_request")
     def test_cleanup_uses_original_root_not_cwd(
-        self, mock_create_pr, mock_open_prs, mock_run, mock_list
+        self, mock_create_pr, mock_open_prs, mock_run, mock_list, mock_file_lock
     ):
         # repository_rootをカレントディレクトリ以外に明示指定した場合でも、
         # 一時ワークツリーの削除はoriginal_root（呼び出し時のrepository_root）
         # を基準に行われるべきで、決め打ちのPath(".")であってはならない。
+        # `/custom/repo/root`は実在しない（書き込み権限もない）パスのため、
+        # file_lock自体はモックし、subprocess呼び出しのみを検証対象とする。
+        mock_file_lock.side_effect = lambda _path: contextlib.nullcontext()
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
         mock_open_prs.return_value = []
@@ -985,14 +1007,16 @@ class TestIntegratorWorktreeIsolation:
         assert len(remove_calls) == 1
         assert remove_calls[0].kwargs["cwd"] == str(custom_root.resolve())
 
+    @patch("orchestune.integrator.file_lock")
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.remove_label")
     @patch("orchestune.integrator.github.add_label")
     @patch("orchestune.integrator.github.add_comment")
     def test_cleanup_runs_even_when_merge_fails(
-        self, mock_comment, mock_add, mock_remove, mock_run, mock_list
+        self, mock_comment, mock_add, mock_remove, mock_run, mock_list, mock_file_lock
     ):
+        mock_file_lock.side_effect = lambda _path: contextlib.nullcontext()
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
 
@@ -1178,3 +1202,134 @@ class TestIntegratorRelativeRepositoryRoot:
             # worktreeの作成先と参照先がずれた場合に発生していた「二重化されたパス」が
             # できていないことも確認する。
             assert not (workspace / "repo" / "repo").exists()
+
+
+class TestIntegratorWorktreeConcurrency:
+    """#51: 固定worktreeパスが並行実行時に相互削除・競合する不具合の回帰テスト。"""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_integration_lock(self):
+        """このクラスはロック機構自体を検証するため、モジュールレベルの
+        同名fixture（file_lockを無効化する）を上書きし、本物のfile_lockを
+        使わせる（何もパッチしない）。"""
+        yield
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    def test_different_parent_issues_use_different_worktree_paths(
+        self, mock_create_pr, mock_open_prs, mock_run, mock_list, tmp_path
+    ):
+        issue_a = _issue(
+            1, labels=("status:done",), subtask_id="task-1", parent_number=100
+        )
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", parent_number=200
+        )
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a, issue_b]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 1
+
+        custom_root = tmp_path
+
+        integrator_a = Integrator(
+            IntegratorConfig(
+                apply=True, parent_issue_number=100, repository_root=custom_root
+            )
+        )
+        res_a = integrator_a.run()
+        add_calls_a = [
+            call
+            for call in mock_run.call_args_list
+            if "worktree" in call.args[0] and "add" in call.args[0]
+        ]
+
+        mock_run.reset_mock()
+
+        integrator_b = Integrator(
+            IntegratorConfig(
+                apply=True, parent_issue_number=200, repository_root=custom_root
+            )
+        )
+        res_b = integrator_b.run()
+        add_calls_b = [
+            call
+            for call in mock_run.call_args_list
+            if "worktree" in call.args[0] and "add" in call.args[0]
+        ]
+
+        assert res_a["status"] == "success"
+        assert res_b["status"] == "success"
+        assert len(add_calls_a) == 1
+        assert len(add_calls_b) == 1
+        path_a = add_calls_a[0].args[0][3]
+        path_b = add_calls_b[0].args[0][3]
+        assert path_a != path_b
+        assert "temp-parent-issue-100" in path_a
+        assert "temp-parent-issue-200" in path_b
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    def test_concurrent_run_on_same_target_fails_without_touching_worktree(
+        self, mock_run, mock_list, tmp_path
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+
+        worktree_name = _worktree_dir_name("integration/temp-main")
+        lock_path = tmp_path / "worktrees" / f"{worktree_name}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            config = IntegratorConfig(apply=True, repository_root=tmp_path)
+            integrator = Integrator(config)
+            res = integrator.run()
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+
+        assert res["status"] == "failed_to_acquire_lock"
+        worktree_calls = [
+            call for call in mock_run.call_args_list if "worktree" in call.args[0]
+        ]
+        assert worktree_calls == []
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    def test_preexisting_non_worktree_directory_is_not_deleted(
+        self, mock_run, mock_list, tmp_path
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+
+        worktree_name = _worktree_dir_name("integration/temp-main")
+        stray_dir = tmp_path / "worktrees" / worktree_name
+        stray_dir.mkdir(parents=True)
+        marker = stray_dir / "important-file.txt"
+        marker.write_text("do not delete me\n", encoding="utf-8")
+
+        config = IntegratorConfig(apply=True, repository_root=tmp_path)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "failed_to_create_temp_worktree"
+        assert stray_dir.exists()
+        assert marker.read_text(encoding="utf-8") == "do not delete me\n"
+
+        add_calls = [
+            call
+            for call in mock_run.call_args_list
+            if "worktree" in call.args[0] and "add" in call.args[0]
+        ]
+        assert add_calls == []

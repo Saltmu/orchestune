@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -8,8 +10,20 @@ from pathlib import Path
 
 from orchestune import github
 from orchestune.dag import SubTask, build_dag
-from orchestune.dispatcher import Task, parse_task_from_issue
+from orchestune.dispatcher import Task, file_lock, parse_task_from_issue
 from orchestune.integration_coordinator import IntegrationCoordinator
+
+_UNSAFE_WORKTREE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _worktree_dir_name(temp_branch: str) -> str:
+    """#51: 統合対象（`temp_branch`）ごとに一意なworktreeディレクトリ名を作る。
+
+    親Issueごとに`temp_branch`が既に一意なため（`IntegratorConfig.__post_init__`
+    参照）、これをそのままファイルシステム安全な名前へ変換するだけで、
+    異なる統合対象が同じworktreeパスを共有しないようにできる。
+    """
+    return _UNSAFE_WORKTREE_NAME_CHARS.sub("-", temp_branch)
 
 
 @dataclass
@@ -55,129 +69,170 @@ class Integrator:
             return {"status": "no_done_tasks", "merged": []}
 
         temp_worktree_path = None
+        lock_ctx: contextlib.AbstractContextManager[None] = contextlib.nullcontext()
         if self.config.apply:
+            worktree_name = _worktree_dir_name(self.config.temp_branch)
             temp_worktree_path = (
-                self.config.repository_root / "worktrees" / "integration-temp"
+                self.config.repository_root / "worktrees" / worktree_name
             )
-            try:
-                subprocess.run(
-                    ["git", "worktree", "prune"],
-                    cwd=str(self.config.repository_root),
-                    capture_output=True,
-                )
-                if temp_worktree_path.exists():
-                    import shutil
-
-                    try:
-                        shutil.rmtree(temp_worktree_path)
-                    except Exception:
-                        pass
-                subprocess.run(
-                    [
-                        "git",
-                        "worktree",
-                        "add",
-                        str(temp_worktree_path),
-                        self.config.base_branch,
-                    ],
-                    cwd=str(self.config.repository_root),
-                    check=True,
-                    capture_output=True,
-                )
-                self.config.repository_root = temp_worktree_path
-            except (subprocess.CalledProcessError, OSError) as e:
-                return {
-                    "status": "failed_to_create_temp_worktree",
-                    "error": f"Failed to create temp worktree: {e}",
-                }
+            # #51: ロックファイルはworktree本体の外側（兄弟ファイル）に置き、
+            # rmtree/worktree addのサイクルをまたいでロック自体が存続するようにする。
+            lock_path = (
+                self.config.repository_root / "worktrees" / f"{worktree_name}.lock"
+            )
+            lock_ctx = file_lock(lock_path)
 
         try:
-            if not self._create_temp_branch():
-                return {
-                    "status": "failed_to_create_temp_branch",
-                    "error": "Failed to create temp branch",
-                }
+            with lock_ctx:
+                if self.config.apply and temp_worktree_path is not None:
+                    worktree_error = self._create_temp_worktree(temp_worktree_path)
+                    if worktree_error is not None:
+                        return worktree_error
 
-            merged_tasks, failed_tasks = self._merge_and_test_tasks(active_done_tasks)
+                try:
+                    if not self._create_temp_branch():
+                        return {
+                            "status": "failed_to_create_temp_branch",
+                            "error": "Failed to create temp branch",
+                        }
 
-            if merged_tasks and not failed_tasks:
-                if self.config.apply:
-                    try:
-                        subprocess.run(
-                            [
-                                "git",
-                                "push",
-                                "--force",
-                                "origin",
-                                self.config.temp_branch,
-                            ],
-                            cwd=str(self.config.repository_root),
-                            check=True,
-                            capture_output=True,
-                        )
-                    except subprocess.CalledProcessError as pe:
-                        print(
-                            f"Warning: Failed to push temp branch: {pe.stderr.decode()}",
-                            file=sys.stderr,
-                        )
+                    merged_tasks, failed_tasks = self._merge_and_test_tasks(
+                        active_done_tasks
+                    )
 
-                    integration_pr_number = self._ensure_integration_pr(merged_tasks)
+                    if merged_tasks and not failed_tasks:
+                        if self.config.apply:
+                            try:
+                                subprocess.run(
+                                    [
+                                        "git",
+                                        "push",
+                                        "--force",
+                                        "origin",
+                                        self.config.temp_branch,
+                                    ],
+                                    cwd=str(self.config.repository_root),
+                                    check=True,
+                                    capture_output=True,
+                                )
+                            except subprocess.CalledProcessError as pe:
+                                print(
+                                    f"Warning: Failed to push temp branch: {pe.stderr.decode()}",
+                                    file=sys.stderr,
+                                )
 
-                    # 意味的レビュー（LLMによる統合diffのバグ検知）はfire-and-forgetで
-                    # 起動するのみ。結果は統合PRへのコメントとして残るだけで、Python側は
-                    # 合否の追跡・自動マージ等の後続処理を一切行わない（最終マージは常に人間）。
-                    semantic_review_dispatched = False
-                    if (
-                        self.config.enable_semantic_review
-                        and self.config.coordinator is not None
-                        and integration_pr_number is not None
-                    ):
-                        try:
-                            self.config.coordinator.dispatch_review(
-                                temp_branch=self.config.temp_branch,
-                                base_branch=self.config.base_branch,
-                                pr_number=integration_pr_number,
-                                parent_issue_number=self.config.parent_issue_number,
-                                merged_subtask_ids=merged_tasks,
+                            integration_pr_number = self._ensure_integration_pr(
+                                merged_tasks
                             )
-                            semantic_review_dispatched = True
-                        except Exception as e:
-                            print(
-                                f"Warning: Failed to dispatch semantic review: {e}",
-                                file=sys.stderr,
-                            )
+
+                            # 意味的レビュー（LLMによる統合diffのバグ検知）は
+                            # fire-and-forgetで起動するのみ。結果は統合PRへの
+                            # コメントとして残るだけで、Python側は合否の追跡・
+                            # 自動マージ等の後続処理を一切行わない
+                            # （最終マージは常に人間）。
+                            semantic_review_dispatched = False
+                            if (
+                                self.config.enable_semantic_review
+                                and self.config.coordinator is not None
+                                and integration_pr_number is not None
+                            ):
+                                try:
+                                    self.config.coordinator.dispatch_review(
+                                        temp_branch=self.config.temp_branch,
+                                        base_branch=self.config.base_branch,
+                                        pr_number=integration_pr_number,
+                                        parent_issue_number=self.config.parent_issue_number,
+                                        merged_subtask_ids=merged_tasks,
+                                    )
+                                    semantic_review_dispatched = True
+                                except Exception as e:
+                                    print(
+                                        f"Warning: Failed to dispatch semantic review: {e}",
+                                        file=sys.stderr,
+                                    )
+
+                            return {
+                                "status": "success",
+                                "merged": merged_tasks,
+                                "integration_pr_number": integration_pr_number,
+                                "semantic_review_dispatched": semantic_review_dispatched,
+                            }
+                        return {"status": "success", "merged": merged_tasks}
 
                     return {
-                        "status": "success",
+                        "status": "partial_success" if merged_tasks else "failure",
                         "merged": merged_tasks,
-                        "integration_pr_number": integration_pr_number,
-                        "semantic_review_dispatched": semantic_review_dispatched,
+                        "failed": failed_tasks,
+                        "failed_reasons": self.failed_reasons,
                     }
-                return {"status": "success", "merged": merged_tasks}
+                finally:
+                    if temp_worktree_path:
+                        self._cleanup_temp_worktree(temp_worktree_path)
+        except RuntimeError as e:
+            # #51: file_lock()が別の実行中インスタンスを検知した場合の
+            # ロック取得失敗のみをここで捕捉する。
+            return {"status": "failed_to_acquire_lock", "error": str(e)}
 
-            return {
-                "status": "partial_success" if merged_tasks else "failure",
-                "merged": merged_tasks,
-                "failed": failed_tasks,
-                "failed_reasons": self.failed_reasons,
-            }
-        finally:
-            if temp_worktree_path:
+    def _create_temp_worktree(self, temp_worktree_path: Path) -> dict | None:
+        """`temp_worktree_path`にgit worktreeを作成する。
+
+        成功時は`None`を、失敗時はrun()がそのまま返すべきエラー辞書を返す。
+        成功時、`self.config.repository_root`を新しいworktreeのパスへ
+        差し替える副作用を持つ。
+        """
+        try:
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=str(self.config.repository_root),
+                capture_output=True,
+            )
+            if temp_worktree_path.exists():
+                # #51: 所有権確認なしにディレクトリを削除しない。
+                # 実際にgit worktreeらしい（`.git`エントリを持つ）場合のみ削除する。
+                if not (temp_worktree_path / ".git").exists():
+                    return {
+                        "status": "failed_to_create_temp_worktree",
+                        "error": (
+                            "Refusing to remove non-worktree directory "
+                            f"at {temp_worktree_path}"
+                        ),
+                    }
+                import shutil
+
                 try:
-                    subprocess.run(
-                        [
-                            "git",
-                            "worktree",
-                            "remove",
-                            "--force",
-                            str(temp_worktree_path),
-                        ],
-                        cwd=str(self.original_root),
-                        capture_output=True,
-                        check=True,
-                    )
+                    shutil.rmtree(temp_worktree_path)
                 except Exception:
                     pass
+            subprocess.run(
+                [
+                    "git",
+                    "worktree",
+                    "add",
+                    str(temp_worktree_path),
+                    self.config.base_branch,
+                ],
+                cwd=str(self.config.repository_root),
+                check=True,
+                capture_output=True,
+            )
+            self.config.repository_root = temp_worktree_path
+            return None
+        except (subprocess.CalledProcessError, OSError) as e:
+            return {
+                "status": "failed_to_create_temp_worktree",
+                "error": f"Failed to create temp worktree: {e}",
+            }
+
+    def _cleanup_temp_worktree(self, temp_worktree_path: Path) -> None:
+        try:
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(temp_worktree_path)],
+                cwd=str(self.original_root),
+                capture_output=True,
+                check=True,
+            )
+        except Exception:
+            pass
 
     def _ensure_integration_pr(self, merged_tasks: list[str]) -> int | None:
         """統合ブランチ(`temp_branch`)から`base_branch`へのPRを作成/再利用する。
