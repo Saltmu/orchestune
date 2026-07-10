@@ -15,6 +15,7 @@ from orchestune.github import (
     close_issue,
     create_pull_request,
     get_issue_labels,
+    is_branch_merged_into,
     list_issues_by_label,
     list_open_prs,
     list_remote_branches,
@@ -215,6 +216,48 @@ class TestListRemoteBranches:
             )
             branches = list_remote_branches()
         assert branches == ["origin/main", "origin/feat/foo"]
+
+
+class TestIsBranchMergedInto:
+    def test_returns_true_for_matching_merged_pr(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='[{"number": 42}]', stderr=""
+            )
+
+            result = is_branch_merged_into("claude/issue-1-task-1", "main")
+
+        assert result is True
+        assert mock_run.call_args.args[0] == [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--head",
+            "claude/issue-1-task-1",
+            "--base",
+            "main",
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+
+    def test_returns_false_when_no_matching_merged_pr_exists(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+
+            assert is_branch_merged_into("claude/issue-1-task-1", "main") is False
+
+    @pytest.mark.parametrize("head,base", [("--evil", "main"), ("feat/x", "bad..base")])
+    def test_rejects_invalid_refs(self, head, base):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                is_branch_merged_into(head, base)
+            mock_run.assert_not_called()
 
 
 class TestListOpenPrs:
