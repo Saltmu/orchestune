@@ -5,7 +5,8 @@ description = "Multi-agent implementation orchestrator (DAG construction, dispat
 authors = ["sshioyama"]
 packages = [{include = "orchestune"}]
 include = [
-    { path = "skills", format = ["sdist", "wheel"] }
+    { path = "skills/orchestune", format = ["sdist", "wheel"] },
+    { path = "skills/orchestune-dispatch", format = ["sdist", "wheel"] }
 ]
 
 [tool.poetry.dependencies]
