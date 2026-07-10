@@ -144,7 +144,7 @@ def _wait_seconds(task: Task, run_state: RunState, now: float) -> float:
     last_attempt = _last_attempt_at(task, run_state)
     if last_attempt is not None:
         return max(0.0, now - last_attempt)
-    created = datetime.fromisoformat(task.created_at)
+    created = datetime.fromisoformat(task.created_at.replace("Z", "+00:00"))
     return max(0.0, now - created.timestamp())
 
 
