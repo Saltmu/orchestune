@@ -16,7 +16,7 @@ Orchestuneは、**Agentic AI開発向けのスキル**（Claude Code、Antigravi
 2. **インテリジェントなディスパッチとスケジューリング**
    - 専用のGit worktreeを切り出し、各サブタスク用の環境を構築してエージェントを起動します。
    - 最大同時実行数（`--max-concurrent`）を制限し、時間窓内の最大起動回数（`--max-launches-per-window` / `--window-seconds`）に基づいてAPIのバーストレートを制御します。
-   - エージェントの実行先として、ローカル環境でのコマンド実行およびClaude Code Cloud Routineへのディスパッチ（`--dispatch-target`）をサポートしています。
+   - エージェントの実行先として、ローカル環境でのコマンド実行およびClaude Code Cloud Routineへのディスパッチ（`--dispatch-target`）をサポートしています。現時点でサポートしているクラウド実行先はClaude Code Cloud Routineのみです（将来的にはCodex Cloud等、他のクラウドエージェント基盤への対応も予定しています）。
 
 3. **自己修復（ステートリカバリ）機能**
    - GitHub ActionsなどのステートレスなCI/CD環境（ローカルの状態ファイル `run_state.json` が消失する環境）に最適化されています。
@@ -129,6 +129,24 @@ orchestune-dispatch
 このコマンド1つで**統合およびリベースの調整**も行われます。サブタスクのPRがオープンされると、以降の`orchestune-dispatch`実行時にそれを検知し、下流ブランチへのリベース・マージやセマンティックレビューが自動的にトリガーされます。個別のコマンドは不要です。
 
 `--dispatch-target cloud-routine`を使う場合は、事前に`ORCHESTUNE_ROUTINE_ID`と`ORCHESTUNE_ROUTINE_TOKEN`環境変数を設定してください。これによりディスパッチャーがClaude Code Cloud Routine経由でエージェントを起動できるようになります。
+
+#### Claude Code Cloud Routineのセットアップ手順
+
+現時点で`--dispatch-target cloud-routine`が対応しているクラウド実行先は**Claude Code Cloud Routineのみ**です（将来的にはCodex Cloud等、他のクラウドエージェント基盤への対応も予定しています）。
+
+1. [claude.ai/code/routines](https://claude.ai/code/routines) を開き、「New routine」からルーチンを新規作成します。プロンプト本文は簡単な説明で構いません（実際の作業指示はディスパッチャーが`fire`のたびに`text`として都度送信します）。
+2. 「Repositories」に、ディスパッチ対象のGitHubリポジトリを追加します（ルーチンは実行のたびにデフォルトブランチからこのリポジトリをcloneします）。
+3. 「Select a trigger」→「Add another trigger」から**API**トリガーを追加し、ルーチンを保存します。
+4. 保存後、同じ画面に表示されるURL（`https://api.anthropic.com/v1/claude_code/routines/<routine_id>/fire`）から`routine_id`を控え、「Generate token」でAPIトークンを発行します。トークンは発行時にしか表示されないため、必ずこの時点で安全な場所に保存してください。
+5. 控えた`routine_id`とトークンを環境変数として設定します：
+   ```bash
+   export ORCHESTUNE_ROUTINE_ID="<routine_id>"
+   export ORCHESTUNE_ROUTINE_TOKEN="<token>"
+   ```
+
+ディスパッチャーが生成するブランチ名は常に`claude/issue-<Issue番号>-<subtask_id>`という`claude/`プレフィックス付きの形式のため、ルーチン側のデフォルトのブランチpush制限（`claude/`プレフィックスのみpush許可）を変更する必要はありません。
+
+トークンの再発行・失効、ネットワークアクセス制限など、より詳しい仕様は[Claude Code公式ドキュメント（Routines）](https://code.claude.com/docs/en/routines.md)を参照してください。
 
 #### 主なオプション:
 - `--apply` / `--no-apply`: 実際にアクションを実行するか、ドライラン（確認のみ）にするかを指定。
