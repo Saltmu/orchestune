@@ -6,7 +6,7 @@
 
 ## セットアップ
 
-Python 3.12以上、Poetry、GitHub CLI（`gh auth status`）がインストールされていることを確認し、依存関係をインストールします。
+Python 3.12以上、Poetry、GitHub CLI（`gh auth status`）、[gitleaks](https://github.com/gitleaks/gitleaks#installing)がインストールされていることを確認し、依存関係をインストールします。
 
 ```bash
 poetry install
@@ -29,3 +29,4 @@ poetry run pytest
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
 3. **Pytest カバレッジチェック**: テストが通過し、カバレッジが75%以上であることを保証
+4. **シークレット・ローカルパススキャン**（`gitleaks`）: シークレットや `file:///home/<user>/...` のような絶対ローカルパスの漏洩を含むコミット・プッシュをブロックします。設定は[`.gitleaks.toml`](.gitleaks.toml)を参照してください。ローカル未導入でもCIで必ず検証されます。

@@ -1,0 +1,24 @@
+title = "Orchestune gitleaks config"
+
+[extend]
+useDefault = true
+
+# Catches incidents like local absolute paths (e.g. file:///home/<user>/...)
+# leaking a contributor's username/directory layout into committed docs.
+[[rules]]
+id = "local-unix-home-path"
+description = "Absolute local Unix home directory path"
+regex = '''(file://)?/home/[a-zA-Z0-9_-]+/'''
+tags = ["local-path"]
+
+[[rules]]
+id = "local-windows-user-path"
+description = "Absolute local Windows user directory path"
+regex = '''[A-Za-z]:\\Users\\[a-zA-Z0-9_-]+\\'''
+tags = ["local-path"]
+
+[[rules]]
+id = "local-macos-home-path"
+description = "Absolute local macOS home directory path"
+regex = '''/Users/[a-zA-Z0-9_-]+/'''
+tags = ["local-path"]

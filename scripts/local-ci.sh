@@ -17,8 +17,16 @@ poetry run ruff check
 echo "[3/4] Checking types (mypy)..."
 poetry run mypy orchestune tests
 
-echo "[4/4] Running tests with coverage (pytest)..."
+echo "[4/5] Running tests with coverage (pytest)..."
 poetry run pytest --cov=orchestune --cov-fail-under=75
+
+echo "[5/5] Scanning for secrets and local paths (gitleaks)..."
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks detect --source . --no-git --redact -v
+else
+  echo "gitleaks not installed locally, skipping (CI will still enforce this)."
+  echo "Install: https://github.com/gitleaks/gitleaks#installing"
+fi
 
 echo "========================================="
 echo "✨ Local CI passed successfully!"
