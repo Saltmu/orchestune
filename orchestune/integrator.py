@@ -22,10 +22,17 @@ class IntegratorConfig:
     apply: bool = False
     # Integratorの仕事は「統合ブランチ(temp_branch)を作成しCI通過を確認した上で、
     # base_branchへのPRを作成/再利用する」までに限定される。最終マージは常に人間が行う。
-    # 意味的レビュー（LLMによる統合diffのバグ検知）は`coordinator`が注入されている場合のみ
+    # 意味的レビュー（LLMによる統合diff of バグ検知）は`coordinator`が注入されている場合のみ
     # 実行され、結果は統合PRへのコメントとして残るのみで、自動マージ等は一切行わない。
     enable_semantic_review: bool = True
     coordinator: IntegrationCoordinator | None = None
+
+    def __post_init__(self) -> None:
+        if self.parent_issue_number is not None:
+            self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
+            self.temp_branch = (
+                f"integration/temp-parent-issue-{self.parent_issue_number}"
+            )
 
 
 class Integrator:
