@@ -88,3 +88,67 @@ def test_setup_skills_already_exists(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Skipped" in captured.out or "already exists" in captured.out
+
+
+def test_get_skills_source_dir_fallback_parent(tmp_path):
+    from orchestune.setup_skills import get_skills_source_dir
+
+    mock_cwd = tmp_path / "other_dir"
+    mock_cwd.mkdir()
+
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
+    fake_parent_skills = tmp_path / "site-packages" / "skills"
+    fake_parent_skills.mkdir()
+    (fake_parent_skills / "orchestune").mkdir()
+
+    with (
+        patch("pathlib.Path.cwd", return_value=mock_cwd),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        result = get_skills_source_dir()
+        assert result == fake_parent_skills
+
+
+def test_get_skills_source_dir_fallback_pkg_dir(tmp_path):
+    from orchestune.setup_skills import get_skills_source_dir
+
+    mock_cwd = tmp_path / "other_dir"
+    mock_cwd.mkdir()
+
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
+    fake_pkg_skills = tmp_path / "site-packages" / "orchestune" / "skills"
+    fake_pkg_skills.mkdir()
+    (fake_pkg_skills / "orchestune").mkdir()
+
+    with (
+        patch("pathlib.Path.cwd", return_value=mock_cwd),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        result = get_skills_source_dir()
+        assert result == fake_pkg_skills
+
+
+def test_get_skills_source_dir_not_found(tmp_path):
+    import pytest
+
+    from orchestune.setup_skills import get_skills_source_dir
+
+    mock_cwd = tmp_path / "other_dir"
+    mock_cwd.mkdir()
+
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
+    with (
+        patch("pathlib.Path.cwd", return_value=mock_cwd),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        with pytest.raises(FileNotFoundError):
+            get_skills_source_dir()
