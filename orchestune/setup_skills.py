@@ -39,7 +39,13 @@ def setup_skills() -> None:
         "Antigravity": (home / ".gemini", home / ".gemini" / "config" / "skills"),
     }
 
-    skills_to_link = ["orchestune", "orchestune-dispatch", "local-ci-developer"]
+    skills_to_link = sorted(
+        [
+            d.name
+            for d in skills_dir.iterdir()
+            if d.is_dir() and (d / "SKILL.md").is_file()
+        ]
+    )
     setup_any = False
 
     for assistant_name, (base_dir, target_dir) in targets.items():

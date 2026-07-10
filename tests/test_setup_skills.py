@@ -16,6 +16,7 @@ def test_setup_skills_creates_links(tmp_path):
     skills_dir = mock_source / "skills"
     skills_dir.mkdir()
     (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
 
     with (
         patch("pathlib.Path.home", return_value=mock_home),
@@ -48,6 +49,7 @@ def test_setup_skills_skips_when_no_parent(tmp_path):
     skills_dir = mock_source / "skills"
     skills_dir.mkdir()
     (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
 
     with (
         patch("pathlib.Path.home", return_value=mock_home),
@@ -73,6 +75,7 @@ def test_setup_skills_already_exists(tmp_path, capsys):
     skills_dir = mock_source / "skills"
     skills_dir.mkdir()
     (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
 
     # すでにターゲットが存在している状態を作る
     claude_dir = mock_home / ".claude" / "skills"
@@ -152,3 +155,39 @@ def test_get_skills_source_dir_not_found(tmp_path):
     ):
         with pytest.raises(FileNotFoundError):
             get_skills_source_dir()
+
+
+def test_setup_skills_dynamic_discovery(tmp_path):
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+
+    # 検出されるべきスキル（SKILL.mdあり）
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    (skills_dir / "skill-a").mkdir()
+    (skills_dir / "skill-a" / "SKILL.md").touch()
+    (skills_dir / "skill-b").mkdir()
+    (skills_dir / "skill-b" / "SKILL.md").touch()
+
+    # 検出されないべきスキル（SKILL.mdなし）
+    (skills_dir / "ignored-folder").mkdir()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        setup_skills()
+
+    # 検出されたスキルのみリンクされていることを検証
+    assert (mock_home / ".claude" / "skills" / "orchestune").is_symlink()
+    assert (mock_home / ".claude" / "skills" / "skill-a").is_symlink()
+    assert (mock_home / ".claude" / "skills" / "skill-b").is_symlink()
+    assert not (mock_home / ".claude" / "skills" / "ignored-folder").exists()
