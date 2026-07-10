@@ -1,14 +1,36 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch_targets import DispatchHandle
 from orchestune.github import IssueRecord, PrRecord
 from orchestune.integrator import Integrator, IntegratorConfig
+
+
+@pytest.fixture(autouse=True)
+def _stub_file_lock_by_default(request: pytest.FixtureRequest):
+    """大半のテストはsubprocessをモックしており実際のGit操作を行わないため、
+    テスト間で共通の`repository_root`（既定の`Path(".")`はこのプロジェクト自身の
+    checkoutに解決される）に対する実ファイルロックの取得を強制すると、並行実行
+    （pytest-xdist）時に無関係なテスト同士がロックを奪い合ってしまう。
+    ロックの実挙動そのものを検証するテストは`@pytest.mark.uses_real_file_lock`
+    を付けることでこのスタブを無効化する。
+    """
+    if request.node.get_closest_marker("uses_real_file_lock") is not None:
+        yield
+        return
+    with patch(
+        "orchestune.integrator.file_lock",
+        lambda _lock_path: contextlib.nullcontext(),
+    ):
+        yield
 
 
 def _issue(
@@ -749,21 +771,25 @@ class TestIntegrator:
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("pathlib.Path.exists")
-    def test_integrator_ci_env_injection(self, mock_exists, mock_run, mock_list):
+    def test_integrator_ci_env_injection(self, mock_run, mock_list):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
-
-        # .venv と bin_path の exists() を True にする
-        mock_exists.return_value = True
 
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=b"", stderr=b""
         )
 
-        config = IntegratorConfig(apply=True)
-        integrator = Integrator(config)
-        integrator.run()
+        # 実際の一時ディレクトリに .venv/bin を用意し、Path.exists()を
+        # グローバルにモックせず本物のファイルシステム状態で検証する
+        # （globalモックはworktreeパスの所有権チェックなど無関係な箇所にも
+        # 影響してしまうため）。
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".venv" / "bin").mkdir(parents=True)
+
+            config = IntegratorConfig(apply=True, repository_root=root)
+            integrator = Integrator(config)
+            integrator.run()
 
         # subprocess.run の引数をチェック
         ci_run_calls = [
@@ -1326,3 +1352,86 @@ class TestIntegratorDependencyFailureBlocking:
         assert "task-2" in res["blocked_reasons"]
         assert "task-1" not in res["blocked_reasons"]
         assert "task-1" in res["blocked_reasons"]["task-2"]
+
+
+class TestIntegratorWorktreeSafety:
+    """#51: 固定worktreeパスの共有によって並行実行が相互に破壊しあう不具合の回帰テスト。"""
+
+    def test_different_parent_issues_use_distinct_worktree_and_lock_paths(self):
+        # 親Issueごとに一意なworktree/lockパスが割り当てられ、異なる親Issueの
+        # Integrator同士が互いのworktreeを踏みつけないことを確認する。
+        integrator_a = Integrator(IntegratorConfig(apply=True, parent_issue_number=100))
+        integrator_b = Integrator(IntegratorConfig(apply=True, parent_issue_number=200))
+
+        assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
+        assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
+
+    @pytest.mark.uses_real_file_lock
+    def test_concurrent_run_on_same_integration_branch_is_serialized_not_destructive(
+        self,
+    ):
+        # 同じ統合ブランチに対する実行が既にロックを保持している間は、
+        # 後続の実行はworktreeを奪い取ったり削除したりせず、ロック済みとして
+        # 直ちに直列化（自身は何もせず終了）されるべき。
+        from orchestune.dispatcher import file_lock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = IntegratorConfig(
+                apply=True, parent_issue_number=42, repository_root=root
+            )
+            integrator = Integrator(config)
+            lock_path = integrator._worktree_lock_path()
+
+            with file_lock(lock_path):
+                issue_a = _issue(
+                    1,
+                    labels=("status:done",),
+                    subtask_id="task-1",
+                    parent_number=42,
+                )
+                with patch(
+                    "orchestune.integrator.github.list_issues_by_label",
+                    lambda label, *a, **k: [issue_a],
+                ):
+                    res = integrator.run()
+
+        assert res["status"] == "integration_branch_locked"
+
+    def test_reclaim_refuses_to_delete_unrecognized_directory(self):
+        # git worktreeとして認識できない（`.git`ポインタファイルを持たない）
+        # 既存ディレクトリは、所有権を確認できないため削除してはならない。
+        with tempfile.TemporaryDirectory() as tmp:
+            config = IntegratorConfig(apply=True, repository_root=Path(tmp))
+            integrator = Integrator(config)
+            foreign_dir = integrator._temp_worktree_path()
+            foreign_dir.mkdir(parents=True)
+            important_file = foreign_dir / "important_work.txt"
+            important_file.write_text("do not delete")
+
+            with pytest.raises(RuntimeError):
+                integrator._reclaim_worktree_path(foreign_dir)
+
+            assert important_file.exists()
+
+    def test_reclaim_removes_recognized_leftover_worktree(self):
+        # `.git`ポインタファイルを持つ、以前の実行が残した正規のリンクワークツリー
+        # であれば`git worktree remove`経由で安全に除去できる。
+        with tempfile.TemporaryDirectory() as tmp:
+            config = IntegratorConfig(apply=True, repository_root=Path(tmp))
+            integrator = Integrator(config)
+            leftover = integrator._temp_worktree_path()
+            leftover.mkdir(parents=True)
+            (leftover / ".git").write_text(
+                "gitdir: /somewhere/.git/worktrees/integration-temp\n"
+            )
+
+            with patch("orchestune.integrator.subprocess.run") as mock_run:
+                mock_run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=0
+                )
+                integrator._reclaim_worktree_path(leftover)
+                assert mock_run.call_count == 1
+                assert "remove" in mock_run.call_args.args[0]
+
+            assert not leftover.exists()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from pathlib import Path
 
 from orchestune import github
 from orchestune.dag import SubTask, build_dag
-from orchestune.dispatcher import Task, parse_task_from_issue
+from orchestune.dispatcher import Task, file_lock, parse_task_from_issue
 from orchestune.integration_coordinator import IntegrationCoordinator
 
 
@@ -45,6 +46,46 @@ class Integrator:
         self.failed_reasons: dict[str, str] = {}
         self.blocked_reasons: dict[str, str] = {}
 
+    def _worktree_key(self) -> str:
+        """`temp_branch`（親Issueごとに一意）を安全なファイル/ディレクトリ名に変換する。"""
+        return self.config.temp_branch.replace("/", "-")
+
+    def _temp_worktree_path(self) -> Path:
+        return (
+            self.original_root
+            / "worktrees"
+            / f"integration-temp-{self._worktree_key()}"
+        )
+
+    def _worktree_lock_path(self) -> Path:
+        return (
+            self.original_root / "worktrees" / ".locks" / f"{self._worktree_key()}.lock"
+        )
+
+    def _reclaim_worktree_path(self, path: Path) -> None:
+        """`path`に残存物があれば、所有権を確認した上でのみ除去する。
+
+        `git worktree add`によって作成されたリンクワークツリーは、直下に
+        gitdirへのポインタを記した`.git`ファイル（ディレクトリではない）を持つ。
+        これを確認できた場合に限り`git worktree remove`で除去し、それ以外の
+        予期しないディレクトリ（他プロセスの作業ディレクトリ等）は所有権を
+        確認できないため一切削除しない。
+        """
+        if not path.exists():
+            return
+        git_marker = path / ".git"
+        if not git_marker.is_file():
+            raise RuntimeError(
+                f"Refusing to remove unrecognized path (not a git worktree): {path}"
+            )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(path)],
+            cwd=str(self.original_root),
+            capture_output=True,
+        )
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+
     def run(self) -> dict:
         sorted_done_tasks = self._get_sorted_done_tasks()
         active_done_tasks = [
@@ -55,24 +96,30 @@ class Integrator:
         if not active_done_tasks:
             return {"status": "no_done_tasks", "merged": []}
 
+        if not self.config.apply:
+            return self._run_integration(active_done_tasks)
+
+        lock_path = self._worktree_lock_path()
+        try:
+            with file_lock(lock_path):
+                return self._run_integration(active_done_tasks)
+        except RuntimeError as e:
+            return {
+                "status": "integration_branch_locked",
+                "error": str(e),
+            }
+
+    def _run_integration(self, active_done_tasks: list[Task]) -> dict:
         temp_worktree_path = None
         if self.config.apply:
-            temp_worktree_path = (
-                self.config.repository_root / "worktrees" / "integration-temp"
-            )
+            temp_worktree_path = self._temp_worktree_path()
             try:
                 subprocess.run(
                     ["git", "worktree", "prune"],
                     cwd=str(self.config.repository_root),
                     capture_output=True,
                 )
-                if temp_worktree_path.exists():
-                    import shutil
-
-                    try:
-                        shutil.rmtree(temp_worktree_path)
-                    except Exception:
-                        pass
+                self._reclaim_worktree_path(temp_worktree_path)
                 subprocess.run(
                     [
                         "git",
@@ -86,7 +133,7 @@ class Integrator:
                     capture_output=True,
                 )
                 self.config.repository_root = temp_worktree_path
-            except (subprocess.CalledProcessError, OSError) as e:
+            except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
                 return {
                     "status": "failed_to_create_temp_worktree",
                     "error": f"Failed to create temp worktree: {e}",
