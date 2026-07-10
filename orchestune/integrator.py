@@ -45,6 +45,7 @@ class Integrator:
         self.config.repository_root = self.original_root
         self.failed_reasons: dict[str, str] = {}
         self.blocked_reasons: dict[str, str] = {}
+        self.unparsable_done_tasks: list[Task] = []
 
     def _worktree_key(self) -> str:
         """`temp_branch`（親Issueごとに一意）を安全なファイル/ディレクトリ名に変換する。"""
@@ -88,26 +89,72 @@ class Integrator:
 
     def run(self) -> dict:
         sorted_done_tasks = self._get_sorted_done_tasks()
+        self._warn_and_flag_unparsable_done_tasks()
+
         active_done_tasks = [
             t
             for t in sorted_done_tasks
             if t.issue_state != "CLOSED" and t.parent_state != "CLOSED"
         ]
         if not active_done_tasks:
-            return {"status": "no_done_tasks", "merged": []}
+            return self._attach_unparsable_info(
+                {"status": "no_done_tasks", "merged": []}
+            )
 
         if not self.config.apply:
-            return self._run_integration(active_done_tasks)
+            return self._attach_unparsable_info(
+                self._run_integration(active_done_tasks)
+            )
 
         lock_path = self._worktree_lock_path()
         try:
             with file_lock(lock_path):
-                return self._run_integration(active_done_tasks)
+                return self._attach_unparsable_info(
+                    self._run_integration(active_done_tasks)
+                )
         except RuntimeError as e:
-            return {
-                "status": "integration_branch_locked",
-                "error": str(e),
-            }
+            return self._attach_unparsable_info(
+                {
+                    "status": "integration_branch_locked",
+                    "error": str(e),
+                }
+            )
+
+    def _warn_and_flag_unparsable_done_tasks(self) -> None:
+        """#54: Footprint YAMLから`subtask_id`を抽出できなかった`status:done`タスクは、
+        マージ対象のIDに紐付けられないため統合できないが、それを警告もエラー報告も
+        なく黙って処理対象から消してしまうと、統合待ちのタスクが放置され続けている
+        ことに誰も気づけない。少なくとも警告ログを出し、apply時は人間が気づけるよう
+        Issueへコメントする。
+        """
+        for task in self.unparsable_done_tasks:
+            print(
+                f"Warning: status:done issue #{task.issue_number} has no extractable "
+                "subtask_id (Footprint YAML block missing or malformed); excluded "
+                "from integration without being marked merged or failed.",
+                file=sys.stderr,
+            )
+            if self.config.apply:
+                try:
+                    github.add_comment(
+                        task.issue_number,
+                        "Integratorは、このIssueのFootprint YAMLブロックから"
+                        "`subtask_id`を抽出できなかったため、統合対象から除外しました。\n"
+                        "Issue本文のFootprintブロックを確認し、`subtask_id`を修正してください。",
+                    )
+                except Exception as e:
+                    print(
+                        "Warning: Failed to comment on unparsable done issue "
+                        f"#{task.issue_number}: {e}",
+                        file=sys.stderr,
+                    )
+
+    def _attach_unparsable_info(self, result: dict) -> dict:
+        if self.unparsable_done_tasks:
+            result["unparsable_done_issues"] = [
+                t.issue_number for t in self.unparsable_done_tasks
+            ]
+        return result
 
     def _run_integration(self, active_done_tasks: list[Task]) -> dict:
         temp_worktree_path = None
@@ -166,10 +213,20 @@ class Integrator:
                             capture_output=True,
                         )
                     except subprocess.CalledProcessError as pe:
+                        push_error = (pe.stderr or b"").decode(errors="replace")
                         print(
-                            f"Warning: Failed to push temp branch: {pe.stderr.decode()}",
+                            f"Failed to push temp branch: {push_error}",
                             file=sys.stderr,
                         )
+                        # #52: pushが失敗した状態でPR作成/再利用やsemantic reviewを
+                        # 続行すると、既存の統合PRがある場合にリモート上の古いdiffを
+                        # 対象にレビューが起動されてしまう。pushの成功をその前提条件
+                        # にし、失敗時は明示的な失敗ステータスで即座に終了する。
+                        return {
+                            "status": "failed_to_push_temp_branch",
+                            "merged": merged_tasks,
+                            "error": push_error,
+                        }
 
                     integration_pr_number = self._ensure_integration_pr(merged_tasks)
 
@@ -331,6 +388,7 @@ class Integrator:
         done_tasks = [
             parse_task_from_issue(issue, issue_to_subtask_id) for issue in done_issues
         ]
+        self.unparsable_done_tasks = [t for t in done_tasks if not t.subtask_id]
         done_task_map = {t.subtask_id: t for t in done_tasks if t.subtask_id}
 
         sorted_done_tasks = []
@@ -475,6 +533,23 @@ class Integrator:
                     unavailable_ids.add(task.subtask_id)
                     continue
 
+                # #53: mergeが新規コミットを作った（=1コミット戻せばよい）という
+                # 仮定に依存すると、対象ブランチの先端が既にHEADへ含まれている場合の
+                # `git merge --no-ff`が新規コミットを作らず"Already up to date"に
+                # なるケースで、CI失敗時のrollbackが直前の無関係なコミットを
+                # 巻き添えで削除してしまう。merge試行前のHEAD SHAを保存しておき、
+                # CI失敗時はそのSHAへ確実に戻す。
+                try:
+                    pre_merge_sha = self._current_head_sha()
+                except subprocess.CalledProcessError as e:
+                    head_error = (e.stderr or b"").decode(errors="replace")
+                    self._handle_failure(
+                        task, f"Failed to capture pre-merge HEAD: {head_error}"
+                    )
+                    failed_tasks.append(task.subtask_id)
+                    unavailable_ids.add(task.subtask_id)
+                    continue
+
                 try:
                     subprocess.run(
                         [
@@ -491,22 +566,22 @@ class Integrator:
                     )
                 except subprocess.CalledProcessError as e:
                     self._abort_merge()
-                    self._handle_failure(task, f"Merge conflict: {e.stderr.decode()}")
+                    merge_error = (e.stderr or b"").decode(errors="replace")
+                    self._handle_failure(task, f"Merge conflict: {merge_error}")
                     failed_tasks.append(task.subtask_id)
                     unavailable_ids.add(task.subtask_id)
                     continue
 
                 ci_success, ci_output = self._run_ci_with_flaky_check()
                 if not ci_success:
-                    subprocess.run(
-                        ["git", "reset", "--hard", "HEAD~1"],
-                        cwd=str(self.config.repository_root),
-                        check=True,
-                        capture_output=True,
-                    )
-                    self._handle_failure(
-                        task, "CI verification failed", ci_output=ci_output
-                    )
+                    reason = "CI verification failed"
+                    if not self._rollback_to(pre_merge_sha):
+                        reason += (
+                            ". さらに、merge前のコミット"
+                            f"({pre_merge_sha})へのrollbackにも失敗しました。"
+                            "統合ブランチの状態を手動で確認してください。"
+                        )
+                    self._handle_failure(task, reason, ci_output=ci_output)
                     failed_tasks.append(task.subtask_id)
                     unavailable_ids.add(task.subtask_id)
                     continue
@@ -564,6 +639,27 @@ class Integrator:
             )
         except subprocess.CalledProcessError:
             pass
+
+    def _current_head_sha(self) -> str:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(self.config.repository_root),
+            check=True,
+            capture_output=True,
+        )
+        return (result.stdout or b"").decode(errors="replace").strip()
+
+    def _rollback_to(self, sha: str) -> bool:
+        try:
+            subprocess.run(
+                ["git", "reset", "--hard", sha],
+                cwd=str(self.config.repository_root),
+                check=True,
+                capture_output=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, OSError):
+            return False
 
     def _abort_merge(self) -> None:
         # マージ失敗時にMERGE_HEADを残したままにすると、後続タスクのマージが
