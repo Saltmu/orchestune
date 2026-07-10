@@ -865,7 +865,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
                     remote_sha = None
                     ls_remote_failed = False
                     try:
-                        ref_name = f"refs/heads/{expected_branch}"
+                        ref_name = f"refs/heads/{existing_pr.head_ref}"
                         res = subprocess.run(
                             ["git", "ls-remote", "origin", ref_name],
                             capture_output=True,

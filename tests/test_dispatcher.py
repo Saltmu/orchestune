@@ -2513,6 +2513,95 @@ class TestPreventDuplicateSessions:
         mock_add_comment.assert_called_once()
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
+    def test_ls_remote_uses_existing_pr_head_ref_for_closes_issue_match(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        queued_issue = _issue(1, subtask_id="task-1")
+        save_run_state(
+            RunState(
+                completed_worktrees=[
+                    CompletedWorktree(
+                        issue_number=1,
+                        subtask_id="task-1",
+                        branch="claude/issue-1-task-1",
+                        started_at=100.0,
+                        completed_at=200.0,
+                        commit_sha="old-sha",
+                    )
+                ]
+            ),
+            config.run_state_path,
+        )
+
+        def ls_remote_result(command, **_kwargs):
+            stdout = (
+                "updated-sha\trefs/heads/human-authored-branch\n"
+                if command
+                == [
+                    "git",
+                    "ls-remote",
+                    "origin",
+                    "refs/heads/human-authored-branch",
+                ]
+                else ""
+            )
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatcher.github.list_open_prs",
+                return_value=[
+                    PrRecord(
+                        number=101,
+                        head_ref="human-authored-branch",
+                        changed_files=(),
+                        review_decision="",
+                        is_ci_passing=False,
+                        closes_issue_numbers=(1,),
+                    )
+                ],
+            ),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
+            patch(
+                "orchestune.dispatcher.subprocess.run", side_effect=ls_remote_result
+            ) as mock_subprocess_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value.pid = 12345
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
+        mock_popen.assert_not_called()
+        mock_subprocess_run.assert_called_once_with(
+            [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/human-authored-branch",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        mock_remove_label.assert_any_call(1, "status:queued")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+
     def test_ls_remote_failure_transitions_to_blocked_human_review(self, tmp_path):
         """ls-remoteが例外等で失敗した場合は、安全のため重複とみなして起動をスキップする。"""
         config = DispatcherConfig(
