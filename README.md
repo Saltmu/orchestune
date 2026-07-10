@@ -71,14 +71,15 @@ The agent needs to know the `orchestune` / `orchestune-dispatch` / `local-ci-dev
 
 ## Usage
 
-A typical end-to-end flow looks like this:
+`orchestune` is the **only skill you ever need to invoke directly** — it drives everything else internally. A typical end-to-end flow looks like this:
 1. You tell your agent: *"I want to implement this big feature (a 'big rock'). Decompose it with `orchestune` and set up parallel development."*
 2. The agent auto-loads the `orchestune` skill in response.
-3. The agent drafts `decomposition_plan.md` and validates the DAG using the installed CLI.
-4. Once you approve the plan, the agent creates the GitHub Issues and kicks off the dispatcher.
+3. `orchestune` asks the `orchestune-dag` CLI to build/validate the DAG for a drafted `decomposition_plan.md`, and presents the result to you.
+4. You approve the plan, or give feedback — `orchestune` revises the plan and re-validates until you approve.
+5. Once approved, `orchestune` hands off internally to the `orchestune-dispatch` skill, which creates the GitHub Issues and configures/starts the dispatcher. You never need to load `orchestune-dispatch` yourself.
 
 ### 1. Decomposition Plan & DAG Validation
-To decompose your main task (a "big rock") into smaller subtasks, load the **`orchestune` core skill** in your agent (e.g. Claude Code, Antigravity). It will automatically survey the codebase, draft a `decomposition_plan.md`, validate the DAG, and create the corresponding GitHub Issues (with `Footprint` metadata and `status`/`priority` labels) for you — manually drafting a plan or creating issues by hand is rarely necessary.
+To decompose your main task (a "big rock") into smaller subtasks, load the **`orchestune` core skill** in your agent (e.g. Claude Code, Antigravity). It will automatically survey the codebase, draft a `decomposition_plan.md`, validate the DAG, iterate with you on approval, and then hand off to `orchestune-dispatch` to create the corresponding GitHub Issues (with `Footprint` metadata and `status`/`priority` labels) — manually drafting a plan or creating issues by hand is rarely necessary.
 
 For reference, `decomposition_plan.md` uses a YAML frontmatter format:
 
@@ -111,7 +112,7 @@ orchestune-dag --plan decomposition_plan.md
 # (or, inside this repo's own dev environment: poetry run orchestune-dag --plan decomposition_plan.md)
 ```
 
-Issue creation follows a fixed convention (title format, `Footprint` YAML block, `status`/`priority`/`risk` labels) so the dispatcher can parse them — see [`skills/orchestune/SKILL.md`](skills/orchestune/SKILL.md) if you ever need to do this by hand.
+Issue creation follows a fixed convention (title format, `Footprint` YAML block, `status`/`priority`/`risk` labels) so the dispatcher can parse them — see [`skills/orchestune-dispatch/SKILL.md`](skills/orchestune-dispatch/SKILL.md) if you ever need to do this by hand.
 
 ### 2. Dispatcher Command
 Run the scheduler/dispatcher:
