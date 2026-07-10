@@ -7,6 +7,7 @@ def main() -> None:
         print("Available commands:")
         print("  dag       DAG validation tool")
         print("  dispatch  Dispatcher/scheduler tool")
+        print("  setup     Setup skills symlinks for AI assistants")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -20,6 +21,10 @@ def main() -> None:
         from orchestune.dispatcher import main as dispatcher_main
 
         dispatcher_main()
+    elif cmd == "setup":
+        from orchestune.setup_skills import setup_skills
+
+        setup_skills()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
