@@ -78,3 +78,20 @@ sequenceDiagram
    Once a preceding task merges, the integrator automatically rebases active downstream branches (that depend on it or touch related files) on `main`, ensuring agents work with fresh code.
 3. **Semantic Review**:
    During integration, an LLM reviews the combined changes to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) before finalization.
+
+---
+
+## 4. Human Approval Points
+
+Orchestune is designed so a human makes a decision at exactly two points in the lifecycle — everything between them runs autonomously.
+
+1. **Decomposition Gate**: Before dispatch begins, a human reviews and approves `decomposition_plan.md` (subtask boundaries, footprints, dependencies).
+2. **Acceptance Gate**: After all subtasks are integrated into `main`, a human reviews the final result of the "big rock" and accepts it (closes the parent Issue).
+
+Between these two gates, subtask PR merges, CI verification, rebases, and conflict resolution all proceed without per-task human approval. `risk:flagged` labels surface sensitive subtasks for visibility, but are informational only — they do not add a third blocking gate.
+
+**Why two gates are enough**: every subtask's history (Issue, PR, commits, CI logs) is preserved on GitHub, so human review effort doesn't need to happen inline with every merge — it can be scoped up front (decomposition) and reconciled after the fact (acceptance) without losing traceability.
+
+**CI as the de facto quality gate**: the pre-merge CI verification described in Section 3 substitutes for per-task human review — every subtask PR must pass CI before it is merged into `main`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
+
+This keeps human review effort concentrated where judgment matters most (scoping and final acceptance), while everything mechanical in between is fully automated.
