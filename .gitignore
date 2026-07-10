@@ -12,12 +12,18 @@ dist/
 
 # Orchestune run state and working directories
 run_state.json
+run_state.lock
 not_needed_review_state.json
 events.jsonl
 worktrees/
 logs/
+decomposition_plan.md
 
 # OS / IDE
 .DS_Store
 .vscode/
 .idea/
+
+# Local secrets (never commit)
+.env
+.env.*
