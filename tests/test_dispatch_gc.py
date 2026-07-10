@@ -2,9 +2,11 @@ import subprocess
 from unittest.mock import patch
 
 from orchestune.dispatch_gc import (
+    _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     is_process_alive,
     remove_worktree,
+    worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
 from orchestune.dispatch_scoring import Task
@@ -90,6 +92,95 @@ class TestWorktreeHasUncommittedChanges:
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             assert worktree_has_uncommitted_changes("worktrees/missing") is False
+
+
+class TestWorktreeHasNewCommits:
+    """#74: base_branchに対する実コミットの有無確認（空コミット完了の誤判定防止）。"""
+
+    def test_returns_true_when_commits_ahead(self):
+        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="2\n", stderr=""
+            )
+            assert worktree_has_new_commits("worktrees/w1", "origin/main") is True
+
+    def test_returns_false_when_no_commits_ahead(self):
+        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="0\n", stderr=""
+            )
+            assert worktree_has_new_commits("worktrees/w1", "origin/main") is False
+
+    def test_git_error_falls_back_to_true(self):
+        """比較不能時は安全側（実コミットありとみなし従来通り完了扱い）にフォールバックする。"""
+        with patch(
+            "orchestune.dispatch_gc.subprocess.run",
+            side_effect=subprocess.CalledProcessError(1, []),
+        ):
+            assert worktree_has_new_commits("worktrees/missing", "origin/main") is True
+
+
+class TestFinalizeCompletedWorktree:
+    """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
+
+    def test_no_new_commits_is_not_treated_as_completed(self):
+        """#74再現: worktreeはcleanだがbase_branchに対して新規コミットが0件の場合、
+        status:doneを付与せず、依存先タスクの誤昇格を防ぐためcompleted以外のアクションにする。"""
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] != "completed"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert mock_add_comment.call_args.args[0] == 280
+
+    def test_new_commits_present_is_treated_as_completed(self):
+        """base_branchに対する実コミットがあれば従来通りcompleted+status:doneとする。"""
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="deadbeef\n", stderr=""
+            )
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] == "completed"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:done")
+        assert event["commit_sha"] == "deadbeef"
 
 
 class TestRemoveWorktree:

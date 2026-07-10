@@ -1090,6 +1090,63 @@ class TestRunDispatchCycleCompletion:
         persisted = json.loads(run_state_path.read_text())
         assert "1" in persisted["active_worktrees"]
 
+    def test_no_commits_completion_frees_quota_without_promoting_dependents(
+        self, tmp_path
+    ):
+        """#74: 空コミット完了はcompleted_subtask_idsに含めず依存先を昇格させないが、
+        run_state側のクオータは解放する(worktree・ラベルはdispatch_gc側で片付け済みのため)。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path)
+        in_progress_issue = _issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        blocked_issue = _issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue]
+                if label == "status:in-progress"
+                else ([blocked_issue] if label == "status:blocked" else [])
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed_no_commits"
+        mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
+        mock_remove_label.assert_any_call(1, "status:in-progress")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        # #74の核心: 依存先(#2)は誤って昇格させない
+        assert report.promotion_events == []
+        assert all(
+            call.args != (2, "status:queued") for call in mock_add_label.call_args_list
+        )
+
+        persisted = json.loads(run_state_path.read_text())
+        assert "1" not in persisted["active_worktrees"]
+        assert persisted["completed_worktrees"] == []
+
     def test_freed_quota_allows_new_task_to_launch_same_cycle(self, tmp_path):
         """#193の核心: 完了検知でクオータが解放され、同一サイクル内で
         新規タスクが選出・起動されることを検証する（恒久停止バグの回帰テスト）。"""
@@ -1111,6 +1168,10 @@ class TestRunDispatchCycleCompletion:
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree"),
             patch("orchestune.dispatcher.subprocess.run") as mock_subproc_run,
