@@ -26,13 +26,15 @@ output_schema:
 * システムに `ochestune` CLIツール（`orchestune-dispatch`, `orchestune-dag`）がインストールされていること。
 * GitHub CLI (`gh` command) がインストール・認証済み（`gh auth status`）であること。
   * `gh` が利用できない場合は、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。
+* ステージA開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと（詳細はステージAの手順1を参照）。
 * ディスパッチャーの書き込み系操作（ラベル更新・`git worktree`作成・エージェント起動）は、既定で実行されます（`--apply`）。テスト確認したい場合は `--no-apply` を明示指定してください。
 * エージェントの起動先（`--dispatch-target`）は、既定でローカルsubprocess起動（`local`）です。現時点でサポートしているクラウド実行先は**Claude Code Cloud Routine（`cloud-routine`）のみ**で、利用する場合は`ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` 環境変数の設定が必要です。ルーチン自体の作成手順（[claude.ai/code/routines](https://claude.ai/code/routines)でのAPIトリガー設定・トークン発行）は[README.ja.mdのセットアップ手順](../../README.ja.md#claude-code-cloud-routineのセットアップ手順)を参照してください。将来的にはCodex Cloud等、他のクラウドエージェント基盤への対応も予定しています。
 
 ## ステージA: Issue起票
 
-1. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
-2. Issueのタイトル・本文は以下の形式とします：
+1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
+2. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
+3. Issueのタイトル・本文は以下の形式とします：
    * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
    * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
 
@@ -49,13 +51,13 @@ output_schema:
      ```
      ```
 
-3. ラベルおよびGitHub関係性を付与します：
+4. ラベルおよびGitHub関係性を付与します：
    * **親子関係の紐付け**: 親となる「大きな石」のIssue番号（例: `#100`）がある場合、新しく作成するサブタスクIssueに親を設定するため `--parent <親Issue番号>` を付与します。
    * **依存関係の紐付け**: 依存関係（`depends_on`）がある場合、先行タスクを先に起票してそのIssue番号（例: `#101`）を確定させ、後続タスク起票時に `--blocked-by <先行Issue番号>` を付与します。
    * **初期ステータスラベル**: 依存関係が未解決（未完了の先行タスクがある）なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
    * **優先度・リスク**: 優先度に応じて `priority:high` / `priority:medium` / `priority:low`、また `risk: true` であれば `risk:flagged` を付与。
 
-4. **Issue起票コマンド例（GitHub CLI使用）**:
+5. **Issue起票コマンド例（GitHub CLI使用）**:
    * 親Issueが `#100` で、先行依存Issueとして `#101` がある場合の例：
      ```bash
      gh issue create --title "[FEAT] task-b: Implement bar feature" --body-file /tmp/issue_body.md --parent 100 --blocked-by 101 --label "status:blocked,priority:medium"
