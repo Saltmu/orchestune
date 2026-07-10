@@ -1278,6 +1278,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "ORCHESTUNE_ROUTINE_ID/ORCHESTUNE_ROUTINE_TOKEN環境変数）",
     )
     parser.add_argument(
+        "--local-cmd",
+        default=None,
+        help="ローカルのCLI（agyなど）にディスパッチする際のコマンドテンプレート。"
+        "例: 'agy --issue {issue_number}' や 'agy'。"
+        "使用可能な変数: {issue_number}, {subtask_id}, {branch_name}, {worktree_path}",
+    )
+    parser.add_argument(
         "--routine-id",
         default=None,
         help="#215: クラウドルーチンのID（未指定時はORCHESTUNE_ROUTINE_ID環境変数を使用）",
@@ -1311,7 +1318,11 @@ def main(argv: list[str] | None = None) -> int:
         parent_issue_number=args.parent_issue,
         apply=args.apply,
         dispatch_target=build_dispatch_target(
-            args.dispatch_target, args.routine_id, args.routine_token, args.log_dir
+            args.dispatch_target,
+            args.routine_id,
+            args.routine_token,
+            args.log_dir,
+            local_cmd=args.local_cmd,
         ),
         deviation_buffer_lines=args.deviation_buffer_lines,
         max_recompute_retries=args.max_recompute_retries,
