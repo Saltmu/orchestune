@@ -35,6 +35,7 @@ class CompletedWorktree:
     completed_at: float
     recompute_count: int = 0
     forced_serial: bool = False
+    commit_sha: str | None = None
 
 
 @dataclass
@@ -73,6 +74,7 @@ def load_run_state(path: str | Path) -> RunState:
             completed_at=value["completed_at"],
             recompute_count=value.get("recompute_count", 0),
             forced_serial=value.get("forced_serial", False),
+            commit_sha=value.get("commit_sha"),
         )
         for value in data.get("completed_worktrees", [])
     ]
