@@ -290,3 +290,17 @@ class TestCheckFootprintDeviation:
                 declared_footprint=(),
             )
         assert deviated == ["src/unexpected.py"]
+
+    def test_respects_custom_base_branch(self):
+        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            check_footprint_deviation(
+                "worktrees/w1",
+                declared_footprint=(),
+                base="parent/issue-12",
+            )
+            mock_run.assert_called_once()
+            called_args = mock_run.call_args[0][0]
+            assert called_args[5] == "parent/issue-12...HEAD"

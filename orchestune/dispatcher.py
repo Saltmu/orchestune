@@ -366,6 +366,7 @@ def _process_active_worktrees(  # noqa: C901
         deviated = check_footprint_deviation(
             active.worktree_path,
             active.declared_footprint,
+            base=active.base_branch,
             min_changed_lines=config.deviation_buffer_lines,
         )
         if not deviated:
@@ -560,6 +561,21 @@ def _restore_missing_active_worktrees(
         except Exception:
             pass
 
+        restored_base_branch = "origin/main"
+        if config.parent_issue_number is not None:
+            restored_base_branch = f"parent/issue-{config.parent_issue_number}"
+
+        if issue.blocked_by:
+            dep_pr = None
+            for pr in open_prs:
+                if any(
+                    dep_num in pr.closes_issue_numbers for dep_num in issue.blocked_by
+                ):
+                    dep_pr = pr
+                    break
+            if dep_pr:
+                restored_base_branch = dep_pr.head_ref
+
         run_state.active_worktrees[str(issue.number)] = ActiveWorktree(
             issue_number=issue.number,
             branch=branch_name,
@@ -571,6 +587,7 @@ def _restore_missing_active_worktrees(
             forced_serial=False,
             external_id=external_id,
             external_url=external_url,
+            base_branch=restored_base_branch,
         )
         print(
             f"Self-healing: Restored active worktree state for subtask '{subtask_id}' (Issue #{issue.number})",
@@ -628,6 +645,9 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
     with file_lock(lock_path):
         run_state = load_run_state(config.run_state_path)
         now = time.time()
+
+        if config.parent_issue_number is not None and config.apply:
+            github.ensure_parent_branch(config.parent_issue_number)
 
         queued_issues = github.list_issues_by_label("status:queued")
         locked_issues = github.list_issues_by_label("status:external-lock")
@@ -1107,6 +1127,17 @@ def _launch_selected_tasks(
     for task in selected:
         branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
         base_branch = task_to_base_branch.get(task.issue_number)
+        if base_branch is None:
+            if config.parent_issue_number is not None:
+                base_branch_for_launch = f"parent/issue-{config.parent_issue_number}"
+                base_branch_for_state = base_branch_for_launch
+            else:
+                base_branch_for_launch = None
+                base_branch_for_state = "origin/main"
+        else:
+            base_branch_for_launch = base_branch
+            base_branch_for_state = base_branch
+
         assert config.dispatch_target is not None
         launch = create_worktree_and_launch(
             task,
@@ -1114,7 +1145,7 @@ def _launch_selected_tasks(
             config.worktree_root,
             config.dispatch_target,
             apply=True,
-            base_branch=base_branch,
+            base_branch=base_branch_for_launch,
         )
         if not launch.launched:
             if "status:queued" in task.status_labels:
@@ -1144,6 +1175,7 @@ def _launch_selected_tasks(
             declared_footprint=task.footprint,
             external_id=launch.external_id,
             external_url=launch.external_url,
+            base_branch=base_branch_for_state,
         )
         run_state.launch_history.append(now)
         save_run_state(run_state, config.run_state_path)
