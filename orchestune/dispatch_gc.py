@@ -87,13 +87,27 @@ def _finalize_completed_worktree(
         event["action"] = "completion_skipped_dirty_worktree"
         return event
 
+    commit_sha = None
     if config.apply:
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=active.worktree_path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            commit_sha = res.stdout.strip()
+        except Exception:
+            pass
+
         remove_worktree(active.worktree_path)
         github.remove_label(active.issue_number, "status:in-progress")
         github.add_label(active.issue_number, "status:done")
 
     event["action"] = "completed"
     event["subtask_id"] = active_task.subtask_id if active_task else ""
+    event["commit_sha"] = commit_sha
     return event
 
 
