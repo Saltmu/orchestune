@@ -45,27 +45,33 @@ pipx install git+https://github.com/Saltmu/orchestune.git
 poetry add --group dev git+https://github.com/Saltmu/orchestune.git
 ```
 
-This makes `orchestune-dag` and `orchestune-dispatch` runnable as plain commands from that project's directory.
+This makes the core `orchestune` command, as well as `orchestune-dag` and `orchestune-dispatch`, runnable as plain commands from that project's directory.
 
 **Step B: Point your agent at the skill definitions**
 
-The agent needs to know the `orchestune` / `orchestune-dispatch` / `local-ci-developer` skills exist. Pick whichever your agent supports:
+The agent needs to know the `orchestune` / `orchestune-dispatch` / `local-ci-developer` skills exist. Pick whichever approach you prefer:
 
-- **`.agents/skills.json`** (Antigravity): in the target project, add an entry pointing at this repo's `skills/` directory:
-  ```json
-  {
-    "entries": [
-      { "path": "../path/to/cloned/orchestune/skills" }
-    ]
-  }
-  ```
-- **Project skills** (Claude Code, Codex CLI): both agents natively auto-discover skills placed under `.claude/skills/<name>/` and `.codex/skills/<name>/` respectively (`SKILL.md` is a cross-agent format, so the same file works for both). In the target project, copy or symlink the skill folder there, e.g.:
+- **Automatic Link Setup (Recommended)**:
+  Run the setup command to automatically create symlinks in the global configuration directories of all supported agents (Claude Code, Codex CLI, Antigravity):
   ```bash
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
+  orchestune setup
   ```
-  This repo does the same for its own skills — see `.claude/skills/` and `.codex/skills/` for a working example.
-- **Global skill directory**: place or symlink the skill folder under your agent's global skills directory so it's available in every project without per-project setup (e.g. Claude Code: `~/.claude/skills/orchestune/`; Codex CLI: `~/.codex/skills/orchestune/`).
+- **Manual Setup (Per Project or Global)**:
+  - **`.agents/skills.json`** (Antigravity): in the target project, add an entry pointing at this repo's `skills/` directory:
+    ```json
+    {
+      "entries": [
+        { "path": "../path/to/cloned/orchestune/skills" }
+      ]
+    }
+    ```
+  - **Project skills** (Claude Code, Codex CLI): both agents natively auto-discover skills placed under `.claude/skills/<name>/` and `.codex/skills/<name>/` respectively (`SKILL.md` is a cross-agent format, so the same file works for both). In the target project, copy or symlink the skill folder there, e.g.:
+    ```bash
+    ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
+    ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
+    ```
+    This repo does the same for its own skills — see `.claude/skills/` and `.codex/skills/` for a working example.
+  - **Global skill directory**: place or symlink the skill folder under your agent's global skills directory so it's available in every project without per-project setup (e.g. Claude Code: `~/.claude/skills/orchestune/`; Codex CLI: `~/.codex/skills/orchestune/`; Antigravity: `~/.gemini/config/skills/orchestune/`).
 
 ---
 
@@ -108,8 +114,9 @@ This plan outlines the steps required to build...
 
 The agent validates this plan itself, but you can also run the same check manually to inspect the DAG topology, circular dependencies, and risk flags:
 ```bash
-orchestune-dag --plan decomposition_plan.md
-# (or, inside this repo's own dev environment: poetry run orchestune-dag --plan decomposition_plan.md)
+orchestune dag --plan decomposition_plan.md
+# (or using individual command: orchestune-dag --plan decomposition_plan.md)
+# (or, inside this repo's own dev environment: poetry run orchestune dag --plan decomposition_plan.md)
 ```
 
 Issue creation follows a fixed convention (title format, `Footprint` YAML block, `status`/`priority`/`risk` labels) so the dispatcher can parse them — see [`skills/orchestune-dispatch/SKILL.md`](skills/orchestune-dispatch/SKILL.md) if you ever need to do this by hand.
@@ -119,10 +126,12 @@ Run the scheduler/dispatcher:
 
 ```bash
 # Dry-run (show plan without executing worktree creation or label updates)
-orchestune-dispatch --no-apply
+orchestune dispatch --no-apply
+# (or: orchestune-dispatch --no-apply)
 
 # Apply (run dispatch cycle: create worktrees, update labels, launch agents)
-orchestune-dispatch
+orchestune dispatch
+# (or: orchestune-dispatch)
 ```
 
 If you use `--dispatch-target cloud-routine`, set the `ORCHESTUNE_ROUTINE_ID` and `ORCHESTUNE_ROUTINE_TOKEN` environment variables first so the dispatcher can launch agents via Claude Code Cloud Routine.
