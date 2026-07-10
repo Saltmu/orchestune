@@ -27,3 +27,5 @@ decomposition_plan.md
 # Local secrets (never commit)
 .env
 .env.*
+walkthrough.md
+implementation_plan.md
