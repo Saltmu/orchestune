@@ -1,0 +1,260 @@
+"""ゾンビタスク・タイムアウトタスクのGC回収と、完了worktreeの後片付け処理。"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from orchestune import github
+from orchestune.dispatch_scoring import Task
+from orchestune.dispatch_state import ActiveWorktree
+
+if TYPE_CHECKING:
+    from orchestune.dispatch_state import RunState
+    from orchestune.dispatcher import DispatcherConfig
+
+
+def is_process_alive(pid: int | None) -> bool:
+    """#193: 記録済みpidのプロセス生存確認によるタスク完了判定。
+
+    シグナル送信権限がない場合（別ユーザー所有のPID再利用等）は、
+    安全側に倒し「生存している」とみなす。
+    """
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:
+    """#193: worktree削除前の未コミット変更確認。
+
+    `git status`自体が失敗する場合（worktreeが既に手動削除済み等）は、
+    クオータ解放を優先し安全側でクリーン（変更なし）として扱う。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree_path), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    return bool(result.stdout.strip())
+
+
+def remove_worktree(worktree_path: str | Path) -> None:
+    """#193: 完了したworktreeを撤去する。既に手動削除済み等の失敗は無視する
+    （run_stateからのクオータ解放を妨げないことを優先する）。"""
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", str(worktree_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+
+def _finalize_completed_worktree(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+) -> dict:
+    """#193: プロセス終了を検知したactive worktreeの完了後処理。
+
+    未コミットの変更が残っている場合は、削除・ラベル遷移を行わず人間の
+    確認を待つ（安全側に倒し、作業内容の消失を防ぐ）。
+    """
+    event: dict = {
+        "issue_number": active.issue_number,
+        "worktree_path": active.worktree_path,
+    }
+
+    if worktree_has_uncommitted_changes(active.worktree_path):
+        event["action"] = "completion_skipped_dirty_worktree"
+        return event
+
+    if config.apply:
+        remove_worktree(active.worktree_path)
+        github.remove_label(active.issue_number, "status:in-progress")
+        github.add_label(active.issue_number, "status:done")
+
+    event["action"] = "completed"
+    event["subtask_id"] = active_task.subtask_id if active_task else ""
+    return event
+
+
+def _finalize_not_needed_worktree(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+) -> dict:
+    """#280/#282: `status:not-needed`ラベル検知による完了後処理。
+
+    セッションが「既に要件を満たしており対応不要」と判断した場合、コミット・PRを
+    作らないためclosingIssuesReferences等の完了シグナルが一切発生せず、
+    `_finalize_completed_worktree`の通常経路では永遠に完了検知されない。
+    このラベルを検知した時点で即座に完了とみなし、worktree撤去・quota解放を行う。
+
+    クラウドルーチンが利用可能な場合（#282）は、誤った対応不要判定で本来必要な
+    作業が埋もれるリスクを避けるため、即座にクローズせず独立した検証レビューを
+    fireし、その判定結果をポーリングして後続サイクルでクローズする
+    （`process_pending_not_needed_reviews`が担う）。クラウドルーチン未設定
+    （ローカル/テスト環境）では検証レビューを起動できないため、従来通り
+    即座にクローズする。
+    """
+    from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
+    from orchestune.integration_coordinator import (
+        IntegrationCoordinator,
+        record_pending_not_needed_review,
+    )
+
+    event: dict = {
+        "issue_number": active.issue_number,
+        "worktree_path": active.worktree_path,
+    }
+
+    if worktree_has_uncommitted_changes(active.worktree_path):
+        event["action"] = "completion_skipped_dirty_worktree"
+        return event
+
+    subtask_id = active_task.subtask_id if active_task else ""
+
+    if config.apply:
+        remove_worktree(active.worktree_path)
+        github.remove_label(active.issue_number, "status:in-progress")
+
+        if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
+            coordinator = IntegrationCoordinator(config.dispatch_target)
+            handle = coordinator.dispatch_not_needed_review(
+                active.issue_number, subtask_id
+            )
+            record_pending_not_needed_review(
+                config.not_needed_review_state_path,
+                issue_number=active.issue_number,
+                subtask_id=subtask_id,
+                session_handle=handle,
+            )
+            event["action"] = "not_needed_review_dispatched"
+        else:
+            github.close_issue(
+                active.issue_number,
+                "not planned",
+                comment=(
+                    "対応不要（status:not-needed）と判定されたため、"
+                    "Orchestuneが自動的にクローズしました。"
+                ),
+            )
+            event["action"] = "not_needed"
+    else:
+        event["action"] = "not_needed"
+
+    event["subtask_id"] = subtask_id
+    return event
+
+
+def _collect_zombies_and_timeouts(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+) -> list[dict]:
+    """ゾンビプロセス（PID消失かつ未コミット変更あり）およびタイムアウトしたタスクをGC回収する。"""
+    if config.task_timeout_seconds <= 0:
+        return []
+    events = []
+    now = time.time()
+    for key, active in list(run_state.active_worktrees.items()):
+        active_task = tasks_by_issue.get(active.issue_number)
+
+        is_zombie = False
+        is_timeout = False
+
+        process_alive = is_process_alive(active.pid)
+        if not process_alive:
+            if os.path.exists(
+                active.worktree_path
+            ) and worktree_has_uncommitted_changes(active.worktree_path):
+                is_zombie = True
+
+        if not is_zombie and active.started_at:
+            timeout_limit = getattr(config, "task_timeout_seconds", 3600)
+            if timeout_limit > 0 and now - active.started_at > timeout_limit:
+                is_timeout = True
+
+        if is_zombie or is_timeout:
+            reason = "process disappeared" if is_zombie else "timeout exceeded"
+
+            if config.apply and os.path.exists(active.worktree_path):
+                backup_success = True
+                if worktree_has_uncommitted_changes(active.worktree_path):
+                    try:
+                        subprocess.run(
+                            ["git", "-C", active.worktree_path, "add", "-A"],
+                            capture_output=True,
+                            check=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                active.worktree_path,
+                                "commit",
+                                "-m",
+                                f"WIP: backup by Orchestune GC ({reason})",
+                            ],
+                            capture_output=True,
+                            check=True,
+                        )
+                    except subprocess.CalledProcessError as e:
+                        backup_success = False
+                        github.add_comment(
+                            active.issue_number,
+                            f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
+                            f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
+                            f"エラー詳細:\n```\n{e.stderr.strip() if e.stderr else str(e)}\n```",
+                        )
+
+                if not backup_success:
+                    continue
+
+                if is_timeout and active.pid and process_alive:
+                    try:
+                        os.kill(active.pid, 9)
+                    except Exception:
+                        pass
+
+                remove_worktree(active.worktree_path)
+
+                github.remove_label(active.issue_number, "status:in-progress")
+                github.add_label(active.issue_number, "status:queued")
+                github.add_comment(
+                    active.issue_number,
+                    f"タスク実行が {reason} のため、GCにより作業ブランチにWIPコミットを退避した上で、タスクを再キューイング（status:queued）しました。",
+                )
+
+            if config.apply:
+                del run_state.active_worktrees[key]
+
+            events.append(
+                {
+                    "issue_number": active.issue_number,
+                    "subtask_id": active_task.subtask_id if active_task else "",
+                    "action": "gc_reclaimed",
+                    "reason": reason,
+                }
+            )
+
+    return events

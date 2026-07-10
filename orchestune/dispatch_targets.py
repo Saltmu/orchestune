@@ -1,0 +1,244 @@
+"""#181/#215: タスクの実ディスパッチ先を切り替え可能にするStrategyクラス群。
+
+`DispatchTarget`を実装するクラスを差し替えるだけで、ディスパッチャーが
+「何に対してタスクを実行させるか」（ローカルsubprocess・Claude Codeクラウドルーチン等）
+を変更できる。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from orchestune import github
+
+if TYPE_CHECKING:
+    from orchestune.dispatcher import Task
+
+ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
+ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
+
+
+@dataclass(frozen=True)
+class DispatchHandle:
+    """起動したエージェント実行を後から追跡するための不透明なハンドル。"""
+
+    pid: int | None = None
+    external_id: str | None = None
+    external_url: str | None = None
+    branch_name: str | None = None
+    issue_number: int | None = None
+
+
+class DispatchTarget(ABC):
+    """タスクを実際にどこへディスパッチするかを表す戦略インターフェース。"""
+
+    @abstractmethod
+    def launch(
+        self, task: Task, branch_name: str, worktree_path: Path
+    ) -> DispatchHandle:
+        """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。"""
+
+    @abstractmethod
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        """`launch`で起動した実行が完了しているかどうかを判定する。"""
+
+
+def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str]:
+    return ["true"]
+
+
+def _is_pid_alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+class LocalProcessDispatchTarget(DispatchTarget):
+    """ローカルの`git worktree`上でsubprocessを直接起動する（既定・後方互換の実装）。"""
+
+    def __init__(
+        self,
+        command_builder: Callable[
+            [Task, Path], list[str]
+        ] = default_dry_run_command_builder,
+        log_dir: str | Path = Path("logs"),
+    ):
+        self._command_builder = command_builder
+        self._log_dir = Path(log_dir)
+
+    def launch(
+        self, task: Task, branch_name: str, worktree_path: Path
+    ) -> DispatchHandle:
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        cmd = self._command_builder(task, worktree_path)
+        slug = branch_name.replace("/", "-")
+        log_path = self._log_dir / f"{slug}.log"
+        with open(log_path, "ab") as log_fh:
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(worktree_path),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        return DispatchHandle(pid=process.pid, branch_name=branch_name)
+
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        return not _is_pid_alive(handle.pid)
+
+
+class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
+    """#181/#215: Claude Codeクラウドルーチンのfire APIへ実ディスパッチする。
+
+    事前に https://claude.ai/code/routines でAPIトリガー付きルーチンを作成し、
+    その`routine_id`と発行済みトークンを渡す必要がある
+    （参考: https://code.claude.com/docs/en/routines.md ）。
+    セッションの完了状態を問い合わせるポーリングAPIは現時点で公開されていないため、
+    `is_complete`は対象ブランチにオープンなPRが立ったことをプロキシシグナルとして使う。
+    """
+
+    API_BASE = "https://api.anthropic.com/v1/claude_code/routines"
+    BETA_HEADER = "experimental-cc-routine-2026-04-01"
+    ANTHROPIC_VERSION = "2023-06-01"
+    _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+    def __init__(
+        self,
+        routine_id: str,
+        routine_token: str,
+        max_retries: int = 3,
+        initial_delay: float = 1.0,
+    ):
+        self._routine_id = routine_id
+        self._routine_token = routine_token
+        self._max_retries = max_retries
+        self._initial_delay = initial_delay
+
+    def _build_text(self, task: Task, branch_name: str) -> str:
+        footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
+        return (
+            f"GitHub Issue #{task.issue_number}"
+            f"（サブタスク: {task.subtask_id or '不明'}）を"
+            "標準開発ワークフローに従って実装してください。\n"
+            f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
+            f"想定footprint: {footprint}\n"
+        )
+
+    def _fire(self, text: str) -> dict[str, Any]:
+        """任意のテキスト指示でルーチンをfireし、生のレスポンスペイロードを返す。"""
+        body = json.dumps({"text": text}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.API_BASE}/{self._routine_id}/fire",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self._routine_token}",
+                "anthropic-beta": self.BETA_HEADER,
+                "anthropic-version": self.ANTHROPIC_VERSION,
+                "Content-Type": "application/json",
+            },
+        )
+        return self._fire_with_retry(request)
+
+    def launch(
+        self, task: Task, branch_name: str, worktree_path: Path
+    ) -> DispatchHandle:
+        payload = self._fire(self._build_text(task, branch_name))
+        return DispatchHandle(
+            external_id=payload.get("claude_code_session_id"),
+            external_url=payload.get("claude_code_session_url"),
+            branch_name=branch_name,
+        )
+
+    def fire_text(self, text: str) -> DispatchHandle:
+        """#186: タスク以外の任意指示（統合コーディネーターの意味的レビュー等）を
+        dispatcherと同一のルーチンへ投げるための汎用fire。"""
+        payload = self._fire(text)
+        return DispatchHandle(
+            external_id=payload.get("claude_code_session_id"),
+            external_url=payload.get("claude_code_session_url"),
+        )
+
+    def _fire_with_retry(self, request: urllib.request.Request) -> dict[str, Any]:
+        """#215: 最大`max_retries`回・指数バックオフでリトライする。
+
+        4xx（認証・入力エラー等の非一時的エラー）はリトライ対象外として即座に送出する。
+        """
+        delay = self._initial_delay
+        last_error: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+                    return result
+            except urllib.error.HTTPError as exc:
+                if exc.code not in self._RETRYABLE_STATUSES:
+                    raise
+                last_error = exc
+            except urllib.error.URLError as exc:
+                last_error = exc
+            if attempt < self._max_retries:
+                time.sleep(delay)
+                delay *= 2
+        assert last_error is not None
+        raise last_error
+
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
+        ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
+        （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
+        if handle.branch_name is None and handle.issue_number is None:
+            return False
+        prs = github.list_open_prs()
+        if handle.branch_name is not None and any(
+            pr.head_ref == handle.branch_name for pr in prs
+        ):
+            return True
+        if handle.issue_number is not None:
+            return any(handle.issue_number in pr.closes_issue_numbers for pr in prs)
+        return False
+
+
+def build_dispatch_target(
+    dispatch_target_name: str,
+    routine_id: str | None,
+    routine_token: str | None,
+    log_dir: str | Path,
+) -> DispatchTarget:
+    """#215: CLI引数・環境変数からディスパッチターゲットを組み立てる。
+
+    `cloud-routine`が指定されていても`routine_id`/`routine_token`が
+    環境変数・引数のいずれからも解決できない場合は、警告を出した上で
+    ローカルのダミー動作（`LocalProcessDispatchTarget`）へ自動フォールバックする。
+    """
+    if dispatch_target_name == "cloud-routine":
+        resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
+        resolved_token = routine_token or os.environ.get(ROUTINE_TOKEN_ENV_VAR)
+        if resolved_id and resolved_token:
+            return ClaudeCodeCloudRoutineDispatchTarget(resolved_id, resolved_token)
+        print(
+            f"警告: {ROUTINE_ID_ENV_VAR}/{ROUTINE_TOKEN_ENV_VAR}"
+            "が未設定のため、クラウドルーチンへのディスパッチはできません。"
+            "ローカルのダミー起動にフォールバックします。",
+            file=sys.stderr,
+        )
+    return LocalProcessDispatchTarget(log_dir=log_dir)
