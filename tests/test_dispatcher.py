@@ -1518,17 +1518,27 @@ class TestDispatcherLocking:
             with file_lock(lock_path):
                 raise ValueError("boom")
 
-    def test_file_lock_still_yields_when_lock_acquisition_itself_fails(self, tmp_path):
-        """ロック取得（mkdir/open/flock）自体が失敗した場合は、従来通り警告を出して
-        フォールバックし、bodyは実行される（安全側に倒す既存の意図は維持する）。"""
+    def test_file_lock_raises_error_when_lock_acquisition_fails(self, tmp_path):
+        """ロック取得（mkdir/open/flock）自体が失敗した場合は、例外を発生させて終了する。"""
         unwritable_dir = tmp_path / "no_such_parent"
         lock_path = unwritable_dir / "test.lock"
 
         with patch("pathlib.Path.mkdir", side_effect=OSError("boom-mkdir")):
             executed = False
-            with file_lock(lock_path):
-                executed = True
-            assert executed
+            with pytest.raises(OSError, match="boom-mkdir"):
+                with file_lock(lock_path):
+                    executed = True
+            assert not executed
+
+    def test_file_lock_raises_error_when_fcntl_is_none(self, tmp_path):
+        """fcntlがNone（非Linux環境）の場合、RuntimeErrorを発生させて終了する。"""
+        lock_path = tmp_path / "test.lock"
+        with patch("orchestune.dispatcher.fcntl", None):
+            executed = False
+            with pytest.raises(RuntimeError, match="fcntl is not supported"):
+                with file_lock(lock_path):
+                    executed = True
+            assert not executed
 
 
 class TestBranchStacking:
