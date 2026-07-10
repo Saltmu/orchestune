@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -224,6 +224,8 @@ class TestIntegrator:
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
 
+        pre_merge_sha = "abc123deadbeef"
+
         def run_side_effect(args, **kwargs):
             if "local-ci.sh" in args[0] or "local-ci.sh" in args:
                 raise subprocess.CalledProcessError(
@@ -231,6 +233,10 @@ class TestIntegrator:
                     cmd=args,
                     output=b"5 passed, 1 failed",
                     stderr=b"CI fail",
+                )
+            if "rev-parse" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=f"{pre_merge_sha}\n".encode()
                 )
             return subprocess.CompletedProcess(args=args, returncode=0)
 
@@ -243,11 +249,13 @@ class TestIntegrator:
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
 
+        # #53: 固定の"HEAD~1"ではなく、merge試行前に保存したHEAD SHAへ戻す
         reset_calls = [
             call for call in mock_run.call_args_list if "reset" in call.args[0]
         ]
         assert len(reset_calls) == 1
-        assert "HEAD~1" in reset_calls[0].args[0]
+        assert pre_merge_sha in reset_calls[0].args[0]
+        assert "HEAD~1" not in reset_calls[0].args[0]
 
         mock_remove.assert_called_with(1, "status:done")
         mock_add.assert_called_with(1, "status:queued")
@@ -1435,3 +1443,248 @@ class TestIntegratorWorktreeSafety:
                 assert "remove" in mock_run.call_args.args[0]
 
             assert not leftover.exists()
+
+
+class TestIntegratorPushFailure:
+    """#52: 統合ブランチのpush失敗後もPR作成・レビューを続行し、成功扱いになっていた
+    不具合の回帰テスト。"""
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    def test_push_failure_without_existing_pr_returns_explicit_failure(
+        self, mock_create_pr, mock_open_prs, mock_run, mock_list
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+
+        def run_side_effect(args, **kwargs):
+            if "push" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"remote rejected"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+        mock_open_prs.return_value = []
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        # push失敗をPR作成の前提条件にし、成功扱いにしない。
+        assert res["status"] == "failed_to_push_temp_branch"
+        assert res["merged"] == ["task-1"]
+        assert "remote rejected" in res["error"]
+        mock_open_prs.assert_not_called()
+        mock_create_pr.assert_not_called()
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    def test_push_failure_with_existing_pr_does_not_reuse_or_review(
+        self, mock_create_pr, mock_open_prs, mock_run, mock_list
+    ):
+        # push失敗時に既存の統合PRがある場合でも、リモート上の古いdiffに対して
+        # semantic reviewを起動したり、それを再利用してsuccessを返してはならない。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+
+        def run_side_effect(args, **kwargs):
+            if "push" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"non-fast-forward"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+        mock_open_prs.return_value = [
+            PrRecord(number=555, head_ref="integration/temp-main", changed_files=())
+        ]
+
+        coordinator = Mock(spec=["dispatch_review"])
+        config = IntegratorConfig(apply=True, coordinator=coordinator)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "failed_to_push_temp_branch"
+        assert "integration_pr_number" not in res
+        assert "semantic_review_dispatched" not in res
+        mock_open_prs.assert_not_called()
+        mock_create_pr.assert_not_called()
+        coordinator.dispatch_review.assert_not_called()
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    def test_push_failure_stderr_decode_is_safe_for_non_utf8(self, mock_run, mock_list):
+        # エラー出力のdecodeが非UTF-8バイト列でも例外を送出しないことを確認する。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+
+        def run_side_effect(args, **kwargs):
+            if "push" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"\xff\xfe invalid utf-8"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "failed_to_push_temp_branch"
+        assert isinstance(res["error"], str)
+
+
+class TestIntegratorRollbackSha:
+    """#53: CI失敗時のrollbackが固定の`HEAD~1`を前提としており、mergeが新規コミットを
+    作らなかった場合（対象ブランチの先端が既にHEADへ含まれている等）に無関係な
+    直前のコミットを削除してしまっていた不具合の回帰テスト。"""
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.remove_label")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_rollback_uses_pre_merge_sha_even_when_merge_created_no_new_commit(
+        self, mock_comment, mock_add, mock_remove, mock_run, mock_list
+    ):
+        # 対象タスクのブランチが既にHEADに含まれており、`git merge --no-ff`が
+        # "Already up to date"となって新規コミットを作らなかったケースを模す。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+
+        pre_merge_sha = "deadbeefcafef00d"
+
+        def run_side_effect(args, **kwargs):
+            if "rev-parse" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=f"{pre_merge_sha}\n".encode()
+                )
+            if "merge" in args:
+                # --no-ffでも新規コミットが作られない("Already up to date")ケース。
+                return subprocess.CompletedProcess(args=args, returncode=0)
+            if "local-ci.sh" in args[0] or "local-ci.sh" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"CI fail"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "failure"
+        reset_calls = [
+            call for call in mock_run.call_args_list if "reset" in call.args[0]
+        ]
+        assert len(reset_calls) == 1
+        assert reset_calls[0].args[0] == [
+            "git",
+            "reset",
+            "--hard",
+            pre_merge_sha,
+        ]
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.remove_label")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_rollback_failure_is_reported_explicitly(
+        self, mock_comment, mock_add, mock_remove, mock_run, mock_list
+    ):
+        # rollback自体(git reset --hard)が失敗した場合、その旨を明示的に報告する。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+
+        def run_side_effect(args, **kwargs):
+            if "rev-parse" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=b"abc123\n"
+                )
+            if "reset" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"reset failed"
+                )
+            if "local-ci.sh" in args[0] or "local-ci.sh" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"CI fail"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "failure"
+        comment_body = mock_comment.call_args[0][1]
+        assert "rollback" in comment_body.lower() or "戻" in comment_body
+
+
+class TestIntegratorUnparsableDoneTask:
+    """#54: Footprint YAMLから`subtask_id`を抽出できなかった`status:done`タスクが、
+    警告もなく黙って処理対象から消えていた不具合の回帰テスト。"""
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_unparsable_done_task_is_flagged_not_silently_dropped(
+        self, mock_comment, mock_list
+    ):
+        # subtask_idを含まないFootprint YAML(またはYAMLブロック自体が無い)の
+        # status:doneイシューのみが存在するケース。
+        issue_without_subtask_id = _issue(7, labels=("status:done",), subtask_id="")
+        mock_list.side_effect = lambda label, *args, **kwargs: (
+            [issue_without_subtask_id] if label == "status:done" else []
+        )
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "no_done_tasks"
+        assert res["unparsable_done_issues"] == [7]
+        mock_comment.assert_called_once()
+        assert mock_comment.call_args[0][0] == 7
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_unparsable_done_task_flagged_alongside_valid_merged_task(
+        self, mock_comment, mock_create_pr, mock_open_prs, mock_run, mock_list
+    ):
+        # subtask_idの取れるタスクが他に存在する場合は、そちらは通常通り統合しつつ、
+        # 抽出できなかったタスクの存在も結果に残す。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        issue_without_subtask_id = _issue(7, labels=("status:done",), subtask_id="")
+
+        mock_list.side_effect = lambda label, *args, **kwargs: (
+            [issue_a, issue_without_subtask_id]
+            if label == "status:done"
+            else [issue_a, issue_without_subtask_id]
+        )
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 42
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-1"]
+        assert res["unparsable_done_issues"] == [7]
+        # issue #7宛のコメントで警告済み（issue #1は統合成功のため対象外）。
+        assert any(call.args[0] == 7 for call in mock_comment.call_args_list)
