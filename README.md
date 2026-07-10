@@ -16,7 +16,7 @@ Orchestune is provided as a **Skill for Agentic AI development** (e.g. Claude Co
 2. **Intelligent Dispatch & Scheduling**
    - Schedules and launches subtasks in dedicated Git worktrees.
    - Limits the number of concurrent executions (`--max-concurrent`) and controls API burst rates (`--max-launches-per-window` within `--window-seconds`).
-   - Supports local command execution and Claude Code Cloud Routine dispatch (`--dispatch-target`).
+   - Supports local command execution and Claude Code Cloud Routine dispatch (`--dispatch-target`). Claude Code Cloud Routine is currently the only supported cloud target (support for other backends, such as Codex Cloud, is planned for the future).
 
 3. **Self-healing State Recovery**
    - Ideal for stateless CI/CD environments (like GitHub Actions) where local state files (`run_state.json`) may be lost.
@@ -128,6 +128,24 @@ orchestune-dispatch
 If you use `--dispatch-target cloud-routine`, set the `ORCHESTUNE_ROUTINE_ID` and `ORCHESTUNE_ROUTINE_TOKEN` environment variables first so the dispatcher can launch agents via Claude Code Cloud Routine.
 
 This single command also covers **Integration & Rebase Coordination**: once a subtask's PR is opened, subsequent `orchestune-dispatch` runs detect it, rebase/merge it against downstream branches, and trigger semantic review — no separate command is needed.
+
+#### Setting Up a Claude Code Cloud Routine
+
+Right now, the only cloud target `--dispatch-target cloud-routine` supports is **Claude Code Cloud Routine** (support for other cloud agent backends, such as Codex Cloud, is planned for the future).
+
+1. Open [claude.ai/code/routines](https://claude.ai/code/routines) and click **New routine**. The prompt body can be minimal — the dispatcher sends the actual task instructions as `text` on every `fire` call.
+2. Under **Repositories**, add the GitHub repository you want to dispatch against (the routine clones it from the default branch on every run).
+3. Under **Select a trigger**, click **Add another trigger**, choose **API**, then save the routine.
+4. After saving, the same screen shows the URL (`https://api.anthropic.com/v1/claude_code/routines/<routine_id>/fire`) — note the `routine_id` from it — and a **Generate token** button. The token is shown only once, so copy it somewhere safe immediately.
+5. Set the `routine_id` and token as environment variables:
+   ```bash
+   export ORCHESTUNE_ROUTINE_ID="<routine_id>"
+   export ORCHESTUNE_ROUTINE_TOKEN="<token>"
+   ```
+
+The dispatcher always generates branch names in the `claude/issue-<issue-number>-<subtask-id>` format, which already matches the routine's default branch-push restriction (only `claude/`-prefixed branches are allowed), so there's no need to enable "Allow unrestricted branch pushes."
+
+For further details (token rotation/revocation, network access restrictions, etc.), see the [official Claude Code documentation on Routines](https://code.claude.com/docs/en/routines.md).
 
 #### Major Options:
 - `--apply` / `--no-apply`: Actually execute actions or run in dry-run mode.
