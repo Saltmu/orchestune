@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+
+# Orchestune run state and working directories
+run_state.json
+not_needed_review_state.json
+events.jsonl
+worktrees/
+logs/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
