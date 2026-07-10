@@ -1,34 +1,24 @@
-# Issue #37 Walkthrough
+# PRテンプレート準拠の強制 Walkthrough
 
 ## 変更内容
 
-- `_wait_seconds` が `created_at` を解析する前に、末尾の `Z` を `+00:00` へ正規化した。
-- Python 3.10相当の `datetime.fromisoformat` 挙動を再現する回帰テストを追加した。
-- 公開APIやスコアリング規則は変更していない。
+- `local-ci-developer` のPR作成手順で、`.github/pull_request_template.md` を作業用本文へコピーして全項目を記入することを必須化した。
+- プレースホルダー、空の箇条書き、未判定チェックボックスを残さない確認手順を追加した。
+- GitHub CLI、GitHub MCP、Web UIの各作成経路でテンプレート構造を維持するよう明記した。
+- スキルのfrontmatterから現行仕様で許可されない旧メタデータを除去した。
 
-## 再現手順と修正確認
+## 検証
 
-- 対象テスト:
-  `tests/test_dispatch_scoring.py::TestComputePriorityScore::test_zulu_created_at_is_normalized_for_legacy_fromisoformat`
-- 修正前（Red）: 末尾 `Z` を拒否する互換スタブへ未変換の値が渡り、
-  `ValueError: Invalid isoformat string` で失敗した。
-- 修正後（Green）: `+00:00` へ正規化された値が渡り、対象テストが成功した。
+- `quick_validate.py skills/local-ci-developer`: passed (`Skill is valid!`)
+- `git diff --check`: passed
+- `./scripts/local-ci.sh`: passed
+  - Ruff format/lint: passed
+  - Mypy: passed
+  - Pytest: 323 passed
+  - Coverage: 91.72%
+  - Gitleaks: ローカル未導入のためスキップ（CIで実行予定）
 
-## ベースライン差分
+## 影響範囲
 
-- 変更前: 317 passed、既存失敗なし、カバレッジ91.49%。
-- 変更後: 318 passed、既存・新規失敗なし、カバレッジ91.58%。
-- スキル指定の `pytest -n auto` は `pytest-xdist` が依存関係にないため実行不能で、
-  同じ全テストを直列の `pytest --tb=no -q` で取得した。
-
-## Local CI
-
-- Ruff format: passed
-- Ruff lint: passed
-- Mypy: passed
-- Pytest: 318 passed
-- Coverage: 91.58%（基準75%以上）
-- Gitleaks: ローカル未導入のためスクリプトによりスキップ（CIでは実行予定）
-- 最終結果: `✨ Local CI passed successfully!`
-
-Closes #37
+- ドキュメント化された開発ワークフローのみを変更する。
+- アプリケーションコード、公開API、実行時動作は変更しない。
