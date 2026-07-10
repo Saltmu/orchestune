@@ -184,6 +184,30 @@ def list_remote_branches() -> list[str]:
     return [line.strip() for line in stdout.splitlines() if line.strip()]
 
 
+def is_branch_merged_into(head: str, base: str) -> bool:
+    """Return whether GitHub records a merged PR for the exact head/base pair."""
+    _validate_ref_name(head)
+    _validate_ref_name(base)
+    stdout = _run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--head",
+            head,
+            "--base",
+            base,
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+    )
+    return bool(json.loads(stdout))
+
+
 def list_open_prs() -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される

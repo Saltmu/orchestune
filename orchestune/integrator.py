@@ -340,14 +340,9 @@ class Integrator:
         merged_tasks = []
         failed_tasks = []
 
-        open_pr_branches = set()
         if self.config.apply:
             self._ensure_git_identity()
             self._ensure_full_history()
-            try:
-                open_pr_branches = {pr.head_ref for pr in github.list_open_prs()}
-            except Exception as e:
-                print(f"Warning: Failed to list open PRs: {e}", file=sys.stderr)
 
         for task in sorted_done_tasks:
             branch_name = (
@@ -372,19 +367,34 @@ class Integrator:
                         capture_output=True,
                     )
                 except subprocess.CalledProcessError as e:
-                    # もし対象ブランチのOpen PRが存在しない場合は、すでにマージ及びブランチ削除
-                    # 済みとみなして、失敗扱いにはせず正常マージ完了扱いでスキップする。
-                    if branch_name not in open_pr_branches:
+                    # ブランチ削除済みの正常系は、同じhead/baseのPRがGitHub上で
+                    # 実際にmergedと確認できた場合に限って統合済みとして扱う。
+                    # 確認APIの障害を含む不確実なケースはfail closedにする。
+                    base_branch_name = self.config.base_branch.removeprefix("origin/")
+                    try:
+                        already_merged = github.is_branch_merged_into(
+                            branch_name, base_branch_name
+                        )
+                    except Exception as lookup_error:
+                        already_merged = False
                         print(
-                            f"[Integrator] Branch {branch_name} not found and no open PR exists. "
-                            "Assuming already merged, skipping integration merge."
+                            "Warning: Failed to verify whether "
+                            f"{branch_name} was merged into {base_branch_name}: "
+                            f"{lookup_error}",
+                            file=sys.stderr,
+                        )
+
+                    if already_merged:
+                        print(
+                            f"[Integrator] Branch {branch_name} could not be fetched, "
+                            f"but its PR into {base_branch_name} is merged. "
+                            "Skipping integration merge."
                         )
                         merged_tasks.append(task.subtask_id)
                         continue
 
-                    self._handle_failure(
-                        task, f"Failed to fetch branch: {e.stderr.decode()}"
-                    )
+                    fetch_error = (e.stderr or b"").decode(errors="replace")
+                    self._handle_failure(task, f"Failed to fetch branch: {fetch_error}")
                     failed_tasks.append(task.subtask_id)
                     continue
 
