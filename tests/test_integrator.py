@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -950,3 +952,140 @@ class TestIntegratorWorktreeIsolation:
             if "worktree" in call.args[0] and "remove" in call.args[0]
         ]
         assert remove_calls == []
+
+
+class TestIntegratorRelativeRepositoryRoot:
+    """#48: repository_rootが`Path(".")`以外の相対パスの場合、worktreeの作成先と
+    その後のcheckout/merge/CIが参照するcwdがずれて処理全体が失敗する不具合の回帰テスト。
+
+    subprocessをモックせず、実際の一時Gitリポジトリに対してIntegratorを走らせる。
+    """
+
+    def test_relative_repository_root_succeeds_with_real_git_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            origin_path = workspace / "origin.git"
+            origin_path.mkdir()
+            subprocess.run(
+                ["git", "init", "--bare"],
+                cwd=str(origin_path),
+                check=True,
+                capture_output=True,
+            )
+
+            # Issueの再現例に合わせ、`.`以外の相対パス名でcloneする。
+            repo_path = workspace / "repo"
+            subprocess.run(
+                ["git", "clone", str(origin_path), str(repo_path)],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "test-bot"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test-bot@example.com"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "checkout", "-b", "main"],
+                cwd=str(repo_path),
+                capture_output=True,
+            )
+
+            def commit_file(
+                rel_path: str, content: str, msg: str, executable: bool = False
+            ) -> None:
+                p = repo_path / rel_path
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding="utf-8")
+                if executable:
+                    p.chmod(0o755)
+                subprocess.run(
+                    ["git", "add", rel_path],
+                    cwd=str(repo_path),
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", msg],
+                    cwd=str(repo_path),
+                    check=True,
+                    capture_output=True,
+                )
+
+            commit_file("README.md", "dummy\n", "Initial commit")
+            commit_file(
+                "scripts/local-ci.sh",
+                "#!/bin/bash\nexit 0\n",
+                "Add local-ci.sh",
+                executable=True,
+            )
+            subprocess.run(
+                ["git", "push", "-u", "origin", "main"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+
+            subprocess.run(
+                ["git", "checkout", "-b", "claude/issue-1-task-1"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+            commit_file("feature.txt", "feature\n", "Add feature")
+            subprocess.run(
+                ["git", "push", "-u", "origin", "claude/issue-1-task-1"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "checkout", "main"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+
+            issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+
+            original_cwd = os.getcwd()
+            # `repository_root=Path("repo")`が実際にプロセスのcwd相対のパスになるよう、
+            # cloneした"repo"の親ディレクトリへchdirする。
+            os.chdir(str(workspace))
+            try:
+                with (
+                    patch(
+                        "orchestune.integrator.github.list_issues_by_label",
+                        lambda label, *a, **k: [issue_a],
+                    ),
+                    patch(
+                        "orchestune.integrator.github.list_open_prs", return_value=[]
+                    ),
+                    patch(
+                        "orchestune.integrator.github.create_pull_request",
+                        return_value=999,
+                    ),
+                    patch("orchestune.integrator.github.add_label"),
+                    patch("orchestune.integrator.github.remove_label"),
+                    patch("orchestune.integrator.github.add_comment"),
+                ):
+                    config = IntegratorConfig(repository_root=Path("repo"), apply=True)
+                    integrator = Integrator(config)
+                    res = integrator.run()
+            finally:
+                os.chdir(original_cwd)
+
+            assert res["status"] == "success"
+            assert res["merged"] == ["task-1"]
+            assert res["integration_pr_number"] == 999
+
+            # worktreeの作成先と参照先がずれた場合に発生していた「二重化されたパス」が
+            # できていないことも確認する。
+            assert not (workspace / "repo" / "repo").exists()
