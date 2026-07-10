@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Multi-agent implementation orchestrator (DAG construction, dispatch cycles, self-healing)"
 authors = ["sshioyama"]
 packages = [{include = "orchestune"}]
+include = ["skills"]
 
 [tool.poetry.dependencies]
 python = "^3.12"
