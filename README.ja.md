@@ -46,27 +46,33 @@ pipx install git+https://github.com/Saltmu/orchestune.git
 poetry add --group dev git+https://github.com/Saltmu/orchestune.git
 ```
 
-これにより、導入先プロジェクトのディレクトリから `orchestune-dag` / `orchestune-dispatch` を素のコマンドとして実行できるようになります。
+これにより、導入先プロジェクトのディレクトリから、統一された `orchestune` コマンド、および個別の `orchestune-dag` / `orchestune-dispatch` コマンドを素で実行できるようになります。
 
 **ステップB: エージェントへのスキル定義の登録**
 
-エージェントに `orchestune` / `orchestune-dispatch` / `local-ci-developer` の各スキルの存在を認識させる必要があります。利用しているエージェントに応じて、以下のいずれかの方法を選んでください。
+エージェントに `orchestune` / `orchestune-dispatch` / `local-ci-developer` の各スキルの存在を認識させる必要があります。以下のいずれかの方法を選んでください。
 
-- **`.agents/skills.json`**（Antigravity向け）: 導入先プロジェクトの`.agents/skills.json`に、本リポジトリの`skills/`ディレクトリへのパスを指定します：
-  ```json
-  {
-    "entries": [
-      { "path": "../path/to/cloned/orchestune/skills" }
-    ]
-  }
-  ```
-- **プロジェクトスキル**（Claude Code、Codex CLI向け）: 両エージェントとも、`.claude/skills/<name>/`・`.codex/skills/<name>/`配下に置かれたスキルをネイティブに自動検出します（`SKILL.md`はエージェント間で共通のフォーマットなので、同じファイルがそのまま両方で使えます）。導入先プロジェクトで、スキルフォルダをコピーまたはシンボリックリンクしてください：
+- **自動セットアップ（推奨）**:
+  セットアップコマンドを実行するだけで、サポートされているすべてのAIアシスタント（Claude Code、Codex CLI、Antigravity）のグローバル設定ディレクトリに対して、自動的にシンボリックリンクを作成します。
   ```bash
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
+  orchestune setup
   ```
-  本リポジトリ自身も同様の構成を採用しています。動作例として`.claude/skills/`・`.codex/skills/`を参照してください。
-- **グローバルスキルディレクトリ**: プロジェクトごとの設定なしにどこでも使えるようにしたい場合は、スキルフォルダをエージェントのグローバルスキルディレクトリに配置（またはシンボリックリンク作成）します（例: Claude Codeの場合 `~/.claude/skills/orchestune/`、Codex CLIの場合 `~/.codex/skills/orchestune/`）。
+- **手動セットアップ（プロジェクト単位またはグローバル）**:
+  - **`.agents/skills.json`**（Antigravity向け）: 導入先プロジェクトの`.agents/skills.json`に、本リポジトリの`skills/`ディレクトリへのパスを指定します：
+    ```json
+    {
+      "entries": [
+        { "path": "../path/to/cloned/orchestune/skills" }
+      ]
+    }
+    ```
+  - **プロジェクトスキル**（Claude Code、Codex CLI向け）: 両エージェントとも、`.claude/skills/<name>/`・`.codex/skills/<name>/`配下に置かれたスキルをネイティブに自動検出します（`SKILL.md`はエージェント間で共通のフォーマットなので、同じファイルがそのまま両方で使えます）。導入先プロジェクトで、スキルフォルダをコピーまたはシンボリックリンクしてください：
+    ```bash
+    ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
+    ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
+    ```
+    本リポジトリ自身も同様の構成を採用しています。動作例として`.claude/skills/`・`.codex/skills/`を参照してください。
+  - **グローバルスキルディレクトリ**: プロジェクトごとの設定なしにどこでも使えるようにしたい場合は、スキルフォルダをエージェントのグローバルスキルディレクトリに配置（またはシンボリックリンク作成）します（例: Claude Codeの場合 `~/.claude/skills/orchestune/`、Codex CLIの場合 `~/.codex/skills/orchestune/`、Antigravityの場合 `~/.gemini/config/skills/orchestune/`）。
 
 ---
 
@@ -109,8 +115,9 @@ subtasks:
 
 この計画はエージェント自身が検証しますが、同じチェックを手動で実行してDAGのトポロジー、循環参照、リスクフラグを確認することもできます：
 ```bash
-orchestune-dag --plan decomposition_plan.md
-# (本リポジトリ自身の開発環境内であれば: poetry run orchestune-dag --plan decomposition_plan.md)
+orchestune dag --plan decomposition_plan.md
+# (または個別コマンドを使用: orchestune-dag --plan decomposition_plan.md)
+# (本リポジトリ自身の開発環境内であれば: poetry run orchestune dag --plan decomposition_plan.md)
 ```
 
 Issueの起票は、ディスパッチャーが解析できるよう決まった形式（タイトル形式、`Footprint`のYAMLブロック、`status`/`priority`/`risk`ラベル）に従います。手動で起票する必要が生じた場合は[`skills/orchestune-dispatch/SKILL.md`](skills/orchestune-dispatch/SKILL.md)を参照してください。
@@ -120,10 +127,12 @@ Issueの起票は、ディスパッチャーが解析できるよう決まった
 
 ```bash
 # ドライラン（worktreeの作成やラベル更新を行わずに計画のみを表示）
-orchestune-dispatch --no-apply
+orchestune dispatch --no-apply
+# (または: orchestune-dispatch --no-apply)
 
 # 適用（ディスパッチサイクルを実行: worktree作成、ラベル更新、エージェント起動）
-orchestune-dispatch
+orchestune dispatch
+# (または: orchestune-dispatch)
 ```
 
 このコマンド1つで**統合およびリベースの調整**も行われます。サブタスクのPRがオープンされると、以降の`orchestune-dispatch`実行時にそれを検知し、下流ブランチへのリベース・マージやセマンティックレビューが自動的にトリガーされます。個別のコマンドは不要です。
