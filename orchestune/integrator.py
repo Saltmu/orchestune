@@ -43,6 +43,7 @@ class Integrator:
         self.original_root = Path(self.config.repository_root).resolve()
         self.config.repository_root = self.original_root
         self.failed_reasons: dict[str, str] = {}
+        self.blocked_reasons: dict[str, str] = {}
 
     def run(self) -> dict:
         sorted_done_tasks = self._get_sorted_done_tasks()
@@ -98,7 +99,9 @@ class Integrator:
                     "error": "Failed to create temp branch",
                 }
 
-            merged_tasks, failed_tasks = self._merge_and_test_tasks(active_done_tasks)
+            merged_tasks, failed_tasks, blocked_tasks = self._merge_and_test_tasks(
+                active_done_tasks
+            )
 
             if merged_tasks and not failed_tasks:
                 if self.config.apply:
@@ -160,6 +163,8 @@ class Integrator:
                 "merged": merged_tasks,
                 "failed": failed_tasks,
                 "failed_reasons": self.failed_reasons,
+                "blocked": blocked_tasks,
+                "blocked_reasons": self.blocked_reasons,
             }
         finally:
             if temp_worktree_path:
@@ -337,15 +342,38 @@ class Integrator:
 
     def _merge_and_test_tasks(
         self, sorted_done_tasks: list[Task]
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str]]:
         merged_tasks = []
         failed_tasks = []
+        blocked_tasks: list[str] = []
+        # #50: 失敗またはblockedになったsubtask_idを集約する。sorted_done_tasksは
+        # 依存関係のトポロジカル順で渡されるため、1回の順走査で後続タスクへ
+        # 推移的にblocked状態を伝播できる。
+        unavailable_ids: set[str] = set()
 
         if self.config.apply:
             self._ensure_git_identity()
             self._ensure_full_history()
 
         for task in sorted_done_tasks:
+            blocking_deps = sorted(
+                dep for dep in task.depends_on if dep in unavailable_ids
+            )
+            if blocking_deps:
+                reason = (
+                    "依存タスク "
+                    f"{', '.join(blocking_deps)} が失敗または依存失敗のため、"
+                    "統合を実行せずスキップしました。"
+                )
+                print(
+                    f"[Integrator] Skipping {task.subtask_id}: {reason}",
+                    file=sys.stderr,
+                )
+                self.blocked_reasons[task.subtask_id] = reason
+                blocked_tasks.append(task.subtask_id)
+                unavailable_ids.add(task.subtask_id)
+                continue
+
             branch_name = (
                 f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
             )
@@ -397,6 +425,7 @@ class Integrator:
                     fetch_error = (e.stderr or b"").decode(errors="replace")
                     self._handle_failure(task, f"Failed to fetch branch: {fetch_error}")
                     failed_tasks.append(task.subtask_id)
+                    unavailable_ids.add(task.subtask_id)
                     continue
 
                 try:
@@ -417,6 +446,7 @@ class Integrator:
                     self._abort_merge()
                     self._handle_failure(task, f"Merge conflict: {e.stderr.decode()}")
                     failed_tasks.append(task.subtask_id)
+                    unavailable_ids.add(task.subtask_id)
                     continue
 
                 ci_success, ci_output = self._run_ci_with_flaky_check()
@@ -431,11 +461,12 @@ class Integrator:
                         task, "CI verification failed", ci_output=ci_output
                     )
                     failed_tasks.append(task.subtask_id)
+                    unavailable_ids.add(task.subtask_id)
                     continue
 
             merged_tasks.append(task.subtask_id)
 
-        return merged_tasks, failed_tasks
+        return merged_tasks, failed_tasks, blocked_tasks
 
     def _ensure_git_identity(self) -> None:
         # CI環境（actions/checkout等）ではgit committer identityが未設定のことがあり、
