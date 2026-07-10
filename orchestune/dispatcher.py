@@ -102,6 +102,25 @@ class LaunchResult:
     external_url: str | None = None
 
 
+def _branch_exists(branch_name: str) -> bool:
+    """指定されたブランチがローカルまたはリモート追跡ブランチとして存在するか確認する。"""
+    res_local = subprocess.run(
+        ["git", "show-ref", "--verify", f"refs/heads/{branch_name}"],
+        capture_output=True,
+    )
+    if res_local.returncode == 0:
+        return True
+
+    res_remote = subprocess.run(
+        ["git", "show-ref", "--verify", f"refs/remotes/origin/{branch_name}"],
+        capture_output=True,
+    )
+    if res_remote.returncode == 0:
+        return True
+
+    return False
+
+
 def create_worktree_and_launch(
     task: Task,
     branch_name: str,
@@ -135,10 +154,13 @@ def create_worktree_and_launch(
 
             worktree_root.mkdir(parents=True, exist_ok=True)
 
-            # 3. ブランチがすでに存在する場合は -B で強制リセットする
-            cmd = ["git", "worktree", "add", str(worktree_path), "-B", branch_name]
-            if base_branch:
-                cmd.append(base_branch)
+            # 3. ブランチがすでに存在する場合はそのまま利用し、存在しない場合は新規作成する
+            if _branch_exists(branch_name):
+                cmd = ["git", "worktree", "add", str(worktree_path), branch_name]
+            else:
+                cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path)]
+                if base_branch:
+                    cmd.append(base_branch)
             subprocess.run(
                 cmd,
                 capture_output=True,
@@ -841,6 +863,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
                 else:
                     # リモートブランチの最新コミットSHAを取得
                     remote_sha = None
+                    ls_remote_failed = False
                     try:
                         ref_name = f"refs/heads/{expected_branch}"
                         res = subprocess.run(
@@ -853,11 +876,13 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
                         if output:
                             remote_sha = output.split()[0]
                     except Exception:
-                        pass
+                        ls_remote_failed = True
 
                     # 履歴のSHAとリモートのSHAが両方取得でき、かつそれらが異なる場合のみ重複（人間介入）と判定。
-                    # いずれかが取得できない場合は、テスト環境や一時的な環境とみなし、安全のため起動を許可（スキップしない）。
-                    if last_completed.commit_sha and remote_sha:
+                    # ただし、ls-remoteが例外等で失敗した場合は、安全のため重複とみなして起動をスキップする。
+                    if ls_remote_failed:
+                        is_duplicate = True
+                    elif last_completed.commit_sha and remote_sha:
                         if last_completed.commit_sha != remote_sha:
                             is_duplicate = True
 
