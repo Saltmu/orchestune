@@ -624,6 +624,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatch_targets.subprocess.Popen"),
             patch("orchestune.dispatcher.is_process_alive", return_value=True),
             patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=True
+            ),
+            patch(
                 "orchestune.dispatcher.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ) as mock_check_deviation,
@@ -692,6 +695,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatcher.is_process_alive", return_value=True),
             patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=True
+            ),
+            patch(
                 "orchestune.dispatcher.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
@@ -749,6 +755,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=True
+            ),
             patch(
                 "orchestune.dispatcher.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
@@ -810,6 +819,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=True
+            ),
             patch(
                 "orchestune.dispatcher.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
@@ -2087,6 +2099,9 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=True
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
