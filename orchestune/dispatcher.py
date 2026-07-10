@@ -317,6 +317,7 @@ def _process_active_worktrees(  # noqa: C901
                             completed_at=time.time(),
                             recompute_count=active.recompute_count,
                             forced_serial=active.forced_serial,
+                            commit_sha=completion_event.get("commit_sha"),
                         )
                     )
                     del run_state.active_worktrees[key]
@@ -792,6 +793,76 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
         )
 
         candidate_tasks = queued_candidates + stack_eligible_tasks
+
+        # 重複起動の防止: 既にオープンなPRが存在するcandidate_tasksを検知し、
+        # 起動対象から除外して status:blocked-human-review へ移行させる。
+        valid_candidate_tasks = []
+        for task in candidate_tasks:
+            expected_branch = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+
+            existing_pr = pr_by_branch.get(expected_branch)
+            if not existing_pr:
+                for pr in prs:
+                    if task.issue_number in pr.closes_issue_numbers:
+                        existing_pr = pr
+                        break
+
+            is_duplicate = False
+            if existing_pr:
+                # 重複起動をスキップする条件の判定
+                last_completed = None
+                for cw in reversed(run_state.completed_worktrees):
+                    if cw.issue_number == task.issue_number:
+                        last_completed = cw
+                        break
+
+                if not last_completed:
+                    # 過去の完了履歴がないのにPRが存在する場合は、人間が作成したとみなしてスキップ
+                    is_duplicate = True
+                else:
+                    # リモートブランチの最新コミットSHAを取得
+                    remote_sha = None
+                    try:
+                        ref_name = f"refs/heads/{expected_branch}"
+                        res = subprocess.run(
+                            ["git", "ls-remote", "origin", ref_name],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        )
+                        output = res.stdout.strip()
+                        if output:
+                            remote_sha = output.split()[0]
+                    except Exception:
+                        pass
+
+                    # 履歴のSHAとリモートのSHAが両方取得でき、かつそれらが異なる場合のみ重複（人間介入）と判定。
+                    # いずれかが取得できない場合は、テスト環境や一時的な環境とみなし、安全のため起動を許可（スキップしない）。
+                    if last_completed.commit_sha and remote_sha:
+                        if last_completed.commit_sha != remote_sha:
+                            is_duplicate = True
+
+            if is_duplicate and existing_pr:
+                print(
+                    f"Skipping task {task.subtask_id} (Issue #{task.issue_number}) because an open PR #{existing_pr.number} already exists on branch '{existing_pr.head_ref}' and has been updated.",
+                    file=sys.stderr,
+                )
+                if config.apply:
+                    if "status:queued" in task.status_labels:
+                        github.remove_label(task.issue_number, "status:queued")
+                    if "status:blocked" in task.status_labels:
+                        github.remove_label(task.issue_number, "status:blocked")
+                    github.add_label(task.issue_number, "status:blocked-human-review")
+                    github.add_comment(
+                        task.issue_number,
+                        f"重複起動防止: このサブタスクに対応するオープンなPR #{existing_pr.number} (ブランチ: `{existing_pr.head_ref}`) が既に検出され、更新されています。\n"
+                        f"重複したエージェントセッションの起動を防ぐため、自動起動をスキップし、ステータスを `status:blocked-human-review` に変更しました。\n"
+                        f"必要に応じて手動でPRをマージするか、再起動したい場合は既存のPRをクローズした上で再度 `status:queued` に設定してください。",
+                    )
+            else:
+                valid_candidate_tasks.append(task)
+
+        candidate_tasks = valid_candidate_tasks
 
         if any_forced_serial:
             quota_slots = 0

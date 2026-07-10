@@ -927,6 +927,7 @@ class TestRunDispatchCycleCompletion:
                 "worktree_path": str(tmp_path / "w1"),
                 "action": "completed",
                 "subtask_id": "task-a",
+                "commit_sha": None,
             }
         ]
 
@@ -2294,6 +2295,126 @@ class TestStaleActiveEntryReconciliation:
 
         loaded = load_run_state(run_state_path)
         assert "1" not in loaded.active_worktrees
+
+
+class TestPreventDuplicateSessions:
+    @patch("orchestune.dispatcher.github.list_issues_by_label")
+    @patch("orchestune.dispatcher.github.list_remote_branches", return_value=[])
+    @patch("orchestune.dispatcher.github.list_open_prs")
+    @patch("orchestune.dispatcher.github.remove_label")
+    @patch("orchestune.dispatcher.github.add_label")
+    @patch("orchestune.dispatcher.github.add_comment")
+    @patch("orchestune.dispatcher.subprocess.run")
+    @patch("orchestune.dispatch_targets.subprocess.Popen")
+    def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
+        self,
+        mock_popen,
+        mock_subproc_run,
+        mock_add_comment,
+        mock_add_label,
+        mock_remove_label,
+        mock_list_prs,
+        mock_list_branches,
+        mock_list_issues,
+        tmp_path,
+    ):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        queued_issue = _issue(1, subtask_id="task-1")
+        mock_list_issues.side_effect = lambda label, **_: (
+            [queued_issue] if label == "status:queued" else []
+        )
+
+        # open PR with expected head_ref branch name exists
+        mock_list_prs.return_value = [
+            PrRecord(
+                number=10,
+                head_ref="claude/issue-1-task-1",
+                changed_files=(),
+                closes_issue_numbers=(),
+                review_decision="",
+                is_ci_passing=True,
+            )
+        ]
+
+        report = run_dispatch_cycle(config)
+
+        # 起動がスキップされていること
+        assert len(report.selected) == 0
+        assert mock_popen.call_count == 0
+
+        # ラベル遷移とコメント追加が行われていること
+        mock_remove_label.assert_any_call(1, "status:queued")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert "重複起動防止" in mock_add_comment.call_args[0][1]
+
+    @patch("orchestune.dispatcher.github.list_issues_by_label")
+    @patch("orchestune.dispatcher.github.list_remote_branches", return_value=[])
+    @patch("orchestune.dispatcher.github.list_open_prs")
+    @patch("orchestune.dispatcher.github.remove_label")
+    @patch("orchestune.dispatcher.github.add_label")
+    @patch("orchestune.dispatcher.github.add_comment")
+    @patch("orchestune.dispatcher.subprocess.run")
+    @patch("orchestune.dispatch_targets.subprocess.Popen")
+    def test_run_dispatch_cycle_skips_launch_if_closes_issue_matches(
+        self,
+        mock_popen,
+        mock_subproc_run,
+        mock_add_comment,
+        mock_add_label,
+        mock_remove_label,
+        mock_list_prs,
+        mock_list_branches,
+        mock_list_issues,
+        tmp_path,
+    ):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        queued_issue = _issue(1, subtask_id="task-1")
+        mock_list_issues.side_effect = lambda label, **_: (
+            [queued_issue] if label == "status:queued" else []
+        )
+
+        # open PR closes issue 1, but head_ref name is different
+        mock_list_prs.return_value = [
+            PrRecord(
+                number=10,
+                head_ref="some-other-branch-name",
+                changed_files=(),
+                closes_issue_numbers=(1,),
+                review_decision="",
+                is_ci_passing=True,
+            )
+        ]
+
+        report = run_dispatch_cycle(config)
+
+        # 起動がスキップされていること
+        assert len(report.selected) == 0
+        assert mock_popen.call_count == 0
+
+        # ラベル遷移とコメント追加が行われていること
+        mock_remove_label.assert_any_call(1, "status:queued")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
 
 class TestSyncExternalLocks:
