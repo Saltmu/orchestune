@@ -18,7 +18,7 @@ echo "[3/4] Checking types (mypy)..."
 poetry run mypy orchestune tests
 
 echo "[4/5] Running tests with coverage (pytest)..."
-poetry run pytest --cov=orchestune --cov-fail-under=75
+poetry run pytest -n auto --cov=orchestune --cov-fail-under=75
 
 echo "[5/5] Scanning for secrets and local paths (gitleaks)..."
 if command -v gitleaks >/dev/null 2>&1; then
