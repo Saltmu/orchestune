@@ -1178,3 +1178,151 @@ class TestIntegratorRelativeRepositoryRoot:
             # worktreeの作成先と参照先がずれた場合に発生していた「二重化されたパス」が
             # できていないことも確認する。
             assert not (workspace / "repo" / "repo").exists()
+
+
+class TestIntegratorDependencyFailureBlocking:
+    """#50: 依存タスクの失敗後も後続タスクをmerge・CIしてしまい、無関係な後続タスクを
+    誤って差し戻す不具合の回帰テスト。"""
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.remove_label")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_dependent_task_is_blocked_not_merged_when_dependency_fails(
+        self, mock_comment, mock_add, mock_remove, mock_run, mock_list
+    ):
+        # task-2はtask-1に依存、task-3は独立。task-1がmerge conflictで失敗した場合、
+        # task-2はfetch/mergeを一切試みずblocked扱いにすべきで、task-3は影響を受けない。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", depends_on=("task-1",)
+        )
+        issue_c = _issue(3, labels=("status:done",), subtask_id="task-3")
+
+        mock_list.side_effect = lambda label, *args, **kwargs: [
+            issue_a,
+            issue_b,
+            issue_c,
+        ]
+
+        def run_side_effect(args, **kwargs):
+            if "merge" in args and any("claude/issue-1-task-1" in a for a in args):
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=args,
+                    stderr=b"CONFLICT (content): Merge conflict",
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "partial_success"
+        assert res["failed"] == ["task-1"]
+        assert res["blocked"] == ["task-2"]
+        assert res["merged"] == ["task-3"]
+
+        # task-2用のブランチに対するfetch/mergeは一切試みられない。
+        task2_calls = [
+            call
+            for call in mock_run.call_args_list
+            if any("claude/issue-2-task-2" in a for a in call.args[0])
+        ]
+        assert task2_calls == []
+
+        # 実際に失敗したtask-1（issue 1）のみラベル差し戻し・コメントが行われ、
+        # blockedなだけのtask-2（issue 2）のstatus:doneラベルは維持される。
+        mock_remove.assert_called_once_with(1, "status:done")
+        mock_add.assert_called_once_with(1, "status:queued")
+        mock_comment.assert_called_once()
+        assert mock_comment.call_args[0][0] == 1
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.remove_label")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_transitive_dependents_are_blocked(
+        self, mock_comment, mock_add, mock_remove, mock_run, mock_list
+    ):
+        # task-3 depends_on task-2 depends_on task-1。task-1がCI失敗すると、
+        # task-2・task-3の両方がblockedになるべき。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", depends_on=("task-1",)
+        )
+        issue_c = _issue(
+            3, labels=("status:done",), subtask_id="task-3", depends_on=("task-2",)
+        )
+
+        mock_list.side_effect = lambda label, *args, **kwargs: [
+            issue_a,
+            issue_b,
+            issue_c,
+        ]
+
+        def run_side_effect(args, **kwargs):
+            if "local-ci.sh" in args[0] or "local-ci.sh" in args:
+                raise subprocess.CalledProcessError(returncode=1, cmd=args)
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "failure"
+        assert res["failed"] == ["task-1"]
+        assert res["blocked"] == ["task-2", "task-3"]
+        assert res["merged"] == []
+
+        for branch in ("claude/issue-2-task-2", "claude/issue-3-task-3"):
+            calls = [
+                call
+                for call in mock_run.call_args_list
+                if any(branch in a for a in call.args[0])
+            ]
+            assert calls == []
+
+        # blockedな2件についてはラベル操作が行われない。
+        mock_remove.assert_called_once_with(1, "status:done")
+        mock_add.assert_called_once_with(1, "status:queued")
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.remove_label")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_result_report_distinguishes_own_failure_from_blocked(
+        self, mock_comment, mock_add, mock_remove, mock_run, mock_list
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", depends_on=("task-1",)
+        )
+
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a, issue_b]
+
+        def run_side_effect(args, **kwargs):
+            if "merge" in args and any("claude/issue-1-task-1" in a for a in args):
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"CONFLICT"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert "task-1" in res["failed_reasons"]
+        assert "task-2" not in res["failed_reasons"]
+        assert "task-2" in res["blocked_reasons"]
+        assert "task-1" not in res["blocked_reasons"]
+        assert "task-1" in res["blocked_reasons"]["task-2"]
