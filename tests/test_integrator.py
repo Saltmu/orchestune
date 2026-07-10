@@ -463,8 +463,19 @@ class TestIntegrator:
     @patch("orchestune.integrator.github.add_label")
     @patch("orchestune.integrator.github.add_comment")
     @patch("orchestune.integrator.github.list_open_prs")
+    @patch(
+        "orchestune.integrator.github.is_branch_merged_into",
+        return_value=False,
+    )
     def test_fetch_failure_is_handled_like_merge_failure(
-        self, mock_list_prs, mock_comment, mock_add, mock_remove, mock_run, mock_list
+        self,
+        mock_is_merged,
+        mock_list_prs,
+        mock_comment,
+        mock_add,
+        mock_remove,
+        mock_run,
+        mock_list,
     ):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
@@ -506,6 +517,7 @@ class TestIntegrator:
 
         mock_remove.assert_called_with(1, "status:done")
         mock_add.assert_called_with(1, "status:queued")
+        mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
@@ -776,8 +788,12 @@ class TestIntegrator:
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
-    def test_merge_fetch_skipped_for_deleted_branch(
-        self, mock_list_prs, mock_run, mock_list
+    @patch(
+        "orchestune.integrator.github.is_branch_merged_into",
+        return_value=False,
+    )
+    def test_fetch_failure_without_merged_pr_is_not_treated_as_success(
+        self, mock_is_merged, mock_list_prs, mock_run, mock_list
     ):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
@@ -803,11 +819,84 @@ class TestIntegrator:
         ):
             res = integrator.run()
 
+        assert res["status"] == "failure"
+        assert res["merged"] == []
+        assert res["failed"] == ["task-1"]
+        mock_remove.assert_called_once_with(1, "status:done")
+        mock_add.assert_called_once_with(1, "status:queued")
+        mock_comment.assert_called_once()
+        mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch(
+        "orchestune.integrator.github.is_branch_merged_into",
+        return_value=True,
+    )
+    def test_fetch_failure_is_skipped_when_matching_pr_is_merged(
+        self, mock_is_merged, mock_list_prs, mock_run, mock_list
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_list_prs.return_value = []
+
+        def run_side_effect(args, **kwargs):
+            if "fetch" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"fatal: couldn't find remote ref"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        with (
+            patch("orchestune.integrator.github.remove_label") as mock_remove,
+            patch("orchestune.integrator.github.add_label") as mock_add,
+            patch("orchestune.integrator.github.add_comment") as mock_comment,
+        ):
+            res = Integrator(IntegratorConfig(apply=True)).run()
+
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
+        mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
         mock_remove.assert_not_called()
         mock_add.assert_not_called()
         mock_comment.assert_not_called()
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch(
+        "orchestune.integrator.github.is_branch_merged_into",
+        side_effect=RuntimeError("GitHub API unavailable"),
+    )
+    def test_fetch_failure_fails_closed_when_merged_lookup_fails(
+        self, mock_is_merged, mock_list_prs, mock_run, mock_list
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_list_prs.return_value = []
+
+        def run_side_effect(args, **kwargs):
+            if "fetch" in args:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"temporary network failure"
+                )
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        mock_run.side_effect = run_side_effect
+
+        with (
+            patch("orchestune.integrator.github.remove_label"),
+            patch("orchestune.integrator.github.add_label"),
+            patch("orchestune.integrator.github.add_comment"),
+        ):
+            res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "failure"
+        assert res["failed"] == ["task-1"]
+        mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
