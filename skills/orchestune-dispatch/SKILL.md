@@ -49,15 +49,21 @@ output_schema:
      ```
      ```
 
-3. ラベルを付与します：
-   * 依存関係(`depends_on`)が未解決なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
-   * 優先度ラベル: `priority:high` / `priority:medium` / `priority:low`。
-   * `risk: true` のサブタスクには `risk:flagged` を付与。
+3. ラベルおよびGitHub関係性を付与します：
+   * **親子関係の紐付け**: 親となる「大きな石」のIssue番号（例: `#100`）がある場合、新しく作成するサブタスクIssueに親を設定するため `--parent <親Issue番号>` を付与します。
+   * **依存関係の紐付け**: 依存関係（`depends_on`）がある場合、先行タスクを先に起票してそのIssue番号（例: `#101`）を確定させ、後続タスク起票時に `--blocked-by <先行Issue番号>` を付与します。
+   * **初期ステータスラベル**: 依存関係が未解決（未完了の先行タスクがある）なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
+   * **優先度・リスク**: 優先度に応じて `priority:high` / `priority:medium` / `priority:low`、また `risk: true` であれば `risk:flagged` を付与。
 
 4. **Issue起票コマンド例（GitHub CLI使用）**:
-   ```bash
-   gh issue create --title "[FEAT] task-a: Implement foo feature" --body-file /tmp/issue_body.md --label "status:queued,priority:medium"
-   ```
+   * 親Issueが `#100` で、先行依存Issueとして `#101` がある場合の例：
+     ```bash
+     gh issue create --title "[FEAT] task-b: Implement bar feature" --body-file /tmp/issue_body.md --parent 100 --blocked-by 101 --label "status:blocked,priority:medium"
+     ```
+   * 親Issueが `#100` で、依存関係がない場合の例：
+     ```bash
+     gh issue create --title "[FEAT] task-a: Implement foo feature" --body-file /tmp/issue_body.md --parent 100 --label "status:queued,priority:medium"
+     ```
 
 ## ステージB: ディスパッチャーのスケジュール実行
 
