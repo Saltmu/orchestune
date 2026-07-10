@@ -72,14 +72,15 @@ poetry add --group dev git+https://github.com/Saltmu/ochestune.git
 
 ## 使い方
 
-典型的な一連の流れは以下のようになります。
+`orchestune`は**人間が直接呼び出す必要のある唯一のスキル**であり、それ以外はすべて内部で駆動します。典型的な一連の流れは以下のようになります。
 1. 人間がエージェントに「この大きな機能（大きな石）を実装したい。`orchestune`で分解して並列開発をセットアップして」と指示します。
 2. エージェントがそれをトリガーに`orchestune`スキルを自動的にロードします。
-3. エージェントが`decomposition_plan.md`を作成し、インストール済みのCLIを使ってDAGを検証します。
-4. 人間が計画を承認すると、エージェントがGitHub Issueを起票し、ディスパッチャーを起動します。
+3. `orchestune`が`orchestune-dag` CLIに`decomposition_plan.md`のDAG構築・検証を依頼し、結果を人間に提示します。
+4. 人間が承認するか、フィードバックを返します。フィードバックの場合は`orchestune`が計画を修正して再検証し、承認が得られるまでこのループを繰り返します。
+5. 承認されると、`orchestune`は内部で`orchestune-dispatch`スキルへハンドオフし、GitHub Issueの起票とディスパッチャーの設定・起動を行います。人間が`orchestune-dispatch`を直接呼び出す必要はありません。
 
 ### 1. タスク分解計画とDAGの検証（Decomposition Plan & DAG Validation）
-メインタスク（「大きな石」）をより小さなサブタスクに分解するには、エージェント（Claude Code、Antigravityなど）に **`orchestune` コアスキル** をロードさせます。AIが自動的にコードベースの調査、`decomposition_plan.md` の作成・検証、およびFootprintメタデータや`status`/`priority`ラベルを含むGitHub Issueの起票までを一貫して行うため、計画を手動で書いたりIssueを手動で起票したりする必要はほぼありません。
+メインタスク（「大きな石」）をより小さなサブタスクに分解するには、エージェント（Claude Code、Antigravityなど）に **`orchestune` コアスキル** をロードさせます。AIが自動的にコードベースの調査、`decomposition_plan.md` の作成・検証、承認までのフィードバックループを行い、承認後は`orchestune-dispatch`にハンドオフしてFootprintメタデータや`status`/`priority`ラベルを含むGitHub Issueを起票するため、計画を手動で書いたりIssueを手動で起票したりする必要はほぼありません。
 
 参考として、`decomposition_plan.md` はYAMLフロントマター形式で記述されます：
 
@@ -112,7 +113,7 @@ orchestune-dag --plan decomposition_plan.md
 # (本リポジトリ自身の開発環境内であれば: poetry run orchestune-dag --plan decomposition_plan.md)
 ```
 
-Issueの起票は、ディスパッチャーが解析できるよう決まった形式（タイトル形式、`Footprint`のYAMLブロック、`status`/`priority`/`risk`ラベル）に従います。手動で起票する必要が生じた場合は[`skills/orchestune/SKILL.md`](skills/orchestune/SKILL.md)を参照してください。
+Issueの起票は、ディスパッチャーが解析できるよう決まった形式（タイトル形式、`Footprint`のYAMLブロック、`status`/`priority`/`risk`ラベル）に従います。手動で起票する必要が生じた場合は[`skills/orchestune-dispatch/SKILL.md`](skills/orchestune-dispatch/SKILL.md)を参照してください。
 
 ### 2. ディスパッチャーコマンド
 スケジューラ/ディスパッチャーを実行します。

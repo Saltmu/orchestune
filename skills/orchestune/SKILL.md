@@ -1,6 +1,6 @@
 ---
 name: "orchestune"
-description: "Core skill to decompose a large task ('big rock') into subtasks, build/validate a dependency DAG, and automatically create GitHub Issues."
+description: "Single entry-point skill for a 'big rock' (large task): decompose it into subtasks, build/validate a dependency DAG, iterate with the user until approved, then hand off to orchestune-dispatch for Issue creation and dispatch."
 version: "1.0.0"
 category: "Development"
 input_schema:
@@ -13,17 +13,15 @@ output_schema:
 
 # Orchestune Core Skill
 
-This skill is designed to automatically understand a "big rock" (large-scale development task) presented by a user, decompose it into subtasks (Decomposition), calculate and validate the dependency graph (DAG), and register them as GitHub Issues.
+This is the **single user-facing entry point** for Orchestune. It understands a "big rock" (large-scale development task) presented by a user, decomposes it into subtasks (Decomposition), calculates and validates the dependency graph (DAG) via the `orchestune-dag` CLI, and iterates with the user until the plan is approved. Once approved, it hands off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md), which creates the GitHub Issues and configures the dispatcher — the user never needs to invoke that skill directly.
 
 ## Trigger Conditions
 
-Load this skill **when a user presents a 'big rock' task and requests task decomposition, implementation roadmap creation, or issue registration for parallel development.**
+Load this skill **when a user presents a 'big rock' task and requests task decomposition, implementation roadmap creation, or parallel development.** This is the only skill a user needs to invoke to go from task description to running parallel dispatch — do not ask the user to separately invoke `orchestune-dag` or `orchestune-dispatch`; drive both internally as described below.
 
 ## Prerequisites
 
 * The `poetry run orchestune-dag` or `orchestune-dag` command must be installed on the system.
-* The GitHub CLI (`gh` command) must be installed and authenticated (`gh auth status`).
-  * If `gh` is unavailable, use the GitHub MCP server, or guide the user to create issues manually via the Web UI.
 
 ## Workflow
 
@@ -54,48 +52,20 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 
 ### Stage 2: Validate DAG
 
-1. Validate the consistency of the DAG using the created `decomposition_plan.md`:
+1. Delegate consistency validation of the `decomposition_plan.md` to the `orchestune-dag` CLI (this is the "ask orchestune-dag to decompose/validate" step — `orchestune` never re-implements DAG validation itself):
 
    ```bash
    poetry run orchestune-dag --plan decomposition_plan.md
    ```
 
-   * If validation errors (such as circular dependencies `DagCycleError`) occur, modify `decomposition_plan.md` and re-run validation.
+   * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `decomposition_plan.md` and re-run this command until it passes.
 
-### Stage 3: Present Plan and Obtain User Approval
+### Stage 3: Present Plan and Iterate with the User
 
 1. Organize the validation results of `orchestune-dag` (topological order, parallel leaf subtasks, conflict risks, etc.) and present them to the user.
-2. Obtain the user's approval on the proposed decomposition plan.
+2. Ask for approval. If the user requests changes instead (feedback), revise `decomposition_plan.md` accordingly and return to **Stage 2** to re-validate — repeat this loop until the user explicitly approves the plan.
 
-### Stage 4: Create GitHub Issues
+### Stage 4: Hand Off to Dispatch
 
-1. Once approved, create a GitHub Issue for each subtask.
-2. Set the title and body of each Issue as follows:
-   * **Title**: `[FEAT] <subtask_id>: <summary of description>`
-   * **Body**: Embed the following Footprint YAML block at the end of the body so that the Orchestune dispatcher can parse it:
-
-     ```markdown
-     ## Footprint
-     ```yaml
-     subtask_id: <subtask_id>
-     footprint:
-       - <path/to/file>
-     symbols:
-       - <class_or_function>
-     depends_on:
-       - <dep_subtask_id>
-     ```
-     ```
-
-   * **Labels**:
-     * Assign the `status:blocked` label if the dependency (`depends_on`) is not yet resolved (i.e., there are other unresolved subtasks).
-     * Assign the `status:queued` label if there are no dependencies or if all dependencies are resolved (parallel leaves).
-     * Assign the appropriate priority label: `priority:high`, `priority:medium`, or `priority:low`.
-     * Assign the `risk:flagged` label if the subtask has `risk: true`.
-
-3. **Example Issue Creation Command (using GitHub CLI)**:
-   ```bash
-   gh issue create --title "[FEAT] task-a: Implement foo feature" --body-file /tmp/issue_body.md --label "status:queued,priority:medium"
-   ```
-
-4. Once all issues have been created, report the list of created issues to the user and conclude the task.
+1. Once the user approves the plan, load and follow the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) with the approved `decomposition_plan.md` as input. That skill is responsible for creating the GitHub Issues (with `Footprint` metadata and `status`/`priority`/`risk` labels) and running the `orchestune-dispatch` CLI to configure/start dispatch.
+2. Report the outcome (created Issues, dispatch status) back to the user to conclude the task.
