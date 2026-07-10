@@ -1,14 +1,6 @@
 ---
 name: "local-ci-developer"
 description: "設計・実装プラン作成、GitHubでのIssue起票、TDDによる実装、ローカルCI検証、Walkthroughを記載したPR作成、マージ時のIssue自動クローズまでの一連の開発ワークフローを統制するスキル。"
-version: "1.0.0"
-category: "Development"
-input_schema:
-  type: "object"
-  properties: {}
-output_schema:
-  type: "object"
-  properties: {}
 ---
 
 # Local CI & TDD Developer Skill
@@ -104,19 +96,23 @@ output_schema:
 ### 10. すべてがパスした後の確認とPR作成（PR agent / finalization）
 - `./scripts/local-ci.sh` が `✨ Local CI passed successfully!` と出力して正常終了したことを確認します。
 - `walkthrough.md` を作成し、実施した変更やテスト内容、Local CI の結果をまとめます。
-- GitHub上にPRを作成します。その際、PRテンプレート（`.github/pull_request_template.md`）の内容に沿って、変更内容（Walkthrough）やローカルCIの合格有無、関連するIssue番号（`Closes #<Issue番号>`）に加え、以下を記述してPRを送信します。
+- PR本文は、必ずリポジトリのPRテンプレート（`.github/pull_request_template.md`）から作成します。テンプレートを直接`--body-file`へ渡さず、作業用ファイル（例: `/tmp/pr_body.md`）へコピーしてから、見出し・チェックリスト・必須項目を削除せずにすべて記入してください。
+- テンプレートにプレースホルダー、未記入の箇条書き、未判定のチェックボックスが残っていないことを確認します。該当しない項目は削除せず、理由を添えて「該当なし」と記載します。
+- GitHub上にPRを作成します。変更内容（Walkthrough）やローカルCIの合格有無、関連するIssue番号（`Closes #<Issue番号>`）に加え、以下をテンプレートの対応する欄へ記述してPRを送信します。
   - **再現手順と修正確認**: ステップ3のReproducerテスト/スクリプトが、修正前はIssue記載の症状通りに失敗し、修正後にパスすることを確認した旨（新規機能の場合は「該当なし」）。
   - **ベースライン差分**: ステップ4のベースラインと比較して新規のリグレッションがないこと、既存の未解決failureがあれば一覧。
   環境に応じて、以下のいずれかの手段を用いてください。
   - **手段A: GitHub CLI (推奨)**
-    `gh` コマンドを使用してPRを作成します。
+    `gh` コマンドを使用し、記入・確認済みの作業用PR本文からPRを作成します。
     ```bash
-    gh pr create --title "PRのタイトル" --body-file .github/pull_request_template.md
+    cp .github/pull_request_template.md /tmp/pr_body.md
+    # /tmp/pr_body.md の全項目を記入し、未記入箇所がないことを確認する
+    gh pr create --title "PRのタイトル" --body-file /tmp/pr_body.md
     ```
   - **手段B: GitHub MCP (MCP利用可能な環境)**
-    GitHub MCPサーバーの `create_pull_request` ツールなどを呼び出します。
+    `.github/pull_request_template.md`を読み込み、その構造と全項目を維持して記入した本文をGitHub MCPサーバーの `create_pull_request` ツールなどへ渡します。
   - **手段C: Web UI (Web/手動環境)**
-    作業ブランチをリモートにプッシュし（`git push origin <branch-name>`）、ブラウザでGitHubのリポジトリにアクセスし、PRテンプレートに沿って手動でPull Requestを作成します。
+    作業ブランチをリモートにプッシュし（`git push origin <branch-name>`）、ブラウザでGitHubのリポジトリにアクセスし、自動表示されたPRテンプレートの全項目を記入してPull Requestを作成します。
 - PR作成後、ユーザーにPR上でのレビューを依頼します。
 
 ### 11. PRマージとIssueの自動クローズ
