@@ -180,6 +180,21 @@ def _get_ci_env(repository_root: Path) -> dict[str, str]:
     return env
 
 
+def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
+    """指定されたPIDのプロセスが終了するまで待機する。"""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            pass
+        except OSError:
+            return
+        time.sleep(0.1)
+
+
 def _try_auto_rebase(
     active: ActiveWorktree,
     active_task: Task | None,
@@ -221,6 +236,7 @@ def _try_auto_rebase(
                     if active.pid:
                         try:
                             os.kill(active.pid, 9)
+                            _wait_for_process_terminate(active.pid)
                         except Exception:
                             pass
                     try:
