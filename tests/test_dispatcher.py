@@ -920,6 +920,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.is_process_alive", return_value=False),
             patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=False
+            ),
+            patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
@@ -972,6 +975,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.is_process_alive", return_value=False),
             patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=False
+            ),
+            patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
@@ -1007,6 +1013,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=False
+            ),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1044,6 +1053,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=False
+            ),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1364,6 +1376,9 @@ class TestRunDispatchCycleBlockedPromotion:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_self_healing.is_process_alive", return_value=False
+            ),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
