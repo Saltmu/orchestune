@@ -6,6 +6,10 @@ def test_setup_skills_creates_links(tmp_path):
 
     mock_home = tmp_path / "home"
     mock_home.mkdir()
+    # 親フォルダがあらかじめ存在している場合のみシンボリックリンクを作成することを確認
+    (mock_home / ".claude").mkdir()
+    (mock_home / ".codex").mkdir()
+    (mock_home / ".gemini").mkdir()
 
     mock_source = tmp_path / "orchestune_repo"
     mock_source.mkdir()
@@ -32,11 +36,37 @@ def test_setup_skills_creates_links(tmp_path):
     assert gemini_target.resolve() == skills_dir / "orchestune"
 
 
+def test_setup_skills_skips_when_no_parent(tmp_path):
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    # 親フォルダを一切作成しない
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        setup_skills()
+
+    # どのフォルダもシンボリックリンクも作成されていないことを検証
+    assert not (mock_home / ".claude").exists()
+    assert not (mock_home / ".codex").exists()
+    assert not (mock_home / ".gemini").exists()
+
+
 def test_setup_skills_already_exists(tmp_path, capsys):
     from orchestune.setup_skills import setup_skills
 
     mock_home = tmp_path / "home"
     mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
 
     mock_source = tmp_path / "orchestune_repo"
     mock_source.mkdir()
@@ -56,7 +86,5 @@ def test_setup_skills_already_exists(tmp_path, capsys):
     ):
         setup_skills()
 
-    # 既に存在している場合はスキップされる、あるいは上書きされる（警告などが出る）
-    # 実装では「すでに存在している場合はスキップしてメッセージを出す」とします
     captured = capsys.readouterr()
     assert "Skipped" in captured.out or "already exists" in captured.out
