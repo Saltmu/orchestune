@@ -20,6 +20,7 @@ class ActiveWorktree:
     forced_serial: bool = False
     external_id: str | None = None
     external_url: str | None = None
+    base_branch: str = "origin/main"
 
 
 @dataclass
@@ -36,6 +37,7 @@ class CompletedWorktree:
     recompute_count: int = 0
     forced_serial: bool = False
     commit_sha: str | None = None
+    base_branch: str = "origin/main"
 
 
 @dataclass
@@ -62,6 +64,7 @@ def load_run_state(path: str | Path) -> RunState:
             forced_serial=value.get("forced_serial", False),
             external_id=value.get("external_id"),
             external_url=value.get("external_url"),
+            base_branch=value.get("base_branch", "origin/main"),
         )
         for key, value in data.get("active_worktrees", {}).items()
     }
@@ -75,6 +78,7 @@ def load_run_state(path: str | Path) -> RunState:
             recompute_count=value.get("recompute_count", 0),
             forced_serial=value.get("forced_serial", False),
             commit_sha=value.get("commit_sha"),
+            base_branch=value.get("base_branch", "origin/main"),
         )
         for value in data.get("completed_worktrees", [])
     ]
