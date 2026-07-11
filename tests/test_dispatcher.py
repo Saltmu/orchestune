@@ -1873,6 +1873,114 @@ class TestBranchStacking:
 
         mock_launch.assert_not_called()
 
+    def test_stacking_blocked_task_when_dependency_completes_in_same_cycle(
+        self, tmp_path
+    ):
+        config = DispatcherConfig(
+            max_concurrent=3,
+            max_launches_per_window=3,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+        )
+        # タスクC(3) は タスクB(2) に依存、タスクB(2) は タスクA(1) に依存
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        issue_b = _issue(
+            2, labels=("status:blocked",), subtask_id="task-2", depends_on=("task-1",)
+        )
+        issue_c = _issue(
+            3, labels=("status:blocked",), subtask_id="task-3", depends_on=("task-2",)
+        )
+
+        # タスクA（issue 1）は active_worktrees に登録されており、このサイクルで完了する
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
+                    pid=123,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                    base_branch="origin/main",
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatcher.github.list_remote_branches",
+                return_value=[
+                    "origin/claude/issue-1-task-1",
+                    "origin/claude/issue-2-task-2",
+                ],
+            ),
+            patch(
+                "orchestune.dispatcher.github.list_open_prs",
+                return_value=[
+                    PrRecord(
+                        number=11,
+                        head_ref="claude/issue-2-task-2",
+                        changed_files=("src/b.py",),
+                        review_decision="APPROVED",
+                        is_ci_passing=True,  # 依存先BのPRはCI通過済み
+                    )
+                ],
+            ),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch(
+                "orchestune.dispatch_launch.create_worktree_and_launch"
+            ) as mock_launch,
+            # タスクAの完了判定とGC処理のためのモック
+            patch("orchestune.dispatch_cycle._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle._finalize_completed_worktree",
+                return_value={
+                    "action": "completed",
+                    "issue_number": 1,
+                    "subtask_id": "task-1",
+                    "commit_sha": "abc1234",
+                },
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_b, issue_c]
+                if label == "status:blocked"
+                else [issue_a]
+                if label == "status:in-progress"
+                else []
+            )
+            mock_launch.return_value = MagicMock(
+                launched=True,
+                pid=456,
+                branch="claude/issue-3-task-3",
+                worktree_path="worktrees/claude-issue-3-task-3",
+                error_message=None,
+                external_id=None,
+                external_url=None,
+            )
+
+            report = run_dispatch_cycle(config)
+
+        # 同一サイクル内で依存先Aが完了し、かつBのPRがCI通過済みのため、
+        # タスクC（issue 3）がタスクBのブランチをベースにスタッキング起動される
+        mock_launch.assert_called_once_with(
+            ANY,
+            "claude/issue-3-task-3",
+            ANY,
+            ANY,
+            apply=True,
+            base_branch="claude/issue-2-task-2",
+        )
+        mock_remove_label.assert_any_call(3, "status:blocked")
+        mock_add_label.assert_any_call(3, "status:in-progress")
+        assert len(report.selected) == 1
+
     def test_auto_rebase_conflict(self, tmp_path):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
