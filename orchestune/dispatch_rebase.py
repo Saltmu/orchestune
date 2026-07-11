@@ -372,10 +372,10 @@ def _try_auto_rebase(
     subtask_branch_map: dict[str, str],
     config: DispatcherConfig,
 ) -> bool:
-    """decide+applyの薄いラッパー（呼び出し互換のため維持）。自動リベースを
-    試行対象と判定した場合は True を返す（実際にリベースを実行したかは問わない。
-    呼び出し元はTrueを「このサイクルはこのactive worktreeの処理を終えた」の
-    シグナルとして扱うため）。"""
+    """decide+applyの薄いラッパー。自動リベースを試行し、実際にリベースを
+    実行した場合は True を返す。リベースが不要、あるいは対象がない場合は
+    False を返す（呼び出し元が footprint 逸脱チェック等の後続処理へ
+    フォールスルーできるようにするため）。"""
     parent_branch = _decide_rebase_target(
         active_task, done_subtask_ids, ci_passed_pr_subtask_ids, subtask_branch_map
     )
@@ -385,4 +385,5 @@ def _try_auto_rebase(
     if _decide_rebase_needed(parent_branch, active.branch):
         assert active_task is not None
         _apply_auto_rebase(active, active_task, key, run_state, parent_branch, config)
-    return True
+        return True
+    return False
