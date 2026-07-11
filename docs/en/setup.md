@@ -84,3 +84,15 @@ Currently, the only supported cloud execution target for `--dispatch-target clou
 
 > [!NOTE]
 > The dispatcher always generates branch names in the `claude/issue-<issue_number>-<subtask_id>` format, which matches the routine's default branch-push restriction (only `claude/`-prefixed branches are allowed). You do not need to lift the branch restriction.
+
+---
+
+## 4. Setting Up Local `claude` CLI Dispatch
+
+To dispatch subtasks to a local `claude` CLI session without hand-writing a `--local-cmd` template, use the built-in preset:
+
+```bash
+orchestune dispatch --dispatch-target claude-cli
+```
+
+This runs `claude -p "..."` (non-interactive print mode) in each subtask's worktree with a preset instruction text. Because `-p` cannot answer interactive permission prompts, run `orchestune bootstrap` once in the target repository first — in addition to ensuring required GitHub labels exist, it also creates a default `.claude/settings.json` permission allowlist (covering the `git`/`gh` commands the standard workflow needs) if one doesn't already exist yet. If `.claude/settings.json` is already present, it is left untouched.

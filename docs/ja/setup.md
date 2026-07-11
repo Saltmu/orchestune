@@ -84,3 +84,15 @@ orchestune setup
 
 > [!NOTE]
 > ディスパッチャーが生成するブランチ名は常に `claude/issue-<Issue番号>-<subtask_id>` という `claude/` プレフィックス付きの形式です。これはルーチン側のデフォルトのブランチpush制限（`claude/` プレフィックスのみpush許可）と一致するため、別途ブランチ制限を解除する必要はありません。
+
+---
+
+## 4. ローカルの`claude` CLIへのディスパッチ設定
+
+`--local-cmd` テンプレートを手書きせずに、ローカルの`claude` CLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
+
+```bash
+orchestune dispatch --dispatch-target claude-cli
+```
+
+これは各サブタスクのworktree内で `claude -p "..."`（非対話・print モード）をプリセットの指示文で実行します。`-p` は対話的な許可プロンプトに応答できないため、事前に対象リポジトリで一度 `orchestune bootstrap` を実行してください。これは必須のGitHubラベルの起票に加えて、`.claude/settings.json` がまだ存在しない場合にデフォルトの許可リスト（標準ワークフローに必要な`git`/`gh`コマンドを含む）を自動作成します。既に `.claude/settings.json` が存在する場合は変更されません。
