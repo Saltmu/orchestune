@@ -18,6 +18,7 @@ Orchestuneは、**Agentic AI開発向けのスキル**（Claude Code、Antigravi
    - サブタスクのPR完了を監視し、下流ブランチの自動マージやリベースを調整して競合を最小化します。
 
 👉 詳細な仕組みについては [アーキテクチャと設計思想](docs/ja/architecture.md) を参照してください。
+👉 各`status:*`ラベルの意味とライフサイクルについては [status:* ラベルのライフサイクル](docs/ja/status-labels.md) を参照してください。
 
 ---
 
