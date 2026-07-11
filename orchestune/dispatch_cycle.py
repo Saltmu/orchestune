@@ -112,7 +112,10 @@ def _decide_stale_active_entry(
 ) -> dict | None:
     """githubラベルを正として、run_state側に残った古い帳簿エントリ（stale)かを
     副作用なしで判定する。staleであればイベントdictを返す。"""
-    if active_task is not None and "status:in-progress" not in active_task.status_labels:
+    if (
+        active_task is not None
+        and "status:in-progress" not in active_task.status_labels
+    ):
         # run_stateへの登録(save_run_state)は起動成功直後に、GitHubラベルの
         # status:in-progress付与はその後に行う順序になっているため、この間で
         # クラッシュした場合（あるいは完了/エスカレーション処理でラベルだけ
@@ -408,7 +411,9 @@ def _decide_external_lock_sync(
     ]
 
     all_tasks = list(tasks_by_issue.values())
-    return scan_external_locks(all_tasks, remote_branch_footprints, prs, active_branches)
+    return scan_external_locks(
+        all_tasks, remote_branch_footprints, prs, active_branches
+    )
 
 
 def _apply_external_lock_sync(

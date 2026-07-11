@@ -181,7 +181,9 @@ def _restore_missing_active_worktrees(
     config: DispatcherConfig,
 ) -> bool:
     """in-progressなIssueからActiveWorktreeを復元する（decide+applyの薄いラッパー）。"""
-    restorations = _decide_missing_active_worktrees(run_state, in_progress_issues, config)
+    restorations = _decide_missing_active_worktrees(
+        run_state, in_progress_issues, config
+    )
     return _apply_restore_missing_active_worktrees(run_state, restorations)
 
 

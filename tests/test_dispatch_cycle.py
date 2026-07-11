@@ -60,7 +60,9 @@ class TestDecideStaleActiveEntry:
 
 class TestDecideChangesRequestedEscalation:
     def test_false_when_no_depends_on(self):
-        assert _decide_changes_requested_escalation(_task(depends_on=()), set()) is False
+        assert (
+            _decide_changes_requested_escalation(_task(depends_on=()), set()) is False
+        )
 
     def test_false_when_dependency_not_changes_requested(self):
         task = _task(depends_on=("task-x",))

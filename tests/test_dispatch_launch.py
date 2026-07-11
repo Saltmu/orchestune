@@ -42,10 +42,10 @@ class TestDecideTaskLaunchPlan:
 
     def test_uses_stack_base_branch_when_available(self):
         task = _task(1)
-        config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
-        plans = _decide_task_launch_plan(
-            [task], {1: "claude/issue-0-task-0"}, config
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
         )
+        plans = _decide_task_launch_plan([task], {1: "claude/issue-0-task-0"}, config)
         assert len(plans) == 1
         assert plans[0].branch_name == "claude/issue-1-task-1"
         assert plans[0].base_branch_for_launch == "claude/issue-0-task-0"
@@ -53,7 +53,9 @@ class TestDecideTaskLaunchPlan:
 
     def test_falls_back_to_origin_main_without_parent(self):
         task = _task(1)
-        config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
         plans = _decide_task_launch_plan([task], {}, config)
         assert plans[0].base_branch_for_launch is None
         assert plans[0].base_branch_for_state == "origin/main"
@@ -61,7 +63,9 @@ class TestDecideTaskLaunchPlan:
     def test_uses_parent_branch_when_configured(self):
         task = _task(1)
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees", parent_issue_number=99
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            parent_issue_number=99,
         )
         plans = _decide_task_launch_plan([task], {}, config)
         assert plans[0].base_branch_for_launch == "parent/issue-99"
