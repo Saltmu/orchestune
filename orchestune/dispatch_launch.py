@@ -73,6 +73,11 @@ class DuplicateCandidateDecision:
     existing_pr: PrRecord | None = None
 
 
+def _is_orchestune_issue_branch(head_ref: str, issue_number: int) -> bool:
+    """PR本文のCloses一致フォールバックをOrchestune由来らしいブランチに限定する。"""
+    return head_ref.startswith(f"claude/issue-{issue_number}-")
+
+
 def _decide_duplicate_candidates(
     candidate_tasks: list[Task],
     ctx: CycleContext,
@@ -92,7 +97,10 @@ def _decide_duplicate_candidates(
         existing_pr = ctx.pr_by_branch.get(expected_branch)
         if not existing_pr:
             for pr in ctx.prs:
-                if task.issue_number in pr.closes_issue_numbers:
+                if (
+                    task.issue_number in pr.closes_issue_numbers
+                    and _is_orchestune_issue_branch(pr.head_ref, task.issue_number)
+                ):
                     existing_pr = pr
                     break
 
