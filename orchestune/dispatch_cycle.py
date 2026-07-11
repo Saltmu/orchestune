@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune import github
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc import (
     _collect_zombies_and_timeouts,
     _finalize_completed_worktree,
@@ -190,10 +191,9 @@ def _apply_changes_requested_escalation(
                 os.kill(active.pid, 9)
             except OSError:
                 pass
-        github.remove_label(active.issue_number, "status:in-progress")
-        github.add_label(active.issue_number, "status:blocked-human-review")
-        github.add_comment(
+        apply_human_review_escalation(
             active.issue_number,
+            ("status:in-progress",),
             "依存元PRが変更要求（Request Changes）を受けたため、スタックされたタスクを一時停止しました。",
         )
         del run_state.active_worktrees[key]
