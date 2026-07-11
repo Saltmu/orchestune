@@ -17,7 +17,8 @@ def _fake_forge(*, auth_error: ForgeAuthError | None = None, result=None):
 
 
 class TestRunBootstrap:
-    def test_returns_1_and_prints_error_on_auth_failure(self, capsys):
+    @patch("orchestune.bootstrap.setup_agy_permissions")
+    def test_returns_1_and_prints_error_on_auth_failure(self, mock_setup, capsys):
         forge = _fake_forge(auth_error=ForgeAuthError("boom"))
 
         exit_code = run_bootstrap(forge=forge)
@@ -26,8 +27,10 @@ class TestRunBootstrap:
         captured = capsys.readouterr()
         assert "boom" in captured.err
         forge.ensure_labels.assert_not_called()
+        mock_setup.assert_not_called()
 
-    def test_returns_0_and_prints_summary_on_success(self, capsys):
+    @patch("orchestune.bootstrap.setup_agy_permissions")
+    def test_returns_0_and_prints_summary_on_success(self, mock_setup, capsys):
         forge = _fake_forge(
             result=BootstrapResult(created_labels=("a",), existing_labels=("b", "c"))
         )
@@ -38,8 +41,10 @@ class TestRunBootstrap:
         captured = capsys.readouterr()
         assert "Labels created: 1" in captured.out
         assert "Labels already present: 2" in captured.out
+        mock_setup.assert_called_once()
 
-    def test_uses_github_forge_by_default(self):
+    @patch("orchestune.bootstrap.setup_agy_permissions")
+    def test_uses_github_forge_by_default(self, mock_setup):
         with patch("orchestune.bootstrap.GitHubForge") as mock_forge_cls:
             mock_forge_cls.return_value = _fake_forge(
                 result=BootstrapResult(created_labels=(), existing_labels=())
@@ -75,7 +80,8 @@ class TestEnsureClaudeSettings:
 
 
 class TestRunBootstrapClaudeSettings:
-    def test_provisions_claude_settings_on_success(self, tmp_path):
+    @patch("orchestune.bootstrap.setup_agy_permissions")
+    def test_provisions_claude_settings_on_success(self, mock_setup, tmp_path):
         forge = _fake_forge(
             result=BootstrapResult(created_labels=(), existing_labels=())
         )
@@ -85,7 +91,10 @@ class TestRunBootstrapClaudeSettings:
         assert exit_code == 0
         assert (tmp_path / ".claude" / "settings.json").exists()
 
-    def test_does_not_provision_claude_settings_on_auth_failure(self, tmp_path):
+    @patch("orchestune.bootstrap.setup_agy_permissions")
+    def test_does_not_provision_claude_settings_on_auth_failure(
+        self, mock_setup, tmp_path
+    ):
         forge = _fake_forge(auth_error=ForgeAuthError("boom"))
 
         run_bootstrap(forge=forge, repo_root=tmp_path)
@@ -105,28 +114,25 @@ class TestMain:
         assert exc_info.value.code == 1
 
 
-class TestSetupAgentPermissions:
+class TestSetupAgyPermissions:
     @patch("shutil.which")
     def test_setup_agy_permissions_success(self, mock_which, tmp_path):
-        from orchestune.bootstrap import setup_agent_permissions
+        from orchestune.bootstrap import setup_agy_permissions
 
-        # Mock shutil.which to say agy and git/gh exist
+        # agy/git/gh が存在する場合
         mock_which.side_effect = (
             lambda cmd: "/usr/bin/" + cmd if cmd in ("agy", "git", "gh") else None
         )
 
-        # Setup mock home and config directory
         mock_home = tmp_path / "home"
         mock_home.mkdir()
-        gemini_dir = mock_home / ".gemini"
-        projects_dir = gemini_dir / "config" / "projects"
+        projects_dir = mock_home / ".gemini" / "config" / "projects"
         projects_dir.mkdir(parents=True)
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         repo_uri = f"file://{repo_root.resolve()}"
 
-        # Create mock project file
         project_file = projects_dir / "test-project.json"
         project_file.write_text(
             json.dumps(
@@ -140,48 +146,56 @@ class TestSetupAgentPermissions:
             )
         )
 
-        with patch("pathlib.Path.home", return_value=mock_home):
-            setup_agent_permissions(repo_root)
+        setup_agy_permissions(repo_root, mock_home)
 
-        # Verify permissions added to project file
         updated_data = json.loads(project_file.read_text())
         allow_list = updated_data["permissionGrants"]["permissionGrants"]["allow"]
         assert "command(git)" in allow_list
         assert "command(gh)" in allow_list
-        assert "command(claude)" not in allow_list  # since claude which returned None
+        assert "command(claude)" not in allow_list  # claude は which で None
 
     @patch("shutil.which")
-    def test_setup_claude_permissions_success(self, mock_which, tmp_path):
-        from orchestune.bootstrap import setup_agent_permissions
+    def test_claude_command_added_when_exists(self, mock_which, tmp_path):
+        from orchestune.bootstrap import setup_agy_permissions
 
-        # Mock shutil.which to say claude exists
+        # agy と claude の両方が存在する場合
         mock_which.side_effect = (
-            lambda cmd: "/usr/bin/" + cmd if cmd == "claude" else None
+            lambda cmd: "/usr/bin/" + cmd if cmd in ("agy", "claude") else None
         )
 
         mock_home = tmp_path / "home"
         mock_home.mkdir()
-        claude_json_path = mock_home / ".claude.json"
-        claude_json_path.write_text(json.dumps({}))
+        projects_dir = mock_home / ".gemini" / "config" / "projects"
+        projects_dir.mkdir(parents=True)
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
+        repo_uri = f"file://{repo_root.resolve()}"
 
-        with patch("pathlib.Path.home", return_value=mock_home):
-            setup_agent_permissions(repo_root)
+        project_file = projects_dir / "test-project.json"
+        project_file.write_text(
+            json.dumps(
+                {
+                    "id": "test-project",
+                    "projectResources": {
+                        "resources": [{"gitFolder": {"folderUri": repo_uri}}]
+                    },
+                }
+            )
+        )
 
-        # Verify ~/.claude.json was updated
-        updated_data = json.loads(claude_json_path.read_text())
-        project_key = str(repo_root.resolve())
-        assert project_key in updated_data
-        assert "execute_bash" in updated_data[project_key]["allowedTools"]
-        assert updated_data[project_key]["hasTrustDialogAccepted"] is True
+        setup_agy_permissions(repo_root, mock_home)
+
+        updated_data = json.loads(project_file.read_text())
+        allow_list = updated_data["permissionGrants"]["permissionGrants"]["allow"]
+        # claude が存在する場合は command(claude) が許可リストに追加される
+        assert "command(claude)" in allow_list
 
     @patch("shutil.which")
-    def test_setup_permissions_skipped_when_cli_missing(self, mock_which, tmp_path):
-        from orchestune.bootstrap import setup_agent_permissions
+    def test_skipped_when_agy_and_gemini_not_present(self, mock_which, tmp_path):
+        from orchestune.bootstrap import setup_agy_permissions
 
-        # Mock shutil.which to say nothing exists
+        # 何も存在しない
         mock_which.return_value = None
 
         mock_home = tmp_path / "home"
@@ -190,9 +204,45 @@ class TestSetupAgentPermissions:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        with patch("pathlib.Path.home", return_value=mock_home):
-            setup_agent_permissions(repo_root)
+        setup_agy_permissions(repo_root, mock_home)
 
-        # Verify no config directories/files were created
+        # .gemini ディレクトリが作成されていないことを確認
         assert not (mock_home / ".gemini").exists()
-        assert not (mock_home / ".claude.json").exists()
+
+    @patch("shutil.which")
+    def test_no_duplicate_permissions(self, mock_which, tmp_path):
+        from orchestune.bootstrap import setup_agy_permissions
+
+        mock_which.side_effect = lambda cmd: "/usr/bin/" + cmd if cmd == "git" else None
+
+        mock_home = tmp_path / "home"
+        mock_home.mkdir()
+        projects_dir = mock_home / ".gemini" / "config" / "projects"
+        projects_dir.mkdir(parents=True)
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        repo_uri = f"file://{repo_root.resolve()}"
+
+        # 既に command(git) が存在する状態
+        project_file = projects_dir / "test-project.json"
+        project_file.write_text(
+            json.dumps(
+                {
+                    "id": "test-project",
+                    "projectResources": {
+                        "resources": [{"gitFolder": {"folderUri": repo_uri}}]
+                    },
+                    "permissionGrants": {
+                        "permissionGrants": {"allow": ["command(git)"]}
+                    },
+                }
+            )
+        )
+
+        setup_agy_permissions(repo_root, mock_home)
+
+        updated_data = json.loads(project_file.read_text())
+        allow_list = updated_data["permissionGrants"]["permissionGrants"]["allow"]
+        # 重複なく1件のみ
+        assert allow_list.count("command(git)") == 1
