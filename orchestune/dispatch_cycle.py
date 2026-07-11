@@ -829,6 +829,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
             done_subtask_ids,
             ci_passed_pr_subtask_ids,
             subtask_branch_map,
+            completed_subtask_ids=completed_subtask_ids,
         )
 
         candidate_tasks = queued_candidates + stack_eligible_tasks

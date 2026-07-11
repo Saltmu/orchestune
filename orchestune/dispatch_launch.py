@@ -24,9 +24,11 @@ def _get_stack_eligible_tasks(
     done_subtask_ids: set[str],
     ci_passed_pr_subtask_ids: set[str],
     subtask_branch_map: dict[str, str],
+    completed_subtask_ids: set[str] | None = None,
 ) -> tuple[list[Task], dict[int, str]]:
     stack_eligible_tasks = []
     task_to_base_branch = {}
+    resolved_grand_deps = done_subtask_ids | (completed_subtask_ids or set())
 
     for issue in blocked_issues:
         task = parse_task_from_issue(issue)
@@ -46,7 +48,7 @@ def _get_stack_eligible_tasks(
                         break
                 if dep_task:
                     if not all(
-                        grand_dep in done_subtask_ids
+                        grand_dep in resolved_grand_deps
                         for grand_dep in dep_task.depends_on
                     ):
                         all_resolved_or_stackable = False
