@@ -81,15 +81,21 @@ class TestDecideMissingActiveWorktrees:
             result = _decide_missing_active_worktrees(
                 run_state,
                 [issue],
-                DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+                DispatcherConfig(
+                    run_state_path="dummy.json", worktree_root="worktrees"
+                ),
             )
         assert result == []
         mock_prs.assert_not_called()
 
     def test_missing_issue_without_pr_decides_synthetic_branch(self):
         run_state = RunState(active_worktrees={})
-        issue = _issue_with_footprint(101, subtask_id="task-a", footprint=["src/foo.py"])
-        config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
+        issue = _issue_with_footprint(
+            101, subtask_id="task-a", footprint=["src/foo.py"]
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
 
         with patch(
             "orchestune.dispatch_recovery.github.list_open_prs", return_value=[]
