@@ -1,7 +1,46 @@
 from unittest.mock import ANY, call, patch
 
 from orchestune.dag import FootprintConflict
-from orchestune.dispatch_rebase import notify_force_serial, notify_recompute
+from orchestune.dispatch_rebase import (
+    _decide_footprint_deviation_outcome,
+    _decide_rebase_needed,
+    _decide_rebase_target,
+    notify_force_serial,
+    notify_recompute,
+)
+from orchestune.dispatch_scoring import Task
+from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatcher import DispatcherConfig
+
+
+def _task(**overrides):
+    defaults = dict(
+        issue_number=1,
+        subtask_id="task-a",
+        footprint=("src/foo.py",),
+        symbols=(),
+        risk=False,
+        priority="medium",
+        progress_partial=False,
+        status_labels=("status:in-progress",),
+        created_at="2026-01-01T00:00:00+00:00",
+        depends_on=(),
+    )
+    defaults.update(overrides)
+    return Task(**defaults)
+
+
+def _active(**overrides):
+    defaults = dict(
+        issue_number=1,
+        branch="claude/issue-1-task-a",
+        worktree_path="worktrees/w1",
+        pid=111,
+        started_at=1_699_999_000.0,
+        declared_footprint=("src/foo.py",),
+    )
+    defaults.update(overrides)
+    return ActiveWorktree(**defaults)
 
 
 class TestNotifyRecompute:
@@ -157,3 +196,82 @@ class TestWaitForProcessTerminate:
 
         mock_kill.assert_called_once_with(12345, 0)
         mock_sleep.assert_not_called()
+
+
+class TestDecideFootprintDeviationOutcome:
+    """decide層: DAG再計算自体は純粋計算で、githubへの通知やactive/run_stateの
+    変更は行わない。"""
+
+    def test_already_forced_serial_is_noop(self):
+        active = _active(forced_serial=True)
+        decision = _decide_footprint_deviation_outcome(
+            active, ["src/foo.py"], {}, DispatcherConfig()
+        )
+        assert decision.action == "already_forced_serial"
+
+    def test_unknown_subtask_is_skipped(self):
+        active = _active()
+        decision = _decide_footprint_deviation_outcome(
+            active, ["src/foo.py"], {}, DispatcherConfig()
+        )
+        assert decision.action == "skipped_unknown_subtask"
+
+    def test_retry_limit_exceeded_forces_serial(self):
+        active = _active(recompute_count=2)
+        task = _task()
+        config = DispatcherConfig(max_recompute_retries=2)
+        decision = _decide_footprint_deviation_outcome(
+            active, ["src/foo.py"], {1: task}, config
+        )
+        assert decision.action == "forced_serial"
+        assert decision.recompute_count == 2
+        # decide層はactive.forced_serialを書き換えない
+        assert active.forced_serial is False
+
+    def test_under_retry_limit_recomputes(self):
+        active = _active(recompute_count=0)
+        task = _task()
+        config = DispatcherConfig(max_recompute_retries=2)
+        decision = _decide_footprint_deviation_outcome(
+            active, ["src/bar.py"], {1: task}, config
+        )
+        assert decision.action == "recomputed"
+        assert decision.subtask_id == "task-a"
+        # decide層はactive.recompute_countを書き換えない
+        assert active.recompute_count == 0
+
+
+class TestDecideRebaseTarget:
+    def test_no_depends_on_returns_none(self):
+        assert _decide_rebase_target(_task(depends_on=()), set(), {}) is None
+
+    def test_returns_first_ci_passed_dependency_branch(self):
+        task = _task(depends_on=("task-x", "task-y"))
+        branch = _decide_rebase_target(
+            task,
+            {"task-y"},
+            {"task-y": "claude/issue-2-task-y"},
+        )
+        assert branch == "claude/issue-2-task-y"
+
+    def test_no_ci_passed_dependency_returns_none(self):
+        task = _task(depends_on=("task-x",))
+        assert _decide_rebase_target(task, set(), {}) is None
+
+
+class TestDecideRebaseNeeded:
+    def test_ancestor_means_no_rebase_needed(self):
+        with patch("orchestune.dispatch_rebase.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            assert _decide_rebase_needed("main", "feature") is False
+
+    def test_not_ancestor_means_rebase_needed(self):
+        with patch("orchestune.dispatch_rebase.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert _decide_rebase_needed("main", "feature") is True
+
+    def test_os_error_defaults_to_no_rebase(self):
+        with patch(
+            "orchestune.dispatch_rebase.subprocess.run", side_effect=OSError("boom")
+        ):
+            assert _decide_rebase_needed("main", "feature") is False

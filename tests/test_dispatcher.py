@@ -6,7 +6,6 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from orchestune.dag import FootprintConflict
-from orchestune.dispatch_targets import DispatchHandle, LocalProcessDispatchTarget
 from orchestune.dispatcher import (
     ActiveWorktree,
     CompletedWorktree,
@@ -17,9 +16,6 @@ from orchestune.dispatcher import (
     _is_worktree_complete,
     append_event_log,
     build_event_log_entry,
-    create_worktree_and_launch,
-    default_dry_run_command_builder,
-    file_lock,
     load_run_state,
     run_dispatch_cycle,
     save_run_state,
@@ -123,190 +119,6 @@ class TestAppendEventLog:
         assert path.exists()
 
 
-class TestCreateWorktreeAndLaunch:
-    def test_dry_run_does_not_call_subprocess(self, tmp_path):
-        task = _task(1)
-        dispatch_target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
-        )
-        with (
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-        ):
-            result = create_worktree_and_launch(
-                task,
-                branch_name="claude/issue-1-task-1",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=dispatch_target,
-                apply=False,
-            )
-        mock_run.assert_not_called()
-        mock_popen.assert_not_called()
-        assert result.launched is False
-
-    def test_apply_creates_worktree_and_launches_process(self, tmp_path):
-        task = _task(1)
-        dispatch_target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
-        )
-        with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-        ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            mock_popen.return_value.pid = 4242
-            result = create_worktree_and_launch(
-                task,
-                branch_name="claude/issue-1-task-1",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=dispatch_target,
-                apply=True,
-            )
-        assert mock_run.called
-        assert mock_popen.called
-        assert result.launched is True
-        assert result.pid == 4242
-
-    def test_rejects_invalid_branch_name(self, tmp_path):
-        task = _task(1)
-        dispatch_target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
-        )
-        with pytest.raises(ValueError):
-            create_worktree_and_launch(
-                task,
-                branch_name="--upload-pack=evil",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=dispatch_target,
-                apply=True,
-            )
-
-    def test_apply_failure_returns_launched_false_with_error(self, tmp_path):
-        task = _task(1)
-        dispatch_target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
-        )
-        with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-        ):
-            mock_run.side_effect = subprocess.CalledProcessError(
-                returncode=128,
-                cmd="git worktree add",
-                stderr="fatal: branch 'claude/issue-1-task-1' already exists",
-            )
-            result = create_worktree_and_launch(
-                task,
-                branch_name="claude/issue-1-task-1",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=dispatch_target,
-                apply=True,
-            )
-        assert result.launched is False
-        assert "fatal: branch" in result.error_message
-        mock_popen.assert_not_called()
-
-    def test_apply_uses_dispatch_target_and_captures_external_handle(self, tmp_path):
-        """#215: 差し替えたDispatchTargetのlaunch()結果がLaunchResultへ反映される。"""
-        task = _task(1)
-        fake_target = MagicMock()
-        fake_target.launch.return_value = DispatchHandle(
-            external_id="session_1",
-            external_url="https://claude.ai/code/session_1",
-            branch_name="claude/issue-1-task-1",
-        )
-        with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            result = create_worktree_and_launch(
-                task,
-                branch_name="claude/issue-1-task-1",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=fake_target,
-                apply=True,
-            )
-        assert fake_target.launch.called
-        assert result.launched is True
-        assert result.pid is None
-        assert result.external_id == "session_1"
-        assert result.external_url == "https://claude.ai/code/session_1"
-
-    @patch("orchestune.dispatcher._branch_exists", return_value=True)
-    def test_apply_reuses_existing_branch_without_overwriting(
-        self, mock_exists, tmp_path
-    ):
-        task = _task(1)
-        dispatch_target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
-        )
-        with (
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-        ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            mock_popen.return_value.pid = 4242
-            result = create_worktree_and_launch(
-                task,
-                branch_name="claude/issue-1-task-1",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=dispatch_target,
-                apply=True,
-            )
-        assert result.launched is True
-        # git worktree add に -B や -b が含まれていない（既存ブランチのチェックアウト）ことを確認
-        worktree_add_call = mock_run.call_args_list[1]
-        args = worktree_add_call.args[0]
-        assert "add" in args
-        assert "-B" not in args
-        assert "-b" not in args
-        assert "claude/issue-1-task-1" in args
-
-
-class TestBranchExists:
-    @patch("orchestune.dispatcher.subprocess.run")
-    def test_branch_exists_local(self, mock_run):
-        # 1回目の subprocess.run が returncode=0 を返せば True
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        from orchestune.dispatcher import _branch_exists
-
-        assert _branch_exists("my-branch") is True
-        mock_run.assert_called_once()
-
-    @patch("orchestune.dispatcher.subprocess.run")
-    def test_branch_exists_remote(self, mock_run):
-        # 1回目が returncode=1（ローカル存在せず）、2回目が returncode=0（リモート存在）
-        mock_run.side_effect = [
-            subprocess.CompletedProcess(args=[], returncode=1),
-            subprocess.CompletedProcess(args=[], returncode=0),
-        ]
-        from orchestune.dispatcher import _branch_exists
-
-        assert _branch_exists("my-branch") is True
-        assert mock_run.call_count == 2
-
-    @patch("orchestune.dispatcher.subprocess.run")
-    def test_branch_does_not_exist(self, mock_run):
-        # 1回目も2回目も returncode=1（存在せず）
-        mock_run.side_effect = [
-            subprocess.CompletedProcess(args=[], returncode=1),
-            subprocess.CompletedProcess(args=[], returncode=1),
-        ]
-        from orchestune.dispatcher import _branch_exists
-
-        assert _branch_exists("my-branch") is False
-        assert mock_run.call_count == 2
-
-
 class TestRunDispatchCycle:
     def test_dry_run_makes_no_write_calls(self, tmp_path):
         config = DispatcherConfig(
@@ -325,7 +137,7 @@ class TestRunDispatchCycle:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -354,13 +166,13 @@ class TestRunDispatchCycle:
         )
         queued_issue = _issue(1)
         with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
-            patch("orchestune.dispatcher.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -405,7 +217,7 @@ class TestRunDispatchCycle:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -566,8 +378,10 @@ class TestRunDispatchCycleBranchNormalization:
                 "orchestune.dispatcher.github.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]
+            ),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -696,9 +510,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatch_targets.subprocess.Popen"),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ) as mock_check_deviation,
             patch(
@@ -764,9 +578,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
@@ -822,9 +636,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
@@ -883,9 +697,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
@@ -980,7 +794,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1033,13 +847,15 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]
+            ),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -1069,7 +885,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1114,7 +930,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1158,13 +974,13 @@ class TestRunDispatchCycleCompletion:
         )
         queued_issue = _issue(2, footprint=("src/bar.py",), subtask_id="task-b")
         with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1174,7 +990,7 @@ class TestRunDispatchCycleCompletion:
                 return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree"),
-            patch("orchestune.dispatcher.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
 
@@ -1251,7 +1067,7 @@ class TestRunDispatchCycleNotNeeded:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.close_issue") as mock_close_issue,
             # プロセスは生きたまま・PRも存在しない、という「対応不要」の典型状態
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1291,7 +1107,7 @@ class TestRunDispatchCycleNotNeeded:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.close_issue") as mock_close_issue,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1488,7 +1304,7 @@ class TestRunDispatchCycleBlockedPromotion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1589,11 +1405,11 @@ class TestRunDispatchCycleBlockedPromotion:
         )
         issue = _issue(1)
         with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
@@ -1644,39 +1460,6 @@ class TestDispatcherLocking:
                     run_dispatch_cycle(config)
             assert "Another instance is already running" in str(exc_info.value)
 
-    def test_file_lock_propagates_exception_raised_inside_body(self, tmp_path):
-        """#227: dispatch cycle本体（`with file_lock(...):`のbody）で発生した例外は、
-        ロック機構によってマスクされず、元の例外のまま呼び出し元に伝播しなければならない。
-        GitHub Actions実行時、`gh issue edit --add-label`のCalledProcessErrorが
-        `RuntimeError: generator didn't stop after throw()`に化けてしまう回帰を防ぐ。"""
-        lock_path = tmp_path / "test.lock"
-
-        with pytest.raises(ValueError, match="boom"):
-            with file_lock(lock_path):
-                raise ValueError("boom")
-
-    def test_file_lock_raises_error_when_lock_acquisition_fails(self, tmp_path):
-        """ロック取得（mkdir/open/flock）自体が失敗した場合は、例外を発生させて終了する。"""
-        unwritable_dir = tmp_path / "no_such_parent"
-        lock_path = unwritable_dir / "test.lock"
-
-        with patch("pathlib.Path.mkdir", side_effect=OSError("boom-mkdir")):
-            executed = False
-            with pytest.raises(OSError, match="boom-mkdir"):
-                with file_lock(lock_path):
-                    executed = True
-            assert not executed
-
-    def test_file_lock_raises_error_when_fcntl_is_none(self, tmp_path):
-        """fcntlがNone（非Linux環境）の場合、RuntimeErrorを発生させて終了する。"""
-        lock_path = tmp_path / "test.lock"
-        with patch("orchestune.dispatcher.fcntl", None):
-            executed = False
-            with pytest.raises(RuntimeError, match="fcntl is not supported"):
-                with file_lock(lock_path):
-                    executed = True
-            assert not executed
-
 
 class TestBranchStacking:
     def test_stacking_blocked_task_when_dependency_pr_ci_passes(self, tmp_path):
@@ -1714,7 +1497,9 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.create_worktree_and_launch") as mock_launch,
+            patch(
+                "orchestune.dispatch_launch.create_worktree_and_launch"
+            ) as mock_launch,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [blocked_issue]
@@ -1785,7 +1570,9 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatcher.github.add_label"),
             patch("orchestune.dispatcher.github.remove_label"),
-            patch("orchestune.dispatcher.create_worktree_and_launch") as mock_launch,
+            patch(
+                "orchestune.dispatch_launch.create_worktree_and_launch"
+            ) as mock_launch,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue_b, issue_c]
@@ -1863,15 +1650,17 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]
+            ),
             patch("orchestune.dispatcher.github.add_label"),
             patch("orchestune.dispatcher.github.remove_label"),
             # os.kill と Popen のモック（リブートプロセスのため）
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatcher.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch_worktree.subprocess.Popen") as mock_popen,
             # git コマンド実行のモック
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
 
             def list_issues_by_label_mock(label, **_):
@@ -1963,7 +1752,9 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatcher.github.add_label"),
             patch("orchestune.dispatcher.github.remove_label"),
-            patch("orchestune.dispatcher.create_worktree_and_launch") as mock_launch,
+            patch(
+                "orchestune.dispatch_launch.create_worktree_and_launch"
+            ) as mock_launch,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue_c]
@@ -2029,13 +1820,15 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]
+            ),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_kill.side_effect = lambda pid, sig: (
                 ProcessLookupError() if sig == 0 else None
@@ -2121,13 +1914,15 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]
+            ),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatcher.os.kill") as mock_kill,
-            patch("orchestune.dispatcher.subprocess.run"),
+            patch("orchestune.dispatch_worktree.subprocess.run"),
         ):
             run_dispatch_cycle(config)
 
@@ -2177,7 +1972,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -2187,7 +1982,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue_a] if label == "status:in-progress" else []
@@ -2244,13 +2039,13 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue_a] if label == "status:in-progress" else []
@@ -2299,7 +2094,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=True,
@@ -2308,7 +2103,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
-            patch("orchestune.dispatcher.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue_a] if label == "status:in-progress" else []
@@ -2358,7 +2153,7 @@ class TestLaunchOrderingCrashSafety:
                 raise RuntimeError("simulated crash during label transition")
 
         with (
-            patch("orchestune.dispatcher._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
@@ -2367,7 +2162,7 @@ class TestLaunchOrderingCrashSafety:
                 "orchestune.dispatcher.github.remove_label",
                 side_effect=remove_label_side_effect,
             ),
-            patch("orchestune.dispatcher.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -2462,7 +2257,7 @@ class TestPreventDuplicateSessions:
     @patch("orchestune.dispatcher.github.remove_label")
     @patch("orchestune.dispatcher.github.add_label")
     @patch("orchestune.dispatcher.github.add_comment")
-    @patch("orchestune.dispatcher.subprocess.run")
+    @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
         self,
@@ -2521,7 +2316,7 @@ class TestPreventDuplicateSessions:
     @patch("orchestune.dispatcher.github.remove_label")
     @patch("orchestune.dispatcher.github.add_label")
     @patch("orchestune.dispatcher.github.add_comment")
-    @patch("orchestune.dispatcher.subprocess.run")
+    @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_closes_issue_matches(
         self,
@@ -2636,7 +2431,8 @@ class TestPreventDuplicateSessions:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch(
-                "orchestune.dispatcher.subprocess.run", side_effect=ls_remote_result
+                "orchestune.dispatch_worktree.subprocess.run",
+                side_effect=ls_remote_result,
             ) as mock_subprocess_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
@@ -2711,7 +2507,7 @@ class TestPreventDuplicateSessions:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch(
-                "orchestune.dispatcher.subprocess.run",
+                "orchestune.dispatch_worktree.subprocess.run",
                 side_effect=subprocess.CalledProcessError(
                     returncode=128, cmd="git ls-remote"
                 ),
