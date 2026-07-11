@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from orchestune import github
 from orchestune.dag import SubTask, build_dag
 from orchestune.dispatcher import Task, file_lock, parse_task_from_issue
 from orchestune.integration_coordinator import IntegrationCoordinator
+from orchestune.integrator_worktree import IntegrationWorktree
 
 
 @dataclass
@@ -46,46 +46,21 @@ class Integrator:
         self.failed_reasons: dict[str, str] = {}
         self.blocked_reasons: dict[str, str] = {}
         self.unparsable_done_tasks: list[Task] = []
+        self._worktree = IntegrationWorktree(
+            self.original_root, self.config.temp_branch
+        )
 
     def _worktree_key(self) -> str:
-        """`temp_branch`（親Issueごとに一意）を安全なファイル/ディレクトリ名に変換する。"""
-        return self.config.temp_branch.replace("/", "-")
+        return self._worktree.key()
 
     def _temp_worktree_path(self) -> Path:
-        return (
-            self.original_root
-            / "worktrees"
-            / f"integration-temp-{self._worktree_key()}"
-        )
+        return self._worktree.temp_path()
 
     def _worktree_lock_path(self) -> Path:
-        return (
-            self.original_root / "worktrees" / ".locks" / f"{self._worktree_key()}.lock"
-        )
+        return self._worktree.lock_path()
 
     def _reclaim_worktree_path(self, path: Path) -> None:
-        """`path`に残存物があれば、所有権を確認した上でのみ除去する。
-
-        `git worktree add`によって作成されたリンクワークツリーは、直下に
-        gitdirへのポインタを記した`.git`ファイル（ディレクトリではない）を持つ。
-        これを確認できた場合に限り`git worktree remove`で除去し、それ以外の
-        予期しないディレクトリ（他プロセスの作業ディレクトリ等）は所有権を
-        確認できないため一切削除しない。
-        """
-        if not path.exists():
-            return
-        git_marker = path / ".git"
-        if not git_marker.is_file():
-            raise RuntimeError(
-                f"Refusing to remove unrecognized path (not a git worktree): {path}"
-            )
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            cwd=str(self.original_root),
-            capture_output=True,
-        )
-        if path.exists():
-            shutil.rmtree(path, ignore_errors=True)
+        self._worktree.reclaim(path)
 
     def run(self) -> dict:
         sorted_done_tasks = self._get_sorted_done_tasks()
