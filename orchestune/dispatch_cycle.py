@@ -98,6 +98,7 @@ class CycleContext:
     run_state: RunState
     tasks_by_issue: dict[int, Task]
     issue_number_by_subtask_id: dict[str, int]
+    done_subtask_ids: set[str]
     ci_passed_pr_subtask_ids: set[str]
     changes_requested_subtask_ids: set[str]
     subtask_branch_map: dict[str, str]
@@ -358,6 +359,7 @@ def _rule_auto_rebase(
         active_task,
         key,
         ctx.run_state,
+        ctx.done_subtask_ids,
         ctx.ci_passed_pr_subtask_ids,
         ctx.subtask_branch_map,
         ctx.config,
@@ -731,6 +733,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
             run_state=run_state,
             tasks_by_issue=tasks_by_issue,
             issue_number_by_subtask_id=issue_number_by_subtask_id,
+            done_subtask_ids=done_subtask_ids,
             ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
             changes_requested_subtask_ids=changes_requested_subtask_ids,
             subtask_branch_map=subtask_branch_map,

@@ -243,12 +243,13 @@ class TestDecideFootprintDeviationOutcome:
 
 class TestDecideRebaseTarget:
     def test_no_depends_on_returns_none(self):
-        assert _decide_rebase_target(_task(depends_on=()), set(), {}) is None
+        assert _decide_rebase_target(_task(depends_on=()), set(), set(), {}) is None
 
-    def test_returns_first_ci_passed_dependency_branch(self):
+    def test_returns_branch_when_exactly_one_ci_passed_dependency_exists(self):
         task = _task(depends_on=("task-x", "task-y"))
         branch = _decide_rebase_target(
             task,
+            {"task-x"},
             {"task-y"},
             {"task-y": "claude/issue-2-task-y"},
         )
@@ -256,7 +257,44 @@ class TestDecideRebaseTarget:
 
     def test_no_ci_passed_dependency_returns_none(self):
         task = _task(depends_on=("task-x",))
-        assert _decide_rebase_target(task, set(), {}) is None
+        assert _decide_rebase_target(task, set(), set(), {}) is None
+
+    def test_multiple_ci_passed_dependencies_return_none(self):
+        task = _task(depends_on=("task-x", "task-y"))
+        assert (
+            _decide_rebase_target(
+                task,
+                set(),
+                {"task-x", "task-y"},
+                {
+                    "task-x": "claude/issue-2-task-x",
+                    "task-y": "claude/issue-3-task-y",
+                },
+            )
+            is None
+        )
+
+    def test_unresolved_dependency_blocks_auto_rebase(self):
+        task = _task(depends_on=("task-x", "task-y"))
+        assert (
+            _decide_rebase_target(
+                task,
+                set(),
+                {"task-y"},
+                {"task-y": "claude/issue-3-task-y"},
+            )
+            is None
+        )
+
+    def test_done_dependencies_are_ignored_when_exactly_one_ci_passed(self):
+        task = _task(depends_on=("task-x", "task-y"))
+        branch = _decide_rebase_target(
+            task,
+            {"task-x"},
+            {"task-y"},
+            {"task-y": "claude/issue-3-task-y"},
+        )
+        assert branch == "claude/issue-3-task-y"
 
 
 class TestDecideRebaseNeeded:
