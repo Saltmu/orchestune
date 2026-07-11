@@ -131,12 +131,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dispatch-target",
-        choices=["local", "cloud-routine", "claude-cli"],
+        choices=["local", "cloud-routine", "claude-cli", "agy-cli"],
         default="local",
         help="#215: エージェントの実ディスパッチ先。'cloud-routine'はClaude Codeクラウド"
         "ルーチンのfire APIへディスパッチする（要 --routine-id/--routine-token または"
         "ORCHESTUNE_ROUTINE_ID/ORCHESTUNE_ROUTINE_TOKEN環境変数）。"
-        "'claude-cli'はローカルのclaude CLIへ、プリセットのコマンドテンプレートで"
+        "'claude-cli'/'agy-cli'はそれぞれローカルのclaude/agy CLIへ、"
+        "許可プロンプトを毎回バイパスするプリセットのコマンドテンプレートで"
         "ディスパッチする（--local-cmdで上書き可能）",
     )
     parser.add_argument(
@@ -145,7 +146,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="ローカルのCLI（agyなど）にディスパッチする際のコマンドテンプレート。"
         "例: 'agy --issue {issue_number}' や 'agy'。"
         "使用可能な変数: {issue_number}, {subtask_id}, {branch_name}, {worktree_path}。"
-        "--dispatch-target claude-cli使用時は未指定ならプリセットが使われる。",
+        "--dispatch-target claude-cli/agy-cli使用時は未指定ならプリセットが使われる。",
     )
     parser.add_argument(
         "--routine-id",
