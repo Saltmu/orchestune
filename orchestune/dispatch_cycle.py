@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune import github
+from orchestune.dispatch_actor_verification import (
+    _apply_actor_verification,
+    _decide_actor_verification,
+)
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc import (
     _collect_zombies_and_timeouts,
@@ -822,6 +826,12 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
             for issue in queued_issues
             if issue.number not in newly_locked
         ]
+
+        # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、
+        # 権限不足のタスクを起動候補から除外する（status:blockedからのスタッキング
+        # 起動であるstack_eligible_tasksは対象外）。
+        actor_decisions = _decide_actor_verification(queued_candidates)
+        queued_candidates = _apply_actor_verification(actor_decisions, config)
 
         stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
             blocked_issues,

@@ -9,12 +9,15 @@ from orchestune.github import (
     _validate_issue_number,
     _validate_label,
     _validate_ref_name,
+    _validate_username,
     add_comment,
     add_label,
     branch_changed_files,
     close_issue,
     create_pull_request,
+    get_actor_permission,
     get_issue_labels,
+    get_label_actor,
     is_branch_merged_into,
     list_issues_by_label,
     list_open_prs,
@@ -83,6 +86,22 @@ class TestValidateRefName:
     def test_rejects_empty(self):
         with pytest.raises(ValueError, match="ブランチ名"):
             _validate_ref_name("")
+
+
+class TestValidateUsername:
+    def test_accepts_normal_username(self):
+        assert _validate_username("Saltmu") == "Saltmu"
+
+    def test_accepts_bot_username(self):
+        assert _validate_username("dependabot[bot]") == "dependabot[bot]"
+
+    def test_rejects_shell_metacharacters(self):
+        with pytest.raises(ValueError, match="ユーザー名"):
+            _validate_username("foo; rm -rf /")
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="ユーザー名"):
+            _validate_username("")
 
 
 class TestListIssuesByLabel:
@@ -396,6 +415,137 @@ class TestGetIssueLabels:
         with patch("orchestune.github.subprocess.run") as mock_run:
             with pytest.raises(ValueError):
                 get_issue_labels("181; rm -rf /")
+            mock_run.assert_not_called()
+
+
+class TestGetLabelActor:
+    """#119: `status:queued`ラベルを実際に付与したユーザーを特定する。"""
+
+    def test_returns_actor_of_matching_labeled_event(self):
+        events_payload = (
+            '[[{"event": "labeled", "actor": {"login": "alice"}, '
+            '"label": {"name": "status:queued"}}]]'
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=events_payload, stderr=""
+            )
+            actor = get_label_actor(184, "status:queued")
+        assert actor == "alice"
+        called_args = mock_run.call_args.args[0]
+        assert called_args == [
+            "gh",
+            "api",
+            "repos/{owner}/{repo}/issues/184/events",
+            "--paginate",
+            "--slurp",
+        ]
+
+    def test_ignores_labeled_events_for_other_labels(self):
+        events_payload = (
+            '[[{"event": "labeled", "actor": {"login": "bob"}, '
+            '"label": {"name": "bug"}}]]'
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=events_payload, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout='{"author": {"login": "carol"}}',
+                    stderr="",
+                ),
+            ]
+            actor = get_label_actor(184, "status:queued")
+        assert actor == "carol"
+
+    def test_falls_back_to_issue_author_when_no_labeled_event(self):
+        """Issue作成時(`gh issue create --label`)に付与されたラベルは
+        `labeled`イベントを残さないため、Issue作成者にフォールバックする。"""
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="[[]]", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout='{"author": {"login": "dave"}}',
+                    stderr="",
+                ),
+            ]
+            actor = get_label_actor(184, "status:queued")
+        assert actor == "dave"
+        second_call_args = mock_run.call_args_list[1].args[0]
+        assert second_call_args == [
+            "gh",
+            "issue",
+            "view",
+            "184",
+            "--json",
+            "author",
+        ]
+
+    def test_takes_most_recent_matching_event_across_pages(self):
+        events_payload = (
+            "["
+            '[{"event": "labeled", "actor": {"login": "alice"}, '
+            '"label": {"name": "status:queued"}}],'
+            '[{"event": "labeled", "actor": {"login": "mallory"}, '
+            '"label": {"name": "status:queued"}}]'
+            "]"
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=events_payload, stderr=""
+            )
+            actor = get_label_actor(184, "status:queued")
+        assert actor == "mallory"
+
+    def test_rejects_invalid_issue_number(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                get_label_actor("184; rm -rf /", "status:queued")
+            mock_run.assert_not_called()
+
+    def test_rejects_invalid_label(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                get_label_actor(184, "status:queued; evil")
+            mock_run.assert_not_called()
+
+
+class TestGetActorPermission:
+    """#119: actorのリポジトリ権限をGitHub APIから取得する。"""
+
+    def test_returns_permission_field(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='{"permission": "write"}', stderr=""
+            )
+            permission = get_actor_permission("alice")
+        assert permission == "write"
+        called_args = mock_run.call_args.args[0]
+        assert called_args == [
+            "gh",
+            "api",
+            "repos/{owner}/{repo}/collaborators/alice/permission",
+        ]
+
+    def test_treats_api_error_as_none(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1, ["gh", "api", "..."]
+            )
+            permission = get_actor_permission("mallory")
+        assert permission == "none"
+
+    def test_rejects_invalid_username(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                get_actor_permission("alice; rm -rf /")
             mock_run.assert_not_called()
 
 

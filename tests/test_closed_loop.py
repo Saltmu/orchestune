@@ -194,6 +194,13 @@ class DummyGitHub:
         )
         return [line.strip() for line in res.stdout.splitlines() if line.strip()]
 
+    def get_label_actor(self, issue_number: int | str, label: str) -> str:
+        """#119: このクローズドループテストでは常に信頼された付与者とみなす。"""
+        return "trusted-actor"
+
+    def get_actor_permission(self, username: str) -> str:
+        return "write"
+
 
 class DummyAgentDispatchTarget(DispatchTarget):
     def __init__(self, run_scenario_func):
@@ -360,6 +367,10 @@ def test_closed_loop_flow():
         ),
         patch(
             "orchestune.github.branch_changed_files", dummy_github.branch_changed_files
+        ),
+        patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),
+        patch(
+            "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
         ),
     ]
 
@@ -591,6 +602,10 @@ def test_closed_loop_dag_recomputation_serialization():
         patch(
             "orchestune.github.branch_changed_files",
             dummy_github.branch_changed_files,
+        ),
+        patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),
+        patch(
+            "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
         ),
     ]
 

@@ -23,6 +23,25 @@ from orchestune.dispatcher import (
 from orchestune.github import IssueRecord, PrRecord
 
 
+@pytest.fixture(autouse=True)
+def _stub_label_actor_permission_by_default():
+    """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
+    `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
+    返すようスタブする。検証ロジック自体のテストは
+    tests/test_dispatch_actor_verification.py に集約する。"""
+    with (
+        patch(
+            "orchestune.dispatcher.github.get_label_actor",
+            return_value="trusted-actor",
+        ),
+        patch(
+            "orchestune.dispatcher.github.get_actor_permission",
+            return_value="write",
+        ),
+    ):
+        yield
+
+
 def _issue(
     number,
     labels=("status:queued",),
@@ -2939,3 +2958,83 @@ class TestBuildArgParser:
 
         args = _build_arg_parser().parse_args(["--apply"])
         assert args.apply is True
+
+
+class TestRunDispatchCycleActorVerification:
+    """#119: status:queuedラベルを付与したactorの権限が不足している場合、
+    run_dispatch_cycle経由でも起動をスキップしエスカレーションすることを確認する。"""
+
+    def test_unauthorized_actor_skips_launch_and_escalates(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        queued_issue = _issue(1, subtask_id="task-1")
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
+            patch(
+                "orchestune.dispatcher.github.get_label_actor", return_value="mallory"
+            ),
+            patch(
+                "orchestune.dispatcher.github.get_actor_permission",
+                return_value="read",
+            ),
+            patch("orchestune.dispatch_worktree.subprocess.run"),
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
+        mock_popen.assert_not_called()
+        mock_remove_label.assert_any_call(1, "status:queued")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert "mallory" in mock_add_comment.call_args[0][1]
+
+    def test_dry_run_excludes_unauthorized_actor_without_writes(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _issue(1, subtask_id="task-1")
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch(
+                "orchestune.dispatcher.github.get_label_actor", return_value="mallory"
+            ),
+            patch(
+                "orchestune.dispatcher.github.get_actor_permission",
+                return_value="none",
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
