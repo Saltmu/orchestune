@@ -63,6 +63,13 @@ stateDiagram-v2
 - 発生元: `skills/orchestune-dispatch/SKILL.md`（Issue起票時、`gh issue create`）
 - 条件: 依存関係（`depends_on`）が未解決の先行タスクを持つ場合は`status:blocked`、
   依存が無い/全て解決済みの場合は`status:queued`。
+- **actor権限検証（#119）**: `status:queued`が起動候補として実際に採用されるには、
+  そのラベルを付与したユーザーのリポジトリ権限がtriage以上である必要がある
+  （`orchestune/dispatch_actor_verification.py`）。権限不足の場合は自動起動を
+  スキップし、`status:blocked-human-review`へ遷移させる（Issue作成時に付与された
+  ラベルは`labeled`イベントを残さないため、付与者が特定できない場合はIssue
+  作成者を実質的な付与者とみなす）。`status:blocked`からのスタッキング起動
+  （セクション「3. 起動」参照）はこの検証の対象外。
 
 ### 2. `status:blocked` → `status:queued`（依存解決による昇格）
 - 発生元: `orchestune/dispatch_cycle.py`の`_promote_blocked_tasks`
