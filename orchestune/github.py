@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
+_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\[\]-]*$")
 
 
 def _validate_issue_number(value: int | str) -> int:
@@ -31,6 +32,12 @@ def _validate_ref_name(ref: str) -> str:
     ):
         raise ValueError(f"ブランチ名が不正です: {ref!r}")
     return ref
+
+
+def _validate_username(username: str) -> str:
+    if not username or not _USERNAME_PATTERN.match(username):
+        raise ValueError(f"ユーザー名が不正です: {username!r}")
+    return username
 
 
 @dataclass(frozen=True)
@@ -149,6 +156,56 @@ def get_issue_labels(issue_number: int | str) -> tuple[str, ...]:
     stdout = _run(["gh", "issue", "view", str(number), "--json", "labels"])
     raw = json.loads(stdout)
     return tuple(entry["name"] for entry in raw.get("labels", []))
+
+
+def get_label_actor(issue_number: int | str, label: str) -> str:
+    """#119: 指定ラベルを最後に付与したユーザーのログイン名を返す。
+
+    `gh issue create --label`によりIssue作成時に付与されたラベルは
+    GitHubのタイムラインに`labeled`イベントを残さないため、該当イベントが
+    1件も見つからない場合はIssue作成者(author)を実質的な付与者とみなす。
+    """
+    number = _validate_issue_number(issue_number)
+    _validate_label(label)
+    stdout = _run(
+        [
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/issues/{number}/events",
+            "--paginate",
+            "--slurp",
+        ]
+    )
+    pages = json.loads(stdout)
+    events = [event for page in pages for event in page]
+    labeled_actors = [
+        event["actor"]["login"]
+        for event in events
+        if event.get("event") == "labeled"
+        and event.get("label", {}).get("name") == label
+    ]
+    if labeled_actors:
+        return str(labeled_actors[-1])
+
+    stdout = _run(["gh", "issue", "view", str(number), "--json", "author"])
+    author = json.loads(stdout).get("author") or {}
+    return str(author.get("login", ""))
+
+
+def get_actor_permission(username: str) -> str:
+    """#119: 指定ユーザーのこのリポジトリに対する権限を返す。
+
+    コラボレーターでない場合や取得に失敗した場合は、安全側のデフォルトとして
+    `"none"`を返す。
+    """
+    login = _validate_username(username)
+    try:
+        stdout = _run(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission"]
+        )
+    except subprocess.CalledProcessError:
+        return "none"
+    return str(json.loads(stdout).get("permission", "none"))
 
 
 def create_pull_request(head: str, base: str, title: str, body: str) -> int:
