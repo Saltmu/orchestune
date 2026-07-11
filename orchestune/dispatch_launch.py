@@ -14,6 +14,7 @@ from orchestune.dispatch_worktree import create_worktree_and_launch
 from orchestune.github import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
+    from orchestune.dispatch_cycle import CycleContext
     from orchestune.dispatcher import DispatcherConfig
 
 
@@ -74,19 +75,23 @@ class DuplicateCandidateDecision:
 
 def _decide_duplicate_candidates(
     candidate_tasks: list[Task],
-    pr_by_branch: dict[str, PrRecord],
-    prs: list[PrRecord],
-    run_state: RunState,
+    ctx: CycleContext,
 ) -> list[DuplicateCandidateDecision]:
     """既にオープンなPRが存在するcandidate_tasksを検知し、重複起動かどうかを判断する
-    （githubラベル等の書き換えは行わない。`git ls-remote`は読み取り専用）。"""
+    （githubラベル等の書き換えは行わない。`git ls-remote`は読み取り専用）。
+
+    `ctx`（`orchestune.dispatch_cycle.CycleContext`）に1サイクル分の読み取り専用
+    データ（`pr_by_branch`/`prs`/`run_state`）をまとめて渡すことで、新しい判断
+    パターンが追加のデータを必要とする場合の引数伝播を`ctx`への1フィールド追加
+    に閉じ込める（#86）。
+    """
     decisions = []
     for task in candidate_tasks:
         expected_branch = f"claude/issue-{task.issue_number}-{task.subtask_id}"
 
-        existing_pr = pr_by_branch.get(expected_branch)
+        existing_pr = ctx.pr_by_branch.get(expected_branch)
         if not existing_pr:
-            for pr in prs:
+            for pr in ctx.prs:
                 if task.issue_number in pr.closes_issue_numbers:
                     existing_pr = pr
                     break
@@ -95,7 +100,7 @@ def _decide_duplicate_candidates(
         if existing_pr:
             # 重複起動をスキップする条件の判定
             last_completed = None
-            for cw in reversed(run_state.completed_worktrees):
+            for cw in reversed(ctx.run_state.completed_worktrees):
                 if cw.issue_number == task.issue_number:
                     last_completed = cw
                     break
@@ -139,7 +144,7 @@ def _decide_duplicate_candidates(
 
 def _apply_duplicate_skip(
     decisions: list[DuplicateCandidateDecision],
-    config: DispatcherConfig,
+    ctx: CycleContext,
 ) -> list[Task]:
     """decide層が判定した重複候補をstatus:blocked-human-reviewへ遷移させ、
     重複でないタスクのみを起動候補として返す。"""
@@ -152,7 +157,7 @@ def _apply_duplicate_skip(
                 f"Skipping task {task.subtask_id} (Issue #{task.issue_number}) because an open PR #{existing_pr.number} already exists on branch '{existing_pr.head_ref}' and has been updated.",
                 file=sys.stderr,
             )
-            if config.apply:
+            if ctx.config.apply:
                 if "status:queued" in task.status_labels:
                     github.remove_label(task.issue_number, "status:queued")
                 if "status:blocked" in task.status_labels:

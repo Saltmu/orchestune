@@ -1,3 +1,4 @@
+from orchestune.dispatch_cycle import CycleContext
 from orchestune.dispatch_launch import (
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
@@ -7,6 +8,22 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import CompletedWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import PrRecord
+
+
+def _ctx(**overrides):
+    defaults = dict(
+        run_state=RunState(active_worktrees={}),
+        tasks_by_issue={},
+        issue_number_by_subtask_id={},
+        ci_passed_pr_subtask_ids=set(),
+        changes_requested_subtask_ids=set(),
+        subtask_branch_map={},
+        prs=[],
+        pr_by_branch={},
+        config=DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+    )
+    defaults.update(overrides)
+    return CycleContext(**defaults)
 
 
 def _task(issue_number, subtask_id=None, yaml_error=False):
@@ -77,8 +94,7 @@ class TestDecideDuplicateCandidates:
 
     def test_no_existing_pr_is_not_duplicate(self):
         task = _task(1)
-        run_state = RunState(active_worktrees={})
-        decisions = _decide_duplicate_candidates([task], {}, [], run_state)
+        decisions = _decide_duplicate_candidates([task], _ctx())
         assert len(decisions) == 1
         assert decisions[0].is_duplicate is False
         assert decisions[0].existing_pr is None
@@ -91,10 +107,12 @@ class TestDecideDuplicateCandidates:
             changed_files=(),
             closes_issue_numbers=(1,),
         )
-        run_state = RunState(active_worktrees={}, completed_worktrees=[])
-        decisions = _decide_duplicate_candidates(
-            [task], {"claude/issue-1-task-1": pr}, [pr], run_state
+        ctx = _ctx(
+            run_state=RunState(active_worktrees={}, completed_worktrees=[]),
+            prs=[pr],
+            pr_by_branch={"claude/issue-1-task-1": pr},
         )
+        decisions = _decide_duplicate_candidates([task], ctx)
         assert decisions[0].is_duplicate is True
         assert decisions[0].existing_pr is pr
 
@@ -127,7 +145,10 @@ class TestDecideDuplicateCandidates:
             "orchestune.dispatch_launch.subprocess.run",
             _raise,
         )
-        decisions = _decide_duplicate_candidates(
-            [task], {"claude/issue-1-task-1": pr}, [pr], run_state
+        ctx = _ctx(
+            run_state=run_state,
+            prs=[pr],
+            pr_by_branch={"claude/issue-1-task-1": pr},
         )
+        decisions = _decide_duplicate_candidates([task], ctx)
         assert decisions[0].is_duplicate is True
