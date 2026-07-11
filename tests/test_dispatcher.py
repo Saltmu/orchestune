@@ -217,7 +217,7 @@ class TestRunDispatchCycle:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -378,8 +378,8 @@ class TestRunDispatchCycleBranchNormalization:
                 "orchestune.dispatcher.github.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -508,9 +508,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatch_targets.subprocess.Popen"),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ) as mock_check_deviation,
             patch(
@@ -576,9 +576,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
@@ -634,9 +634,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
@@ -695,9 +695,9 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatcher.check_footprint_deviation",
+                "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
@@ -792,7 +792,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -845,13 +845,13 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -881,7 +881,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -926,7 +926,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -976,7 +976,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1063,7 +1063,7 @@ class TestRunDispatchCycleNotNeeded:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.close_issue") as mock_close_issue,
             # プロセスは生きたまま・PRも存在しない、という「対応不要」の典型状態
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1103,7 +1103,7 @@ class TestRunDispatchCycleNotNeeded:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.close_issue") as mock_close_issue,
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1300,7 +1300,7 @@ class TestRunDispatchCycleBlockedPromotion:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -1642,8 +1642,8 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]),
             patch("orchestune.dispatcher.github.add_label"),
             patch("orchestune.dispatcher.github.remove_label"),
             # os.kill と Popen のモック（リブートプロセスのため）
@@ -1808,8 +1808,8 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
@@ -1900,8 +1900,8 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
-            patch("orchestune.dispatcher.check_footprint_deviation", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.check_footprint_deviation", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
@@ -1956,7 +1956,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -2023,7 +2023,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
@@ -2078,7 +2078,7 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatcher.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=True,
