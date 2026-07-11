@@ -53,6 +53,7 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
+        done_subtask_ids=set(),
         ci_passed_pr_subtask_ids=set(),
         changes_requested_subtask_ids=set(),
         subtask_branch_map={},
