@@ -5,11 +5,12 @@ from orchestune.dispatch_rebase import (
     _decide_footprint_deviation_outcome,
     _decide_rebase_needed,
     _decide_rebase_target,
+    _try_auto_rebase,
     notify_force_serial,
     notify_recompute,
 )
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
 
 
@@ -313,3 +314,75 @@ class TestDecideRebaseNeeded:
             "orchestune.dispatch_rebase.subprocess.run", side_effect=OSError("boom")
         ):
             assert _decide_rebase_needed("main", "feature") is False
+
+
+class TestTryAutoRebase:
+    def test_rebase_not_needed_returns_false(self):
+        active = _active(branch="feature")
+        task = _task(depends_on=("task-parent",))
+
+        done_subtask_ids = set()
+        ci_passed_pr_subtask_ids = {"task-parent"}
+        subtask_branch_map = {"task-parent": "parent-branch"}
+
+        run_state = RunState(active_worktrees={})
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch_rebase._decide_rebase_needed",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_rebase._apply_auto_rebase") as mock_apply,
+        ):
+            result = _try_auto_rebase(
+                active=active,
+                active_task=task,
+                key="1",
+                run_state=run_state,
+                done_subtask_ids=done_subtask_ids,
+                ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+                subtask_branch_map=subtask_branch_map,
+                config=config,
+            )
+
+        assert result is False
+        mock_apply.assert_not_called()
+
+    def test_rebase_needed_returns_true(self):
+        active = _active(branch="feature")
+        task = _task(depends_on=("task-parent",))
+
+        done_subtask_ids = set()
+        ci_passed_pr_subtask_ids = {"task-parent"}
+        subtask_branch_map = {"task-parent": "parent-branch"}
+
+        run_state = RunState(active_worktrees={})
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch_rebase._decide_rebase_needed",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_rebase._apply_auto_rebase") as mock_apply,
+        ):
+            result = _try_auto_rebase(
+                active=active,
+                active_task=task,
+                key="1",
+                run_state=run_state,
+                done_subtask_ids=done_subtask_ids,
+                ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+                subtask_branch_map=subtask_branch_map,
+                config=config,
+            )
+
+        assert result is True
+        mock_apply.assert_called_once_with(
+            active, task, "1", run_state, "parent-branch", config
+        )
