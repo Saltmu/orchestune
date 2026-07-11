@@ -103,3 +103,96 @@ class TestMain:
                 main()
 
         assert exc_info.value.code == 1
+
+
+class TestSetupAgentPermissions:
+    @patch("shutil.which")
+    def test_setup_agy_permissions_success(self, mock_which, tmp_path):
+        from orchestune.bootstrap import setup_agent_permissions
+
+        # Mock shutil.which to say agy and git/gh exist
+        mock_which.side_effect = (
+            lambda cmd: "/usr/bin/" + cmd if cmd in ("agy", "git", "gh") else None
+        )
+
+        # Setup mock home and config directory
+        mock_home = tmp_path / "home"
+        mock_home.mkdir()
+        gemini_dir = mock_home / ".gemini"
+        projects_dir = gemini_dir / "config" / "projects"
+        projects_dir.mkdir(parents=True)
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        repo_uri = f"file://{repo_root.resolve()}"
+
+        # Create mock project file
+        project_file = projects_dir / "test-project.json"
+        project_file.write_text(
+            json.dumps(
+                {
+                    "id": "test-project",
+                    "name": "Test Project",
+                    "projectResources": {
+                        "resources": [{"gitFolder": {"folderUri": repo_uri}}]
+                    },
+                }
+            )
+        )
+
+        with patch("pathlib.Path.home", return_value=mock_home):
+            setup_agent_permissions(repo_root)
+
+        # Verify permissions added to project file
+        updated_data = json.loads(project_file.read_text())
+        allow_list = updated_data["permissionGrants"]["permissionGrants"]["allow"]
+        assert "command(git)" in allow_list
+        assert "command(gh)" in allow_list
+        assert "command(claude)" not in allow_list  # since claude which returned None
+
+    @patch("shutil.which")
+    def test_setup_claude_permissions_success(self, mock_which, tmp_path):
+        from orchestune.bootstrap import setup_agent_permissions
+
+        # Mock shutil.which to say claude exists
+        mock_which.side_effect = (
+            lambda cmd: "/usr/bin/" + cmd if cmd == "claude" else None
+        )
+
+        mock_home = tmp_path / "home"
+        mock_home.mkdir()
+        claude_json_path = mock_home / ".claude.json"
+        claude_json_path.write_text(json.dumps({}))
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("pathlib.Path.home", return_value=mock_home):
+            setup_agent_permissions(repo_root)
+
+        # Verify ~/.claude.json was updated
+        updated_data = json.loads(claude_json_path.read_text())
+        project_key = str(repo_root.resolve())
+        assert project_key in updated_data
+        assert "execute_bash" in updated_data[project_key]["allowedTools"]
+        assert updated_data[project_key]["hasTrustDialogAccepted"] is True
+
+    @patch("shutil.which")
+    def test_setup_permissions_skipped_when_cli_missing(self, mock_which, tmp_path):
+        from orchestune.bootstrap import setup_agent_permissions
+
+        # Mock shutil.which to say nothing exists
+        mock_which.return_value = None
+
+        mock_home = tmp_path / "home"
+        mock_home.mkdir()
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("pathlib.Path.home", return_value=mock_home):
+            setup_agent_permissions(repo_root)
+
+        # Verify no config directories/files were created
+        assert not (mock_home / ".gemini").exists()
+        assert not (mock_home / ".claude.json").exists()
