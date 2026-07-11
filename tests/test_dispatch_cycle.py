@@ -9,6 +9,7 @@ from orchestune.dispatch_cycle import (
     _decide_external_lock_sync,
     _decide_stale_active_entry,
     _rule_changes_requested,
+    _rule_completed,
     _run_active_worktree_rules,
 )
 from orchestune.dispatch_scoring import Task
@@ -182,7 +183,7 @@ class TestRunActiveWorktreeRules:
         assert calls == ["a"]
 
     def test_non_terminal_result_falls_through_to_next_rule(self):
-        """dirty worktreeスキップのような「記録はするが処理は継続する」ケースを
+        """「記録はするが処理は継続する」ケースを
         汎用的なNone/terminal/non-terminalの組み合わせで再現する。"""
         calls = []
 
@@ -249,3 +250,25 @@ class TestRuleChangesRequested:
         assert (
             outcome.completion_event["action"] == "escalated_due_to_changes_requested"
         )
+
+
+class TestRuleCompleted:
+    def test_dirty_worktree_is_terminal(self):
+        active = _active()
+        task = _task()
+        ctx = _ctx()
+        with (
+            patch(
+                "orchestune.dispatch_cycle._is_worktree_complete",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_cycle._finalize_completed_worktree",
+                return_value={"action": "completion_skipped_dirty_worktree"},
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.terminal is True
+        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"

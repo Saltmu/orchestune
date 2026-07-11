@@ -328,8 +328,8 @@ def _rule_completed(
 
     # action == "completion_skipped_dirty_worktree": イベントは記録するが、
     # このactive worktreeへの他の判定（CHANGES_REQUESTED/自動リベース/
-    # footprint逸脱）は継続する必要があるためterminalにしない。
-    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=False)
+    # footprint逸脱）は継続せずに人間が変更を確認するまで待つため、terminalにする。
+    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 
 
 def _rule_changes_requested(
