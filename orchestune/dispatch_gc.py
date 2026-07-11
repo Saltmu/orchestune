@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -94,30 +95,53 @@ def remove_worktree(worktree_path: str | Path) -> None:
         pass
 
 
-def _finalize_completed_worktree(
+@dataclass
+class CompletedWorktreeDecision:
+    action: str
+    subtask_id: str = ""
+
+
+def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: Task | None,
-    config: DispatcherConfig,
-) -> dict:
-    """#193: プロセス終了を検知したactive worktreeの完了後処理。
-
-    未コミットの変更が残っている場合は、削除・ラベル遷移を行わず人間の
-    確認を待つ（安全側に倒し、作業内容の消失を防ぐ）。
-    """
-    event: dict = {
-        "issue_number": active.issue_number,
-        "worktree_path": active.worktree_path,
-    }
+) -> CompletedWorktreeDecision:
+    """#193/#74: プロセス終了を検知したactive worktreeへの対応方針を、副作用なし
+    （worktree削除・githubラベル変更を行わない）で判定する。"""
+    subtask_id = active_task.subtask_id if active_task else ""
 
     if worktree_has_uncommitted_changes(active.worktree_path):
-        event["action"] = "completion_skipped_dirty_worktree"
-        return event
+        # 未コミットの変更が残っている場合は、削除・ラベル遷移を行わず人間の
+        # 確認を待つ（安全側に倒し、作業内容の消失を防ぐ）。
+        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
 
     if not worktree_has_new_commits(active.worktree_path, active.base_branch):
         # #74: プロセスは終了しworktreeもcleanだが、base_branchに対して新規コミットが
         # 1件も無い＝権限拒否等で実際には何も実装されず終了したと考えられる。
         # ここでstatus:doneを付与すると、依存先タスクが同一サイクル内で実体のない
         # 完了を根拠に誤ってstatus:queuedへ昇格してしまうため、completed扱いにしない。
+        return CompletedWorktreeDecision(
+            action="completed_no_commits", subtask_id=subtask_id
+        )
+
+    return CompletedWorktreeDecision(action="completed", subtask_id=subtask_id)
+
+
+def _apply_completed_worktree_outcome(
+    active: ActiveWorktree,
+    decision: CompletedWorktreeDecision,
+    config: DispatcherConfig,
+) -> dict:
+    """decide層が判定した方針に基づき、worktree撤去・githubラベル/コメント更新を行う。"""
+    event: dict = {
+        "issue_number": active.issue_number,
+        "worktree_path": active.worktree_path,
+        "action": decision.action,
+    }
+
+    if decision.action == "completion_skipped_dirty_worktree":
+        return event
+
+    if decision.action == "completed_no_commits":
         if config.apply:
             remove_worktree(active.worktree_path)
             github.remove_label(active.issue_number, "status:in-progress")
@@ -130,11 +154,11 @@ def _finalize_completed_worktree(
                 "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
                 "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
             )
-        event["action"] = "completed_no_commits"
-        event["subtask_id"] = active_task.subtask_id if active_task else ""
+        event["subtask_id"] = decision.subtask_id
         event["commit_sha"] = None
         return event
 
+    # decision.action == "completed"
     commit_sha = None
     if config.apply:
         try:
@@ -153,10 +177,24 @@ def _finalize_completed_worktree(
         github.remove_label(active.issue_number, "status:in-progress")
         github.add_label(active.issue_number, "status:done")
 
-    event["action"] = "completed"
-    event["subtask_id"] = active_task.subtask_id if active_task else ""
+    event["subtask_id"] = decision.subtask_id
     event["commit_sha"] = commit_sha
     return event
+
+
+def _finalize_completed_worktree(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+) -> dict:
+    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
+    decision = _decide_completed_worktree_outcome(active, active_task)
+    return _apply_completed_worktree_outcome(active, decision, config)
+
+
+def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
+    """worktreeに未コミットの変更が残っているか（副作用なし）を判定する。"""
+    return worktree_has_uncommitted_changes(active.worktree_path)
 
 
 def _finalize_not_needed_worktree(
@@ -189,12 +227,14 @@ def _finalize_not_needed_worktree(
         "worktree_path": active.worktree_path,
     }
 
-    if worktree_has_uncommitted_changes(active.worktree_path):
+    # decide: dirty worktreeかどうかの判定は副作用を持たない。
+    if _decide_not_needed_dirty_worktree(active):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
 
     subtask_id = active_task.subtask_id if active_task else ""
 
+    # 以降はact: worktree撤去・githubラベル/クローズ・検証レビューの起動を行う。
     if config.apply:
         remove_worktree(active.worktree_path)
         github.remove_label(active.issue_number, "status:in-progress")

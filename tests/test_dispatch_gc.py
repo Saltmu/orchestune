@@ -2,6 +2,8 @@ import subprocess
 from unittest.mock import patch
 
 from orchestune.dispatch_gc import (
+    _decide_completed_worktree_outcome,
+    _decide_not_needed_dirty_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     is_process_alive,
@@ -362,3 +364,68 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
 
         mock_fire_text.assert_not_called()
         assert event["action"] == "completion_skipped_dirty_worktree"
+
+
+class TestDecideCompletedWorktreeOutcome:
+    """decide層: worktree_has_uncommitted_changes/worktree_has_new_commitsの
+    読み取りのみで方針を判定し、github/worktreeへの書き込みは行わない。"""
+
+    def test_dirty_worktree_is_skipped(self):
+        active = _active()
+        task = _task()
+        with patch(
+            "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+            return_value=True,
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+        assert decision.action == "completion_skipped_dirty_worktree"
+
+    def test_no_new_commits_is_completed_no_commits(self):
+        active = _active()
+        task = _task()
+        with (
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=False,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+        assert decision.action == "completed_no_commits"
+        assert decision.subtask_id == "task-a"
+
+    def test_clean_with_new_commits_is_completed(self):
+        active = _active()
+        task = _task()
+        with (
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+        assert decision.action == "completed"
+        assert decision.subtask_id == "task-a"
+
+
+class TestDecideNotNeededDirtyWorktree:
+    def test_true_when_dirty(self):
+        with patch(
+            "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+            return_value=True,
+        ):
+            assert _decide_not_needed_dirty_worktree(_active()) is True
+
+    def test_false_when_clean(self):
+        with patch(
+            "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+            return_value=False,
+        ):
+            assert _decide_not_needed_dirty_worktree(_active()) is False
