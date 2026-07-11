@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+⚠️ **Alpha**: Orchestune is in early-stage development. APIs, CLI commands, and workflows may change without notice.
+
 Orchestune is a multi-agent implementation orchestrator designed to coordinate parallel development tasks. It automates DAG construction, scheduling, dispatch cycles, self-healing, and pull request integration.
 
 Orchestune is provided as a **Skill for Agentic AI development** (e.g., Claude Code, Antigravity), allowing an AI agent to autonomously decompose tasks, dispatch subtasks, and integrate results.
