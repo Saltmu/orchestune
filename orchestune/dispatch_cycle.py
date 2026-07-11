@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune import github
@@ -83,6 +84,26 @@ class CycleReport:
     completion_events: list[dict]
     promotion_events: list[dict]
     applied: bool
+
+
+@dataclass
+class CycleContext:
+    """1サイクル分の読み取り専用データをまとめたコンテキスト。
+
+    decide/act関数の引数を位置引数の羅列にせず、新しい判断パターンが追加の
+    データを必要とする場合の引数伝播を、このコンテキストへの1フィールド追加に
+    閉じ込めることを目的とする（#86）。
+    """
+
+    run_state: RunState
+    tasks_by_issue: dict[int, Task]
+    issue_number_by_subtask_id: dict[str, int]
+    ci_passed_pr_subtask_ids: set[str]
+    changes_requested_subtask_ids: set[str]
+    subtask_branch_map: dict[str, str]
+    prs: list[PrRecord]
+    pr_by_branch: dict[str, PrRecord]
+    config: DispatcherConfig
 
 
 def build_event_log_entry(report: CycleReport, now: float) -> dict:
@@ -182,134 +203,285 @@ def _apply_changes_requested_escalation(
     }
 
 
-def _process_active_worktrees(  # noqa: C901
-    run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    issue_number_by_subtask_id: dict[str, int],
-    ci_passed_pr_subtask_ids: set[str],
-    changes_requested_subtask_ids: set[str],
-    subtask_branch_map: dict[str, str],
-    config: DispatcherConfig,
+@dataclass
+class ActiveWorktreeRuleOutcome:
+    """1つの判定ルールがactive worktreeに対して下した結果。
+
+    `terminal=True`の場合、このactive worktreeに対する以降のルール評価を
+    打ち切り次のactive worktreeへ進む。`terminal=False`の場合は次のルールを
+    引き続き試す（例: dirty worktreeのため完了判定を見送った場合でも、
+    CHANGES_REQUESTEDや自動リベースのチェックは継続する必要がある）。
+    """
+
+    completion_event: dict | None = None
+    deviation_event: dict | None = None
+    completed_subtask_id: str | None = None
+    forced_serial: bool = False
+    terminal: bool = True
+
+
+@dataclass
+class _ActiveWorktreeAggregates:
+    completion_events: list[dict] = field(default_factory=list)
+    deviation_events: list[dict] = field(default_factory=list)
+    any_forced_serial: bool = False
+    completed_subtask_ids: set[str] = field(default_factory=set)
+
+
+def _merge_active_worktree_outcome(
+    aggregates: _ActiveWorktreeAggregates, outcome: ActiveWorktreeRuleOutcome
+) -> None:
+    if outcome.completion_event is not None:
+        aggregates.completion_events.append(outcome.completion_event)
+    if outcome.deviation_event is not None:
+        aggregates.deviation_events.append(outcome.deviation_event)
+    if outcome.completed_subtask_id is not None:
+        aggregates.completed_subtask_ids.add(outcome.completed_subtask_id)
+    if outcome.forced_serial:
+        aggregates.any_forced_serial = True
+
+
+def _rule_not_needed(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    """#280: status:not-neededラベル検知による即時完了処理。
+
+    セッションが「対応不要」と判断した場合、コミット・PRを作らないため
+    closingIssuesReferences等の完了シグナルが発生せず、`_rule_completed`
+    （PID/PR存在ベース）は永遠にマッチしない。ラベル検知を最優先の完了
+    シグナルとして扱い、stale判定より先に評価する。
+    """
+    if active_task is None or "status:not-needed" not in active_task.status_labels:
+        return None
+
+    completion_event = _finalize_not_needed_worktree(active, active_task, ctx.config)
+    completed_subtask_id = None
+    # #282: 即時クローズ・検証レビューへの委譲のどちらの経路でも、対応不要の
+    # 根拠自体は「mainに既に実装されている」ことなので、Issueクローズの可否とは
+    # 独立に依存関係は解決済みとして扱ってよい。
+    if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
+        if active_task.subtask_id:
+            completed_subtask_id = active_task.subtask_id
+        if ctx.config.apply:
+            del ctx.run_state.active_worktrees[key]
+
+    return ActiveWorktreeRuleOutcome(
+        completion_event=completion_event,
+        completed_subtask_id=completed_subtask_id,
+        terminal=True,
+    )
+
+
+def _rule_stale_entry(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    stale_event = _decide_stale_active_entry(active, active_task)
+    if stale_event is None:
+        return None
+    _apply_stale_active_entry_discard(ctx.run_state, key, ctx.config)
+    return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
+
+
+def _rule_completed(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    if not _is_worktree_complete(active, ctx.config):
+        return None
+
+    completion_event = _finalize_completed_worktree(active, active_task, ctx.config)
+    action = completion_event["action"]
+
+    if action == "completed":
+        completed_subtask_id = None
+        if active_task is not None and active_task.subtask_id:
+            completed_subtask_id = active_task.subtask_id
+        if ctx.config.apply:
+            ctx.run_state.completed_worktrees.append(
+                CompletedWorktree(
+                    issue_number=active.issue_number,
+                    subtask_id=active_task.subtask_id if active_task else "",
+                    branch=active.branch,
+                    started_at=active.started_at,
+                    completed_at=time.time(),
+                    recompute_count=active.recompute_count,
+                    forced_serial=active.forced_serial,
+                    commit_sha=completion_event.get("commit_sha"),
+                )
+            )
+            del ctx.run_state.active_worktrees[key]
+        return ActiveWorktreeRuleOutcome(
+            completion_event=completion_event,
+            completed_subtask_id=completed_subtask_id,
+            terminal=True,
+        )
+
+    if action == "completed_no_commits":
+        # #74: 実コミットの無い完了は依存解決の対象にしない
+        # (completed_subtask_idsに加えない)が、worktree・ラベルは
+        # dispatch_gc側で既に片付け済みのため、クオータ解放のために
+        # run_state側のエントリは削除する。
+        if ctx.config.apply:
+            del ctx.run_state.active_worktrees[key]
+        return ActiveWorktreeRuleOutcome(
+            completion_event=completion_event, terminal=True
+        )
+
+    # action == "completion_skipped_dirty_worktree": イベントは記録するが、
+    # このactive worktreeへの他の判定（CHANGES_REQUESTED/自動リベース/
+    # footprint逸脱）は継続する必要があるためterminalにしない。
+    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=False)
+
+
+def _rule_changes_requested(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    """#185: 自動リベースや逸脱判定の前に、CHANGES_REQUESTEDになった親を持つかチェックする。"""
+    if not _decide_changes_requested_escalation(
+        active_task, ctx.changes_requested_subtask_ids
+    ):
+        return None
+    assert active_task is not None
+    event = _apply_changes_requested_escalation(
+        active, active_task, key, ctx.run_state, ctx.config
+    )
+    return ActiveWorktreeRuleOutcome(completion_event=event, terminal=True)
+
+
+def _rule_auto_rebase(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    """#201: 自動リベース判定＆実行。"""
+    if not is_process_alive(active.pid):
+        return None
+    if not _try_auto_rebase(
+        active,
+        active_task,
+        key,
+        ctx.run_state,
+        ctx.ci_passed_pr_subtask_ids,
+        ctx.subtask_branch_map,
+        ctx.config,
+    ):
+        return None
+    return ActiveWorktreeRuleOutcome(terminal=True)
+
+
+def _rule_footprint_deviation(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome:
+    """フォールバックルール: 他のどのルールにも該当しなかったactive worktreeに
+    ついて、footprint逸脱の有無を判定する。ルールチェーンの末尾として、常に
+    非Noneの結果を返し必ずこのactive worktreeの処理を終える。
+    """
+    deviated = check_footprint_deviation(
+        active.worktree_path,
+        active.declared_footprint,
+        base=active.base_branch,
+        min_changed_lines=ctx.config.deviation_buffer_lines,
+    )
+    if not deviated:
+        return ActiveWorktreeRuleOutcome(terminal=True)
+
+    event = _handle_footprint_deviation(
+        active, deviated, ctx.tasks_by_issue, ctx.issue_number_by_subtask_id, ctx.config
+    )
+    forced_serial = event["action"] in ("forced_serial", "already_forced_serial")
+    return ActiveWorktreeRuleOutcome(
+        deviation_event=event, forced_serial=forced_serial, terminal=True
+    )
+
+
+_EARLY_ACTIVE_WORKTREE_RULES: list[
+    Callable[
+        [CycleContext, str, ActiveWorktree, Task | None],
+        ActiveWorktreeRuleOutcome | None,
+    ]
+] = [
+    _rule_not_needed,
+    _rule_stale_entry,
+]
+
+_MAIN_ACTIVE_WORKTREE_RULES: list[
+    Callable[
+        [CycleContext, str, ActiveWorktree, Task | None],
+        ActiveWorktreeRuleOutcome | None,
+    ]
+] = [
+    _rule_completed,
+    _rule_changes_requested,
+    _rule_auto_rebase,
+    _rule_footprint_deviation,
+]
+
+
+def _run_active_worktree_rules(
+    rules: list[
+        Callable[
+            [CycleContext, str, ActiveWorktree, Task | None],
+            ActiveWorktreeRuleOutcome | None,
+        ]
+    ],
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+    aggregates: _ActiveWorktreeAggregates,
+) -> bool:
+    """ruleを順に試し、非Noneの結果が返るたびaggregatesへ反映する。
+
+    `terminal=True`の結果を得たら直ちにTrueを返して打ち切り、それ以外は
+    次のruleを試し続ける。どのruleにも該当しなければFalseを返す。
+
+    新しい判断パターンを追加する場合、このループ自体は変更せず、対応する
+    `_rule_*`関数を書いて`_EARLY_ACTIVE_WORKTREE_RULES`/
+    `_MAIN_ACTIVE_WORKTREE_RULES`に追加するだけでよい（#86）。
+    """
+    for rule in rules:
+        outcome = rule(ctx, key, active, active_task)
+        if outcome is None:
+            continue
+        _merge_active_worktree_outcome(aggregates, outcome)
+        if outcome.terminal:
+            return True
+    return False
+
+
+def _process_active_worktrees(
+    ctx: CycleContext,
 ) -> tuple[list[dict], list[dict], bool, set[str]]:
     """#192/#193/#200: active worktreeごとの完了検知・footprint逸脱処理。
 
     完了と判定したエントリは（apply時）run_state.active_worktreesから
     除去してクオータを解放し、以後のfootprint逸脱チェックはスキップする。
 
-    各分岐の判定(decide)と実処理(act)は、本関数または委譲先の
+    各分岐の判定(decide)と実処理(act)は、`_rule_*`関数または委譲先の
     dispatch_gc/dispatch_rebaseモジュール内でそれぞれ分離されている。
     """
-    completion_events: list[dict] = []
-    deviation_events: list[dict] = []
-    any_forced_serial = False
-    completed_subtask_ids: set[str] = set()
+    aggregates = _ActiveWorktreeAggregates()
 
-    for key, active in list(run_state.active_worktrees.items()):
-        active_task = tasks_by_issue.get(active.issue_number)
+    for key, active in list(ctx.run_state.active_worktrees.items()):
+        active_task = ctx.tasks_by_issue.get(active.issue_number)
 
-        if active_task is not None and "status:not-needed" in active_task.status_labels:
-            # #280: セッションが「対応不要」と判断した場合、コミット・PRを作らない
-            # ためclosingIssuesReferences等の完了シグナルが発生せず、
-            # _is_worktree_complete()（PID/PR存在ベース）は永遠にFalseを返し続ける。
-            # ラベル検知を最優先の完了シグナルとして扱い、下のstale判定より先に処理する。
-            completion_event = _finalize_not_needed_worktree(
-                active, active_task, config
-            )
-            completion_events.append(completion_event)
-            # #282: 即時クローズ・検証レビューへの委譲のどちらの経路でも、
-            # 対応不要の根拠自体は「mainに既に実装されている」ことなので、
-            # Issueクローズの可否とは独立に依存関係は解決済みとして扱ってよい。
-            if completion_event["action"] in (
-                "not_needed",
-                "not_needed_review_dispatched",
-            ):
-                if active_task.subtask_id:
-                    completed_subtask_ids.add(active_task.subtask_id)
-                if config.apply:
-                    del run_state.active_worktrees[key]
-            continue
-
-        stale_event = _decide_stale_active_entry(active, active_task)
-        if stale_event is not None:
-            completion_events.append(stale_event)
-            _apply_stale_active_entry_discard(run_state, key, config)
+        if _run_active_worktree_rules(
+            _EARLY_ACTIVE_WORKTREE_RULES, ctx, key, active, active_task, aggregates
+        ):
             continue
 
         if active.forced_serial:
-            any_forced_serial = True
+            aggregates.any_forced_serial = True
 
-        if _is_worktree_complete(active, config):
-            completion_event = _finalize_completed_worktree(active, active_task, config)
-            completion_events.append(completion_event)
-            if completion_event["action"] == "completed":
-                if active_task is not None and active_task.subtask_id:
-                    completed_subtask_ids.add(active_task.subtask_id)
-                if config.apply:
-                    run_state.completed_worktrees.append(
-                        CompletedWorktree(
-                            issue_number=active.issue_number,
-                            subtask_id=active_task.subtask_id if active_task else "",
-                            branch=active.branch,
-                            started_at=active.started_at,
-                            completed_at=time.time(),
-                            recompute_count=active.recompute_count,
-                            forced_serial=active.forced_serial,
-                            commit_sha=completion_event.get("commit_sha"),
-                        )
-                    )
-                    del run_state.active_worktrees[key]
-                continue
-            if completion_event["action"] == "completed_no_commits":
-                # #74: 実コミットの無い完了は依存解決の対象にしない
-                # (completed_subtask_idsに加えない)が、worktree・ラベルは
-                # dispatch_gc側で既に片付け済みのため、クオータ解放のために
-                # run_state側のエントリは削除する。
-                if config.apply:
-                    del run_state.active_worktrees[key]
-                continue
-
-        # 自動リベースや逸脱判定の前に、CHANGES_REQUESTED になった親を持つかチェックする (#185)
-        if _decide_changes_requested_escalation(
-            active_task, changes_requested_subtask_ids
-        ):
-            assert active_task is not None
-            completion_events.append(
-                _apply_changes_requested_escalation(
-                    active, active_task, key, run_state, config
-                )
-            )
-            continue
-
-        # 自動リベース判定＆実行 (#201)
-        process_alive = is_process_alive(active.pid)
-        if process_alive and _try_auto_rebase(
-            active,
-            active_task,
-            key,
-            run_state,
-            ci_passed_pr_subtask_ids,
-            subtask_branch_map,
-            config,
-        ):
-            continue
-
-        deviated = check_footprint_deviation(
-            active.worktree_path,
-            active.declared_footprint,
-            base=active.base_branch,
-            min_changed_lines=config.deviation_buffer_lines,
+        # _MAIN_ACTIVE_WORKTREE_RULESの末尾(_rule_footprint_deviation)は必ず
+        # 非Noneかつterminalな結果を返すため、戻り値を見る必要はない。
+        _run_active_worktree_rules(
+            _MAIN_ACTIVE_WORKTREE_RULES, ctx, key, active, active_task, aggregates
         )
-        if not deviated:
-            continue
 
-        event = _handle_footprint_deviation(
-            active, deviated, tasks_by_issue, issue_number_by_subtask_id, config
-        )
-        if event["action"] in ("forced_serial", "already_forced_serial"):
-            any_forced_serial = True
-        deviation_events.append(event)
-
-    return completion_events, deviation_events, any_forced_serial, completed_subtask_ids
+    return (
+        aggregates.completion_events,
+        aggregates.deviation_events,
+        aggregates.any_forced_serial,
+        aggregates.completed_subtask_ids,
+    )
 
 
 def _decide_blocked_promotions(
@@ -555,20 +727,24 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
                 elif pr.is_ci_passing:
                     ci_passed_pr_subtask_ids.add(task.subtask_id)
 
+        ctx = CycleContext(
+            run_state=run_state,
+            tasks_by_issue=tasks_by_issue,
+            issue_number_by_subtask_id=issue_number_by_subtask_id,
+            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+            changes_requested_subtask_ids=changes_requested_subtask_ids,
+            subtask_branch_map=subtask_branch_map,
+            prs=prs,
+            pr_by_branch=pr_by_branch,
+            config=config,
+        )
+
         (
             completion_events,
             deviation_events,
             any_forced_serial,
             completed_subtask_ids,
-        ) = _process_active_worktrees(
-            run_state,
-            tasks_by_issue,
-            issue_number_by_subtask_id,
-            ci_passed_pr_subtask_ids,
-            changes_requested_subtask_ids,
-            subtask_branch_map,
-            config,
-        )
+        ) = _process_active_worktrees(ctx)
 
         gc_events = _collect_zombies_and_timeouts(
             run_state,
@@ -606,10 +782,8 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
 
         # 重複起動の防止: 既にオープンなPRが存在するcandidate_tasksを検知し、
         # 起動対象から除外して status:blocked-human-review へ移行させる。
-        duplicate_decisions = _decide_duplicate_candidates(
-            candidate_tasks, pr_by_branch, prs, run_state
-        )
-        candidate_tasks = _apply_duplicate_skip(duplicate_decisions, config)
+        duplicate_decisions = _decide_duplicate_candidates(candidate_tasks, ctx)
+        candidate_tasks = _apply_duplicate_skip(duplicate_decisions, ctx)
 
         if any_forced_serial:
             quota_slots = 0
