@@ -54,6 +54,32 @@ def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> bool:
+    """#74: base_branchに対して実コミットが積まれているかの確認。
+
+    プロセス終了+cleanなworktreeというだけでは、権限拒否等で何も実装されずに
+    終了したケースと本当に完了したケースを区別できない。比較に失敗した場合
+    （非gitディレクトリ等）は安全側に倒し、従来通り完了扱いとするため`True`を返す。
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "rev-list",
+                "--count",
+                f"{base_branch}..HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return int(result.stdout.strip() or "0") > 0
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        return True
+
+
 def remove_worktree(worktree_path: str | Path) -> None:
     """#193: 完了したworktreeを撤去する。既に手動削除済み等の失敗は無視する
     （run_stateからのクオータ解放を妨げないことを優先する）。"""
@@ -85,6 +111,28 @@ def _finalize_completed_worktree(
 
     if worktree_has_uncommitted_changes(active.worktree_path):
         event["action"] = "completion_skipped_dirty_worktree"
+        return event
+
+    if not worktree_has_new_commits(active.worktree_path, active.base_branch):
+        # #74: プロセスは終了しworktreeもcleanだが、base_branchに対して新規コミットが
+        # 1件も無い＝権限拒否等で実際には何も実装されず終了したと考えられる。
+        # ここでstatus:doneを付与すると、依存先タスクが同一サイクル内で実体のない
+        # 完了を根拠に誤ってstatus:queuedへ昇格してしまうため、completed扱いにしない。
+        if config.apply:
+            remove_worktree(active.worktree_path)
+            github.remove_label(active.issue_number, "status:in-progress")
+            github.add_label(active.issue_number, "status:blocked-human-review")
+            github.add_comment(
+                active.issue_number,
+                "エージェントプロセスの終了を検知しましたが、ベースブランチ"
+                f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
+                "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
+                "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
+                "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
+            )
+        event["action"] = "completed_no_commits"
+        event["subtask_id"] = active_task.subtask_id if active_task else ""
+        event["commit_sha"] = None
         return event
 
     commit_sha = None

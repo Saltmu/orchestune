@@ -344,6 +344,14 @@ def _process_active_worktrees(  # noqa: C901
                     )
                     del run_state.active_worktrees[key]
                 continue
+            if completion_event["action"] == "completed_no_commits":
+                # #74: 実コミットの無い完了は依存解決の対象にしない
+                # (completed_subtask_idsに加えない)が、worktree・ラベルは
+                # dispatch_gc側で既に片付け済みのため、クオータ解放のために
+                # run_state側のエントリは削除する。
+                if config.apply:
+                    del run_state.active_worktrees[key]
+                continue
 
         # 自動リベースや逸脱判定の前に、CHANGES_REQUESTED になった親を持つかチェックする (#185)
         if active_task and active_task.depends_on:
