@@ -57,3 +57,7 @@ addopts = "--cov=orchestune --cov-fail-under=75 --cov-report=term-missing"
 markers = [
     "uses_real_file_lock: exercises the real fcntl-based Integrator worktree lock instead of the autouse no-op stub",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["orchestune"]
