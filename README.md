@@ -18,6 +18,7 @@ Orchestune is provided as a **Skill for Agentic AI development** (e.g., Claude C
    - Monitors completed subtask PRs, orchestrating merges and rebasing downstream branches automatically to minimize conflicts.
 
 👉 For more details about the design, see [Architecture & Design](docs/en/architecture.md).
+👉 For the meaning and lifecycle of each `status:*` GitHub label, see [status:* Label Lifecycle](docs/en/status-labels.md).
 
 ---
 
