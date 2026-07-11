@@ -117,6 +117,40 @@ class TestDecideDuplicateCandidates:
         assert decisions[0].is_duplicate is True
         assert decisions[0].existing_pr is pr
 
+    def test_unrelated_closes_issue_pr_is_not_duplicate(self):
+        task = _task(1)
+        pr = PrRecord(
+            number=6,
+            head_ref="human/experiment",
+            changed_files=(),
+            closes_issue_numbers=(1,),
+        )
+        ctx = _ctx(
+            run_state=RunState(active_worktrees={}, completed_worktrees=[]),
+            prs=[pr],
+            pr_by_branch={},
+        )
+        decisions = _decide_duplicate_candidates([task], ctx)
+        assert decisions[0].is_duplicate is False
+        assert decisions[0].existing_pr is None
+
+    def test_orchestune_branch_closes_issue_pr_is_duplicate(self):
+        task = _task(1)
+        pr = PrRecord(
+            number=7,
+            head_ref="claude/issue-1-retry",
+            changed_files=(),
+            closes_issue_numbers=(1,),
+        )
+        ctx = _ctx(
+            run_state=RunState(active_worktrees={}, completed_worktrees=[]),
+            prs=[pr],
+            pr_by_branch={},
+        )
+        decisions = _decide_duplicate_candidates([task], ctx)
+        assert decisions[0].is_duplicate is True
+        assert decisions[0].existing_pr is pr
+
     def test_ls_remote_failure_is_treated_as_duplicate(self, monkeypatch):
         task = _task(1)
         pr = PrRecord(

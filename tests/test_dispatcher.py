@@ -2423,7 +2423,7 @@ class TestPreventDuplicateSessions:
     @patch("orchestune.dispatcher.github.add_comment")
     @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
-    def test_run_dispatch_cycle_skips_launch_if_closes_issue_matches(
+    def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
         self,
         mock_popen,
         mock_subproc_run,
@@ -2450,7 +2450,7 @@ class TestPreventDuplicateSessions:
             [queued_issue] if label == "status:queued" else []
         )
 
-        # open PR closes issue 1, but head_ref name is different
+        # unrelated open PR closes issue 1, but head_ref does not follow Orchestune launch branch naming
         mock_list_prs.return_value = [
             PrRecord(
                 number=10,
@@ -2461,18 +2461,16 @@ class TestPreventDuplicateSessions:
                 is_ci_passing=True,
             )
         ]
+        mock_popen.return_value.pid = 12345
 
         report = run_dispatch_cycle(config)
 
-        # 起動がスキップされていること
-        assert len(report.selected) == 0
-        assert mock_popen.call_count == 0
-
-        # ラベル遷移とコメント追加が行われていること
+        # 無関係なPRは重複扱いせず、起動候補として残ること
+        assert len(report.selected) == 1
+        mock_popen.assert_called_once()
         mock_remove_label.assert_any_call(1, "status:queued")
-        mock_add_label.assert_any_call(1, "status:blocked-human-review")
-        mock_add_comment.assert_called_once()
-        assert "重複起動防止" in mock_add_comment.call_args[0][1]
+        mock_add_label.assert_any_call(1, "status:in-progress")
+        mock_add_comment.assert_not_called()
 
     def test_ls_remote_uses_existing_pr_head_ref_for_closes_issue_match(self, tmp_path):
         config = DispatcherConfig(
@@ -2504,13 +2502,13 @@ class TestPreventDuplicateSessions:
 
         def ls_remote_result(command, **_kwargs):
             stdout = (
-                "updated-sha\trefs/heads/human-authored-branch\n"
+                "updated-sha\trefs/heads/claude/issue-1-human-authored\n"
                 if command
                 == [
                     "git",
                     "ls-remote",
                     "origin",
-                    "refs/heads/human-authored-branch",
+                    "refs/heads/claude/issue-1-human-authored",
                 ]
                 else ""
             )
@@ -2524,7 +2522,7 @@ class TestPreventDuplicateSessions:
                 return_value=[
                     PrRecord(
                         number=101,
-                        head_ref="human-authored-branch",
+                        head_ref="claude/issue-1-human-authored",
                         changed_files=(),
                         review_decision="",
                         is_ci_passing=False,
@@ -2554,7 +2552,7 @@ class TestPreventDuplicateSessions:
                 "git",
                 "ls-remote",
                 "origin",
-                "refs/heads/human-authored-branch",
+                "refs/heads/claude/issue-1-human-authored",
             ],
             capture_output=True,
             text=True,
