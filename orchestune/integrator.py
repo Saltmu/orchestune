@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune import github
-from orchestune.dag import SubTask, build_dag
-from orchestune.dispatcher import Task, file_lock, parse_task_from_issue
+from orchestune.dispatcher import Task, file_lock
 from orchestune.integration_coordinator import IntegrationCoordinator
+from orchestune.integrator_git_ops import IntegrationMerger
+from orchestune.integrator_pr import ensure_integration_pr
+from orchestune.integrator_tasks import get_sorted_done_tasks
+from orchestune.integrator_worktree import IntegrationWorktree
 
 
 @dataclass
@@ -46,49 +47,26 @@ class Integrator:
         self.failed_reasons: dict[str, str] = {}
         self.blocked_reasons: dict[str, str] = {}
         self.unparsable_done_tasks: list[Task] = []
+        self._worktree = IntegrationWorktree(
+            self.original_root, self.config.temp_branch
+        )
 
     def _worktree_key(self) -> str:
-        """`temp_branch`（親Issueごとに一意）を安全なファイル/ディレクトリ名に変換する。"""
-        return self.config.temp_branch.replace("/", "-")
+        return self._worktree.key()
 
     def _temp_worktree_path(self) -> Path:
-        return (
-            self.original_root
-            / "worktrees"
-            / f"integration-temp-{self._worktree_key()}"
-        )
+        return self._worktree.temp_path()
 
     def _worktree_lock_path(self) -> Path:
-        return (
-            self.original_root / "worktrees" / ".locks" / f"{self._worktree_key()}.lock"
-        )
+        return self._worktree.lock_path()
 
     def _reclaim_worktree_path(self, path: Path) -> None:
-        """`path`に残存物があれば、所有権を確認した上でのみ除去する。
-
-        `git worktree add`によって作成されたリンクワークツリーは、直下に
-        gitdirへのポインタを記した`.git`ファイル（ディレクトリではない）を持つ。
-        これを確認できた場合に限り`git worktree remove`で除去し、それ以外の
-        予期しないディレクトリ（他プロセスの作業ディレクトリ等）は所有権を
-        確認できないため一切削除しない。
-        """
-        if not path.exists():
-            return
-        git_marker = path / ".git"
-        if not git_marker.is_file():
-            raise RuntimeError(
-                f"Refusing to remove unrecognized path (not a git worktree): {path}"
-            )
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            cwd=str(self.original_root),
-            capture_output=True,
-        )
-        if path.exists():
-            shutil.rmtree(path, ignore_errors=True)
+        self._worktree.reclaim(path)
 
     def run(self) -> dict:
-        sorted_done_tasks = self._get_sorted_done_tasks()
+        sorted_done_tasks, self.unparsable_done_tasks = get_sorted_done_tasks(
+            self.config.parent_issue_number
+        )
         self._warn_and_flag_unparsable_done_tasks()
 
         active_done_tasks = [
@@ -186,16 +164,32 @@ class Integrator:
                     "error": f"Failed to create temp worktree: {e}",
                 }
 
+        merger = IntegrationMerger(
+            repository_root=self.config.repository_root,
+            original_root=self.original_root,
+            ci_command=self.config.ci_command or ["./scripts/local-ci.sh"],
+        )
+
         try:
-            if not self._create_temp_branch():
+            if not merger.create_temp_branch(
+                self.config.temp_branch, self.config.base_branch, self.config.apply
+            ):
                 return {
                     "status": "failed_to_create_temp_branch",
                     "error": "Failed to create temp branch",
                 }
 
-            merged_tasks, failed_tasks, blocked_tasks = self._merge_and_test_tasks(
-                active_done_tasks
+            (
+                merged_tasks,
+                failed_tasks,
+                blocked_tasks,
+                failed_reasons,
+                blocked_reasons,
+            ) = merger.merge_and_test_tasks(
+                active_done_tasks, self.config.base_branch, self.config.apply
             )
+            self.failed_reasons.update(failed_reasons)
+            self.blocked_reasons.update(blocked_reasons)
 
             if merged_tasks and not failed_tasks:
                 if self.config.apply:
@@ -289,454 +283,6 @@ class Integrator:
                     pass
 
     def _ensure_integration_pr(self, merged_tasks: list[str]) -> int | None:
-        """統合ブランチ(`temp_branch`)から`base_branch`へのPRを作成/再利用する。
-
-        既にopenなPRがあれば重複作成せずその番号を返す。PR作成自体に失敗しても
-        （差分無し等）Integrator全体は失敗させず、警告ログのみ出して`None`を返す。
-        """
-        try:
-            existing = [
-                pr
-                for pr in github.list_open_prs()
-                if pr.head_ref == self.config.temp_branch
-            ]
-            if existing:
-                return existing[0].number
-
-            base = self.config.base_branch.removeprefix("origin/")
-            return github.create_pull_request(
-                head=self.config.temp_branch,
-                base=base,
-                title=f"Integrate completed tasks ({', '.join(merged_tasks)})",
-                body=(
-                    "Orchestune Integrator が仮マージCI通過後に作成した統合PRです。\n"
-                    f"統合済みタスク: {', '.join(merged_tasks)}\n\n"
-                    "最終マージは人間が行ってください。"
-                ),
-            )
-        except Exception as e:
-            print(f"Warning: Failed to ensure integration PR: {e}", file=sys.stderr)
-            return None
-
-    def _get_sorted_done_tasks(self) -> list[Task]:
-        done_issues = github.list_issues_by_label("status:done", state="all")
-        if not done_issues:
-            return []
-
-        all_issues = []
-        for label in [
-            "status:queued",
-            "status:in-progress",
-            "status:blocked",
-            "status:external-lock",
-            "status:done",
-        ]:
-            state = "all" if label == "status:done" else "open"
-            all_issues.extend(github.list_issues_by_label(label, state=state))
-
-        # parent_issue_number が指定されている場合、親Issueが一致する子Issueのみにフィルタリングする
-        if self.config.parent_issue_number is not None:
-            done_issues = [
-                i
-                for i in done_issues
-                if i.parent
-                and i.parent.get("number") == self.config.parent_issue_number
-            ]
-            all_issues = [
-                i
-                for i in all_issues
-                if i.parent
-                and i.parent.get("number") == self.config.parent_issue_number
-            ]
-
-        seen_numbers = set()
-        unique_issues = []
-        for issue in all_issues:
-            if issue.number not in seen_numbers:
-                seen_numbers.add(issue.number)
-                unique_issues.append(issue)
-
-        # すべてのIssueについて、YAML内の subtask_id を事前スキャンしてマッピングを構築する
-        issue_to_subtask_id = self._build_issue_to_subtask_id_map(
-            unique_issues + done_issues
+        return ensure_integration_pr(
+            self.config.temp_branch, self.config.base_branch, merged_tasks
         )
-
-        tasks = [
-            parse_task_from_issue(issue, issue_to_subtask_id) for issue in unique_issues
-        ]
-        subtasks = [
-            SubTask(
-                id=task.subtask_id,
-                description="",
-                footprint=task.footprint,
-                symbols=task.symbols,
-                depends_on=task.depends_on,
-                risk=task.risk,
-                risk_reasons=(),
-            )
-            for task in tasks
-            if task.subtask_id
-        ]
-
-        try:
-            dag = build_dag(subtasks)
-            topological_order = dag.topological_order
-        except Exception as e:
-            print(f"Warning: Failed to build DAG: {e}", file=sys.stderr)
-            topological_order = [t.id for t in subtasks]
-
-        done_tasks = [
-            parse_task_from_issue(issue, issue_to_subtask_id) for issue in done_issues
-        ]
-        self.unparsable_done_tasks = [t for t in done_tasks if not t.subtask_id]
-        done_task_map = {t.subtask_id: t for t in done_tasks if t.subtask_id}
-
-        sorted_done_tasks = []
-        for subtask_id in topological_order:
-            if subtask_id in done_task_map:
-                sorted_done_tasks.append(done_task_map[subtask_id])
-
-        for t in done_tasks:
-            if t.subtask_id and t.subtask_id not in [
-                x.subtask_id for x in sorted_done_tasks
-            ]:
-                sorted_done_tasks.append(t)
-
-        return sorted_done_tasks
-
-    def _build_issue_to_subtask_id_map(
-        self, issues: list[github.IssueRecord]
-    ) -> dict[int, str]:
-        import yaml
-
-        from orchestune.dispatch_scoring import _FOOTPRINT_BLOCK_PATTERN
-
-        issue_to_subtask_id = {}
-        for issue in issues:
-            match = _FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-            if match:
-                try:
-                    data = yaml.safe_load(match.group(1))
-                    if isinstance(data, dict):
-                        sub_id = data.get("subtask_id")
-                        if sub_id:
-                            issue_to_subtask_id[issue.number] = str(sub_id)
-                except Exception:
-                    pass
-        return issue_to_subtask_id
-
-    def _create_temp_branch(self) -> bool:
-        if not self.config.apply:
-            return True
-        try:
-            subprocess.run(
-                [
-                    "git",
-                    "checkout",
-                    "-B",
-                    self.config.temp_branch,
-                    self.config.base_branch,
-                ],
-                cwd=str(self.config.repository_root),
-                check=True,
-                capture_output=True,
-            )
-            return True
-        except subprocess.CalledProcessError:
-            return False
-
-    def _merge_and_test_tasks(
-        self, sorted_done_tasks: list[Task]
-    ) -> tuple[list[str], list[str], list[str]]:
-        merged_tasks = []
-        failed_tasks = []
-        blocked_tasks: list[str] = []
-        # #50: 失敗またはblockedになったsubtask_idを集約する。sorted_done_tasksは
-        # 依存関係のトポロジカル順で渡されるため、1回の順走査で後続タスクへ
-        # 推移的にblocked状態を伝播できる。
-        unavailable_ids: set[str] = set()
-
-        if self.config.apply:
-            self._ensure_git_identity()
-            self._ensure_full_history()
-
-        for task in sorted_done_tasks:
-            blocking_deps = sorted(
-                dep for dep in task.depends_on if dep in unavailable_ids
-            )
-            if blocking_deps:
-                reason = (
-                    "依存タスク "
-                    f"{', '.join(blocking_deps)} が失敗または依存失敗のため、"
-                    "統合を実行せずスキップしました。"
-                )
-                print(
-                    f"[Integrator] Skipping {task.subtask_id}: {reason}",
-                    file=sys.stderr,
-                )
-                self.blocked_reasons[task.subtask_id] = reason
-                blocked_tasks.append(task.subtask_id)
-                unavailable_ids.add(task.subtask_id)
-                continue
-
-            branch_name = (
-                f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
-            )
-
-            if self.config.apply:
-                # actions/checkout のデフォルト（単一ブランチの浅いclone）では
-                # `origin/{branch_name}` のremote-trackingブランチが存在しないため、
-                # refspecを明示してfetchしないと後続のmergeが常に
-                # 「not something we can merge」で失敗する（内容衝突ではない）。
-                try:
-                    subprocess.run(
-                        [
-                            "git",
-                            "fetch",
-                            "origin",
-                            f"{branch_name}:refs/remotes/origin/{branch_name}",
-                        ],
-                        cwd=str(self.config.repository_root),
-                        check=True,
-                        capture_output=True,
-                    )
-                except subprocess.CalledProcessError as e:
-                    # ブランチ削除済みの正常系は、同じhead/baseのPRがGitHub上で
-                    # 実際にmergedと確認できた場合に限って統合済みとして扱う。
-                    # 確認APIの障害を含む不確実なケースはfail closedにする。
-                    base_branch_name = self.config.base_branch.removeprefix("origin/")
-                    try:
-                        already_merged = github.is_branch_merged_into(
-                            branch_name, base_branch_name
-                        )
-                    except Exception as lookup_error:
-                        already_merged = False
-                        print(
-                            "Warning: Failed to verify whether "
-                            f"{branch_name} was merged into {base_branch_name}: "
-                            f"{lookup_error}",
-                            file=sys.stderr,
-                        )
-
-                    if already_merged:
-                        print(
-                            f"[Integrator] Branch {branch_name} could not be fetched, "
-                            f"but its PR into {base_branch_name} is merged. "
-                            "Skipping integration merge."
-                        )
-                        merged_tasks.append(task.subtask_id)
-                        continue
-
-                    fetch_error = (e.stderr or b"").decode(errors="replace")
-                    self._handle_failure(task, f"Failed to fetch branch: {fetch_error}")
-                    failed_tasks.append(task.subtask_id)
-                    unavailable_ids.add(task.subtask_id)
-                    continue
-
-                # #53: mergeが新規コミットを作った（=1コミット戻せばよい）という
-                # 仮定に依存すると、対象ブランチの先端が既にHEADへ含まれている場合の
-                # `git merge --no-ff`が新規コミットを作らず"Already up to date"に
-                # なるケースで、CI失敗時のrollbackが直前の無関係なコミットを
-                # 巻き添えで削除してしまう。merge試行前のHEAD SHAを保存しておき、
-                # CI失敗時はそのSHAへ確実に戻す。
-                try:
-                    pre_merge_sha = self._current_head_sha()
-                except subprocess.CalledProcessError as e:
-                    head_error = (e.stderr or b"").decode(errors="replace")
-                    self._handle_failure(
-                        task, f"Failed to capture pre-merge HEAD: {head_error}"
-                    )
-                    failed_tasks.append(task.subtask_id)
-                    unavailable_ids.add(task.subtask_id)
-                    continue
-
-                try:
-                    subprocess.run(
-                        [
-                            "git",
-                            "merge",
-                            "--no-ff",
-                            "-m",
-                            f"Temp merge {branch_name}",
-                            f"origin/{branch_name}",
-                        ],
-                        cwd=str(self.config.repository_root),
-                        check=True,
-                        capture_output=True,
-                    )
-                except subprocess.CalledProcessError as e:
-                    self._abort_merge()
-                    merge_error = (e.stderr or b"").decode(errors="replace")
-                    self._handle_failure(task, f"Merge conflict: {merge_error}")
-                    failed_tasks.append(task.subtask_id)
-                    unavailable_ids.add(task.subtask_id)
-                    continue
-
-                ci_success, ci_output = self._run_ci_with_flaky_check()
-                if not ci_success:
-                    reason = "CI verification failed"
-                    if not self._rollback_to(pre_merge_sha):
-                        reason += (
-                            ". さらに、merge前のコミット"
-                            f"({pre_merge_sha})へのrollbackにも失敗しました。"
-                            "統合ブランチの状態を手動で確認してください。"
-                        )
-                    self._handle_failure(task, reason, ci_output=ci_output)
-                    failed_tasks.append(task.subtask_id)
-                    unavailable_ids.add(task.subtask_id)
-                    continue
-
-            merged_tasks.append(task.subtask_id)
-
-        return merged_tasks, failed_tasks, blocked_tasks
-
-    def _ensure_git_identity(self) -> None:
-        # CI環境（actions/checkout等）ではgit committer identityが未設定のことがあり、
-        # `git merge --no-ff`でマージコミットを作成する際に
-        # "Committer identity unknown" で必ず失敗するため、事前に設定しておく。
-        subprocess.run(
-            ["git", "config", "user.name", "orchestune-integrator"],
-            cwd=str(self.config.repository_root),
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "config",
-                "user.email",
-                "orchestune-integrator@users.noreply.github.com",
-            ],
-            cwd=str(self.config.repository_root),
-            capture_output=True,
-        )
-
-    def _ensure_full_history(self) -> None:
-        # actions/checkout@v6 のデフォルト（浅い・単一ブランチのclone）のままだと、
-        # タスクブランチをrefspec指定でfetchしても取得されるのはそのブランチの
-        # 先端コミット1つのみ（親情報を持たない）になり、mainと共通の祖先が
-        # 見つからず `refusing to merge unrelated histories` でmergeが必ず
-        # 失敗する。浅いリポジトリの場合のみ、ベースブランチの履歴を深くしておく。
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--is-shallow-repository"],
-                cwd=str(self.config.repository_root),
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            return
-
-        if (result.stdout or b"").decode().strip() != "true":
-            return
-
-        base_branch_name = self.config.base_branch.removeprefix("origin/")
-        try:
-            subprocess.run(
-                ["git", "fetch", "--unshallow", "origin", base_branch_name],
-                cwd=str(self.config.repository_root),
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            pass
-
-    def _current_head_sha(self) -> str:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(self.config.repository_root),
-            check=True,
-            capture_output=True,
-        )
-        return (result.stdout or b"").decode(errors="replace").strip()
-
-    def _rollback_to(self, sha: str) -> bool:
-        try:
-            subprocess.run(
-                ["git", "reset", "--hard", sha],
-                cwd=str(self.config.repository_root),
-                check=True,
-                capture_output=True,
-            )
-            return True
-        except (subprocess.CalledProcessError, OSError):
-            return False
-
-    def _abort_merge(self) -> None:
-        # マージ失敗時にMERGE_HEADを残したままにすると、後続タスクのマージが
-        # 「進行中の未完了マージがある」ために巻き添えで失敗してしまうため、
-        # 一時ブランチの直前の状態へ確実に戻す。
-        try:
-            subprocess.run(
-                ["git", "merge", "--abort"],
-                cwd=str(self.config.repository_root),
-                capture_output=True,
-            )
-        except (subprocess.CalledProcessError, OSError):
-            pass
-
-    def _run_ci_with_flaky_check(self) -> tuple[bool, str]:
-        # #208: 丸ごとの再実行はしない。既知のflakyテストは呼び出し先の
-        # pytest-rerunfailures（quarantineリストに基づく個別リトライ）が
-        # 内部で吸収するため、ここで通しの再実行を重ねる必要はない。
-        # quarantine対象外のテストが不安定な場合は、そのままCI失敗として
-        # 正しく検知させ、人間がquarantineリストへの追加を判断する。
-        ci_cmd = self.config.ci_command or ["./scripts/local-ci.sh"]
-
-        env = os.environ.copy()
-        venv_path = self.original_root / ".venv"
-        if "tools/orchestune" in str(venv_path):
-            parent_venv = venv_path.parent.parent.parent / ".venv"
-            if parent_venv.exists():
-                venv_path = parent_venv
-
-        if venv_path.exists():
-            env["VIRTUAL_ENV"] = str(venv_path.resolve())
-            bin_path = venv_path / "bin"
-            if bin_path.exists():
-                env["PATH"] = f"{bin_path.resolve()}{os.pathsep}{env.get('PATH', '')}"
-
-        try:
-            subprocess.run(
-                ci_cmd,
-                cwd=str(self.config.repository_root),
-                check=True,
-                capture_output=True,
-                env=env,
-            )
-            return True, ""
-        except subprocess.CalledProcessError as e:
-            stdout = (e.stdout or b"").decode(errors="replace")
-            stderr = (e.stderr or b"").decode(errors="replace")
-            return False, f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-
-    # #295: GitHubコメントの肥大化を避けるため、末尾のみを埋め込む。
-    # エラーメッセージ本体は通常出力の末尾に現れるため、これで十分な情報量を確保する。
-    _CI_OUTPUT_COMMENT_TAIL_CHARS = 4000
-
-    def _handle_failure(
-        self, task: Task, reason: str, ci_output: str | None = None
-    ) -> None:
-        self.failed_reasons[task.subtask_id] = reason
-        if ci_output:
-            # #295: ジョブログ（stderr）には切り詰めずに全文を残し、
-            # コメントに書ききれない詳細もそこから追跡できるようにする。
-            print(
-                f"[Integrator] CI failure output for {task.subtask_id}:\n{ci_output}",
-                file=sys.stderr,
-            )
-        if self.config.apply:
-            github.remove_label(task.issue_number, "status:done")
-            github.add_label(task.issue_number, "status:queued")
-            comment_body = (
-                f"仮マージCIでエラーが検出されたため、マージを取り消し差し戻しました。\n"
-                f"理由: {reason}\n"
-            )
-            if ci_output:
-                truncated = ci_output[-self._CI_OUTPUT_COMMENT_TAIL_CHARS :]
-                comment_body += (
-                    "\n<details><summary>CI出力（末尾"
-                    f"{self._CI_OUTPUT_COMMENT_TAIL_CHARS}文字）</summary>\n\n"
-                    f"```\n{truncated}\n```\n</details>\n"
-                )
-            comment_body += "自動修復エージェントの再起動を待ちます。"
-            github.add_comment(task.issue_number, comment_body)
