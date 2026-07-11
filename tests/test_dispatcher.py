@@ -624,11 +624,31 @@ class TestRunDispatchCycleFootprintRecompute:
             ),
             run_state_path,
         )
-        config = self._config(tmp_path, run_state_path, max_recompute_retries=2)
-        in_progress_issue = _issue(
-            1, labels=("status:in-progress",), subtask_id="task-a"
+        config = self._config(
+            tmp_path,
+            run_state_path,
+            max_recompute_retries=2,
+            max_concurrent=2,
         )
-        other_queued_issue = _issue(2, labels=("status:queued",), subtask_id="task-b")
+        in_progress_issue = _issue(
+            1,
+            labels=("status:in-progress",),
+            subtask_id="task-a",
+            footprint=("src/foo.py",),
+        )
+        other_queued_issue = _issue(
+            2,
+            labels=("status:queued",),
+            subtask_id="task-b",
+            footprint=("src/bar.py",),
+        )
+
+        def _launch_stub(
+            selected, _task_to_base_branch, _candidate_tasks, run_state, _now, config
+        ):
+            save_run_state(run_state, config.run_state_path)
+            return selected
+
         with (
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
@@ -637,6 +657,10 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle._launch_selected_tasks",
+                side_effect=_launch_stub,
+            ),
             patch(
                 "orchestune.dispatch_cycle.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
@@ -660,11 +684,92 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_recompute.assert_not_called()
         mock_add_label.assert_any_call(1, "status:force-serial")
         mock_add_comment.assert_called_once()
-        assert report.selected == []
+        assert [task.issue_number for task in report.selected] == [2]
+        assert report.quota_slots_available == 1
         assert report.deviation_events[0]["action"] == "forced_serial"
 
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"]["1"]["forced_serial"] is True
+
+    def test_forced_serial_filters_out_only_conflicting_candidates(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                        forced_serial=True,
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(tmp_path, run_state_path, max_concurrent=3)
+        in_progress_issue = _issue(
+            1,
+            labels=("status:in-progress", "status:force-serial"),
+            subtask_id="task-a",
+            footprint=("src/foo.py",),
+        )
+        conflicting_issue = _issue(
+            2,
+            labels=("status:queued",),
+            subtask_id="task-b",
+            footprint=("src/foo.py",),
+        )
+        dependent_issue = _issue(
+            3,
+            labels=("status:queued",),
+            subtask_id="task-c",
+            footprint=("src/baz.py",),
+            depends_on=("task-a",),
+        )
+        independent_issue = _issue(
+            4,
+            labels=("status:queued",),
+            subtask_id="task-d",
+            footprint=("src/qux.py",),
+        )
+
+        def _launch_stub(
+            selected, _task_to_base_branch, _candidate_tasks, run_state, _now, config
+        ):
+            save_run_state(run_state, config.run_state_path)
+            return selected
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle._launch_selected_tasks",
+                side_effect=_launch_stub,
+            ),
+            patch(
+                "orchestune.dispatch_cycle.check_footprint_deviation",
+                return_value=[],
+            ),
+        ):
+
+            def _list(label, **_):
+                if label == "status:queued":
+                    return [conflicting_issue, dependent_issue, independent_issue]
+                if label == "status:in-progress":
+                    return [in_progress_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        assert report.quota_slots_available == 2
+        assert [task.issue_number for task in report.selected] == [4]
 
     def test_already_forced_serial_does_not_recompute_again(self, tmp_path):
         """一度強制直列化された後は、再度の再計算・通知でチャーンさせない。"""
