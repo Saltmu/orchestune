@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
 ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
 
+CLAUDE_CLI_LOCAL_CMD_TEMPLATE = (
+    'claude -p "GitHub Issue #{issue_number} を、'
+    "必ず作業ブランチ `{branch_name}` で、"
+    '標準開発ワークフローに従って実装してください。"'
+)
+
 
 @dataclass(frozen=True)
 class DispatchHandle:
@@ -254,5 +260,9 @@ def build_dispatch_target(
             "が未設定のため、クラウドルーチンへのディスパッチはできません。"
             "ローカルのダミー起動にフォールバックします。",
             file=sys.stderr,
+        )
+    if dispatch_target_name == "claude-cli":
+        return LocalProcessDispatchTarget(
+            log_dir=log_dir, local_cmd=local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE
         )
     return LocalProcessDispatchTarget(log_dir=log_dir, local_cmd=local_cmd)
