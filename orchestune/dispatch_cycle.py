@@ -486,6 +486,56 @@ def _process_active_worktrees(
     )
 
 
+def _candidate_conflicts_with_forced_serial_active(
+    candidate: Task,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> bool:
+    active_footprint = active.declared_footprint
+    active_subtask_id = ""
+    active_depends_on: tuple[str, ...] = ()
+    if active_task is not None:
+        active_footprint = active_task.footprint or active.declared_footprint
+        active_subtask_id = active_task.subtask_id
+        active_depends_on = active_task.depends_on
+
+    if set(candidate.footprint) & set(active_footprint):
+        return True
+
+    if active_subtask_id and active_subtask_id in candidate.depends_on:
+        return True
+
+    if candidate.subtask_id and candidate.subtask_id in active_depends_on:
+        return True
+
+    return False
+
+
+def _filter_candidates_for_forced_serial(
+    candidate_tasks: list[Task],
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+) -> list[Task]:
+    forced_serial_actives = [
+        (active, tasks_by_issue.get(active.issue_number))
+        for active in run_state.active_worktrees.values()
+        if active.forced_serial
+    ]
+    if not forced_serial_actives:
+        return candidate_tasks
+
+    return [
+        candidate
+        for candidate in candidate_tasks
+        if not any(
+            _candidate_conflicts_with_forced_serial_active(
+                candidate, active, active_task
+            )
+            for active, active_task in forced_serial_actives
+        )
+    ]
+
+
 def _decide_blocked_promotions(
     blocked_issues: list[IssueRecord],
     done_issues: list[IssueRecord],
@@ -789,24 +839,27 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
         candidate_tasks = _apply_duplicate_skip(duplicate_decisions, ctx)
 
         if any_forced_serial:
-            quota_slots = 0
-            selected: list[Task] = []
-        else:
-            quota_slots = quota_available(
-                run_state,
-                now,
-                config.max_concurrent,
-                config.max_launches_per_window,
-                config.window_seconds,
-            )
-            selected = select_next_tasks(
+            candidate_tasks = _filter_candidates_for_forced_serial(
                 candidate_tasks,
                 run_state,
-                now,
-                config.max_concurrent,
-                config.max_launches_per_window,
-                config.window_seconds,
+                tasks_by_issue,
             )
+
+        quota_slots = quota_available(
+            run_state,
+            now,
+            config.max_concurrent,
+            config.max_launches_per_window,
+            config.window_seconds,
+        )
+        selected = select_next_tasks(
+            candidate_tasks,
+            run_state,
+            now,
+            config.max_concurrent,
+            config.max_launches_per_window,
+            config.window_seconds,
+        )
 
         if config.apply:
             selected = _launch_selected_tasks(

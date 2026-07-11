@@ -521,6 +521,10 @@ def test_closed_loop_dag_recomputation_serialization():
                 # Deviation: edit src/main.py which is NOT in footprint!
                 p_dev = worktree_path / "src/main.py"
                 p_dev.write_text("# Deviated edit!\n", encoding="utf-8")
+            elif task.subtask_id == "task-3":
+                p = worktree_path / "src/third.py"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("def third():\n    pass\n", encoding="utf-8")
 
             subprocess.run(["git", "add", "."], cwd=str(worktree_path), check=True)
             subprocess.run(
@@ -556,7 +560,7 @@ def test_closed_loop_dag_recomputation_serialization():
     save_run_state(RunState(), run_state_path)
 
     config = DispatcherConfig(
-        max_concurrent=2,  # Allow up to 2 concurrent launches
+        max_concurrent=3,  # Independent task can still launch during force-serial
         max_launches_per_window=5,
         window_seconds=3600,
         run_state_path=run_state_path,
@@ -614,9 +618,8 @@ def test_closed_loop_dag_recomputation_serialization():
         # Confirm that task-2 has status:force-serial label
         assert "status:force-serial" in dummy_github.issues[2].labels
 
-        # Since force-serial is active (any_forced_serial is True),
-        # the dispatcher should set quota_slots to 0 and select nothing.
-        # We will add another queued task-3 and check if it gets blocked.
+        # force-serialは衝突範囲だけを直列化し、独立タスクの起動は維持する。
+        # task-3は独立しているため、次サイクルで起動されるはず。
         issue_body_3 = (
             "```yaml\nsubtask_id: task-3\nfootprint:\n  - src/third.py\n```\n"
         )
@@ -626,15 +629,16 @@ def test_closed_loop_dag_recomputation_serialization():
             body=issue_body_3,
             labels=("status:queued",),
             created_at="2026-07-07T00:00:00Z",
+            parent={"number": 100},
         )
         dummy_github.add_issue(issue_3)
 
-        # Run Cycle 3. Even though there is a queued task-3, no task should be selected
-        # because the active worktree is forced serial.
+        # Run Cycle 3. task-3 is independent from the forced-serial task and should launch.
         report3 = run_dispatch_cycle(config)
-        assert len(report3.selected) == 0
-        assert report3.quota_slots_available == 0
-        assert "status:in-progress" not in dummy_github.issues[3].labels
+        assert len(report3.selected) == 1
+        assert report3.selected[0].subtask_id == "task-3"
+        assert report3.quota_slots_available == 1
+        assert "status:in-progress" in dummy_github.issues[3].labels
 
     finally:
         os.chdir(original_cwd)
