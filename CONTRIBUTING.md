@@ -12,6 +12,12 @@ Ensure you have Python 3.12+, Poetry, the GitHub CLI (`gh auth status`), and [gi
 poetry install
 ```
 
+Then install the local Git hooks so `./scripts/local-ci.sh` (including the gitleaks scan) runs automatically before every `git push` and blocks it on failure:
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
 ## Running Tests
 
 Execute unit tests and coverage checks using `pytest`:
@@ -29,4 +35,4 @@ This runs:
 1. **Ruff Format & Lint Check**: `ruff format` and `ruff check`
 2. **Mypy Type Check**: Type hint validation
 3. **Pytest Coverage Check**: Ensures coverage does not drop below 75%
-4. **Secret & Local Path Scan** (`gitleaks`): Blocks commits/pushes that leak secrets or absolute local paths (e.g. `file:///home/<user>/...`). Config lives in [`.gitleaks.toml`](.gitleaks.toml). Also enforced in CI regardless of local setup.
+4. **Secret & Local Path Scan** (`gitleaks`): Blocks commits/pushes that leak secrets or absolute local paths (e.g. `file:///home/<user>/...`). Config lives in [`.gitleaks.toml`](.gitleaks.toml). gitleaks must be installed locally — the script fails (rather than skipping) if it's missing, so this check is always enforced before you can push. It's also re-checked in CI as a backstop.
