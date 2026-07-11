@@ -228,8 +228,7 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
             labels = github.get_issue_labels(entry.issue_number)
         except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
             print(
-                f"Warning: failed to poll labels for issue "
-                f"{entry.issue_number}: {exc}",
+                f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
                 file=sys.stderr,
             )
             still_pending.append(entry)
