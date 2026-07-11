@@ -32,7 +32,15 @@ ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
 CLAUDE_CLI_LOCAL_CMD_TEMPLATE = (
     'claude -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
-    '標準開発ワークフローに従って実装してください。"'
+    '標準開発ワークフローに従って実装してください。" '
+    "--permission-mode bypassPermissions"
+)
+
+AGY_CLI_LOCAL_CMD_TEMPLATE = (
+    'agy -p "GitHub Issue #{issue_number} を、'
+    "必ず作業ブランチ `{branch_name}` で、"
+    '標準開発ワークフローに従って実装してください。" '
+    "--sandbox --dangerously-skip-permissions"
 )
 
 
@@ -264,5 +272,9 @@ def build_dispatch_target(
     if dispatch_target_name == "claude-cli":
         return LocalProcessDispatchTarget(
             log_dir=log_dir, local_cmd=local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+        )
+    if dispatch_target_name == "agy-cli":
+        return LocalProcessDispatchTarget(
+            log_dir=log_dir, local_cmd=local_cmd or AGY_CLI_LOCAL_CMD_TEMPLATE
         )
     return LocalProcessDispatchTarget(log_dir=log_dir, local_cmd=local_cmd)

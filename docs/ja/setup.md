@@ -87,12 +87,14 @@ orchestune setup
 
 ---
 
-## 4. ローカルの`claude` CLIへのディスパッチ設定
+## 4. ローカルの`claude` / `agy` CLIへのディスパッチ設定
 
-`--local-cmd` テンプレートを手書きせずに、ローカルの`claude` CLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
+`--local-cmd` テンプレートを手書きせずに、ローカルの`claude`または`agy`(Antigravity) CLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
 
 ```bash
 orchestune dispatch --dispatch-target claude-cli
+# または
+orchestune dispatch --dispatch-target agy-cli
 ```
 
-これは各サブタスクのworktree内で `claude -p "..."`（非対話・print モード）をプリセットの指示文で実行します。`-p` は対話的な許可プロンプトに応答できないため、事前に対象リポジトリで一度 `orchestune bootstrap` を実行してください。これは必須のGitHubラベルの起票に加えて、`.claude/settings.json` がまだ存在しない場合にデフォルトの許可リスト（標準ワークフローに必要な`git`/`gh`コマンドを含む）を自動作成します。既に `.claude/settings.json` が存在する場合は変更されません。
+これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions`（非対話・print モード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。サブタスクごとの`git worktree`自体が安全境界となる、クラウド型のエージェントオーケストレーターと同じ考え方です。別途、許可設定ファイルを準備するステップは不要です。`orchestune bootstrap`は必須のGitHubラベルの起票のみを行います。
