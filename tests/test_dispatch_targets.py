@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dispatch_targets import (
+    CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
     LocalProcessDispatchTarget,
@@ -313,3 +314,19 @@ class TestBuildDispatchTarget:
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "agy {issue_number}"
+
+    def test_claude_cli_without_local_cmd_uses_preset_template(self, tmp_path):
+        target = build_dispatch_target("claude-cli", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_claude_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
+        target = build_dispatch_target(
+            "claude-cli",
+            None,
+            None,
+            tmp_path / "logs",
+            local_cmd="claude -p 'custom {issue_number}'",
+        )
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == "claude -p 'custom {issue_number}'"
