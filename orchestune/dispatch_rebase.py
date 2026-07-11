@@ -247,17 +247,26 @@ def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
 
 def _decide_rebase_target(
     active_task: Task | None,
+    done_subtask_ids: set[str],
     ci_passed_pr_subtask_ids: set[str],
     subtask_branch_map: dict[str, str],
 ) -> str | None:
-    """CIが通過済みの依存先ブランチ（自動リベース対象）があれば、その最初の1件を
-    返す（副作用なし）。"""
+    """起動時のスタッキング制約に合わせて、自動リベース対象を1件に絞れる場合のみ
+    その依存先ブランチを返す（副作用なし）。"""
     if not active_task or not active_task.depends_on:
         return None
+    stackable_deps = []
     for dep in active_task.depends_on:
+        if dep in done_subtask_ids:
+            continue
         if dep in ci_passed_pr_subtask_ids:
-            return subtask_branch_map[dep]
-    return None
+            stackable_deps.append(dep)
+            continue
+        return None
+
+    if len(stackable_deps) != 1:
+        return None
+    return subtask_branch_map.get(stackable_deps[0])
 
 
 def _decide_rebase_needed(parent_branch: str, child_branch: str) -> bool:
@@ -358,6 +367,7 @@ def _try_auto_rebase(
     active_task: Task | None,
     key: str,
     run_state: RunState,
+    done_subtask_ids: set[str],
     ci_passed_pr_subtask_ids: set[str],
     subtask_branch_map: dict[str, str],
     config: DispatcherConfig,
@@ -367,7 +377,7 @@ def _try_auto_rebase(
     呼び出し元はTrueを「このサイクルはこのactive worktreeの処理を終えた」の
     シグナルとして扱うため）。"""
     parent_branch = _decide_rebase_target(
-        active_task, ci_passed_pr_subtask_ids, subtask_branch_map
+        active_task, done_subtask_ids, ci_passed_pr_subtask_ids, subtask_branch_map
     )
     if parent_branch is None:
         return False
