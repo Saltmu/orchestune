@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orchestune import github
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree
 
@@ -144,10 +145,9 @@ def _apply_completed_worktree_outcome(
     if decision.action == "completed_no_commits":
         if config.apply:
             remove_worktree(active.worktree_path)
-            github.remove_label(active.issue_number, "status:in-progress")
-            github.add_label(active.issue_number, "status:blocked-human-review")
-            github.add_comment(
+            apply_human_review_escalation(
                 active.issue_number,
+                ("status:in-progress",),
                 "エージェントプロセスの終了を検知しましたが、ベースブランチ"
                 f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
                 "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"

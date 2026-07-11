@@ -98,6 +98,13 @@ stateDiagram-v2
 - 条件: 依存元PRがGitHub上でCHANGES_REQUESTEDを受けた場合、スタックされた
   タスクを一時停止する。
 
+> **注記（#109）**: 上記3つの遷移（5〜7）は、いずれも
+> `orchestune/dispatch_escalation.py`の`apply_human_review_escalation`
+> （現在のstatus:*ラベルを除去→`status:blocked-human-review`付与→理由コメント、
+> という共通処理）へ実装を集約している。各呼び出し元（`_finalize_completed_worktree`
+> /`_apply_duplicate_skip`/`_apply_changes_requested_escalation`）は、どの理由で
+> エスカレーションするかを判断し、この共通関数を呼ぶだけの薄い層になっている。
+
 ### 8. `status:in-progress` → `status:manual-merge-required`（自動リベース失敗）
 - 発生元: `orchestune/dispatch_rebase.py`の`_apply_auto_rebase`
 - 条件: 依存先PRのCI通過を検知し自動リベースを試みたが、コンフリクトまたは

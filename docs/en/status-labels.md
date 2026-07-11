@@ -102,6 +102,14 @@ independently of the lifecycle above (see "External lock" below).
 - Condition: an upstream PR received a CHANGES_REQUESTED review on GitHub,
   pausing the stacked task.
 
+> **Note (#109)**: transitions 5-7 above all delegate to
+> `apply_human_review_escalation` in `orchestune/dispatch_escalation.py` (the
+> shared logic: remove the current `status:*` label, add
+> `status:blocked-human-review`, then post the reason as a comment). Each
+> caller (`_finalize_completed_worktree` / `_apply_duplicate_skip` /
+> `_apply_changes_requested_escalation`) is now a thin layer that only decides
+> *why* to escalate before calling this shared function.
+
 ### 8. `status:in-progress` → `status:manual-merge-required` (automatic rebase failed)
 - Source: `_apply_auto_rebase` in `orchestune/dispatch_rebase.py`
 - Condition: an automatic rebase was attempted after detecting that an
