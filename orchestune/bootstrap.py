@@ -81,48 +81,6 @@ def setup_agy_permissions(repo_root: Path, home: Path) -> None:
                 print(f"agy permissions in {project_file.name} are already up to date.")
 
 
-def setup_claude_permissions(repo_root: Path, home: Path) -> None:
-    """claude のパーミッション設定を更新する。"""
-    claude_json_path = home / ".claude.json"
-    has_claude = shutil.which("claude") is not None or claude_json_path.exists()
-    if not has_claude:
-        return
-
-    data = {}
-    if claude_json_path.exists():
-        try:
-            data = json.loads(claude_json_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    project_key = str(repo_root.resolve())
-    project_settings = data.setdefault(project_key, {})
-    allowed_tools = project_settings.setdefault("allowedTools", [])
-
-    updated = False
-    if "execute_bash" not in allowed_tools:
-        allowed_tools.append("execute_bash")
-        updated = True
-    if project_settings.get("hasTrustDialogAccepted") is not True:
-        project_settings["hasTrustDialogAccepted"] = True
-        updated = True
-
-    if updated:
-        claude_json_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        print(f"Updated {claude_json_path} for project {project_key}")
-    else:
-        print(f"{claude_json_path} is already up to date for project {project_key}")
-
-
-def setup_agent_permissions(repo_root: Path) -> None:
-    """agy や claude が存在する場合に、このリポジトリの実行に必要なパーミッション設定を自動追加する。"""
-    home = Path.home()
-    setup_agy_permissions(repo_root, home)
-    setup_claude_permissions(repo_root, home)
-
-
 def ensure_claude_settings(repo_root: Path) -> bool:
     """動作リポジトリに`.claude/settings.json`が無ければデフォルトの許可リストを作成する。
 
@@ -165,7 +123,7 @@ def run_bootstrap(forge: Forge | None = None, repo_root: Path | None = None) -> 
     else:
         print(f".claude/settings.json already exists at {settings_path}, skipping.")
 
-    setup_agent_permissions(repo_root)
+    setup_agy_permissions(repo_root, Path.home())
     return 0
 
 
