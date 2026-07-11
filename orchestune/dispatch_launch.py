@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from orchestune import github
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
@@ -168,13 +169,9 @@ def _apply_duplicate_skip(
                 file=sys.stderr,
             )
             if ctx.config.apply:
-                if "status:queued" in task.status_labels:
-                    github.remove_label(task.issue_number, "status:queued")
-                if "status:blocked" in task.status_labels:
-                    github.remove_label(task.issue_number, "status:blocked")
-                github.add_label(task.issue_number, "status:blocked-human-review")
-                github.add_comment(
+                apply_human_review_escalation(
                     task.issue_number,
+                    task.status_labels,
                     f"重複起動防止: このサブタスクに対応するオープンなPR #{existing_pr.number} (ブランチ: `{existing_pr.head_ref}`) が既に検出され、更新されています。\n"
                     f"重複したエージェントセッションの起動を防ぐため、自動起動をスキップし、ステータスを `status:blocked-human-review` に変更しました。\n"
                     f"必要に応じて手動でPRをマージするか、再起動したい場合は既存のPRをクローズした上で再度 `status:queued` に設定してください。",
