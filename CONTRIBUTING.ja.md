@@ -12,6 +12,12 @@ Python 3.12以上、Poetry、GitHub CLI（`gh auth status`）、[gitleaks](https
 poetry install
 ```
 
+続けて、以下を実行してGit hooksをローカルにインストールしてください。これにより `git push` の直前に `./scripts/local-ci.sh`（gitleaksスキャンを含む）が自動実行され、失敗時はpushがブロックされます。
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
 ## テストの実行
 
 `pytest`を使用して、ユニットテストとカバレッジ測定を実行します。
@@ -29,4 +35,4 @@ poetry run pytest
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
 3. **Pytest カバレッジチェック**: テストが通過し、カバレッジが75%以上であることを保証
-4. **シークレット・ローカルパススキャン**（`gitleaks`）: シークレットや `file:///home/<user>/...` のような絶対ローカルパスの漏洩を含むコミット・プッシュをブロックします。設定は[`.gitleaks.toml`](.gitleaks.toml)を参照してください。ローカル未導入でもCIで必ず検証されます。
+4. **シークレット・ローカルパススキャン**（`gitleaks`）: シークレットや `file:///home/<user>/...` のような絶対ローカルパスの漏洩を含むコミット・プッシュをブロックします。設定は[`.gitleaks.toml`](.gitleaks.toml)を参照してください。gitleaksがローカルにインストールされていない場合、このスクリプトはスキップせずエラーで停止するため、push前に必ずこのチェックが実行されます。リモートCIでも念のため再検証されます。
