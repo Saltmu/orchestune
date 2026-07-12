@@ -307,6 +307,17 @@ def _sync_external_locks(
     return lock_result
 
 
+def _filter_by_parent(
+    issues: list[IssueRecord], parent_issue_number: int | None
+) -> list[IssueRecord]:
+    """`parent_issue_number`が指定されている場合、親Issueが一致するものだけに絞る。"""
+    if parent_issue_number is None:
+        return issues
+    return [
+        i for i in issues if i.parent and i.parent.get("number") == parent_issue_number
+    ]
+
+
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
     lock_path = Path(config.run_state_path).with_suffix(".lock")
     with file_lock(lock_path):
@@ -338,37 +349,16 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
                 save_run_state(run_state, config.run_state_path)
 
         # parent_issue_number が指定されている場合、親Issueが一致する子Issueのみにフィルタリングする
-        if config.parent_issue_number is not None:
-            queued_issues = [
-                i
-                for i in queued_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            locked_issues = [
-                i
-                for i in locked_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            in_progress_issues = [
-                i
-                for i in in_progress_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            blocked_issues = [
-                i
-                for i in blocked_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            done_issues = [
-                i
-                for i in done_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            not_needed_issues = [
-                i
-                for i in not_needed_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
+        queued_issues = _filter_by_parent(queued_issues, config.parent_issue_number)
+        locked_issues = _filter_by_parent(locked_issues, config.parent_issue_number)
+        in_progress_issues = _filter_by_parent(
+            in_progress_issues, config.parent_issue_number
+        )
+        blocked_issues = _filter_by_parent(blocked_issues, config.parent_issue_number)
+        done_issues = _filter_by_parent(done_issues, config.parent_issue_number)
+        not_needed_issues = _filter_by_parent(
+            not_needed_issues, config.parent_issue_number
+        )
 
         all_issues = [
             *queued_issues,
