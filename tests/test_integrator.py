@@ -1934,3 +1934,59 @@ class TestIntegratorHybridPattern:
         assert res["status"] == "composite_success"
         assert res["details"]["issue_100"] == {"status": "success", "parent_issue": 100}
         assert res["details"]["issue_200"] == {"status": "success", "parent_issue": 200}
+
+    def test_multi_issue_integrator_partial_success(self):
+        from pathlib import Path
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegratorConfig,
+            MultiIssueIntegrator,
+        )
+
+        class SuccessDummy(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                return {"status": "success"}
+
+        class FailDummy(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                return {"status": "failure"}
+
+        runner = MultiIssueIntegrator([SuccessDummy(), FailDummy()])
+        config = IntegratorConfig(apply=True)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        res = runner.execute(ctx)
+        assert res["status"] == "composite_partial_success"
+
+    def test_multi_issue_integrator_failure(self):
+        from pathlib import Path
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegratorConfig,
+            MultiIssueIntegrator,
+        )
+
+        class FailDummy(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                return {"status": "failed_to_push_temp_branch"}
+
+        runner = MultiIssueIntegrator([FailDummy(), FailDummy()])
+        config = IntegratorConfig(apply=True)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        res = runner.execute(ctx)
+        assert res["status"] == "composite_failure"

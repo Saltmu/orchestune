@@ -139,6 +139,9 @@ class MultiIssueIntegrator(IntegrationComponent):
 
     def execute(self, ctx: IntegrationContext) -> dict:
         details = {}
+        success_count = 0
+        failure_count = 0
+
         for integrator in self.integrators:
             sub_ctx = copy.deepcopy(ctx)
             parent_issue = getattr(integrator, "parent_issue", None)
@@ -147,10 +150,27 @@ class MultiIssueIntegrator(IntegrationComponent):
                 if parent_issue is not None
                 else f"integrator_{id(integrator)}"
             )
-            details[key] = integrator.execute(sub_ctx)
+            res = integrator.execute(sub_ctx)
+            details[key] = res
+
+            status = res.get("status")
+            if status in ("success", "no_done_tasks"):
+                success_count += 1
+            else:
+                failure_count += 1
+
+        if success_count > 0 and failure_count == 0:
+            overall_status = "composite_success"
+        elif success_count > 0 and failure_count > 0:
+            overall_status = "composite_partial_success"
+        else:
+            overall_status = "composite_failure"
+
+        if not self.integrators:
+            overall_status = "composite_success"
 
         return {
-            "status": "composite_success",
+            "status": overall_status,
             "details": details,
         }
 
