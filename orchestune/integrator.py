@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 import subprocess
 import sys
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune import github
@@ -37,82 +39,195 @@ class IntegratorConfig:
             )
 
 
-class Integrator:
-    def __init__(self, config: IntegratorConfig):
-        self.config = config
-        if self.config.ci_command is None:
-            self.config.ci_command = ["./scripts/local-ci.sh"]
-        self.original_root = Path(self.config.repository_root).resolve()
-        self.config.repository_root = self.original_root
-        self.failed_reasons: dict[str, str] = {}
-        self.blocked_reasons: dict[str, str] = {}
-        self.unparsable_done_tasks: list[Task] = []
-        self._worktree = IntegrationWorktree(
-            self.original_root, self.config.temp_branch
+@dataclass
+class IntegrationContext:
+    config: IntegratorConfig
+    repository_root: Path
+    original_root: Path
+    base_branch: str
+    temp_branch: str
+
+    # 処理中の共有状態
+    merged_tasks: list[str] = field(default_factory=list)
+    failed_tasks: list[str] = field(default_factory=list)
+    blocked_tasks: list[str] = field(default_factory=list)
+    failed_reasons: dict[str, str] = field(default_factory=dict)
+    blocked_reasons: dict[str, str] = field(default_factory=dict)
+    unparsable_done_tasks: list[Task] = field(default_factory=list)
+    active_done_tasks: list[Task] = field(default_factory=list)
+    integration_pr_number: int | None = None
+    semantic_review_dispatched: bool = False
+    newly_included: list[str] = field(default_factory=list)
+    temp_worktree_path: Path | None = None
+
+    # 全体結果ステータス
+    status: str = "success"
+    error: str | None = None
+
+
+class IntegrationComponent(ABC):
+    @abstractmethod
+    def execute(self, ctx: IntegrationContext) -> dict:
+        pass
+
+
+class IntegrationPipeline(IntegrationComponent):
+    def __init__(self, steps: list[IntegrationComponent]):
+        self.steps = steps
+
+    def execute(self, ctx: IntegrationContext) -> dict:
+        merged_report = {}
+        try:
+            for step in self.steps:
+                res = step.execute(ctx)
+                merged_report.update(res)
+
+                if "status" in res:
+                    ctx.status = res["status"]
+                if "error" in res:
+                    ctx.error = res["error"]
+
+                # success以外（failure, partial_success, no_done_tasksなど）の場合は処理を中断
+                if ctx.status != "success":
+                    break
+        finally:
+            if ctx.temp_worktree_path:
+                try:
+                    subprocess.run(
+                        [
+                            "git",
+                            "worktree",
+                            "remove",
+                            "--force",
+                            str(ctx.temp_worktree_path),
+                        ],
+                        cwd=str(ctx.original_root),
+                        capture_output=True,
+                        check=True,
+                    )
+                except Exception:
+                    pass
+
+        # 各ステップが返した辞書の内容をベースに、最終結果を集約
+        final_report = copy.deepcopy(merged_report)
+        final_report["status"] = ctx.status
+        final_report["merged"] = ctx.merged_tasks
+
+        if ctx.status == "success":
+            final_report["integration_pr_number"] = ctx.integration_pr_number
+            final_report["semantic_review_dispatched"] = ctx.semantic_review_dispatched
+            final_report["newly_included"] = ctx.newly_included
+
+        if ctx.failed_tasks:
+            final_report["failed"] = ctx.failed_tasks
+            final_report["failed_reasons"] = ctx.failed_reasons
+        if ctx.blocked_tasks:
+            final_report["blocked"] = ctx.blocked_tasks
+            final_report["blocked_reasons"] = ctx.blocked_reasons
+        if ctx.error:
+            final_report["error"] = ctx.error
+        if ctx.unparsable_done_tasks:
+            final_report["unparsable_done_issues"] = [
+                t.issue_number for t in ctx.unparsable_done_tasks
+            ]
+        return final_report
+
+
+class MultiIssueIntegrator(IntegrationComponent):
+    def __init__(self, integrators: list[IntegrationComponent]):
+        self.integrators = integrators
+
+    def execute(self, ctx: IntegrationContext) -> dict:
+        details = {}
+        success_count = 0
+        failure_count = 0
+
+        for integrator in self.integrators:
+            sub_ctx = copy.deepcopy(ctx)
+            parent_issue = getattr(integrator, "parent_issue", None)
+            key = (
+                f"issue_{parent_issue}"
+                if parent_issue is not None
+                else f"integrator_{id(integrator)}"
+            )
+            res = integrator.execute(sub_ctx)
+            details[key] = res
+
+            status = res.get("status")
+            if status in ("success", "no_done_tasks"):
+                success_count += 1
+            else:
+                failure_count += 1
+
+        if success_count > 0 and failure_count == 0:
+            overall_status = "composite_success"
+        elif success_count > 0 and failure_count > 0:
+            overall_status = "composite_partial_success"
+        else:
+            overall_status = "composite_failure"
+
+        if not self.integrators:
+            overall_status = "composite_success"
+
+        return {
+            "status": overall_status,
+            "details": details,
+        }
+
+
+class SingleIssueIntegrator(IntegrationComponent):
+    def __init__(self, parent_issue: int | None, pipeline: IntegrationComponent):
+        self.parent_issue = parent_issue
+        self.pipeline = pipeline
+
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if self.parent_issue is not None:
+            ctx.config.parent_issue_number = self.parent_issue
+            ctx.base_branch = f"origin/parent/issue-{self.parent_issue}"
+            ctx.temp_branch = f"integration/temp-parent-issue-{self.parent_issue}"
+
+        if not ctx.config.apply:
+            return self.pipeline.execute(ctx)
+
+        worktree_manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
+        lock_path = worktree_manager.lock_path()
+        try:
+            with file_lock(lock_path):
+                return self.pipeline.execute(ctx)
+        except RuntimeError as e:
+            return {
+                "status": "integration_branch_locked",
+                "error": str(e),
+            }
+
+
+class PrepareTasksStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
+        sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
+            ctx.config.parent_issue_number
         )
+        self._warn_and_flag_unparsable_done_tasks(ctx)
 
-    def _worktree_key(self) -> str:
-        return self._worktree.key()
-
-    def _temp_worktree_path(self) -> Path:
-        return self._worktree.temp_path()
-
-    def _worktree_lock_path(self) -> Path:
-        return self._worktree.lock_path()
-
-    def _reclaim_worktree_path(self, path: Path) -> None:
-        self._worktree.reclaim(path)
-
-    def run(self) -> dict:
-        sorted_done_tasks, self.unparsable_done_tasks = get_sorted_done_tasks(
-            self.config.parent_issue_number
-        )
-        self._warn_and_flag_unparsable_done_tasks()
-
-        active_done_tasks = [
+        ctx.active_done_tasks = [
             t
             for t in sorted_done_tasks
             if t.issue_state != "CLOSED" and t.parent_state != "CLOSED"
         ]
-        if not active_done_tasks:
-            return self._attach_unparsable_info(
-                {"status": "no_done_tasks", "merged": []}
-            )
 
-        if not self.config.apply:
-            return self._attach_unparsable_info(
-                self._run_integration(active_done_tasks)
-            )
+        if not ctx.active_done_tasks:
+            return {"status": "no_done_tasks"}
 
-        lock_path = self._worktree_lock_path()
-        try:
-            with file_lock(lock_path):
-                return self._attach_unparsable_info(
-                    self._run_integration(active_done_tasks)
-                )
-        except RuntimeError as e:
-            return self._attach_unparsable_info(
-                {
-                    "status": "integration_branch_locked",
-                    "error": str(e),
-                }
-            )
+        return {"status": "success"}
 
-    def _warn_and_flag_unparsable_done_tasks(self) -> None:
-        """#54: Footprint YAMLから`subtask_id`を抽出できなかった`status:done`タスクは、
-        マージ対象のIDに紐付けられないため統合できないが、それを警告もエラー報告も
-        なく黙って処理対象から消してしまうと、統合待ちのタスクが放置され続けている
-        ことに誰も気づけない。少なくとも警告ログを出し、apply時は人間が気づけるよう
-        Issueへコメントする。
-        """
-        for task in self.unparsable_done_tasks:
+    def _warn_and_flag_unparsable_done_tasks(self, ctx: IntegrationContext) -> None:
+        for task in ctx.unparsable_done_tasks:
             print(
                 f"Warning: status:done issue #{task.issue_number} has no extractable "
                 "subtask_id (Footprint YAML block missing or malformed); excluded "
                 "from integration without being marked merged or failed.",
                 file=sys.stderr,
             )
-            if self.config.apply:
+            if ctx.config.apply:
                 try:
                     github.add_comment(
                         task.issue_number,
@@ -127,52 +242,56 @@ class Integrator:
                         file=sys.stderr,
                     )
 
-    def _attach_unparsable_info(self, result: dict) -> dict:
-        if self.unparsable_done_tasks:
-            result["unparsable_done_issues"] = [
-                t.issue_number for t in self.unparsable_done_tasks
-            ]
-        return result
 
-    def _run_integration(self, active_done_tasks: list[Task]) -> dict:
-        temp_worktree_path = None
-        if self.config.apply:
-            temp_worktree_path = self._temp_worktree_path()
-            try:
-                subprocess.run(
-                    ["git", "worktree", "prune"],
-                    cwd=str(self.config.repository_root),
-                    capture_output=True,
-                )
-                self._reclaim_worktree_path(temp_worktree_path)
-                subprocess.run(
-                    [
-                        "git",
-                        "worktree",
-                        "add",
-                        str(temp_worktree_path),
-                        self.config.base_branch,
-                    ],
-                    cwd=str(self.config.repository_root),
-                    check=True,
-                    capture_output=True,
-                )
-                self.config.repository_root = temp_worktree_path
-            except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
-                return {
-                    "status": "failed_to_create_temp_worktree",
-                    "error": f"Failed to create temp worktree: {e}",
-                }
+class SetupWorktreeStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply:
+            return {"status": "success"}
 
+        try:
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=str(ctx.original_root),
+                capture_output=True,
+            )
+
+            worktree_manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
+            worktree_manager.reclaim(worktree_manager.temp_path())
+
+            subprocess.run(
+                [
+                    "git",
+                    "worktree",
+                    "add",
+                    str(worktree_manager.temp_path()),
+                    ctx.base_branch,
+                ],
+                cwd=str(ctx.original_root),
+                check=True,
+                capture_output=True,
+            )
+            ctx.repository_root = worktree_manager.temp_path()
+            ctx.config.repository_root = worktree_manager.temp_path()
+            ctx.temp_worktree_path = worktree_manager.temp_path()
+        except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
+            return {
+                "status": "failed_to_create_temp_worktree",
+                "error": f"Failed to create temp worktree: {e}",
+            }
+        return {"status": "success"}
+
+
+class MergeAndTestStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
         merger = IntegrationMerger(
-            repository_root=self.config.repository_root,
-            original_root=self.original_root,
-            ci_command=self.config.ci_command or ["./scripts/local-ci.sh"],
+            repository_root=ctx.repository_root,
+            original_root=ctx.original_root,
+            ci_command=ctx.config.ci_command or ["./scripts/local-ci.sh"],
         )
 
         try:
             if not merger.create_temp_branch(
-                self.config.temp_branch, self.config.base_branch, self.config.apply
+                ctx.temp_branch, ctx.base_branch, ctx.config.apply
             ):
                 return {
                     "status": "failed_to_create_temp_branch",
@@ -186,131 +305,139 @@ class Integrator:
                 failed_reasons,
                 blocked_reasons,
             ) = merger.merge_and_test_tasks(
-                active_done_tasks, self.config.base_branch, self.config.apply
+                ctx.active_done_tasks, ctx.base_branch, ctx.config.apply
             )
-            self.failed_reasons.update(failed_reasons)
-            self.blocked_reasons.update(blocked_reasons)
+            ctx.merged_tasks.extend(merged_tasks)
+            ctx.failed_tasks.extend(failed_tasks)
+            ctx.blocked_tasks.extend(blocked_tasks)
+            ctx.failed_reasons.update(failed_reasons)
+            ctx.blocked_reasons.update(blocked_reasons)
 
-            if merged_tasks and not failed_tasks:
-                if self.config.apply:
-                    try:
-                        subprocess.run(
-                            [
-                                "git",
-                                "push",
-                                "--force",
-                                "origin",
-                                self.config.temp_branch,
-                            ],
-                            cwd=str(self.config.repository_root),
-                            check=True,
-                            capture_output=True,
-                        )
-                    except subprocess.CalledProcessError as pe:
-                        push_error = (pe.stderr or b"").decode(errors="replace")
-                        print(
-                            f"Failed to push temp branch: {push_error}",
-                            file=sys.stderr,
-                        )
-                        # #52: pushが失敗した状態でPR作成/再利用やsemantic reviewを
-                        # 続行すると、既存の統合PRがある場合にリモート上の古いdiffを
-                        # 対象にレビューが起動されてしまう。pushの成功をその前提条件
-                        # にし、失敗時は明示的な失敗ステータスで即座に終了する。
-                        return {
-                            "status": "failed_to_push_temp_branch",
-                            "merged": merged_tasks,
-                            "error": push_error,
-                        }
+            if not failed_tasks and merged_tasks:
+                return {"status": "success"}
 
-                    integration_pr_number = self._ensure_integration_pr(merged_tasks)
-
-                    # #139: 統合の安全確定（push成功＋統合PR確保成功）を
-                    # 確認できた場合にのみ、対象Issueへ`integration:included`を
-                    # 記帳する。
-                    newly_included: list[str] = []
-                    if integration_pr_number is not None:
-                        newly_included = self._mark_newly_included(
-                            active_done_tasks, merged_tasks
-                        )
-
-                    # 意味的レビュー（LLMによる統合diffのバグ検知）はfire-and-forgetで
-                    # 起動するのみ。結果は統合PRへのコメントとして残るだけで、Python側は
-                    # 合否の追跡・自動マージ等の後続処理を一切行わない（最終マージは常に人間）。
-                    semantic_review_dispatched = False
-                    if (
-                        self.config.enable_semantic_review
-                        and self.config.coordinator is not None
-                        and integration_pr_number is not None
-                    ):
-                        try:
-                            self.config.coordinator.dispatch_review(
-                                temp_branch=self.config.temp_branch,
-                                base_branch=self.config.base_branch,
-                                pr_number=integration_pr_number,
-                                parent_issue_number=self.config.parent_issue_number,
-                                merged_subtask_ids=merged_tasks,
-                            )
-                            semantic_review_dispatched = True
-                        except Exception as e:
-                            print(
-                                f"Warning: Failed to dispatch semantic review: {e}",
-                                file=sys.stderr,
-                            )
-
-                    return {
-                        "status": "success",
-                        "merged": merged_tasks,
-                        "integration_pr_number": integration_pr_number,
-                        "semantic_review_dispatched": semantic_review_dispatched,
-                        "newly_included": newly_included,
-                    }
-                return {"status": "success", "merged": merged_tasks}
-
+            status = "partial_success" if merged_tasks else "failure"
             return {
-                "status": "partial_success" if merged_tasks else "failure",
-                "merged": merged_tasks,
-                "failed": failed_tasks,
-                "failed_reasons": self.failed_reasons,
-                "blocked": blocked_tasks,
-                "blocked_reasons": self.blocked_reasons,
+                "status": status,
+                "merged": ctx.merged_tasks,
+                "failed": ctx.failed_tasks,
+                "failed_reasons": ctx.failed_reasons,
+                "blocked": ctx.blocked_tasks,
+                "blocked_reasons": ctx.blocked_reasons,
             }
-        finally:
-            if temp_worktree_path:
-                try:
-                    subprocess.run(
-                        [
-                            "git",
-                            "worktree",
-                            "remove",
-                            "--force",
-                            str(temp_worktree_path),
-                        ],
-                        cwd=str(self.original_root),
-                        capture_output=True,
-                        check=True,
-                    )
-                except Exception:
-                    pass
+        except Exception as e:
+            return {
+                "status": "failure",
+                "error": f"Error during merge and test: {e}",
+            }
 
-    def _ensure_integration_pr(self, merged_tasks: list[str]) -> int | None:
-        return ensure_integration_pr(
-            self.config.temp_branch, self.config.base_branch, merged_tasks
-        )
 
-    def _mark_newly_included(
-        self, active_done_tasks: list[Task], merged_tasks: list[str]
-    ) -> list[str]:
-        """#139: `status:done`自体は変更せず（依存解決判定や外部ロック解除条件
-        など他サブシステムが引き続き参照するため）、統合済みを示す直交ラベル
-        `integration:included`のみを記帳する。統合ブランチは毎回base_branchから
-        再構築されるため、既に記帳済みのタスクもre-merge対象からは除外しない
-        （除外すると再構築のたびに統合ブランチから消えてしまう）。
-        """
+class PushTempBranchStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply:
+            return {"status": "success"}
+        if ctx.failed_tasks or not ctx.merged_tasks:
+            return {"status": ctx.status}
+
+        try:
+            subprocess.run(
+                [
+                    "git",
+                    "push",
+                    "--force",
+                    "origin",
+                    ctx.temp_branch,
+                ],
+                cwd=str(ctx.repository_root),
+                check=True,
+                capture_output=True,
+            )
+            return {"status": "success"}
+        except subprocess.CalledProcessError as pe:
+            push_error = (pe.stderr or b"").decode(errors="replace")
+            print(
+                f"Failed to push temp branch: {push_error}",
+                file=sys.stderr,
+            )
+            return {
+                "status": "failed_to_push_temp_branch",
+                "error": push_error,
+            }
+
+
+class EnsureIntegrationPrStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply:
+            return {"status": "success"}
+        if (
+            ctx.status == "failed_to_push_temp_branch"
+            or ctx.failed_tasks
+            or not ctx.merged_tasks
+        ):
+            return {"status": ctx.status}
+
+        try:
+            pr_number = ensure_integration_pr(
+                ctx.temp_branch, ctx.base_branch, ctx.merged_tasks
+            )
+            ctx.integration_pr_number = pr_number
+            return {"status": "success", "integration_pr_number": pr_number}
+        except Exception as e:
+            print(f"Warning: failed to ensure integration PR: {e}", file=sys.stderr)
+            return {"status": "success", "integration_pr_number": None}
+
+
+class SemanticReviewStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply:
+            return {"status": "success"}
+        if (
+            ctx.failed_tasks
+            or not ctx.merged_tasks
+            or ctx.integration_pr_number is None
+        ):
+            return {"status": ctx.status}
+
+        if ctx.config.enable_semantic_review and ctx.config.coordinator is not None:
+            try:
+                ctx.config.coordinator.dispatch_review(
+                    temp_branch=ctx.temp_branch,
+                    base_branch=ctx.base_branch,
+                    pr_number=ctx.integration_pr_number,
+                    parent_issue_number=ctx.config.parent_issue_number,
+                    merged_subtask_ids=ctx.merged_tasks,
+                )
+                ctx.semantic_review_dispatched = True
+                return {"status": "success", "semantic_review_dispatched": True}
+            except Exception as e:
+                print(
+                    f"Warning: Failed to dispatch semantic review: {e}",
+                    file=sys.stderr,
+                )
+        return {"status": "success", "semantic_review_dispatched": False}
+
+
+class LabelIncludedStep(IntegrationComponent):
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply:
+            return {"status": "success"}
+        if (
+            ctx.failed_tasks
+            or not ctx.merged_tasks
+            or ctx.integration_pr_number is None
+        ):
+            return {"status": ctx.status}
+
+        newly_included = self._mark_newly_included(ctx)
+        ctx.newly_included = newly_included
+        return {"status": "success", "newly_included": newly_included}
+
+    def _mark_newly_included(self, ctx: IntegrationContext) -> list[str]:
         newly_included: list[str] = []
         task_by_subtask_id = {
-            t.subtask_id: t for t in active_done_tasks if t.subtask_id
+            t.subtask_id: t for t in ctx.active_done_tasks if t.subtask_id
         }
-        for subtask_id in merged_tasks:
+        for subtask_id in ctx.merged_tasks:
             task = task_by_subtask_id.get(subtask_id)
             if task is None or "integration:included" in task.status_labels:
                 continue
@@ -324,3 +451,67 @@ class Integrator:
                     file=sys.stderr,
                 )
         return newly_included
+
+
+class Integrator:
+    def __init__(self, config: IntegratorConfig):
+        self.config = config
+        if self.config.ci_command is None:
+            self.config.ci_command = ["./scripts/local-ci.sh"]
+        self.original_root = Path(self.config.repository_root).resolve()
+        self.config.repository_root = self.original_root
+        self._worktree = IntegrationWorktree(
+            self.original_root, self.config.temp_branch
+        )
+
+        # 既存コードが直接参照する可能性のある属性
+        self.failed_reasons: dict[str, str] = {}
+        self.blocked_reasons: dict[str, str] = {}
+        self.unparsable_done_tasks: list[Task] = []
+
+    def _worktree_key(self) -> str:
+        return self._worktree.key()
+
+    def _temp_worktree_path(self) -> Path:
+        return self._worktree.temp_path()
+
+    def _worktree_lock_path(self) -> Path:
+        return self._worktree.lock_path()
+
+    def _reclaim_worktree_path(self, path: Path) -> None:
+        self._worktree.reclaim(path)
+
+    def run(self) -> dict:
+        ctx = IntegrationContext(
+            config=self.config,
+            repository_root=self.original_root,
+            original_root=self.original_root,
+            base_branch=self.config.base_branch,
+            temp_branch=self.config.temp_branch,
+        )
+
+        pipeline = IntegrationPipeline(
+            [
+                PrepareTasksStep(),
+                SetupWorktreeStep(),
+                MergeAndTestStep(),
+                PushTempBranchStep(),
+                EnsureIntegrationPrStep(),
+                SemanticReviewStep(),
+                LabelIncludedStep(),
+            ]
+        )
+
+        runner = SingleIssueIntegrator(
+            parent_issue=self.config.parent_issue_number,
+            pipeline=pipeline,
+        )
+
+        res = runner.execute(ctx)
+
+        # 属性の同期
+        self.failed_reasons = ctx.failed_reasons
+        self.blocked_reasons = ctx.blocked_reasons
+        self.unparsable_done_tasks = ctx.unparsable_done_tasks
+
+        return res
