@@ -7,6 +7,7 @@ def main() -> None:
         print("Available commands:")
         print("  dag       DAG validation tool")
         print("  dispatch  Dispatcher/scheduler tool")
+        print("  status    Monitor dispatched agent sessions (--watch for live view)")
         print("  setup     Setup skills symlinks for AI assistants")
         print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
         sys.exit(1)
@@ -22,6 +23,10 @@ def main() -> None:
         from orchestune.dispatcher import main as dispatcher_main
 
         dispatcher_main()
+    elif cmd == "status":
+        from orchestune.monitor import main as monitor_main
+
+        monitor_main()
     elif cmd == "setup":
         from orchestune.setup_skills import setup_skills
 
