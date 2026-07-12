@@ -8,21 +8,19 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from orchestune import github
+from orchestune import dispatch_gc, github
 from orchestune.dag import (
     FootprintConflict,
     SubTask,
     recompute_dag_for_footprint_change,
 )
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_locks import check_footprint_deviation
+from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.github import resolve_local_or_remote_branch
-
-if TYPE_CHECKING:
-    from orchestune.dispatch_state import RunState
-    from orchestune.dispatcher import DispatcherConfig
 
 
 def notify_recompute(
@@ -410,3 +408,48 @@ def _try_auto_rebase(
         _apply_auto_rebase(active, active_task, key, run_state, parent_branch, config)
         return True
     return False
+
+
+def _rule_auto_rebase(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    """#201: 自動リベース判定＆実行。"""
+    if not dispatch_gc.is_process_alive(active.pid):
+        return None
+    if not _try_auto_rebase(
+        active,
+        active_task,
+        key,
+        ctx.run_state,
+        ctx.done_subtask_ids,
+        ctx.ci_passed_pr_subtask_ids,
+        ctx.subtask_branch_map,
+        ctx.config,
+    ):
+        return None
+    return ActiveWorktreeRuleOutcome(terminal=True)
+
+
+def _rule_footprint_deviation(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome:
+    """フォールバックルール: 他のどのルールにも該当しなかったactive worktreeに
+    ついて、footprint逸脱の有無を判定する。ルールチェーンの末尾として、常に
+    非Noneの結果を返し必ずこのactive worktreeの処理を終える。
+    """
+    deviated = check_footprint_deviation(
+        active.worktree_path,
+        active.declared_footprint,
+        base=active.base_branch,
+        min_changed_lines=ctx.config.deviation_buffer_lines,
+    )
+    if not deviated:
+        return ActiveWorktreeRuleOutcome(terminal=True)
+
+    event = _handle_footprint_deviation(
+        active, deviated, ctx.tasks_by_issue, ctx.issue_number_by_subtask_id, ctx.config
+    )
+    forced_serial = event["action"] in ("forced_serial", "already_forced_serial")
+    return ActiveWorktreeRuleOutcome(
+        deviation_event=event, forced_serial=forced_serial, terminal=True
+    )

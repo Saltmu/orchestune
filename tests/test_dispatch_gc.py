@@ -4,20 +4,40 @@ from unittest.mock import patch
 from orchestune.dispatch_gc import (
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
+    _decide_stale_active_entry,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
+    _rule_completed,
     is_process_alive,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )
 from orchestune.dispatcher import DispatcherConfig
+
+
+def _ctx(**overrides):
+    defaults = dict(
+        run_state=RunState(active_worktrees={}),
+        tasks_by_issue={},
+        issue_number_by_subtask_id={},
+        done_subtask_ids=set(),
+        ci_passed_pr_subtask_ids=set(),
+        changes_requested_subtask_ids=set(),
+        subtask_branch_map={},
+        prs=[],
+        pr_by_branch={},
+        config=DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+    )
+    defaults.update(overrides)
+    return CycleContext(**defaults)
 
 
 def _active(**overrides):
@@ -443,3 +463,42 @@ class TestDecideNotNeededDirtyWorktree:
             return_value=False,
         ):
             assert _decide_not_needed_dirty_worktree(_active()) is False
+
+
+class TestDecideStaleActiveEntry:
+    """decide層: githubラベルの読み取りのみでstale判定を行い、run_stateは変更しない。"""
+
+    def test_none_when_still_in_progress(self):
+        task = _task(status_labels=("status:in-progress",))
+        assert _decide_stale_active_entry(_active(), task) is None
+
+    def test_none_when_no_matching_task(self):
+        assert _decide_stale_active_entry(_active(), None) is None
+
+    def test_stale_when_label_no_longer_in_progress(self):
+        task = _task(status_labels=("status:blocked",))
+        event = _decide_stale_active_entry(_active(), task)
+        assert event is not None
+        assert event["action"] == "stale_active_entry_discarded"
+
+
+class TestRuleCompleted:
+    def test_dirty_worktree_is_terminal(self):
+        active = _active()
+        task = _task()
+        ctx = _ctx()
+        with (
+            patch(
+                "orchestune.dispatch_gc._is_worktree_complete",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completion_skipped_dirty_worktree"},
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.terminal is True
+        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
