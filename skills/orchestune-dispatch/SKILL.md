@@ -28,7 +28,7 @@ output_schema:
   * `gh` が利用できない場合は、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。
 * ステージA開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと（詳細はステージAの手順1を参照）。
 * ディスパッチャーの書き込み系操作（ラベル更新・`git worktree`作成・エージェント起動）は、既定で実行されます（`--apply`）。テスト確認したい場合は `--no-apply` を明示指定してください。
-* エージェントの起動先（`--dispatch-target`）は、既定でローカルsubprocess起動（`local`）です。現時点でサポートしているクラウド実行先は**Claude Code Cloud Routine（`cloud-routine`）のみ**で、利用する場合は`ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` 環境変数の設定が必要です。ルーチン自体の作成手順（[claude.ai/code/routines](https://claude.ai/code/routines)でのAPIトリガー設定・トークン発行）は[README.ja.mdのセットアップ手順](../../README.ja.md#claude-code-cloud-routineのセットアップ手順)を参照してください。将来的にはCodex Cloud等、他のクラウドエージェント基盤への対応も予定しています。
+* エージェントの起動先（`--dispatch-target`）は、未指定時は実行環境に応じて自動選択されます：ローカル/対話実行時は`claude-cli`（ローカルの`claude` CLIをsubprocess起動）、GitHub Actions実行時（`GITHUB_ACTIONS=true`）は`cloud-routine`（Claude Code Cloud Routine）です。明示的に`local`を指定した場合のみ、後方互換のダミー起動（`true`のno-op、テスト・dry-run用途）になります。現時点でサポートしているクラウド実行先は**Claude Code Cloud Routine（`cloud-routine`）のみ**で、利用する場合は`ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` 環境変数の設定が必要です（GitHub Actions上で自動選択された場合も同様。未設定なら警告してローカルのダミー起動にフォールバックします）。ルーチン自体の作成手順（[claude.ai/code/routines](https://claude.ai/code/routines)でのAPIトリガー設定・トークン発行）は[README.ja.mdのセットアップ手順](../../README.ja.md#claude-code-cloud-routineのセットアップ手順)を参照してください。将来的にはCodex Cloud等、他のクラウドエージェント基盤への対応も予定しています。
 
 ## ステージA: Issue起票
 
