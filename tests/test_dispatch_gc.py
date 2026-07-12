@@ -113,13 +113,27 @@ class TestWorktreeHasNewCommits:
             )
             assert worktree_has_new_commits("worktrees/w1", "origin/main") is False
 
-    def test_git_error_falls_back_to_true(self):
-        """比較不能時は安全側（実コミットありとみなし従来通り完了扱い）にフォールバックする。"""
+    def test_git_error_falls_back_to_false(self):
+        """#135: 比較不能時（base_branch参照が解決できない等）は「新規コミット無し」
+        と同じ安全側（False）にフォールバックし、実体のない完了確定を防ぐ。"""
         with patch(
             "orchestune.dispatch_gc.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, []),
         ):
-            assert worktree_has_new_commits("worktrees/missing", "origin/main") is True
+            assert worktree_has_new_commits("worktrees/missing", "origin/main") is False
+
+    def test_git_error_logs_warning_to_stderr(self, capsys):
+        """#135: 比較失敗時にstderrへ警告を出力し、原因調査を容易にする。"""
+        with patch(
+            "orchestune.dispatch_gc.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                1, [], stderr="fatal: bad revision"
+            ),
+        ):
+            worktree_has_new_commits("worktrees/w1", "origin/main")
+        captured = capsys.readouterr()
+        assert "worktrees/w1" in captured.err
+        assert "origin/main" in captured.err
 
 
 class TestFinalizeCompletedWorktree:
