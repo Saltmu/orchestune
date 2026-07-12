@@ -8,16 +8,14 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from orchestune import github
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
+from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
-
-if TYPE_CHECKING:
-    from orchestune.dispatch_state import RunState
-    from orchestune.dispatcher import DispatcherConfig
+from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.dispatch_targets import DispatchHandle
 
 
 def is_process_alive(pid: int | None) -> bool:
@@ -368,3 +366,146 @@ def _collect_zombies_and_timeouts(
             )
 
     return events
+
+
+def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    """#215: `external_id`が設定されている（ローカルpid以外でディスパッチされた）
+    active worktreeは、設定されたdispatch_targetの`is_complete`に完了判定を委譲する。
+    それ以外（従来通りのローカルsubprocess起動）は`is_process_alive`ベースのまま。"""
+    if active.external_id is not None:
+        handle = DispatchHandle(
+            pid=active.pid,
+            external_id=active.external_id,
+            external_url=active.external_url,
+            branch_name=active.branch,
+            issue_number=active.issue_number,
+        )
+        assert config.dispatch_target is not None
+        return config.dispatch_target.is_complete(handle)
+    return not is_process_alive(active.pid)
+
+
+def _rule_not_needed(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    """#280: status:not-neededラベル検知による即時完了処理。
+
+    セッションが「対応不要」と判断した場合、コミット・PRを作らないため
+    closingIssuesReferences等の完了シグナルが発生せず、`_rule_completed`
+    （PID/PR存在ベース）は永遠にマッチしない。ラベル検知を最優先の完了
+    シグナルとして扱い、stale判定より先に評価する。
+    """
+    if active_task is None or "status:not-needed" not in active_task.status_labels:
+        return None
+
+    completion_event = _finalize_not_needed_worktree(active, active_task, ctx.config)
+    completed_subtask_id = None
+    # #282: 即時クローズ・検証レビューへの委譲のどちらの経路でも、対応不要の
+    # 根拠自体は「mainに既に実装されている」ことなので、Issueクローズの可否とは
+    # 独立に依存関係は解決済みとして扱ってよい。
+    if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
+        if active_task.subtask_id:
+            completed_subtask_id = active_task.subtask_id
+        if ctx.config.apply:
+            del ctx.run_state.active_worktrees[key]
+
+    return ActiveWorktreeRuleOutcome(
+        completion_event=completion_event,
+        completed_subtask_id=completed_subtask_id,
+        terminal=True,
+    )
+
+
+def _decide_stale_active_entry(
+    active: ActiveWorktree, active_task: Task | None
+) -> dict | None:
+    """githubラベルを正として、run_state側に残った古い帳簿エントリ（stale)かを
+    副作用なしで判定する。staleであればイベントdictを返す。"""
+    if (
+        active_task is not None
+        and "status:in-progress" not in active_task.status_labels
+    ):
+        # run_stateへの登録(save_run_state)は起動成功直後に、GitHubラベルの
+        # status:in-progress付与はその後に行う順序になっているため、この間で
+        # クラッシュした場合（あるいは完了/エスカレーション処理でラベルだけ
+        # 先に更新されてクラッシュした場合）、GitHub側のラベルは
+        # status:in-progressでなくなっているのにrun_state側にだけ古い
+        # エントリが残ることがある。GitHubラベルを正として、この古い帳簿
+        # エントリを破棄する（ゾンビGCの拡張）。
+        return {
+            "issue_number": active.issue_number,
+            "subtask_id": active_task.subtask_id,
+            "action": "stale_active_entry_discarded",
+            "reason": (
+                "issue label is no longer status:in-progress "
+                f"(labels={sorted(active_task.status_labels)})"
+            ),
+        }
+    return None
+
+
+def _apply_stale_active_entry_discard(
+    run_state: RunState, key: str, config: DispatcherConfig
+) -> None:
+    if config.apply:
+        del run_state.active_worktrees[key]
+
+
+def _rule_stale_entry(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    stale_event = _decide_stale_active_entry(active, active_task)
+    if stale_event is None:
+        return None
+    _apply_stale_active_entry_discard(ctx.run_state, key, ctx.config)
+    return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
+
+
+def _rule_completed(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    if not _is_worktree_complete(active, ctx.config):
+        return None
+
+    completion_event = _finalize_completed_worktree(active, active_task, ctx.config)
+    action = completion_event["action"]
+
+    if action == "completed":
+        completed_subtask_id = None
+        if active_task is not None and active_task.subtask_id:
+            completed_subtask_id = active_task.subtask_id
+        if ctx.config.apply:
+            ctx.run_state.completed_worktrees.append(
+                CompletedWorktree(
+                    issue_number=active.issue_number,
+                    subtask_id=active_task.subtask_id if active_task else "",
+                    branch=active.branch,
+                    started_at=active.started_at,
+                    completed_at=time.time(),
+                    recompute_count=active.recompute_count,
+                    forced_serial=active.forced_serial,
+                    commit_sha=completion_event.get("commit_sha"),
+                )
+            )
+            del ctx.run_state.active_worktrees[key]
+        return ActiveWorktreeRuleOutcome(
+            completion_event=completion_event,
+            completed_subtask_id=completed_subtask_id,
+            terminal=True,
+        )
+
+    if action == "completed_no_commits":
+        # #74: 実コミットの無い完了は依存解決の対象にしない
+        # (completed_subtask_idsに加えない)が、worktree・ラベルは
+        # dispatch_gc側で既に片付け済みのため、クオータ解放のために
+        # run_state側のエントリは削除する。
+        if ctx.config.apply:
+            del ctx.run_state.active_worktrees[key]
+        return ActiveWorktreeRuleOutcome(
+            completion_event=completion_event, terminal=True
+        )
+
+    # action == "completion_skipped_dirty_worktree": イベントは記録するが、
+    # このactive worktreeへの他の判定（CHANGES_REQUESTED/自動リベース/
+    # footprint逸脱）は継続せずに人間が変更を確認するまで待つため、terminalにする。
+    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)

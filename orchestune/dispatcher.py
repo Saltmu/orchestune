@@ -14,13 +14,13 @@ from orchestune import github  # noqa: F401
 from orchestune.dispatch_cycle import (
     CycleReport,
     DispatcherConfig,
-    _is_worktree_complete,
     _sync_external_locks,
     append_event_log,
     build_event_log_entry,
     run_dispatch_cycle,
 )
 from orchestune.dispatch_gc import (
+    _is_worktree_complete,
     is_process_alive,
     remove_worktree,
     worktree_has_uncommitted_changes,
