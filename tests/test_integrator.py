@@ -1800,3 +1800,137 @@ class TestIntegratorUnparsableDoneTask:
         assert res["unparsable_done_issues"] == [7]
         # issue #7宛のコメントで警告済み（issue #1は統合成功のため対象外）。
         assert any(call.args[0] == 7 for call in mock_comment.call_args_list)
+
+
+class TestIntegratorHybridPattern:
+    def test_integration_context(self):
+        from pathlib import Path
+
+        from orchestune.integrator import IntegrationContext, IntegratorConfig
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("/tmp/repo"),
+            original_root=Path("/tmp/repo"),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        assert ctx.config == config
+        assert ctx.repository_root == Path("/tmp/repo")
+        assert ctx.base_branch == "main"
+        assert ctx.temp_branch == "temp-main"
+        assert ctx.merged_tasks == []
+
+    def test_integration_pipeline_success(self):
+        from pathlib import Path
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegrationPipeline,
+            IntegratorConfig,
+        )
+
+        class DummyStep1(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                ctx.merged_tasks.append("task-1")
+                return {"step1": "ok"}
+
+        class DummyStep2(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                ctx.merged_tasks.append("task-2")
+                return {"step2": "ok"}
+
+        config = IntegratorConfig(apply=True)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        pipeline = IntegrationPipeline([DummyStep1(), DummyStep2()])
+        res = pipeline.execute(ctx)
+
+        assert res == {
+            "status": "success",
+            "step1": "ok",
+            "step2": "ok",
+            "merged": ["task-1", "task-2"],
+            "integration_pr_number": None,
+            "semantic_review_dispatched": False,
+            "newly_included": [],
+        }
+        assert ctx.merged_tasks == ["task-1", "task-2"]
+
+    def test_integration_pipeline_failure(self):
+        from pathlib import Path
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegrationPipeline,
+            IntegratorConfig,
+        )
+
+        class FailStep(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                return {"status": "failure", "error": "something wrong"}
+
+        class DummyStep(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                ctx.merged_tasks.append("task-skipped")
+                return {"step": "ok"}
+
+        config = IntegratorConfig(apply=True)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        pipeline = IntegrationPipeline([FailStep(), DummyStep()])
+        res = pipeline.execute(ctx)
+
+        assert res["status"] == "failure"
+        assert "error" in res
+        assert ctx.merged_tasks == []
+
+    def test_multi_issue_integrator(self):
+        from pathlib import Path
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegratorConfig,
+            MultiIssueIntegrator,
+        )
+
+        class DummyIntegrator(IntegrationComponent):
+            def __init__(self, issue_number: int):
+                self.parent_issue = issue_number
+
+            def execute(self, ctx: IntegrationContext) -> dict:
+                return {"status": "success", "parent_issue": self.parent_issue}
+
+        runner = MultiIssueIntegrator(
+            [
+                DummyIntegrator(100),
+                DummyIntegrator(200),
+            ]
+        )
+        config = IntegratorConfig(apply=True)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        res = runner.execute(ctx)
+
+        assert res["status"] == "composite_success"
+        assert res["details"]["issue_100"] == {"status": "success", "parent_issue": 100}
+        assert res["details"]["issue_200"] == {"status": "success", "parent_issue": 200}
