@@ -1786,6 +1786,10 @@ class TestBranchStacking:
             patch("orchestune.dispatch_worktree.subprocess.Popen") as mock_popen,
             # git コマンド実行のモック
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                return_value="claude/issue-1-task-1",
+            ),
         ):
 
             def list_issues_by_label_mock(label, **_):
@@ -2062,6 +2066,10 @@ class TestBranchStacking:
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                return_value="claude/issue-1-task-1",
+            ),
         ):
             mock_kill.side_effect = lambda pid, sig: (
                 ProcessLookupError() if sig == 0 else None
