@@ -45,6 +45,7 @@ class RunState:
     active_worktrees: dict[str, ActiveWorktree] = field(default_factory=dict)
     launch_history: list[float] = field(default_factory=list)
     completed_worktrees: list[CompletedWorktree] = field(default_factory=list)
+    last_reconciled_at: float | None = None
 
 
 def load_run_state(path: str | Path) -> RunState:
@@ -86,6 +87,7 @@ def load_run_state(path: str | Path) -> RunState:
         active_worktrees=active_worktrees,
         launch_history=list(data.get("launch_history", [])),
         completed_worktrees=completed_worktrees,
+        last_reconciled_at=data.get("last_reconciled_at"),
     )
 
 
@@ -101,5 +103,6 @@ def save_run_state(state: RunState, path: str | Path) -> None:
         "completed_worktrees": [
             dataclasses.asdict(value) for value in state.completed_worktrees
         ],
+        "last_reconciled_at": state.last_reconciled_at,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

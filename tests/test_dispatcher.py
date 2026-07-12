@@ -1,5 +1,6 @@
 import json
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
@@ -210,6 +211,49 @@ class TestRunDispatchCycle:
         assert (tmp_path / "run_state.json").exists()
         persisted = json.loads((tmp_path / "run_state.json").read_text())
         assert "1" in persisted["active_worktrees"]
+
+    def test_apply_updates_last_reconciled_at(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        before = time.time()
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label", return_value=[]),
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+        ):
+            run_dispatch_cycle(config)
+        after = time.time()
+
+        loaded = load_run_state(config.run_state_path)
+        assert loaded.last_reconciled_at is not None
+        assert before <= loaded.last_reconciled_at <= after
+
+    def test_dry_run_does_not_update_last_reconciled_at(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label", return_value=[]),
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+        ):
+            run_dispatch_cycle(config)
+
+        assert not config.run_state_path.exists()
 
     def test_quota_exhausted_selects_nothing(self, tmp_path):
         run_state_path = tmp_path / "run_state.json"
