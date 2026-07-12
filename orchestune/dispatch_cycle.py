@@ -881,6 +881,8 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
                 now,
                 config,
             )
+            run_state.last_reconciled_at = now
+            save_run_state(run_state, config.run_state_path)
 
         report = CycleReport(
             selected=selected,
