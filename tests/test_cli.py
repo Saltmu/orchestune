@@ -40,6 +40,19 @@ def test_cli_delegates_to_bootstrap():
         assert sys.argv == ["orchestune"]
 
 
+def test_cli_delegates_to_status():
+    from orchestune.cli import main
+
+    test_args = ["orchestune", "status", "--watch"]
+    with (
+        patch("sys.argv", test_args),
+        patch("orchestune.monitor.main") as mock_monitor_main,
+    ):
+        main()
+        mock_monitor_main.assert_called_once()
+        assert sys.argv == ["orchestune", "--watch"]
+
+
 def test_cli_no_args_exits(capsys):
     from orchestune.cli import main
 
