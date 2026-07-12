@@ -2,17 +2,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_cycle import (
-    ActiveWorktreeRuleOutcome,
     CycleContext,
-    _ActiveWorktreeAggregates,
     _decide_blocked_promotions,
-    _decide_changes_requested_escalation,
     _decide_external_lock_sync,
-    _decide_stale_active_entry,
     _process_active_worktrees,
-    _rule_changes_requested,
-    _rule_completed,
-    _run_active_worktree_rules,
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
@@ -67,38 +60,6 @@ def _ctx(**overrides):
     return CycleContext(**defaults)
 
 
-class TestDecideStaleActiveEntry:
-    """decide層: githubラベルの読み取りのみでstale判定を行い、run_stateは変更しない。"""
-
-    def test_none_when_still_in_progress(self):
-        task = _task(status_labels=("status:in-progress",))
-        assert _decide_stale_active_entry(_active(), task) is None
-
-    def test_none_when_no_matching_task(self):
-        assert _decide_stale_active_entry(_active(), None) is None
-
-    def test_stale_when_label_no_longer_in_progress(self):
-        task = _task(status_labels=("status:blocked",))
-        event = _decide_stale_active_entry(_active(), task)
-        assert event is not None
-        assert event["action"] == "stale_active_entry_discarded"
-
-
-class TestDecideChangesRequestedEscalation:
-    def test_false_when_no_depends_on(self):
-        assert (
-            _decide_changes_requested_escalation(_task(depends_on=()), set()) is False
-        )
-
-    def test_false_when_dependency_not_changes_requested(self):
-        task = _task(depends_on=("task-x",))
-        assert _decide_changes_requested_escalation(task, set()) is False
-
-    def test_true_when_dependency_changes_requested(self):
-        task = _task(depends_on=("task-x",))
-        assert _decide_changes_requested_escalation(task, {"task-x"}) is True
-
-
 class TestDecideBlockedPromotions:
     """decide層: 依存解決済みタスクの判定のみを行い、githubラベルは変更しない。"""
 
@@ -141,144 +102,13 @@ class TestDecideExternalLockSync:
         assert result.to_unlock == []
 
 
-class TestRunActiveWorktreeRules:
-    """ルールチェーン実行エンジン自体の振る舞い（#86）。
-
-    新しい判断パターンは`_rule_*`関数を1つ書いてリストに追加するだけで済む
-    ことを裏付けるため、ここではルールの中身に依存しない汎用的な挙動
-    （None/terminal/non-terminalの扱い）のみを検証する。
-    """
-
-    def test_none_result_tries_next_rule(self):
-        calls = []
-
-        def _rule_a(ctx, key, active, active_task):
-            calls.append("a")
-            return None
-
-        def _rule_b(ctx, key, active, active_task):
-            calls.append("b")
-            return ActiveWorktreeRuleOutcome(terminal=True)
-
-        aggregates = _ActiveWorktreeAggregates()
-        handled = _run_active_worktree_rules(
-            [_rule_a, _rule_b], _ctx(), "1", _active(), None, aggregates
-        )
-        assert handled is True
-        assert calls == ["a", "b"]
-
-    def test_terminal_result_stops_the_chain(self):
-        calls = []
-
-        def _rule_a(ctx, key, active, active_task):
-            calls.append("a")
-            return ActiveWorktreeRuleOutcome(terminal=True)
-
-        def _rule_b(ctx, key, active, active_task):
-            calls.append("b")
-            return ActiveWorktreeRuleOutcome(terminal=True)
-
-        aggregates = _ActiveWorktreeAggregates()
-        handled = _run_active_worktree_rules(
-            [_rule_a, _rule_b], _ctx(), "1", _active(), None, aggregates
-        )
-        assert handled is True
-        assert calls == ["a"]
-
-    def test_non_terminal_result_falls_through_to_next_rule(self):
-        """「記録はするが処理は継続する」ケースを
-        汎用的なNone/terminal/non-terminalの組み合わせで再現する。"""
-        calls = []
-
-        def _rule_a(ctx, key, active, active_task):
-            calls.append("a")
-            return ActiveWorktreeRuleOutcome(
-                completion_event={"action": "skip"}, terminal=False
-            )
-
-        def _rule_b(ctx, key, active, active_task):
-            calls.append("b")
-            return ActiveWorktreeRuleOutcome(terminal=True)
-
-        aggregates = _ActiveWorktreeAggregates()
-        handled = _run_active_worktree_rules(
-            [_rule_a, _rule_b], _ctx(), "1", _active(), None, aggregates
-        )
-        assert handled is True
-        assert calls == ["a", "b"]
-        # non-terminalなruleが記録したイベントもaggregatesへmergeされていること
-        assert aggregates.completion_events == [{"action": "skip"}]
-
-    def test_no_rule_matches_returns_false(self):
-        def _rule_a(ctx, key, active, active_task):
-            return None
-
-        aggregates = _ActiveWorktreeAggregates()
-        handled = _run_active_worktree_rules(
-            [_rule_a], _ctx(), "1", _active(), None, aggregates
-        )
-        assert handled is False
-        assert aggregates.completion_events == []
-
-    def test_merges_all_outcome_fields(self):
-        def _rule(ctx, key, active, active_task):
-            return ActiveWorktreeRuleOutcome(
-                completion_event={"action": "done"},
-                deviation_event={"action": "recomputed"},
-                completed_subtask_id="task-a",
-                forced_serial=True,
-                terminal=True,
-            )
-
-        aggregates = _ActiveWorktreeAggregates()
-        _run_active_worktree_rules([_rule], _ctx(), "1", _active(), None, aggregates)
-        assert aggregates.completion_events == [{"action": "done"}]
-        assert aggregates.deviation_events == [{"action": "recomputed"}]
-        assert aggregates.completed_subtask_ids == {"task-a"}
-        assert aggregates.any_forced_serial is True
-
-
-class TestRuleChangesRequested:
-    def test_none_when_no_dependency_changes_requested(self):
-        task = _task(depends_on=("task-x",))
-        outcome = _rule_changes_requested(_ctx(), "1", _active(), task)
-        assert outcome is None
-
-    def test_terminal_event_when_dependency_changes_requested(self):
-        task = _task(depends_on=("task-x",))
-        ctx = _ctx(changes_requested_subtask_ids={"task-x"})
-        outcome = _rule_changes_requested(ctx, "1", _active(), task)
-        assert outcome is not None
-        assert outcome.terminal is True
-        assert (
-            outcome.completion_event["action"] == "escalated_due_to_changes_requested"
-        )
-
-
-class TestRuleCompleted:
-    def test_dirty_worktree_is_terminal(self):
-        active = _active()
-        task = _task()
-        ctx = _ctx()
-        with (
-            patch(
-                "orchestune.dispatch_cycle._is_worktree_complete",
-                return_value=True,
-            ),
-            patch(
-                "orchestune.dispatch_cycle._finalize_completed_worktree",
-                return_value={"action": "completion_skipped_dirty_worktree"},
-            ),
-        ):
-            outcome = _rule_completed(ctx, "1", active, task)
-
-        assert outcome is not None
-        assert outcome.terminal is True
-        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
-
-
 class TestProcessActiveWorktrees:
-    """_process_active_worktreesの結合テストケース。"""
+    """_process_active_worktreesの結合テストケース。
+
+    各ruleの中身(条件判定=decide/実処理=act)は対応するact側モジュール
+    (dispatch_gc/dispatch_escalation/dispatch_rebase)に定義されているため、
+    patch対象はそれらのモジュールを指す（#86のComposite化に伴う移設）。
+    """
 
     def test_auto_rebase_not_needed_falls_through_to_footprint_deviation(self):
         active = _active(
@@ -303,11 +133,11 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch_cycle._is_worktree_complete",
+                "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_cycle.is_process_alive",
+                "orchestune.dispatch_gc.is_process_alive",
                 return_value=True,
             ),
             patch(
@@ -315,11 +145,11 @@ class TestProcessActiveWorktrees:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_cycle.check_footprint_deviation",
+                "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=["b.py"],
             ),
             patch(
-                "orchestune.dispatch_cycle._handle_footprint_deviation",
+                "orchestune.dispatch_rebase._handle_footprint_deviation",
                 return_value={
                     "action": "recomputed",
                     "issue_number": 1,
@@ -363,19 +193,19 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch_cycle._is_worktree_complete",
+                "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_cycle._finalize_completed_worktree",
+                "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={"action": "completion_skipped_dirty_worktree"},
             ),
             patch(
-                "orchestune.dispatch_cycle._try_auto_rebase",
+                "orchestune.dispatch_rebase._try_auto_rebase",
                 side_effect=AssertionError("Should not call auto rebase"),
             ),
             patch(
-                "orchestune.dispatch_cycle.check_footprint_deviation",
+                "orchestune.dispatch_rebase.check_footprint_deviation",
                 side_effect=AssertionError("Should not call check footprint deviation"),
             ),
         ):
@@ -411,11 +241,11 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch_cycle._finalize_not_needed_worktree",
+                "orchestune.dispatch_gc._finalize_not_needed_worktree",
                 return_value={"action": "not_needed"},
             ),
             patch(
-                "orchestune.dispatch_cycle._decide_stale_active_entry",
+                "orchestune.dispatch_gc._decide_stale_active_entry",
                 side_effect=AssertionError("Should not call decide stale active entry"),
             ),
         ):
@@ -465,11 +295,11 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch_cycle._is_worktree_complete",
+                "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_cycle.is_process_alive",
+                "orchestune.dispatch_gc.is_process_alive",
                 return_value=True,
             ),
             patch(
@@ -524,7 +354,7 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch_cycle._finalize_not_needed_worktree",
+                "orchestune.dispatch_gc._finalize_not_needed_worktree",
                 return_value={"action": "not_needed"},
             ),
         ):
@@ -561,15 +391,15 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch_cycle._finalize_not_needed_worktree",
+                "orchestune.dispatch_gc._finalize_not_needed_worktree",
                 return_value={"action": "not_needed"},
             ),
             patch(
-                "orchestune.dispatch_cycle._is_worktree_complete",
+                "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_cycle.is_process_alive",
+                "orchestune.dispatch_gc.is_process_alive",
                 return_value=True,
             ),
             patch(
@@ -577,7 +407,7 @@ class TestProcessActiveWorktrees:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_cycle.check_footprint_deviation",
+                "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=[],
             ),
         ):
@@ -590,4 +420,3 @@ class TestProcessActiveWorktrees:
 
         assert any_forced_serial is True
         assert "1" not in ctx_two.run_state.active_worktrees
-        assert "2" in ctx_two.run_state.active_worktrees

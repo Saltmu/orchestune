@@ -15,8 +15,8 @@ from orchestune.dispatch_worktree import create_worktree_and_launch
 from orchestune.github import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
-    from orchestune.dispatch_cycle import CycleContext
-    from orchestune.dispatcher import DispatcherConfig
+    from orchestune.dispatch_config import DispatcherConfig
+    from orchestune.dispatch_rules import CycleContext
 
 
 def _get_stack_eligible_tasks(
