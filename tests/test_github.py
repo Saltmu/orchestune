@@ -314,6 +314,34 @@ class TestListOpenPrs:
             ),
         ]
 
+    def test_accepts_nested_status_check_rollup_contexts(self):
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", "reviewDecision": "APPROVED", '
+            '"statusCheckRollup": {"contexts": [{"status": "COMPLETED", "conclusion": "SUCCESS"}]}},'
+            '{"number": 6, "headRefName": "feat/y", "reviewDecision": "APPROVED", '
+            '"statusCheckRollup": {"contexts": [{"status": "QUEUED", "conclusion": null}]}}'
+            "]"
+        )
+        files_payload = '{"files": []}'
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=list_payload, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=files_payload, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=files_payload, stderr=""
+                ),
+            ]
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is True
+        assert prs[1].is_ci_passing is False
+
     def test_includes_closing_issue_references(self):
         """#239: ブランチ名がAIセッションの指示通りにならない場合でも
         自己PR判定できるよう、PRが閉じるIssue番号一覧も取得する。"""
