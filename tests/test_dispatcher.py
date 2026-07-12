@@ -17,6 +17,7 @@ from orchestune.dispatcher import (
     append_event_log,
     build_event_log_entry,
     load_run_state,
+    main,
     run_dispatch_cycle,
     save_run_state,
 )
@@ -1785,6 +1786,10 @@ class TestBranchStacking:
             patch("orchestune.dispatch_worktree.subprocess.Popen") as mock_popen,
             # git コマンド実行のモック
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                return_value="claude/issue-1-task-1",
+            ),
         ):
 
             def list_issues_by_label_mock(label, **_):
@@ -2061,6 +2066,10 @@ class TestBranchStacking:
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                return_value="claude/issue-1-task-1",
+            ),
         ):
             mock_kill.side_effect = lambda pid, sig: (
                 ProcessLookupError() if sig == 0 else None
@@ -2958,6 +2967,83 @@ class TestBuildArgParser:
 
         args = _build_arg_parser().parse_args(["--apply"])
         assert args.apply is True
+
+    def test_dispatch_target_defaults_to_none_when_unspecified(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.dispatch_target is None
+
+    def test_dispatch_target_explicit_local_is_preserved(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--dispatch-target", "local"])
+        assert args.dispatch_target == "local"
+
+
+class TestMainDispatchTargetAutoDetection:
+    """#121: --dispatch-target未指定時、mainが実行環境に応じた実ディスパッチ先を
+    build_dispatch_targetへ渡すことを検証する（ダミー動作への誤フォールバック防止）。"""
+
+    def _empty_report(self):
+        return CycleReport(
+            selected=[],
+            quota_slots_available=0,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=False,
+        )
+
+    def test_defaults_to_claude_cli_outside_github_actions(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+        ):
+            main(["--no-apply", "--run-state-path", str(tmp_path / "rs.json")])
+
+        assert mock_build.call_args.args[0] == "claude-cli"
+
+    def test_defaults_to_cloud_routine_in_github_actions(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+        ):
+            main(["--no-apply", "--run-state-path", str(tmp_path / "rs.json")])
+
+        assert mock_build.call_args.args[0] == "cloud-routine"
+
+    def test_explicit_local_wins_even_inside_github_actions(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+        ):
+            main(
+                [
+                    "--no-apply",
+                    "--dispatch-target",
+                    "local",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                ]
+            )
+
+        assert mock_build.call_args.args[0] == "local"
 
 
 class TestRunDispatchCycleActorVerification:

@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,6 +42,18 @@ AGY_CLI_LOCAL_CMD_TEMPLATE = (
     '標準開発ワークフローに従って実装してください。" '
     "--sandbox --dangerously-skip-permissions"
 )
+
+
+def resolve_default_dispatch_target_name(env: Mapping[str, str]) -> str:
+    """`--dispatch-target`未指定時、実行環境から実ディスパッチ先を自動選択する。
+
+    GitHub Actions実行環境（`GITHUB_ACTIONS=true`）ではクラウドルーチンへ、
+    それ以外（ローカル/対話実行）ではローカルの`claude` CLIへディスパッチする。
+    資格情報未設定時のフォールバックは`build_dispatch_target`側の既存ロジックに委ねる。
+    """
+    if env.get("GITHUB_ACTIONS") == "true":
+        return "cloud-routine"
+    return "claude-cli"
 
 
 @dataclass(frozen=True)

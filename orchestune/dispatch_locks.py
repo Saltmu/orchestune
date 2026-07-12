@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune.dispatch_scoring import Task
-from orchestune.github import PrRecord
+from orchestune.github import PrRecord, resolve_local_or_remote_branch
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -96,9 +96,23 @@ def check_footprint_deviation(
     バイナリファイル（`git diff --numstat`が行数の代わりに`-`を返す）は
     行数で測れないため、バッファに関わらず常に逸脱として報告する。
     """
+    resolved_base = base
+    # base がローカルに存在しないが、リモート追跡ブランチとして存在する場合はそちらを使用する
+
+    resolved_base = resolve_local_or_remote_branch(
+        worktree_path, base, prefer_remote=base.startswith("parent/")
+    )
+
     try:
         result = subprocess.run(
-            ["git", "-C", str(worktree_path), "diff", "--numstat", f"{base}...HEAD"],
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "diff",
+                "--numstat",
+                f"{resolved_base}...HEAD",
+            ],
             capture_output=True,
             text=True,
             check=True,
