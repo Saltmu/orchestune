@@ -1,3 +1,4 @@
+import argparse
 import json
 import subprocess
 import time
@@ -9,12 +10,17 @@ import pytest
 from orchestune.dag import FootprintConflict
 from orchestune.dispatcher import (
     ActiveWorktree,
+    ClaudeCodeCloudRoutineDispatchTarget,
     CompletedWorktree,
     CycleReport,
     DispatcherConfig,
+    LocalProcessDispatchTarget,
     RunState,
     Task,
+    _decide_semantic_review_enabled,
     _is_worktree_complete,
+    _poll_pending_not_needed_reviews,
+    _run_semantic_integrator,
     append_event_log,
     build_event_log_entry,
     load_run_state,
@@ -3103,6 +3109,120 @@ class TestMainDispatchTargetAutoDetection:
             )
 
         assert mock_build.call_args.args[0] == "local"
+
+
+class TestDecideSemanticReviewEnabled:
+    """#150: ORCHESTUNE_SEMANTIC_REVIEW環境変数によるON/OFF判定（副作用なし）。"""
+
+    def test_enabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("ORCHESTUNE_SEMANTIC_REVIEW", raising=False)
+        assert _decide_semantic_review_enabled() is True
+
+    def test_disabled_when_env_var_is_zero(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTUNE_SEMANTIC_REVIEW", "0")
+        assert _decide_semantic_review_enabled() is False
+
+    def test_enabled_when_env_var_is_nonzero(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTUNE_SEMANTIC_REVIEW", "1")
+        assert _decide_semantic_review_enabled() is True
+
+
+class TestPollPendingNotNeededReviews:
+    """#150/#282: 保留中のstatus:not-needed検証レビューのポーリング（ベストエフォート）。"""
+
+    def test_returns_report_on_success(self, tmp_path):
+        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        with patch(
+            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            return_value={"processed": 1},
+        ) as mock_poll:
+            result = _poll_pending_not_needed_reviews(args)
+
+        assert result == {"processed": 1}
+        mock_poll.assert_called_once_with(args.not_needed_review_state_path)
+
+    def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
+        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        with patch(
+            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = _poll_pending_not_needed_reviews(args)
+
+        assert result is None
+        assert "boom" in capsys.readouterr().err
+
+
+class TestRunSemanticIntegrator:
+    """#150: Integrator実行と、クラウドルーチン利用時のみ意味的レビューを
+    有効化する分岐（ベストエフォート）。"""
+
+    def test_enables_semantic_review_for_cloud_routine_target(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"ok": True}
+        with (
+            patch(
+                "orchestune.integrator.Integrator", return_value=mock_instance
+            ) as mock_integrator_cls,
+            patch(
+                "orchestune.integration_coordinator.IntegrationCoordinator"
+            ) as mock_coordinator_cls,
+        ):
+            result = _run_semantic_integrator(config, semantic_review_enabled=True)
+
+        assert result == {"ok": True}
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.enable_semantic_review is True
+        mock_coordinator_cls.assert_called_once_with(config.dispatch_target)
+
+    def test_disables_semantic_review_when_flag_off(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"ok": True}
+        with patch(
+            "orchestune.integrator.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.enable_semantic_review is False
+
+    def test_disables_semantic_review_for_non_cloud_routine_target(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"ok": True}
+        with patch(
+            "orchestune.integrator.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=True)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.enable_semantic_review is False
+
+    def test_returns_none_and_warns_on_failure(self, capsys):
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        with patch(
+            "orchestune.integrator.Integrator", side_effect=RuntimeError("boom")
+        ):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert result is None
+        assert "boom" in capsys.readouterr().err
 
 
 class TestRunDispatchCycleActorVerification:
