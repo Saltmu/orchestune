@@ -924,6 +924,10 @@ class TestRunDispatchCycleCompletion:
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1014,6 +1018,10 @@ class TestRunDispatchCycleCompletion:
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
         ):
@@ -1434,6 +1442,10 @@ class TestRunDispatchCycleBlockedPromotion:
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
             patch("orchestune.dispatch_gc.remove_worktree"),
         ):
 
@@ -1622,6 +1634,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
@@ -1695,6 +1708,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatcher.github.add_label"),
             patch("orchestune.dispatcher.github.remove_label"),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
@@ -1881,6 +1895,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatcher.github.add_label"),
             patch("orchestune.dispatcher.github.remove_label"),
+            patch("orchestune.dispatch_cycle.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
