@@ -33,8 +33,15 @@ output_schema:
 ## ステージA: Issue起票
 
 1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
-2. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
-3. Issueのタイトル・本文は以下の形式とします：
+2. **親Issueの起票**: `decomposition_plan.md`の`title`を用いて、「大きな石」自体を表す親Issueを起票します。サブタスクIssueより先に、必ずこの手順を実行してください。
+
+   ```bash
+   gh issue create --title "[EPIC] <decomposition_plan.mdのtitle>" --body "decomposition_plan.md記載の設計方針の要約。配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+   ```
+
+   起票後に返却されたIssue番号を控え、以降すべてのサブタスクIssue起票の`--parent`として使用します（この番号を得るまで、次のサブタスクIssue起票を開始しないこと）。
+3. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
+4. Issueのタイトル・本文は以下の形式とします：
    * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
    * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
 
@@ -51,13 +58,13 @@ output_schema:
      ```
      ```
 
-4. ラベルおよびGitHub関係性を付与します：
-   * **親子関係の紐付け**: 親となる「大きな石」のIssue番号（例: `#100`）がある場合、新しく作成するサブタスクIssueに親を設定するため `--parent <親Issue番号>` を付与します。
+5. ラベルおよびGitHub関係性を付与します：
+   * **親子関係の紐付け**: 手順2で起票した親Issueの番号（例: `#100`）を、新しく作成するサブタスクIssueに設定するため `--parent <親Issue番号>` を必ず付与します。
    * **依存関係の紐付け**: 依存関係（`depends_on`）がある場合、先行タスクを先に起票してそのIssue番号（例: `#101`）を確定させ、後続タスク起票時に `--blocked-by <先行Issue番号>` を付与します。
    * **初期ステータスラベル**: 依存関係が未解決（未完了の先行タスクがある）なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
    * **優先度・リスク**: 優先度に応じて `priority:high` / `priority:medium` / `priority:low`、また `risk: true` であれば `risk:flagged` を付与。
 
-5. **Issue起票コマンド例（GitHub CLI使用）**:
+6. **Issue起票コマンド例（GitHub CLI使用）**:
    * 親Issueが `#100` で、先行依存Issueとして `#101` がある場合の例：
      ```bash
      gh issue create --title "[FEAT] task-b: Implement bar feature" --body-file /tmp/issue_body.md --parent 100 --blocked-by 101 --label "status:blocked,priority:medium"
