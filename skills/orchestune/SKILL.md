@@ -34,6 +34,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 
    ```markdown
    ---
+   title: "One-line summary of the 'big rock' itself"
    subtasks:
      - id: task-a
        description: "Implement feature XX"
@@ -49,6 +50,8 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    # Decomposition Plan
    (The section below the frontmatter is free text to explain the design approach or background)
    ```
+
+   The top-level `title` is required — `orchestune-dispatch` uses it to create the parent tracking issue for the whole "big rock" (see that skill's Stage A).
 
 ### Stage 2: Validate DAG
 
