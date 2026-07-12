@@ -1,9 +1,21 @@
 import subprocess
 from unittest.mock import patch
 
+import pytest
+
+import orchestune.dispatch_locks
 from orchestune.dispatch_locks import check_footprint_deviation, scan_external_locks
 from orchestune.dispatch_scoring import Task
 from orchestune.github import PrRecord
+
+
+@pytest.fixture(autouse=True)
+def mock_resolve_branch(monkeypatch):
+    monkeypatch.setattr(
+        orchestune.dispatch_locks,
+        "resolve_local_or_remote_branch",
+        lambda worktree_path, branch: branch,
+    )
 
 
 def _task(

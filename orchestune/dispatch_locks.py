@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
@@ -11,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune.dispatch_scoring import Task
-from orchestune.github import PrRecord
+from orchestune.github import PrRecord, resolve_local_or_remote_branch
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -99,11 +98,7 @@ def check_footprint_deviation(
     """
     resolved_base = base
     # base がローカルに存在しないが、リモート追跡ブランチとして存在する場合はそちらを使用する
-    cmd_local = f"git -C '{worktree_path}' show-ref --verify 'refs/heads/{base}' >/dev/null 2>&1"
-    if os.system(cmd_local) != 0:
-        cmd_remote = f"git -C '{worktree_path}' show-ref --verify 'refs/remotes/origin/{base}' >/dev/null 2>&1"
-        if os.system(cmd_remote) == 0:
-            resolved_base = f"origin/{base}"
+    resolved_base = resolve_local_or_remote_branch(worktree_path, base)
 
     try:
         result = subprocess.run(
