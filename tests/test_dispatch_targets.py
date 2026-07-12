@@ -12,6 +12,7 @@ from orchestune.dispatch_targets import (
     LocalProcessDispatchTarget,
     build_dispatch_target,
     default_dry_run_command_builder,
+    resolve_default_dispatch_target_name,
 )
 from orchestune.dispatcher import Task
 from orchestune.github import PrRecord
@@ -356,3 +357,28 @@ class TestBuildDispatchTarget:
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "agy -p 'custom {issue_number}'"
+
+
+class TestResolveDefaultDispatchTargetName:
+    def test_defaults_to_claude_cli_when_env_empty(self):
+        assert resolve_default_dispatch_target_name({}) == "claude-cli"
+
+    def test_defaults_to_claude_cli_when_github_actions_not_true(self):
+        assert (
+            resolve_default_dispatch_target_name({"GITHUB_ACTIONS": "false"})
+            == "claude-cli"
+        )
+
+    def test_defaults_to_cloud_routine_in_github_actions(self):
+        assert (
+            resolve_default_dispatch_target_name({"GITHUB_ACTIONS": "true"})
+            == "cloud-routine"
+        )
+
+    def test_ignores_unrelated_env_vars(self):
+        assert (
+            resolve_default_dispatch_target_name(
+                {"GITHUB_ACTIONS": "true", "PATH": "/usr/bin"}
+            )
+            == "cloud-routine"
+        )

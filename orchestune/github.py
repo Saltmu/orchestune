@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
@@ -269,7 +270,8 @@ def is_branch_merged_into(head: str, base: str) -> bool:
 def list_open_prs() -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される
-    GitHub側の正規のIssue参照一覧）も併せて取得する。"""
+    GitHub側の正規のIssue参照一覧）も併せて取得する。
+    パフォーマンス向上のため、一括で取得する。"""
     stdout = _run(
         [
             "gh",
@@ -278,28 +280,17 @@ def list_open_prs() -> list[PrRecord]:
             "--state",
             "open",
             "--json",
-            "number,headRefName,reviewDecision,statusCheckRollup",
+            "number,headRefName,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
         ]
     )
     raw_prs = json.loads(stdout)
     prs: list[PrRecord] = []
     for raw in raw_prs:
         number = raw["number"]
-        detail_stdout = _run(
-            [
-                "gh",
-                "pr",
-                "view",
-                str(number),
-                "--json",
-                "files,closingIssuesReferences",
-            ]
-        )
-        detail = json.loads(detail_stdout)
-        files = detail.get("files", [])
-        closing_refs = detail.get("closingIssuesReferences", [])
+        files = raw.get("files", [])
+        closing_refs = raw.get("closingIssuesReferences", [])
 
-        rollup = raw.get("statusCheckRollup") or []
+        rollup = _status_check_contexts(raw.get("statusCheckRollup"))
         is_ci_passing = True
         for check in rollup:
             status = check.get("status")
@@ -324,6 +315,17 @@ def list_open_prs() -> list[PrRecord]:
             )
         )
     return prs
+
+
+def _status_check_contexts(rollup: object) -> list[dict[str, object]]:
+    if isinstance(rollup, list):
+        return [check for check in rollup if isinstance(check, dict)]
+    if not isinstance(rollup, dict):
+        return []
+    contexts = rollup.get("contexts")
+    if isinstance(contexts, list):
+        return [check for check in contexts if isinstance(check, dict)]
+    return []
 
 
 def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
@@ -360,28 +362,97 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
     except Exception:
         remote_exists = False
 
-    if not remote_exists:
-        print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
-        current_branch = None
+    if remote_exists:
         try:
-            res_branch = _run(["git", "symbolic-ref", "--short", "HEAD"])
-            current_branch = res_branch.strip()
-        except Exception:
-            pass
-
-        try:
-            _run(["git", "checkout", "main"])
-            _run(["git", "pull", "origin", "main"])
-            _run(["git", "checkout", "-B", parent_branch])
-            _run(["git", "push", "-u", "origin", parent_branch])
+            # すでにリモートに親ブランチが存在する場合、そのリモート追跡ブランチ参照を確実にローカルにフェッチする
+            _run(
+                [
+                    "git",
+                    "fetch",
+                    "origin",
+                    f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
+                ]
+            )
         except Exception as e:
             print(
-                f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
+                f"Warning: Failed to fetch existing parent branch '{parent_branch}': {e}",
                 file=sys.stderr,
             )
-        finally:
-            if current_branch:
-                try:
-                    _run(["git", "checkout", current_branch])
-                except Exception:
-                    pass
+        return
+
+    print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
+    try:
+        # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
+        # FETCH_HEADを指定して直接リモートに親ブランチをプッシュして作成する。
+        _run(["git", "fetch", "origin", "main"])
+        _run(
+            [
+                "git",
+                "push",
+                "origin",
+                f"FETCH_HEAD:refs/heads/{parent_branch}",
+            ]
+        )
+        # プッシュ完了後、リモート追跡ブランチ参照を確実にローカルにフェッチする
+        _run(
+            [
+                "git",
+                "fetch",
+                "origin",
+                f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
+            ]
+        )
+    except Exception as e:
+        print(
+            f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
+            file=sys.stderr,
+        )
+
+
+def resolve_local_or_remote_branch(
+    worktree_path: str | Path, branch: str, *, prefer_remote: bool = False
+) -> str:
+    """指定されたブランチ名を解決して返す。
+    prefer_remote=True の場合はリモート追跡ブランチを最優先し、
+    False の場合はローカルブランチを最優先する。"""
+    _validate_ref_name(branch)
+    worktree_path = Path(worktree_path)
+
+    def check_remote() -> str | None:
+        res_remote = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "show-ref",
+                "--verify",
+                f"refs/remotes/origin/{branch}",
+            ],
+            capture_output=True,
+        )
+        if res_remote.returncode == 0:
+            return f"origin/{branch}"
+        return None
+
+    def check_local() -> str | None:
+        res_local = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "show-ref",
+                "--verify",
+                f"refs/heads/{branch}",
+            ],
+            capture_output=True,
+        )
+        if res_local.returncode == 0:
+            return branch
+        return None
+
+    if prefer_remote:
+        resolved = check_remote() or check_local()
+    else:
+        resolved = check_local() or check_remote()
+
+    return resolved or branch

@@ -54,6 +54,7 @@ from orchestune.dispatch_targets import (
     LocalProcessDispatchTarget,
     build_dispatch_target,
     default_dry_run_command_builder,
+    resolve_default_dispatch_target_name,
 )
 from orchestune.dispatch_worktree import file_lock
 
@@ -84,6 +85,7 @@ __all__ = [
     "quota_available",
     "recover_run_state",
     "remove_worktree",
+    "resolve_default_dispatch_target_name",
     "save_run_state",
     "scan_external_locks",
     "select_next_tasks",
@@ -132,8 +134,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dispatch-target",
         choices=["local", "cloud-routine", "claude-cli", "agy-cli"],
-        default="local",
-        help="#215: エージェントの実ディスパッチ先。'cloud-routine'はClaude Codeクラウド"
+        default=None,
+        help="#215: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
+        "（GitHub Actions実行時（GITHUB_ACTIONS=true）は'cloud-routine'、"
+        "それ以外のローカル/対話実行時は'claude-cli'）。"
+        "明示的に'local'を指定した場合のみ、後方互換のダミー起動（no-op、"
+        "テスト・dry-run用途）になる。'cloud-routine'はClaude Codeクラウド"
         "ルーチンのfire APIへディスパッチする（要 --routine-id/--routine-token または"
         "ORCHESTUNE_ROUTINE_ID/ORCHESTUNE_ROUTINE_TOKEN環境変数）。"
         "'claude-cli'/'agy-cli'はそれぞれローカルのclaude/agy CLIへ、"
@@ -170,6 +176,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
+        os.environ
+    )
 
     config = DispatcherConfig(
         max_concurrent=args.max_concurrent,
@@ -182,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
         parent_issue_number=args.parent_issue,
         apply=args.apply,
         dispatch_target=build_dispatch_target(
-            args.dispatch_target,
+            dispatch_target_name,
             args.routine_id,
             args.routine_token,
             args.log_dir,

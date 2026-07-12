@@ -284,27 +284,20 @@ class TestListOpenPrs:
     def test_fetches_pr_list_and_per_pr_files(self):
         list_payload = (
             "["
-            '{"number": 5, "headRefName": "feat/x", "reviewDecision": "APPROVED", "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}]},'
-            '{"number": 6, "headRefName": "feat/y", "reviewDecision": "CHANGES_REQUESTED", "statusCheckRollup": [{"status": "IN_PROGRESS", "conclusion": null}]}'
+            '{"number": 5, "headRefName": "feat/x", "reviewDecision": "APPROVED", "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}], "files": [{"path": "src/a.py"}, {"path": "src/b.py"}], "closingIssuesReferences": []},'
+            '{"number": 6, "headRefName": "feat/y", "reviewDecision": "CHANGES_REQUESTED", "statusCheckRollup": [{"status": "IN_PROGRESS", "conclusion": null}], "files": [], "closingIssuesReferences": []}'
             "]"
         )
-        files_payload_5 = '{"files": [{"path": "src/a.py"}, {"path": "src/b.py"}]}'
-        files_payload_6 = '{"files": []}'
 
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=list_payload, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=files_payload_5, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=files_payload_6, stderr=""
-                ),
-            ]
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
             prs = list_open_prs()
+            called_args = mock_run.call_args.args[0]
 
+        assert "files" in called_args[called_args.index("--json") + 1]
+        assert "closingIssuesReferences" in called_args[called_args.index("--json") + 1]
         assert prs == [
             PrRecord(
                 number=5,
@@ -322,14 +315,16 @@ class TestListOpenPrs:
             ),
         ]
 
-    def test_includes_closing_issue_references(self):
-        """#239: ブランチ名がAIセッションの指示通りにならない場合でも
-        自己PR判定できるよう、PRが閉じるIssue番号一覧も取得する。"""
-        list_payload = '[{"number": 5, "headRefName": "claude/elegant-noether-5rli7u"}]'
-        detail_payload = (
-            '{"files": [{"path": "src/a.py"}], '
-            '"closingIssuesReferences": [{"number": 218}]}'
+    def test_accepts_nested_status_check_rollup_contexts(self):
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", "reviewDecision": "APPROVED", '
+            '"statusCheckRollup": {"contexts": [{"status": "COMPLETED", "conclusion": "SUCCESS"}]}},'
+            '{"number": 6, "headRefName": "feat/y", "reviewDecision": "APPROVED", '
+            '"statusCheckRollup": {"contexts": [{"status": "QUEUED", "conclusion": null}]}}'
+            "]"
         )
+        files_payload = '{"files": []}'
 
         with patch("orchestune.github.subprocess.run") as mock_run:
             mock_run.side_effect = [
@@ -337,11 +332,34 @@ class TestListOpenPrs:
                     args=[], returncode=0, stdout=list_payload, stderr=""
                 ),
                 subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=detail_payload, stderr=""
+                    args=[], returncode=0, stdout=files_payload, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=files_payload, stderr=""
                 ),
             ]
             prs = list_open_prs()
-            called_args = mock_run.call_args_list[1].args[0]
+
+        assert prs[0].is_ci_passing is True
+        assert prs[1].is_ci_passing is False
+
+    def test_includes_closing_issue_references(self):
+        """#239: ブランチ名がAIセッションの指示通りにならない場合でも
+        自己PR判定できるよう、PRが閉じるIssue番号一覧も取得する。"""
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "claude/elegant-noether-5rli7u", '
+            '"files": [{"path": "src/a.py"}], '
+            '"closingIssuesReferences": [{"number": 218}]}'
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+            called_args = mock_run.call_args.args[0]
 
         assert "closingIssuesReferences" in called_args[called_args.index("--json") + 1]
         assert prs == [
@@ -354,18 +372,12 @@ class TestListOpenPrs:
         ]
 
     def test_closes_issue_numbers_defaults_to_empty_tuple(self):
-        list_payload = '[{"number": 5, "headRefName": "feat/x"}]'
-        detail_payload = '{"files": []}'
+        list_payload = '[{"number": 5, "headRefName": "feat/x", "files": []}]'
 
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=list_payload, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=detail_payload, stderr=""
-                ),
-            ]
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
             prs = list_open_prs()
 
         assert prs[0].closes_issue_numbers == ()
@@ -671,3 +683,502 @@ class TestCreatePullRequest:
                     body="b",
                 )
             mock_run.assert_not_called()
+
+
+class TestEnsureParentBranch:
+    def test_ensure_parent_branch_does_not_checkout_and_pushes_directly(self):
+        # リモートに親ブランチが存在しない場合、checkoutを行わずに直接pushする
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # 1. ls-remote -> "" (存在しない)
+            # 2. fetch main -> ""
+            # 3. push -> ""
+            # 4. fetch parent -> ""
+            mock_run.side_effect = ["", "", "", ""]
+
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+
+            # git checkout は一度も呼ばれないべき
+            for cmd in called_commands:
+                assert "checkout" not in cmd
+                assert "pull" not in cmd
+
+            # 期待されるコマンドが実行されたことを検証
+            assert mock_run.call_count == 4
+            assert called_commands[0] == [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/parent/issue-129",
+            ]
+            assert called_commands[1] == ["git", "fetch", "origin", "main"]
+            assert called_commands[2] == [
+                "git",
+                "push",
+                "origin",
+                "FETCH_HEAD:refs/heads/parent/issue-129",
+            ]
+            assert called_commands[3] == [
+                "git",
+                "fetch",
+                "origin",
+                "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
+            ]
+
+    def test_ensure_parent_branch_does_nothing_if_remote_exists(self):
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # ls-remote が結果（ハッシュ値など）を返す（存在する）
+            # fetch -> ""
+            mock_run.side_effect = ["abcdef123456... refs/heads/parent/issue-129", ""]
+
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+            assert len(called_commands) == 2
+            assert called_commands[0] == [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/parent/issue-129",
+            ]
+            assert called_commands[1] == [
+                "git",
+                "fetch",
+                "origin",
+                "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
+            ]
+
+    def test_ensure_parent_branch_handles_ls_remote_error(self):
+        # ls-remote が例外を投げた場合、存在しないものとみなして作成処理へ進む
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # 1. ls-remote -> Exception
+            # 2. fetch main -> ""
+            # 3. push -> ""
+            # 4. fetch parent -> ""
+            mock_run.side_effect = [Exception("network error"), "", "", ""]
+
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+            assert mock_run.call_count == 4
+            assert called_commands[0] == [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/parent/issue-129",
+            ]
+            assert called_commands[1] == ["git", "fetch", "origin", "main"]
+            assert called_commands[2] == [
+                "git",
+                "push",
+                "origin",
+                "FETCH_HEAD:refs/heads/parent/issue-129",
+            ]
+            assert called_commands[3] == [
+                "git",
+                "fetch",
+                "origin",
+                "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
+            ]
+
+    def test_ensure_parent_branch_handles_push_error_without_crashing(self):
+        # fetch または push が失敗しても、警告を出力してクラッシュしない
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # 1. ls-remote -> ""
+            # 2. fetch -> Exception
+            mock_run.side_effect = ["", Exception("fetch failed")]
+
+            # 例外がスローされないことを確認
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+            assert len(called_commands) == 2
+
+    def test_ensure_parent_branch_real_git_fetch_head(self, tmp_path):
+        import os
+        import subprocess
+
+        from orchestune.github import ensure_parent_branch
+
+        # 1. リモートとローカルリポジトリを準備
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+        # リモートのデフォルトブランチを main に設定
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+            cwd=str(remote_dir),
+            check=True,
+        )
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        # ローカルのデフォルトブランチを main に切り替える
+        subprocess.run(
+            ["git", "checkout", "-b", "main"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 最初のコミットを作成して push (これが古い main になる)
+        dummy_file = local_dir / "dummy.txt"
+        dummy_file.write_text("commit 1")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 1"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # ローカルの refs/remotes/origin/main が commit 1 を指している状態
+        old_sha = subprocess.check_output(
+            ["git", "rev-parse", "refs/remotes/origin/main"],
+            cwd=str(local_dir),
+            text=True,
+        ).strip()
+
+        # 2. リモートの main を進める（別のクローンで新しいコミットを push）
+        clone_dir = tmp_path / "clone"
+        subprocess.run(["git", "clone", str(remote_dir), str(clone_dir)], check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+        # 変更をコミットして push
+        (clone_dir / "dummy.txt").write_text("commit 2")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(clone_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 2"], cwd=str(clone_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"], cwd=str(clone_dir), check=True
+        )
+
+        new_sha = subprocess.check_output(
+            ["git", "rev-parse", "main"], cwd=str(clone_dir), text=True
+        ).strip()
+        assert old_sha != new_sha
+
+        # 3. local_dir 側で ensure_parent_branch を実行
+        original_cwd = os.getcwd()
+        os.chdir(str(local_dir))
+        try:
+            ensure_parent_branch(999)
+        finally:
+            os.chdir(original_cwd)
+
+        # 4. 作成されたリモートの parent/issue-999 ブランチの SHA が、古い SHA ではなく、リモートの最新 main (new_sha) であることを確認する
+        parent_sha = (
+            subprocess.check_output(
+                ["git", "ls-remote", str(remote_dir), "refs/heads/parent/issue-999"],
+                text=True,
+            )
+            .split()[0]
+            .strip()
+        )
+
+        assert parent_sha == new_sha
+
+    def test_ensure_parent_branch_fetch_existing_branch(self, tmp_path):
+        import os
+        import subprocess
+
+        from orchestune.github import (
+            ensure_parent_branch,
+            resolve_local_or_remote_branch,
+        )
+
+        # 1. リモートとローカルリポジトリを準備
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+            cwd=str(remote_dir),
+            check=True,
+        )
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "checkout", "-b", "main"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 最初のコミットを作成して push (これが古い SHA になる)
+        dummy_file = local_dir / "dummy.txt"
+        dummy_file.write_text("commit 1")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 1"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        sha1 = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(local_dir), text=True
+        ).strip()
+
+        # 2. 別のクローンから、リモート上に親ブランチ parent/issue-888 を作成する
+        clone_dir = tmp_path / "clone"
+        subprocess.run(["git", "clone", str(remote_dir), str(clone_dir)], check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+
+        # 新しいコミットを作成して親ブランチとして push する
+        (clone_dir / "dummy.txt").write_text("commit 2")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(clone_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 2"], cwd=str(clone_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "HEAD:refs/heads/parent/issue-888"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+        sha2 = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(clone_dir), text=True
+        ).strip()
+
+        assert sha1 != sha2
+
+        # 3. 対象 clone (local_dir) にて、古いローカルブランチ parent/issue-888 を sha1 で作成する
+        # この時点では、local_dir 側には refs/remotes/origin/parent/issue-888 はまだ存在しない (fetchしていないため)
+        subprocess.run(
+            ["git", "branch", "parent/issue-888", sha1],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 4. ensure_parent_branch(888) を実行する
+        original_cwd = os.getcwd()
+        os.chdir(str(local_dir))
+        try:
+            ensure_parent_branch(888)
+        finally:
+            os.chdir(original_cwd)
+
+        # 5. リモート追跡ブランチ refs/remotes/origin/parent/issue-888 が自動で取得され、sha2 を指していることを確認する
+        tracking_sha = subprocess.check_output(
+            ["git", "rev-parse", "refs/remotes/origin/parent/issue-888"],
+            cwd=str(local_dir),
+            text=True,
+        ).strip()
+        assert tracking_sha == sha2
+
+        # 6. prefer_remote=True で解決した際、古いローカルブランチ (sha1) ではなく、最新のリモート側 (origin/parent/issue-888) が返ることを確認する
+        assert (
+            resolve_local_or_remote_branch(
+                local_dir, "parent/issue-888", prefer_remote=True
+            )
+            == "origin/parent/issue-888"
+        )
+
+
+class TestResolveLocalOrRemoteBranch:
+    def test_resolve_local_or_remote_branch(self, tmp_path):
+        import subprocess
+
+        from orchestune.github import resolve_local_or_remote_branch
+
+        # 1. ローカル・リモートリポジトリの初期化
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        # 初期ユーザーとメールのアドレスを設定しないとコミットに失敗することがあるため設定
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 最初のダミーコミットを作成してプッシュ
+        dummy_file = local_dir / "dummy.txt"
+        dummy_file.write_text("hello")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "HEAD:refs/heads/main"],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 2. ローカルブランチが存在する場合の解決
+        # ローカルブランチ "parent/issue-129" を作成する
+        subprocess.run(
+            ["git", "checkout", "-b", "parent/issue-129"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        assert (
+            resolve_local_or_remote_branch(local_dir, "parent/issue-129")
+            == "parent/issue-129"
+        )
+
+        # 3. ローカルには存在せず、リモート追跡ブランチのみが存在する場合の解決
+        # リモートに push する
+        subprocess.run(
+            ["git", "push", "origin", "parent/issue-129"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        # mainに戻る
+        subprocess.run(["git", "checkout", "main"], cwd=str(local_dir), check=True)
+        # ローカルの parent/issue-129 を削除
+        subprocess.run(
+            ["git", "branch", "-D", "parent/issue-129"], cwd=str(local_dir), check=True
+        )
+
+        # origin/parent/issue-129 というリモート追跡ブランチが存在することを確認
+        assert (
+            resolve_local_or_remote_branch(local_dir, "parent/issue-129")
+            == "origin/parent/issue-129"
+        )
+
+        # 4. どちらも存在しない場合
+        # 存在しないブランチ名を解決しようとすると、そのままのブランチ名が返る
+        assert (
+            resolve_local_or_remote_branch(local_dir, "nonexistent-branch")
+            == "nonexistent-branch"
+        )
+
+    def test_resolve_local_or_remote_branch_prefer_remote(self, tmp_path):
+        import subprocess
+
+        from orchestune.github import resolve_local_or_remote_branch
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # ダミーコミット 1
+        dummy_file = local_dir / "dummy.txt"
+        dummy_file.write_text("hello 1")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 1"], cwd=str(local_dir), check=True
+        )
+        sha1 = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(local_dir), text=True
+        ).strip()
+
+        # ローカルブランチ "parent/issue-129" を作成 (sha1 を指す)
+        subprocess.run(
+            ["git", "branch", "parent/issue-129"], cwd=str(local_dir), check=True
+        )
+
+        # ダミーコミット 2 (SHAを進める)
+        dummy_file.write_text("hello 2")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 2"], cwd=str(local_dir), check=True
+        )
+        sha2 = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(local_dir), text=True
+        ).strip()
+
+        # リモート追跡参照を作成 (sha2 を指す)
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/parent/issue-129", sha2],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        assert sha1 != sha2
+
+        # prefer_remote=False の場合は、ローカルブランチが優先されて "parent/issue-129" が返る
+        assert (
+            resolve_local_or_remote_branch(
+                local_dir, "parent/issue-129", prefer_remote=False
+            )
+            == "parent/issue-129"
+        )
+
+        # prefer_remote=True の場合は、リモート追跡ブランチが優先されて "origin/parent/issue-129" が返る
+        assert (
+            resolve_local_or_remote_branch(
+                local_dir, "parent/issue-129", prefer_remote=True
+            )
+            == "origin/parent/issue-129"
+        )
