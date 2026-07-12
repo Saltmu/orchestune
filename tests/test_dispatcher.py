@@ -298,6 +298,11 @@ class TestRunDispatchCycle:
         assert report.quota_slots_available == 0
 
     def test_run_dispatch_cycle_filters_by_parent_issue_number(self, tmp_path):
+        """#156: parent_issue_number指定時は、github.list_sub_issuesによる
+        fast pathへ正しく配線され、その結果がそのまま使われることを確認する。
+        『親を問わず返された候補から正しい親だけに絞る』という判定自体は、
+        list_sub_issuesの実装（github.py）側の責務のためここでは検証しない。
+        """
         config = DispatcherConfig(
             max_concurrent=2,
             max_launches_per_window=2,
@@ -312,49 +317,18 @@ class TestRunDispatchCycle:
             1,
             labels=("status:queued",),
             subtask_id="task-a",
-        )
-        sub_issue_1 = IssueRecord(
-            number=sub_issue_1.number,
-            title=sub_issue_1.title,
-            body=sub_issue_1.body,
-            labels=sub_issue_1.labels,
-            created_at=sub_issue_1.created_at,
-            parent={"number": 100},
-        )
-        sub_issue_2 = _issue(
-            2,
-            labels=("status:queued",),
-            subtask_id="task-b",
-        )
-        sub_issue_2 = IssueRecord(
-            number=sub_issue_2.number,
-            title=sub_issue_2.title,
-            body=sub_issue_2.body,
-            labels=sub_issue_2.labels,
-            created_at=sub_issue_2.created_at,
-            parent={"number": 200},
-        )
-        sub_issue_3 = _issue(
-            3,
-            labels=("status:queued",),
-            subtask_id="task-c",
+            parent_number=100,
         )
 
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
         ):
-
-            def _list(label, **_):
-                if label == "status:queued":
-                    return [sub_issue_1, sub_issue_2, sub_issue_3]
-                return []
-
-            mock_list.side_effect = _list
+            mock_list.return_value = [sub_issue_1]
             report = run_dispatch_cycle(config)
 
-        # parent=100 の sub_issue_1 のみが選出される
+        mock_list.assert_called_once_with(100)
         assert [t.issue_number for t in report.selected] == [1]
 
     def test_run_dispatch_cycle_resolves_depends_on_from_blocked_by(self, tmp_path):
@@ -574,7 +548,7 @@ class TestRunDispatchCycleFootprintRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -592,9 +566,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.notify_recompute", return_value=["body"]
             ) as mock_notify,
         ):
-            mock_list.side_effect = lambda label, **_: (
-                [in_progress_issue] if label == "status:in-progress" else []
-            )
+            mock_list.return_value = [in_progress_issue]
             mock_recompute.return_value = (MagicMock(), [conflict])
 
             report = run_dispatch_cycle(config)
@@ -643,7 +615,7 @@ class TestRunDispatchCycleFootprintRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -660,9 +632,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.notify_recompute", return_value=["dry body"]
             ) as mock_notify,
         ):
-            mock_list.side_effect = lambda label, **_: (
-                [in_progress_issue] if label == "status:in-progress" else []
-            )
+            mock_list.return_value = [in_progress_issue]
             mock_recompute.return_value = (MagicMock(), [conflict])
 
             run_dispatch_cycle(config)
@@ -720,7 +690,7 @@ class TestRunDispatchCycleFootprintRecompute:
             return selected
 
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -739,15 +709,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
         ):
-
-            def _list(label, **_):
-                if label == "status:queued":
-                    return [other_queued_issue]
-                if label == "status:in-progress":
-                    return [in_progress_issue]
-                return []
-
-            mock_list.side_effect = _list
+            mock_list.return_value = [other_queued_issue, in_progress_issue]
 
             report = run_dispatch_cycle(config)
 
@@ -814,7 +776,7 @@ class TestRunDispatchCycleFootprintRecompute:
             return selected
 
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
@@ -827,15 +789,12 @@ class TestRunDispatchCycleFootprintRecompute:
                 return_value=[],
             ),
         ):
-
-            def _list(label, **_):
-                if label == "status:queued":
-                    return [conflicting_issue, dependent_issue, independent_issue]
-                if label == "status:in-progress":
-                    return [in_progress_issue]
-                return []
-
-            mock_list.side_effect = _list
+            mock_list.return_value = [
+                conflicting_issue,
+                dependent_issue,
+                independent_issue,
+                in_progress_issue,
+            ]
             report = run_dispatch_cycle(config)
 
         assert report.quota_slots_available == 2
@@ -867,7 +826,7 @@ class TestRunDispatchCycleFootprintRecompute:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -881,9 +840,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
         ):
-            mock_list.side_effect = lambda label, **_: (
-                [in_progress_issue] if label == "status:in-progress" else []
-            )
+            mock_list.return_value = [in_progress_issue]
             report = run_dispatch_cycle(config)
 
         mock_recompute.assert_not_called()
