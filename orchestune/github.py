@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -335,7 +336,20 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
     _validate_ref_name(base)
     try:
         stdout = _run(["git", "diff", "--name-only", f"{base}...{branch}"])
-    except (subprocess.CalledProcessError, OSError):
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() if exc.stderr else str(exc)
+        print(
+            f"Warning: failed to diff changed files for {branch!r} against "
+            f"{base!r}: {detail}",
+            file=sys.stderr,
+        )
+        return []
+    except OSError as exc:
+        print(
+            f"Warning: unable to inspect changed files for {branch!r} against "
+            f"{base!r}: {exc}",
+            file=sys.stderr,
+        )
         return []
     return [line.strip() for line in stdout.splitlines() if line.strip()]
 
@@ -347,8 +361,6 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
         remote_exists = bool(stdout.strip())
     except Exception:
         remote_exists = False
-
-    import sys
 
     if remote_exists:
         try:
