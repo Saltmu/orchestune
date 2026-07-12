@@ -288,7 +288,7 @@ def list_open_prs() -> list[PrRecord]:
         files = raw.get("files", [])
         closing_refs = raw.get("closingIssuesReferences", [])
 
-        rollup = raw.get("statusCheckRollup") or []
+        rollup = _status_check_contexts(raw.get("statusCheckRollup"))
         is_ci_passing = True
         for check in rollup:
             status = check.get("status")
@@ -313,6 +313,17 @@ def list_open_prs() -> list[PrRecord]:
             )
         )
     return prs
+
+
+def _status_check_contexts(rollup: object) -> list[dict[str, object]]:
+    if isinstance(rollup, list):
+        return [check for check in rollup if isinstance(check, dict)]
+    if not isinstance(rollup, dict):
+        return []
+    contexts = rollup.get("contexts")
+    if isinstance(contexts, list):
+        return [check for check in contexts if isinstance(check, dict)]
+    return []
 
 
 def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
