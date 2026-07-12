@@ -1,4 +1,5 @@
 import subprocess
+from io import StringIO
 from unittest.mock import patch
 
 import pytest
@@ -392,12 +393,31 @@ class TestBranchChangedFiles:
         """#232: mainと共通の祖先を持たない(orphanな)ブランチとの3点diffは
         `fatal: no merge base`でexit 128になる。dispatch-cycle全体をクラッシュ
         させず、footprint差分なし（ロック対象外）として扱うべき。"""
-        with patch("orchestune.github.subprocess.run") as mock_run:
+        stderr = StringIO()
+        with (
+            patch("orchestune.github.subprocess.run") as mock_run,
+            patch("sys.stderr", stderr),
+        ):
             mock_run.side_effect = subprocess.CalledProcessError(
                 128, ["git", "diff", "--name-only", "origin/main...origin/orphan"]
             )
             files = branch_changed_files("origin/orphan")
         assert files == []
+        assert "Warning: failed to diff changed files" in stderr.getvalue()
+        assert "origin/orphan" in stderr.getvalue()
+
+    def test_logs_warning_when_git_diff_cannot_run(self):
+        stderr = StringIO()
+        with (
+            patch("orchestune.github.subprocess.run") as mock_run,
+            patch("sys.stderr", stderr),
+        ):
+            mock_run.side_effect = OSError("git binary missing")
+            files = branch_changed_files("origin/feat/x")
+
+        assert files == []
+        assert "Warning: unable to inspect changed files" in stderr.getvalue()
+        assert "git binary missing" in stderr.getvalue()
 
 
 class TestGetIssueLabels:
