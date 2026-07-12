@@ -161,6 +161,16 @@ stateDiagram-v2
 - `not-needed-review:passed` / `not-needed-review:failed`:
   `status:not-needed`の独立検証レビュー結果（`orchestune/integration_coordinator.py`）。
   検証済みIssueのクローズ判定にのみ使われ、`status:*`の状態遷移には含まれない。
+- `integration:included`:
+  Integrator（`orchestune/integrator.py`）が、統合ブランチへのforce pushおよび
+  統合PRの確保（新規作成または既存PRの再利用）に成功した時点で付与する記帳用
+  ラベル。`status:done`は変更しない（依存解決判定・外部ロック解除条件・monitor
+  表示など他サブシステムが引き続き`status:done`を参照するため）。統合ブランチは
+  `base_branch`の前進に追従するため毎回ベースから再構築され、既に本ラベルを持つ
+  タスクもre-merge対象からは除外されない（除外すると再構築のたびに統合ブランチ
+  からその変更が消えてしまう）。本ラベルは、Integrator実行結果のうち「今回新たに
+  含めたタスク」（`newly_included`）と「既に統合済みのタスク」を区別するための
+  シグナルとしてのみ使われる。
 - `priority:high` / `priority:medium` / `priority:low`:
   起動順序の優先度付けに使われるが、ライフサイクル遷移には関与しない。
 - `risk:flagged` / `progress:partial`:

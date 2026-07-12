@@ -33,6 +33,21 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _stub_label_mutations_by_default():
+    """`integration:included`ラベル付与ロジックの追加により、成功パスを通る
+    大多数のテストが（それを検証する意図が無いにもかかわらず）実際の
+    `gh issue edit`を呼び出してしまわないよう、既定で`add_label`/`remove_label`を
+    スタブする。ラベル呼び出し自体を検証したいテストは、自身で`@patch`する
+    （このデフォルトスタブを上書きする）ことで従来通りアサーションできる。
+    """
+    with (
+        patch("orchestune.integrator.github.add_label"),
+        patch("orchestune.integrator.github.remove_label"),
+    ):
+        yield
+
+
 def _issue(
     number: int,
     labels: tuple[str, ...] = (),
@@ -130,6 +145,94 @@ class TestIntegrator:
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
+    def test_success_integration_marks_merged_issues_as_integration_included(
+        self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
+    ):
+        # #139: 統合ブランチへのpush・統合PR確保が成功した時点で、対象Issueに
+        # `integration:included`を記帳する。`status:done`自体は変更しない
+        # （依存解決・外部ロック等の他サブシステムが引き続き参照するため）。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", depends_on=("task-1",)
+        )
+
+        def list_side_effect(label, *args, **kwargs):
+            if label == "status:done":
+                return [issue_b, issue_a]
+            return [issue_a, issue_b]
+
+        mock_list.side_effect = list_side_effect
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["newly_included"] == ["task-1", "task-2"]
+        mock_add.assert_any_call(1, "integration:included")
+        mock_add.assert_any_call(2, "integration:included")
+        assert mock_add.call_count == 2
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
+    def test_already_included_task_is_not_relabeled_but_still_remerged(
+        self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
+    ):
+        # #139: 統合ブランチはbase_branchの前進に追従するため毎回ベースから
+        # 再構築される。既に`integration:included`が付いたタスクもre-merge
+        # 対象からは除外しない（除外すると再構築のたびに統合ブランチから
+        # そのタスクの変更が消えてしまう）が、ラベルの再付与とnewly_includedへの
+        # 算入だけは行わない。
+        issue_a = _issue(
+            1,
+            labels=("status:done", "integration:included"),
+            subtask_id="task-1",
+        )
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", depends_on=("task-1",)
+        )
+
+        def list_side_effect(label, *args, **kwargs):
+            if label == "status:done":
+                return [issue_b, issue_a]
+            return [issue_a, issue_b]
+
+        mock_list.side_effect = list_side_effect
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-1", "task-2"]
+        assert res["newly_included"] == ["task-2"]
+        mock_add.assert_called_once_with(2, "integration:included")
+
+        # 既にintegration:includedを持つtask-1もre-mergeの対象からは
+        # 除外されていないこと（統合ブランチ再構築の正しさを維持する）。
+        merge_calls = [
+            call for call in mock_run.call_args_list if "merge" in call.args[0]
+        ]
+        assert len(merge_calls) == 2
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.create_pull_request")
     def test_success_integration_reuses_existing_open_pr(
         self, mock_create_pr, mock_run, mock_list
@@ -157,8 +260,9 @@ class TestIntegrator:
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
     def test_success_integration_pr_creation_failure_is_non_fatal(
-        self, mock_create_pr, mock_open_prs, mock_run, mock_list
+        self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
@@ -176,6 +280,10 @@ class TestIntegrator:
         assert res["merged"] == ["task-1"]
         assert res["integration_pr_number"] is None
         assert res["semantic_review_dispatched"] is False
+        # #139: PR確保に失敗した場合、統合の安全確定ができていないため
+        # integration:includedは付与しない。
+        assert res["newly_included"] == []
+        mock_add.assert_not_called()
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
@@ -1453,8 +1561,9 @@ class TestIntegratorPushFailure:
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
     def test_push_failure_without_existing_pr_returns_explicit_failure(
-        self, mock_create_pr, mock_open_prs, mock_run, mock_list
+        self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
@@ -1479,6 +1588,9 @@ class TestIntegratorPushFailure:
         assert "remote rejected" in res["error"]
         mock_open_prs.assert_not_called()
         mock_create_pr.assert_not_called()
+        # #139: push失敗時は統合の安全確定ができていないため、
+        # integration:includedを付与してはならない。
+        mock_add.assert_not_called()
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
