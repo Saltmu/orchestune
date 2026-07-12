@@ -264,27 +264,20 @@ class TestListOpenPrs:
     def test_fetches_pr_list_and_per_pr_files(self):
         list_payload = (
             "["
-            '{"number": 5, "headRefName": "feat/x", "reviewDecision": "APPROVED", "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}]},'
-            '{"number": 6, "headRefName": "feat/y", "reviewDecision": "CHANGES_REQUESTED", "statusCheckRollup": [{"status": "IN_PROGRESS", "conclusion": null}]}'
+            '{"number": 5, "headRefName": "feat/x", "reviewDecision": "APPROVED", "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}], "files": [{"path": "src/a.py"}, {"path": "src/b.py"}], "closingIssuesReferences": []},'
+            '{"number": 6, "headRefName": "feat/y", "reviewDecision": "CHANGES_REQUESTED", "statusCheckRollup": [{"status": "IN_PROGRESS", "conclusion": null}], "files": [], "closingIssuesReferences": []}'
             "]"
         )
-        files_payload_5 = '{"files": [{"path": "src/a.py"}, {"path": "src/b.py"}]}'
-        files_payload_6 = '{"files": []}'
 
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=list_payload, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=files_payload_5, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=files_payload_6, stderr=""
-                ),
-            ]
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
             prs = list_open_prs()
+            called_args = mock_run.call_args.args[0]
 
+        assert "files" in called_args[called_args.index("--json") + 1]
+        assert "closingIssuesReferences" in called_args[called_args.index("--json") + 1]
         assert prs == [
             PrRecord(
                 number=5,
@@ -305,23 +298,20 @@ class TestListOpenPrs:
     def test_includes_closing_issue_references(self):
         """#239: ブランチ名がAIセッションの指示通りにならない場合でも
         自己PR判定できるよう、PRが閉じるIssue番号一覧も取得する。"""
-        list_payload = '[{"number": 5, "headRefName": "claude/elegant-noether-5rli7u"}]'
-        detail_payload = (
-            '{"files": [{"path": "src/a.py"}], '
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "claude/elegant-noether-5rli7u", '
+            '"files": [{"path": "src/a.py"}], '
             '"closingIssuesReferences": [{"number": 218}]}'
+            "]"
         )
 
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=list_payload, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=detail_payload, stderr=""
-                ),
-            ]
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
             prs = list_open_prs()
-            called_args = mock_run.call_args_list[1].args[0]
+            called_args = mock_run.call_args.args[0]
 
         assert "closingIssuesReferences" in called_args[called_args.index("--json") + 1]
         assert prs == [
@@ -334,18 +324,12 @@ class TestListOpenPrs:
         ]
 
     def test_closes_issue_numbers_defaults_to_empty_tuple(self):
-        list_payload = '[{"number": 5, "headRefName": "feat/x"}]'
-        detail_payload = '{"files": []}'
+        list_payload = '[{"number": 5, "headRefName": "feat/x", "files": []}]'
 
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=list_payload, stderr=""
-                ),
-                subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=detail_payload, stderr=""
-                ),
-            ]
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
             prs = list_open_prs()
 
         assert prs[0].closes_issue_numbers == ()
