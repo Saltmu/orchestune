@@ -657,9 +657,10 @@ class TestEnsureParentBranch:
             from orchestune.github import ensure_parent_branch
 
             # 1. ls-remote -> "" (存在しない)
-            # 2. fetch -> ""
+            # 2. fetch main -> ""
             # 3. push -> ""
-            mock_run.side_effect = ["", "", ""]
+            # 4. fetch parent -> ""
+            mock_run.side_effect = ["", "", "", ""]
 
             ensure_parent_branch(129)
 
@@ -671,7 +672,7 @@ class TestEnsureParentBranch:
                 assert "pull" not in cmd
 
             # 期待されるコマンドが実行されたことを検証
-            assert mock_run.call_count == 3
+            assert mock_run.call_count == 4
             assert called_commands[0] == [
                 "git",
                 "ls-remote",
@@ -685,24 +686,36 @@ class TestEnsureParentBranch:
                 "origin",
                 "FETCH_HEAD:refs/heads/parent/issue-129",
             ]
+            assert called_commands[3] == [
+                "git",
+                "fetch",
+                "origin",
+                "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
+            ]
 
     def test_ensure_parent_branch_does_nothing_if_remote_exists(self):
         with patch("orchestune.github._run") as mock_run:
             from orchestune.github import ensure_parent_branch
 
             # ls-remote が結果（ハッシュ値など）を返す（存在する）
-            mock_run.return_value = "abcdef123456... refs/heads/parent/issue-129"
+            # fetch -> ""
+            mock_run.side_effect = ["abcdef123456... refs/heads/parent/issue-129", ""]
 
             ensure_parent_branch(129)
 
-            # ls-remote の呼び出しだけが行われるはず
             called_commands = [call[0][0] for call in mock_run.call_args_list]
-            assert len(called_commands) == 1
+            assert len(called_commands) == 2
             assert called_commands[0] == [
                 "git",
                 "ls-remote",
                 "origin",
                 "refs/heads/parent/issue-129",
+            ]
+            assert called_commands[1] == [
+                "git",
+                "fetch",
+                "origin",
+                "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
             ]
 
     def test_ensure_parent_branch_handles_ls_remote_error(self):
@@ -711,14 +724,15 @@ class TestEnsureParentBranch:
             from orchestune.github import ensure_parent_branch
 
             # 1. ls-remote -> Exception
-            # 2. fetch -> ""
+            # 2. fetch main -> ""
             # 3. push -> ""
-            mock_run.side_effect = [Exception("network error"), "", ""]
+            # 4. fetch parent -> ""
+            mock_run.side_effect = [Exception("network error"), "", "", ""]
 
             ensure_parent_branch(129)
 
             called_commands = [call[0][0] for call in mock_run.call_args_list]
-            assert mock_run.call_count == 3
+            assert mock_run.call_count == 4
             assert called_commands[0] == [
                 "git",
                 "ls-remote",
@@ -726,6 +740,18 @@ class TestEnsureParentBranch:
                 "refs/heads/parent/issue-129",
             ]
             assert called_commands[1] == ["git", "fetch", "origin", "main"]
+            assert called_commands[2] == [
+                "git",
+                "push",
+                "origin",
+                "FETCH_HEAD:refs/heads/parent/issue-129",
+            ]
+            assert called_commands[3] == [
+                "git",
+                "fetch",
+                "origin",
+                "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
+            ]
 
     def test_ensure_parent_branch_handles_push_error_without_crashing(self):
         # fetch または push が失敗しても、警告を出力してクラッシュしない
@@ -849,6 +875,126 @@ class TestEnsureParentBranch:
         )
 
         assert parent_sha == new_sha
+
+    def test_ensure_parent_branch_fetch_existing_branch(self, tmp_path):
+        import os
+        import subprocess
+
+        from orchestune.github import (
+            ensure_parent_branch,
+            resolve_local_or_remote_branch,
+        )
+
+        # 1. リモートとローカルリポジトリを準備
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+            cwd=str(remote_dir),
+            check=True,
+        )
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "checkout", "-b", "main"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 最初のコミットを作成して push (これが古い SHA になる)
+        dummy_file = local_dir / "dummy.txt"
+        dummy_file.write_text("commit 1")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 1"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        sha1 = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(local_dir), text=True
+        ).strip()
+
+        # 2. 別のクローンから、リモート上に親ブランチ parent/issue-888 を作成する
+        clone_dir = tmp_path / "clone"
+        subprocess.run(["git", "clone", str(remote_dir), str(clone_dir)], check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+
+        # 新しいコミットを作成して親ブランチとして push する
+        (clone_dir / "dummy.txt").write_text("commit 2")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(clone_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 2"], cwd=str(clone_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "HEAD:refs/heads/parent/issue-888"],
+            cwd=str(clone_dir),
+            check=True,
+        )
+        sha2 = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(clone_dir), text=True
+        ).strip()
+
+        assert sha1 != sha2
+
+        # 3. 対象 clone (local_dir) にて、古いローカルブランチ parent/issue-888 を sha1 で作成する
+        # この時点では、local_dir 側には refs/remotes/origin/parent/issue-888 はまだ存在しない (fetchしていないため)
+        subprocess.run(
+            ["git", "branch", "parent/issue-888", sha1],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 4. ensure_parent_branch(888) を実行する
+        original_cwd = os.getcwd()
+        os.chdir(str(local_dir))
+        try:
+            ensure_parent_branch(888)
+        finally:
+            os.chdir(original_cwd)
+
+        # 5. リモート追跡ブランチ refs/remotes/origin/parent/issue-888 が自動で取得され、sha2 を指していることを確認する
+        tracking_sha = subprocess.check_output(
+            ["git", "rev-parse", "refs/remotes/origin/parent/issue-888"],
+            cwd=str(local_dir),
+            text=True,
+        ).strip()
+        assert tracking_sha == sha2
+
+        # 6. prefer_remote=True で解決した際、古いローカルブランチ (sha1) ではなく、最新のリモート側 (origin/parent/issue-888) が返ることを確認する
+        assert (
+            resolve_local_or_remote_branch(
+                local_dir, "parent/issue-888", prefer_remote=True
+            )
+            == "origin/parent/issue-888"
+        )
 
 
 class TestResolveLocalOrRemoteBranch:

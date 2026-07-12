@@ -347,27 +347,53 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
     except Exception:
         remote_exists = False
 
-    if not remote_exists:
-        import sys
+    import sys
 
-        print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
+    if remote_exists:
         try:
-            # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
-            # FETCH_HEADを指定して直接リモートに親ブランチをプッシュして作成する。
-            _run(["git", "fetch", "origin", "main"])
+            # すでにリモートに親ブランチが存在する場合、そのリモート追跡ブランチ参照を確実にローカルにフェッチする
             _run(
                 [
                     "git",
-                    "push",
+                    "fetch",
                     "origin",
-                    f"FETCH_HEAD:refs/heads/{parent_branch}",
+                    f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
                 ]
             )
         except Exception as e:
             print(
-                f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
+                f"Warning: Failed to fetch existing parent branch '{parent_branch}': {e}",
                 file=sys.stderr,
             )
+        return
+
+    print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
+    try:
+        # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
+        # FETCH_HEADを指定して直接リモートに親ブランチをプッシュして作成する。
+        _run(["git", "fetch", "origin", "main"])
+        _run(
+            [
+                "git",
+                "push",
+                "origin",
+                f"FETCH_HEAD:refs/heads/{parent_branch}",
+            ]
+        )
+        # プッシュ完了後、リモート追跡ブランチ参照を確実にローカルにフェッチする
+        _run(
+            [
+                "git",
+                "fetch",
+                "origin",
+                f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
+            ]
+        )
+    except Exception as e:
+        print(
+            f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
+            file=sys.stderr,
+        )
 
 
 def resolve_local_or_remote_branch(
