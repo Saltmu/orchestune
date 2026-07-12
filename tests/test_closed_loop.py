@@ -136,6 +136,14 @@ class DummyGitHub:
                 results.append(issue)
         return results
 
+    def list_sub_issues(self, parent_issue_number: int | str) -> list[IssueRecord]:
+        number = int(parent_issue_number)
+        return [
+            issue
+            for issue in self.issues.values()
+            if issue.parent and issue.parent.get("number") == number
+        ]
+
     def add_label(self, issue_number: int | str, label: str) -> None:
         num = int(issue_number)
         if num in self.issues:
@@ -590,6 +598,10 @@ def test_closed_loop_dag_recomputation_serialization():
         patch(
             "orchestune.github.list_issues_by_label",
             dummy_github.list_issues_by_label,
+        ),
+        patch(
+            "orchestune.github.list_sub_issues",
+            dummy_github.list_sub_issues,
         ),
         patch("orchestune.github.add_label", dummy_github.add_label),
         patch("orchestune.github.remove_label", dummy_github.remove_label),

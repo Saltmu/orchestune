@@ -5,7 +5,10 @@ from orchestune.dispatch_cycle import (
     CycleContext,
     _decide_blocked_promotions,
     _decide_external_lock_sync,
+    _fetch_issues,
+    _group_by_status,
     _process_active_worktrees,
+    _self_heal_run_state,
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
@@ -100,6 +103,162 @@ class TestDecideExternalLockSync:
             result = _decide_external_lock_sync({}, [], run_state)
         assert result.to_lock == []
         assert result.to_unlock == []
+
+
+def _sub_issue(number, labels=(), state="OPEN"):
+    return IssueRecord(
+        number=number,
+        title=f"issue-{number}",
+        body="",
+        labels=labels,
+        created_at="2026-01-01T00:00:00+00:00",
+        state=state,
+        parent={"number": 100},
+    )
+
+
+class TestGroupByStatus:
+    """#156: list_sub_issuesが返す親Issue配下の全Issueを、list_issues_by_label
+    のstate引数（open/all）と同じ意味論でステータスラベル別に分類する。"""
+
+    def test_groups_each_open_status_label(self):
+        issues = [
+            _sub_issue(1, labels=("status:queued",)),
+            _sub_issue(2, labels=("status:external-lock",)),
+            _sub_issue(3, labels=("status:in-progress",)),
+            _sub_issue(4, labels=("status:blocked",)),
+        ]
+        result = _group_by_status(issues)
+        assert [i.number for i in result.queued] == [1]
+        assert [i.number for i in result.locked] == [2]
+        assert [i.number for i in result.in_progress] == [3]
+        assert [i.number for i in result.blocked] == [4]
+        assert result.done == []
+        assert result.not_needed == []
+
+    def test_closed_open_only_labels_are_excluded(self):
+        """status:queued/external-lock/in-progress/blockedはclosedなIssueを含めない
+        （list_issues_by_labelの既定state="open"と同じ意味論）。"""
+        issues = [_sub_issue(1, labels=("status:queued",), state="CLOSED")]
+        result = _group_by_status(issues)
+        assert result.queued == []
+
+    def test_done_and_not_needed_include_closed(self):
+        """status:done/not-neededはclosedでも含める
+        （list_issues_by_labelのstate="all"呼び出しと同じ意味論）。"""
+        issues = [
+            _sub_issue(1, labels=("status:done",), state="CLOSED"),
+            _sub_issue(2, labels=("status:not-needed",), state="CLOSED"),
+        ]
+        result = _group_by_status(issues)
+        assert [i.number for i in result.done] == [1]
+        assert [i.number for i in result.not_needed] == [2]
+
+    def test_issue_with_multiple_status_labels_appears_in_each_bucket(self):
+        issues = [_sub_issue(1, labels=("status:done", "status:not-needed"))]
+        result = _group_by_status(issues)
+        assert [i.number for i in result.done] == [1]
+        assert [i.number for i in result.not_needed] == [1]
+
+
+class TestFetchIssues:
+    """#156: parent_issue_number指定時はlist_sub_issues経由のfast pathを、
+    未指定時は従来通りlist_issues_by_labelを使う。"""
+
+    def test_uses_list_sub_issues_when_parent_issue_number_is_set(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            parent_issue_number=100,
+        )
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_sub_issues",
+                return_value=[_sub_issue(1, labels=("status:queued",))],
+            ) as mock_sub_issues,
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label",
+                side_effect=AssertionError("Should not scan the whole repository"),
+            ),
+        ):
+            result = _fetch_issues(config)
+
+        mock_sub_issues.assert_called_once_with(100)
+        assert [i.number for i in result.queued] == [1]
+
+    def test_uses_list_issues_by_label_when_parent_issue_number_is_none(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label",
+                return_value=[],
+            ) as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_sub_issues",
+                side_effect=AssertionError("Should not use the parent fast path"),
+            ),
+        ):
+            _fetch_issues(config)
+
+        assert mock_list.call_count == 6
+
+
+class TestSelfHealRunState:
+    """#156: run_state.jsonは複数の親Issue（big rock）にまたがって共有されうる
+    ため、parent_issue_number指定時のfast pathでスコープが絞られていても、
+    自己修復は常にリポジトリ全体のstatus:in-progress Issueを読み直す。"""
+
+    def test_noop_when_run_state_file_exists(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}")
+        config = DispatcherConfig(
+            run_state_path=run_state_path, worktree_root="worktrees", apply=True
+        )
+        run_state = RunState(active_worktrees={})
+        with patch(
+            "orchestune.dispatch_cycle.github.list_issues_by_label",
+            side_effect=AssertionError("Should not fetch when file exists"),
+        ):
+            _self_heal_run_state(run_state, config)
+
+    def test_noop_when_not_apply(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root="worktrees",
+            apply=False,
+        )
+        run_state = RunState(active_worktrees={})
+        with patch(
+            "orchestune.dispatch_cycle.github.list_issues_by_label",
+            side_effect=AssertionError("Should not fetch when apply=False"),
+        ):
+            _self_heal_run_state(run_state, config)
+
+    def test_fetches_repo_wide_in_progress_issues_regardless_of_parent_scope(
+        self, tmp_path
+    ):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root="worktrees",
+            apply=True,
+            parent_issue_number=100,
+        )
+        run_state = RunState(active_worktrees={})
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label",
+                return_value=[],
+            ) as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.recover_run_state", return_value=False
+            ) as mock_recover,
+        ):
+            _self_heal_run_state(run_state, config)
+
+        mock_list.assert_called_once_with("status:in-progress")
+        mock_recover.assert_called_once_with(run_state, [], config)
 
 
 class TestProcessActiveWorktrees:

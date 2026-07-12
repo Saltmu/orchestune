@@ -33,31 +33,69 @@ output_schema:
 ## ステージA: Issue起票
 
 1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
-2. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
-3. Issueのタイトル・本文は以下の形式とします：
-   * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
-   * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
+2. **親Issueの起票（冪等）**: `decomposition_plan.md`の`title`を用いて、「大きな石」自体を表す親Issueを用意します。サブタスクIssueより先に、必ずこの手順を実行してください。手順3のサブタスク起票が部分的に失敗して本ステージを再実行した場合でも、親Issueを重複作成しないよう、以下の順で「既存を再利用できないか」を先に確認します。
 
-     ```markdown
-     ## Footprint
-     ```yaml
-     subtask_id: <subtask_id>
-     footprint:
-       - <path/to/file>
-     symbols:
-       - <class_or_function>
-     depends_on:
-       - <dep_subtask_id>
-     ```
-     ```
+   a. `decomposition_plan.md`の`parent_issue_number`が既に設定されている（`null`でない）場合は、そのIssue番号をそのまま再利用します。念のため`gh issue view <番号>`で存在・オープン状態を確認し、問題なければ手順bをスキップして手順3へ進みます。
 
-4. ラベルおよびGitHub関係性を付与します：
-   * **親子関係の紐付け**: 親となる「大きな石」のIssue番号（例: `#100`）がある場合、新しく作成するサブタスクIssueに親を設定するため `--parent <親Issue番号>` を付与します。
-   * **依存関係の紐付け**: 依存関係（`depends_on`）がある場合、先行タスクを先に起票してそのIssue番号（例: `#101`）を確定させ、後続タスク起票時に `--blocked-by <先行Issue番号>` を付与します。
-   * **初期ステータスラベル**: 依存関係が未解決（未完了の先行タスクがある）なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
-   * **優先度・リスク**: 優先度に応じて `priority:high` / `priority:medium` / `priority:low`、また `risk: true` であれば `risk:flagged` を付与。
+   b. `parent_issue_number`が未設定の場合、同一タイトルのopenな親Issueが既に存在しないか検索します（過去の実行が親Issue作成後・`decomposition_plan.md`書き戻し前に中断した可能性があるため）：
 
-5. **Issue起票コマンド例（GitHub CLI使用）**:
+      ```bash
+      gh issue list --search "in:title \"[EPIC] <decomposition_plan.mdのtitle>\"" --state open
+      ```
+
+      該当するIssueが見つかった場合は、それを誤って重複作成しないよう、そのIssue番号を再利用してよいか必ず人間に確認を求めてください。見つからない場合のみ、新規に起票します：
+
+      ```bash
+      gh issue create --title "[EPIC] <decomposition_plan.mdのtitle>" --body "decomposition_plan.md記載の設計方針の要約。配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+      ```
+
+   c. 上記a/bで確定したIssue番号を、**必ず**`decomposition_plan.md`のフロントマターの`parent_issue_number`フィールドへ書き戻してから、次の手順へ進みます。これを怠ると、後続のサブタスク起票中にエラーが発生し本ステージを再実行した際、親Issueが重複作成されSub-issue階層が分裂します。
+
+   確定した親Issue番号は、以降すべてのサブタスクIssue起票の`--parent`として使用します。
+3. **サブタスクIssueの起票（冪等）**: 承認済みの`decomposition_plan.md`の各サブタスクについて、`depends_on`のトポロジカル順（依存元を先に処理する順）で以下を行います。手順2と同様、部分失敗からの再実行でサブタスクIssueを重複作成しないよう、起票前に必ず「既存を再利用できないか」を確認します。
+
+   a. そのサブタスクの`issue_number`が既に設定されている場合は、そのIssue番号をそのまま再利用します。`gh issue view <番号>`で存在確認と、`parent`が手順2で確定した親Issue番号と一致することを確認してください。問題なければ手順b・cをスキップし、次のサブタスクへ進みます。
+   b. `issue_number`が未設定の場合、親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの`subtask_id`が、このサブタスクの`id`と一致するものが無いか検索します（Issueタイトルの一致より`subtask_id`の方が構造化されており安定するため、こちらを優先する）。**`gh issue view --json subIssues`は`number`/`title`/`state`程度しか返さず本文（body）を含まないため、この照合には使えません。** 代わりに、`gh api graphql`で`subIssues`の`body`まで含めて直接取得してください：
+
+      ```bash
+      gh api graphql -F owner='{owner}' -F name='{repo}' -F number=<親Issue番号> -f query='
+      query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+          issue(number: $number) {
+            subIssues(first: 100) {
+              nodes { number body }
+            }
+          }
+        }
+      }'
+      ```
+
+      （本リポジトリの`orchestune/github.py`の`list_sub_issues()`が同じ理由・同じ手法でこのフィールドを取得している。100件を超えるサブタスクがある大きな石を扱う場合は`pageInfo`によるページネーションが必要になる点も同様。）各`node.body`からFootprint YAMLの`subtask_id`を読み取って照合し、一致するIssueが見つかった場合はそのIssue番号を再利用します。同一親配下・同一`subtask_id`という強い一致のため、手順2bのような人間への確認は不要です。
+   c. それでも見つからない場合のみ、新規にIssueを起票します。タイトル・本文は以下の形式とします：
+      * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
+      * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
+
+        ```markdown
+        ## Footprint
+        ```yaml
+        subtask_id: <subtask_id>
+        footprint:
+          - <path/to/file>
+        symbols:
+          - <class_or_function>
+        depends_on:
+          - <dep_subtask_id>
+        ```
+        ```
+
+      ラベルおよびGitHub関係性の付与:
+      * **親子関係の紐付け**: 手順2で確定した親Issueの番号（例: `#100`）を設定するため `--parent <親Issue番号>` を必ず付与します。
+      * **依存関係の紐付け**: 依存関係（`depends_on`）がある場合、先行タスクの`issue_number`（トポロジカル順で処理しているため、この時点で手順a〜cのいずれかにより確定済み）を `--blocked-by <先行Issue番号>` として付与します。
+      * **初期ステータスラベル**: 依存関係が未解決（未完了の先行タスクがある）なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
+      * **優先度・リスク**: 優先度に応じて `priority:high` / `priority:medium` / `priority:low`、また `risk: true` であれば `risk:flagged` を付与。
+   d. 上記a〜cで確定したIssue番号を、**必ず**`decomposition_plan.md`の該当サブタスクエントリの`issue_number`フィールドへ書き戻してから、次のサブタスクへ進みます。これを怠ると、後続のサブタスク起票中にエラーが発生し本ステージを再実行した際、このサブタスクのIssueが重複作成されます。
+
+4. **Issue起票コマンド例（GitHub CLI使用、手順3cの新規作成の場合）**:
    * 親Issueが `#100` で、先行依存Issueとして `#101` がある場合の例：
      ```bash
      gh issue create --title "[FEAT] task-b: Implement bar feature" --body-file /tmp/issue_body.md --parent 100 --blocked-by 101 --label "status:blocked,priority:medium"
