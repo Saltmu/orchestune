@@ -224,6 +224,15 @@ class Integrator:
 
                     integration_pr_number = self._ensure_integration_pr(merged_tasks)
 
+                    # #139: 統合の安全確定（push成功＋統合PR確保成功）を
+                    # 確認できた場合にのみ、対象Issueへ`integration:included`を
+                    # 記帳する。
+                    newly_included: list[str] = []
+                    if integration_pr_number is not None:
+                        newly_included = self._mark_newly_included(
+                            active_done_tasks, merged_tasks
+                        )
+
                     # 意味的レビュー（LLMによる統合diffのバグ検知）はfire-and-forgetで
                     # 起動するのみ。結果は統合PRへのコメントとして残るだけで、Python側は
                     # 合否の追跡・自動マージ等の後続処理を一切行わない（最終マージは常に人間）。
@@ -253,6 +262,7 @@ class Integrator:
                         "merged": merged_tasks,
                         "integration_pr_number": integration_pr_number,
                         "semantic_review_dispatched": semantic_review_dispatched,
+                        "newly_included": newly_included,
                     }
                 return {"status": "success", "merged": merged_tasks}
 
@@ -286,3 +296,31 @@ class Integrator:
         return ensure_integration_pr(
             self.config.temp_branch, self.config.base_branch, merged_tasks
         )
+
+    def _mark_newly_included(
+        self, active_done_tasks: list[Task], merged_tasks: list[str]
+    ) -> list[str]:
+        """#139: `status:done`自体は変更せず（依存解決判定や外部ロック解除条件
+        など他サブシステムが引き続き参照するため）、統合済みを示す直交ラベル
+        `integration:included`のみを記帳する。統合ブランチは毎回base_branchから
+        再構築されるため、既に記帳済みのタスクもre-merge対象からは除外しない
+        （除外すると再構築のたびに統合ブランチから消えてしまう）。
+        """
+        newly_included: list[str] = []
+        task_by_subtask_id = {
+            t.subtask_id: t for t in active_done_tasks if t.subtask_id
+        }
+        for subtask_id in merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is None or "integration:included" in task.status_labels:
+                continue
+            try:
+                github.add_label(task.issue_number, "integration:included")
+                newly_included.append(subtask_id)
+            except Exception as e:
+                print(
+                    "Warning: Failed to add integration:included label to "
+                    f"issue #{task.issue_number}: {e}",
+                    file=sys.stderr,
+                )
+        return newly_included

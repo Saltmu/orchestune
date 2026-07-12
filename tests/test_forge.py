@@ -192,6 +192,7 @@ class TestRequiredLabels:
         "progress:partial",
         "not-needed-review:passed",
         "not-needed-review:failed",
+        "integration:included",
     }
 
     def test_required_labels_contains_all_canonical_labels(self):

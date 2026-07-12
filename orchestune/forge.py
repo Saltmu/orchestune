@@ -143,4 +143,9 @@ REQUIRED_LABELS: tuple[LabelSpec, ...] = (
         "B60205",
         "Not-needed determination verified as incorrect",
     ),
+    LabelSpec(
+        "integration:included",
+        "BFD4F2",
+        "Already merged into an integration branch/PR by the Integrator",
+    ),
 )
