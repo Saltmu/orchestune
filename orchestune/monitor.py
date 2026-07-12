@@ -11,6 +11,7 @@ from orchestune.dispatch_gc import is_process_alive
 from orchestune.dispatch_state import load_run_state
 
 _CLEAR_SCREEN = "\x1b[2J\x1b[H"
+_TAIL_CHUNK_SIZE = 8192
 
 
 @dataclass
@@ -37,10 +38,31 @@ def _extract_subtask_id(branch: str, issue_number: int) -> str | None:
 
 
 def _read_log_tail(log_path: Path, n_lines: int) -> list[str]:
+    """ログ末尾n_lines行を返す。ファイル全体を読み込まず、末尾からチャンク単位で
+    改行がn_lines個見つかるまで逆向きに読み進める（長時間セッションの巨大ログでも
+    更新のたびにI/O・メモリ使用量がファイルサイズに比例して増えないようにするため）。"""
+    if n_lines <= 0:
+        return []
     if not log_path.exists():
         return []
-    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return [line for line in lines[-n_lines:] if line != ""] if lines else []
+
+    with open(log_path, "rb") as f:
+        f.seek(0, 2)
+        remaining = f.tell()
+        chunks: list[bytes] = []
+        newline_count = 0
+
+        while remaining > 0 and newline_count <= n_lines:
+            read_size = min(_TAIL_CHUNK_SIZE, remaining)
+            remaining -= read_size
+            f.seek(remaining)
+            chunk = f.read(read_size)
+            newline_count += chunk.count(b"\n")
+            chunks.append(chunk)
+
+    data = b"".join(reversed(chunks))
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return lines[-n_lines:] if lines else []
 
 
 def _format_duration(seconds: float) -> str:
@@ -133,6 +155,28 @@ def format_status_report(snapshot: list[WorktreeStatus], now: float) -> str:
     return "\n".join(lines)
 
 
+def _positive_int(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if result < 1:
+        raise argparse.ArgumentTypeError(f"{value!r} must be a positive integer (>= 1)")
+    return result
+
+
+def _non_negative_int(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if result < 0:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} must be a non-negative integer (>= 0)"
+        )
+    return result
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ディスパッチ済みAIセッション（run_state.jsonのactive_worktrees）の状態を表示する"
@@ -141,9 +185,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
     parser.add_argument(
         "--tail-lines",
-        type=int,
+        type=_non_negative_int,
         default=3,
-        help="タスクごとに表示するログ末尾の行数（既定3行）",
+        help="タスクごとに表示するログ末尾の行数（既定3行、0を指定するとログ末尾を表示しない）",
     )
     parser.add_argument(
         "--watch",
@@ -153,9 +197,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--interval",
-        type=int,
+        type=_positive_int,
         default=3,
-        help="--watch指定時の自動更新間隔（秒、既定3秒）",
+        help="--watch指定時の自動更新間隔（秒、既定3秒、1以上の整数）",
     )
     return parser
 
