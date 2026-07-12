@@ -52,45 +52,51 @@ Orchestuneのディスパッチャーは、GitHub Actionsなどの**「実行が
 
 ## 3. 統合（Integration）と自動リベース
 
-複数のエージェントが開発を進めてPRを作成すると、下流のタスクは上流の成果物を取り込む必要があります。Orchestuneのインテグレーターは、この依存関係に基づいたリベースとマージの調整を自律的に行います。
+複数のエージェントが開発を進めてPRを作成すると、下流のタスクは上流の成果物を取り込む必要があります。この工程は**Integrator**と**Dispatcher**という2つの異なる責務に分かれており、`orchestune dispatch`コマンドの1回の呼び出し内で、Dispatcherサイクルの後にIntegratorが順次実行されます（別プロセスではありません）。
 
 ```mermaid
 sequenceDiagram
     participant AG as Agent (Subtask B)
+    participant IG as Orchestune Integrator
     participant DP as Orchestune Dispatcher
-    participant GH as GitHub (main)
+    participant GH as GitHub
+    participant HU as Human
 
     AG->>GH: Open Pull Request
-    Note over DP: Detect completed Subtask B
-    DP->>GH: Create temporary integration merge
-    DP->>DP: Run CI Verification
+    Note over IG: status:done を検知
+    IG->>GH: Create temporary integration branch
+    IG->>IG: Run CI Verification
     alt CI Passes
-        DP->>GH: Merge Subtask B into main
+        IG->>GH: Ensure integration PR to main
+        IG->>GH: Grant integration:included label
+        HU->>GH: Review & merge PR into main (検収ゲート)
+        Note over DP: 上流PRのマージを検知
         DP->>GH: Rebase downstream tasks (Subtask C) on main
     else CI Fails
-        DP->>GH: Reset merge & Report CI logs to PR
+        IG->>GH: Reset temp branch & report CI logs
     end
 ```
 
-1. **マージ前CI検証**:
-   PRが開かれたら、単にマージするのではなく、一時統合ブランチを作成してローカルCIを走らせます。
-2. **自動リベース**:
-   先行タスクがマージされたら、その成果物に依存している（または関連ファイルに触れる）下流の仕掛かり中ブランチに対し、自動的に `git rebase` またはマージを行い、最新の `main` ブランチの変更を取り込ませます。これによって、個々のエージェントがコンフリクトに悩まされることなく開発を続けられます。
-3. **セマンティックレビュー**:
-   統合時にAIが自動で変更点の整合性をレビューし、不整合（例えばインターフェースの変更が反映されていないなど）を検出します。
+1. **マージ前CI検証（Integratorの責務）**:
+   `status:done`のタスクを検知すると、`orchestune/integrator.py`が単にマージするのではなく一時統合ブランチを作成してローカルCIを走らせ、成功したタスクには`integration:included`ラベルを付与します。Integratorの仕事はここまでで、**mainへの最終マージは常に人間が行います**（後述「4. 人間の承認ポイント」の検収ゲート）。
+2. **自動リベース（Dispatcherの責務）**:
+   先行タスクのPRがmainへマージされると、その成果物に依存している（または関連ファイルに触れる）下流の仕掛かり中ブランチに対し、`orchestune/dispatch_rebase.py`が自動的に`git rebase`またはマージを行い、最新の`main`ブランチの変更を取り込ませます。これによって、個々のエージェントがコンフリクトに悩まされることなく開発を続けられます。
+3. **セマンティックレビュー（Integratorの責務）**:
+   統合PR作成時にAIが自動で変更点の整合性をレビューし、不整合（例えばインターフェースの変更が反映されていないなど）をPRへのコメントとして検出・報告します（自動マージは行いません）。
 
 ---
 
 ## 4. 人間の承認ポイント
 
-Orchestuneは、開発ライフサイクルの中で人間が意思決定を行う地点を「分解点」と「検収（最終マージ）」の2点のみに限定し、その間は完全に自律実行させる設計思想を採っています。
+Orchestuneは、人間が**内容を判断・レビューする**地点を「分解点」と「検収（最終受け入れ）」の2点のみに限定する設計思想を採っています。ただし、Integratorが作成する統合PRをmainへ反映させる操作（`gh pr merge`）自体は、この2つの判断ゲートとは別に、常に人間の手（クリック）を介して実行されます（[3. 統合と自動リベース](#3-統合integrationと自動リベース)参照）。これはCI検証・AIセマンティックレビューが既に検証済みの内容をmainへ反映するだけの機械的な確認操作であり、個々のサブタスク差分を人間が精査する「レビュー」ではありません。
 
 1. **分解ゲート**: ディスパッチ開始前に、人間が `decomposition_plan.md`（サブタスクの粒度、footprint、依存関係）をレビューし承認します。
-2. **検収ゲート**: 全サブタスクが `main` に統合された後、人間が「大きな石」全体の最終成果をレビューし受け入れます（親Issueをクローズ）。
+2. **統合PRマージ（機械的確認、判断ゲートではない）**: Integratorが作成した統合PRがCI検証とAIセマンティックレビューを通過したら、人間が内容を精査することなく`main`へマージします。マージは自動化されておらず、統合サイクルごとに繰り返し発生します。
+3. **検収ゲート**: 全サブタスクがこの統合PRマージを経て`main`に取り込まれた後、人間が「大きな石」全体の最終成果をレビューし受け入れます（親Issueをクローズ）。
 
-この2つのゲートの間では、個々のサブタスクPRのマージ、CI検証、リベース、コンフリクト解消はすべて人間の承認を介さずに進行します。`risk:flagged` ラベルはリスクのあるサブタスクを可視化するためのものであり、追加の承認ゲートとしては機能しません。
+分解ゲートと検収ゲートの間では、CI検証、リベース、コンフリクト解消といった機械的な処理は人間の判断を介さずに進行しますが、上記の通りmainへのマージ操作自体は常に人間が実行します。`risk:flagged` ラベルはリスクのあるサブタスクを可視化するためのものであり、追加の承認ゲートとしては機能しません。
 
-**なぜ2点だけで十分なのか**: 各サブタスクの履歴（Issue、PR、コミット、CIログ）はすべてGitHub上に保存されるため、マージのたびに人間がインラインでレビューしなくても、トレーサビリティを失うことなく事前（分解）と事後（検収）にレビュー労力を集約できます。
+**なぜ「判断」が2点だけで十分なのか**: 各サブタスクの履歴（Issue、PR、コミット、CIログ）はすべてGitHub上に保存されるため、統合PRのマージ操作自体は毎回必要になるものの、その内容を人間がインラインでレビューする必要はなく、トレーサビリティを失うことなく事前（分解）と事後（検収）に「判断」の労力を集約できます。
 
 **per-task承認の代替としてのCI**: セクション3で述べたマージ前CI検証は、実質的にサブタスク単位の人間レビューの代替として機能します。すべてのサブタスクPRは `main` にマージされる前にCIをパスする必要があるため、個々の差分を人間が見なくても機械的な正しさは自動的に担保されます。
 
