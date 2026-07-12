@@ -355,8 +355,52 @@ class IssuesByStatus:
         )
 
 
-def _fetch_issues() -> IssuesByStatus:
-    """ステータスラベルごとにIssueをGitHubから取得する。"""
+def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
+    """#156: `github.list_sub_issues`が返す親Issue配下の全Issueを、
+    `list_issues_by_label`のstate引数（open/all）と同じ意味論でステータス
+    ラベル別に分類する（`status:done`/`status:not-needed`はclosedも含める）。"""
+    queued: list[IssueRecord] = []
+    locked: list[IssueRecord] = []
+    in_progress: list[IssueRecord] = []
+    blocked: list[IssueRecord] = []
+    done: list[IssueRecord] = []
+    not_needed: list[IssueRecord] = []
+
+    for issue in issues:
+        is_open = issue.state == "OPEN"
+        if is_open and "status:queued" in issue.labels:
+            queued.append(issue)
+        if is_open and "status:external-lock" in issue.labels:
+            locked.append(issue)
+        if is_open and "status:in-progress" in issue.labels:
+            in_progress.append(issue)
+        if is_open and "status:blocked" in issue.labels:
+            blocked.append(issue)
+        if "status:done" in issue.labels:
+            done.append(issue)
+        if "status:not-needed" in issue.labels:
+            not_needed.append(issue)
+
+    return IssuesByStatus(
+        queued=queued,
+        locked=locked,
+        in_progress=in_progress,
+        blocked=blocked,
+        done=done,
+        not_needed=not_needed,
+    )
+
+
+def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
+    """ステータスラベルごとにIssueをGitHubから取得する。
+
+    #156: `config.parent_issue_number`が指定されている場合、無関係な親配下の
+    Issueまでリポジトリ全体から取得して後段で破棄する無駄を避けるため、
+    `github.list_sub_issues`による親Issue起点のfast pathを使う。
+    """
+    if config.parent_issue_number is not None:
+        return _group_by_status(github.list_sub_issues(config.parent_issue_number))
+
     return IssuesByStatus(
         queued=github.list_issues_by_label("status:queued"),
         locked=github.list_issues_by_label("status:external-lock"),
@@ -375,16 +419,24 @@ def _fetch_issues() -> IssuesByStatus:
 
 def _self_heal_run_state(
     run_state: RunState,
-    in_progress_issues: list[IssueRecord],
     config: DispatcherConfig,
 ) -> None:
     """自己修復（ステート復元・不整合修復）。
 
     run_state.json が存在しない場合、かつ apply=True の場合のみ復元処理を実行する。
+
+    #156: `run_state.json`は複数の親Issue（big rock）にまたがって共有されうる
+    ため、`parent_issue_number`指定時のfast pathでスコープが絞られた
+    `IssuesByStatus`は使わず、常にリポジトリ全体のstatus:in-progress Issueを
+    読み直す。範囲を絞ってしまうと、他の親Issue配下のactive worktreeが
+    復元されないまま`run_state.json`が新規保存され、以後永遠に復元機会を
+    失うおそれがある。
     """
-    if config.apply and not Path(config.run_state_path).exists():
-        if recover_run_state(run_state, in_progress_issues, config):
-            save_run_state(run_state, config.run_state_path)
+    if not (config.apply and not Path(config.run_state_path).exists()):
+        return
+    in_progress_issues = github.list_issues_by_label("status:in-progress")
+    if recover_run_state(run_state, in_progress_issues, config):
+        save_run_state(run_state, config.run_state_path)
 
 
 def _build_cycle_context(
@@ -533,8 +585,8 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         if config.parent_issue_number is not None and config.apply:
             github.ensure_parent_branch(config.parent_issue_number)
 
-        issues = _fetch_issues()
-        _self_heal_run_state(run_state, issues.in_progress, config)
+        issues = _fetch_issues(config)
+        _self_heal_run_state(run_state, config)
         issues = issues.filtered_by_parent(config.parent_issue_number)
 
         ctx = _build_cycle_context(issues, run_state, config)
