@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
@@ -333,7 +334,19 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
     _validate_ref_name(base)
     try:
         stdout = _run(["git", "diff", "--name-only", f"{base}...{branch}"])
-    except (subprocess.CalledProcessError, OSError):
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"Warning: failed to diff changed files for {branch!r} against "
+            f"{base!r}: {exc}",
+            file=sys.stderr,
+        )
+        return []
+    except OSError as exc:
+        print(
+            f"Warning: unable to inspect changed files for {branch!r} against "
+            f"{base!r}: {exc}",
+            file=sys.stderr,
+        )
         return []
     return [line.strip() for line in stdout.splitlines() if line.strip()]
 
@@ -347,8 +360,6 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
         remote_exists = False
 
     if not remote_exists:
-        import sys
-
         print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
         current_branch = None
         try:
