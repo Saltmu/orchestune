@@ -924,6 +924,10 @@ class TestRunDispatchCycleCompletion:
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1014,6 +1018,10 @@ class TestRunDispatchCycleCompletion:
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
         ):
@@ -1433,6 +1441,10 @@ class TestRunDispatchCycleBlockedPromotion:
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
             ),
             patch("orchestune.dispatch_gc.remove_worktree"),
         ):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,8 +61,10 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
     """#74: base_branchに対して実コミットが積まれているかの確認。
 
     プロセス終了+cleanなworktreeというだけでは、権限拒否等で何も実装されずに
-    終了したケースと本当に完了したケースを区別できない。比較に失敗した場合
-    （非gitディレクトリ等）は安全側に倒し、従来通り完了扱いとするため`True`を返す。
+    終了したケースと本当に完了したケースを区別できない。#135: 比較に失敗した場合
+    （`base_branch`参照が解決できない等）は「新規コミットが確認できた」わけでは
+    ないため、安全側に倒し「新規コミット無し」と同じ`False`を返す（既存の
+    `completed_no_commits`エスカレーション経路に合流させ、実体のない完了確定を防ぐ）。
     """
     try:
         result = subprocess.run(
@@ -78,8 +81,13 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
             check=True,
         )
         return int(result.stdout.strip() or "0") > 0
-    except (subprocess.CalledProcessError, OSError, ValueError):
-        return True
+    except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+        print(
+            f"Warning: failed to check new commits for {worktree_path!r} against "
+            f"{base_branch!r}: {exc}",
+            file=sys.stderr,
+        )
+        return False
 
 
 def remove_worktree(worktree_path: str | Path) -> None:
