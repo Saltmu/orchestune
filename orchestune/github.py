@@ -353,14 +353,14 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
         print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
         try:
             # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
-            # 直接リモートに親ブランチをプッシュして作成する。
+            # FETCH_HEADを指定して直接リモートに親ブランチをプッシュして作成する。
             _run(["git", "fetch", "origin", "main"])
             _run(
                 [
                     "git",
                     "push",
                     "origin",
-                    f"refs/remotes/origin/main:refs/heads/{parent_branch}",
+                    f"FETCH_HEAD:refs/heads/{parent_branch}",
                 ]
             )
         except Exception as e:
@@ -370,38 +370,50 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
             )
 
 
-def resolve_local_or_remote_branch(worktree_path: str | Path, branch: str) -> str:
-    """指定されたブランチ名がローカルに存在すればそれを返し、
-    無ければリモート追跡ブランチ `origin/{branch}` が存在するか確認して返す。"""
+def resolve_local_or_remote_branch(
+    worktree_path: str | Path, branch: str, *, prefer_remote: bool = False
+) -> str:
+    """指定されたブランチ名を解決して返す。
+    prefer_remote=True の場合はリモート追跡ブランチを最優先し、
+    False の場合はローカルブランチを最優先する。"""
     _validate_ref_name(branch)
     worktree_path = Path(worktree_path)
 
-    res_local = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(worktree_path),
-            "show-ref",
-            "--verify",
-            f"refs/heads/{branch}",
-        ],
-        capture_output=True,
-    )
-    if res_local.returncode == 0:
-        return branch
+    def check_remote() -> str | None:
+        res_remote = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "show-ref",
+                "--verify",
+                f"refs/remotes/origin/{branch}",
+            ],
+            capture_output=True,
+        )
+        if res_remote.returncode == 0:
+            return f"origin/{branch}"
+        return None
 
-    res_remote = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(worktree_path),
-            "show-ref",
-            "--verify",
-            f"refs/remotes/origin/{branch}",
-        ],
-        capture_output=True,
-    )
-    if res_remote.returncode == 0:
-        return f"origin/{branch}"
+    def check_local() -> str | None:
+        res_local = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "show-ref",
+                "--verify",
+                f"refs/heads/{branch}",
+            ],
+            capture_output=True,
+        )
+        if res_local.returncode == 0:
+            return branch
+        return None
 
-    return branch
+    if prefer_remote:
+        resolved = check_remote() or check_local()
+    else:
+        resolved = check_local() or check_remote()
+
+    return resolved or branch

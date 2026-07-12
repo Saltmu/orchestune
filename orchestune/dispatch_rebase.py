@@ -275,7 +275,10 @@ def _decide_rebase_needed(
 ) -> bool:
     """`parent_branch`が`child_branch`の祖先でない（＝リベースが必要）かを、
     読み取り専用の`git merge-base --is-ancestor`で判定する。"""
-    resolved_parent = resolve_local_or_remote_branch(worktree_path, parent_branch)
+
+    resolved_parent = resolve_local_or_remote_branch(
+        worktree_path, parent_branch, prefer_remote=parent_branch.startswith("parent/")
+    )
 
     try:
         res = subprocess.run(
@@ -317,7 +320,9 @@ def _apply_auto_rebase(
             pass
 
     resolved_parent = resolve_local_or_remote_branch(
-        active.worktree_path, parent_branch
+        active.worktree_path,
+        parent_branch,
+        prefer_remote=parent_branch.startswith("parent/"),
     )
 
     try:
