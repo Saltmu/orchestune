@@ -65,6 +65,9 @@ orchestune setup
 
 ## 3. Claude Code Cloud Routine のセットアップ手順
 
+> [!NOTE]
+> `--dispatch-target` を明示指定しない場合、GitHub Actions実行環境（`GITHUB_ACTIONS=true`）では本セクションの `cloud-routine` が自動的に選択されます。GitHub Actions上でディスパッチャーを動かす場合は、以下の手順で事前に環境変数（Actions Secrets）を設定しておいてください。
+
 現時点で `--dispatch-target cloud-routine` が対応しているクラウド実行先は **Claude Code Cloud Routineのみ** です。
 
 1. **ルーチンの新規作成**:
@@ -88,6 +91,20 @@ orchestune setup
 ---
 
 ## 4. ローカルの`claude` / `agy` CLIへのディスパッチ設定
+
+> [!NOTE]
+> `--dispatch-target` を明示指定しない場合、GitHub Actions以外（ローカル/対話実行）では本セクションの `claude-cli` が自動的に選択されます。
+
+### 前提: `claude` CLI（Claude Code）のインストール
+
+本セクションのプリセットは、ローカルに `claude` コマンド（Claude Code CLI）がインストール済みでPATH上にあることを前提とします。未インストールの場合は、以下のいずれかの方法でインストールしてください（詳細は[公式ドキュメント](https://docs.claude.com/)を参照）：
+
+```bash
+# npm経由でグローバルインストール
+npm install -g @anthropic-ai/claude-code
+```
+
+インストール後、`claude --version` でCLIが認識されることを確認してください。
 
 `--local-cmd` テンプレートを手書きせずに、ローカルの`claude`または`agy`(Antigravity) CLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
 

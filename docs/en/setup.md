@@ -65,6 +65,9 @@ orchestune setup
 
 ## 3. Setting Up a Claude Code Cloud Routine
 
+> [!NOTE]
+> When `--dispatch-target` is not explicitly specified, `cloud-routine` from this section is automatically selected in a GitHub Actions environment (`GITHUB_ACTIONS=true`). If you run the dispatcher on GitHub Actions, set up the environment variables (Actions Secrets) below beforehand.
+
 Currently, the only supported cloud execution target for `--dispatch-target cloud-routine` is **Claude Code Cloud Routine**.
 
 1. **Create a New Routine**:
@@ -88,6 +91,20 @@ Currently, the only supported cloud execution target for `--dispatch-target clou
 ---
 
 ## 4. Setting Up Local `claude` / `agy` CLI Dispatch
+
+> [!NOTE]
+> When `--dispatch-target` is not explicitly specified, `claude-cli` from this section is automatically selected outside of GitHub Actions (local/interactive runs).
+
+### Prerequisite: Installing the `claude` CLI (Claude Code)
+
+The presets in this section assume the `claude` command (Claude Code CLI) is already installed and on your PATH. If it isn't installed yet, install it with one of the following methods (see the [official documentation](https://docs.claude.com/) for details):
+
+```bash
+# Install globally via npm
+npm install -g @anthropic-ai/claude-code
+```
+
+After installing, confirm the CLI is recognized with `claude --version`.
 
 To dispatch subtasks to a local `claude` or `agy` (Antigravity) CLI session without hand-writing a `--local-cmd` template, use the built-in presets:
 
