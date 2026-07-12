@@ -399,12 +399,15 @@ class TestBranchChangedFiles:
             patch("sys.stderr", stderr),
         ):
             mock_run.side_effect = subprocess.CalledProcessError(
-                128, ["git", "diff", "--name-only", "origin/main...origin/orphan"]
+                128,
+                ["git", "diff", "--name-only", "origin/main...origin/orphan"],
+                stderr="fatal: no merge base\n",
             )
             files = branch_changed_files("origin/orphan")
         assert files == []
         assert "Warning: failed to diff changed files" in stderr.getvalue()
         assert "origin/orphan" in stderr.getvalue()
+        assert "fatal: no merge base" in stderr.getvalue()
 
     def test_logs_warning_when_git_diff_cannot_run(self):
         stderr = StringIO()

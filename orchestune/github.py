@@ -335,9 +335,10 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
     try:
         stdout = _run(["git", "diff", "--name-only", f"{base}...{branch}"])
     except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() if exc.stderr else str(exc)
         print(
             f"Warning: failed to diff changed files for {branch!r} against "
-            f"{base!r}: {exc}",
+            f"{base!r}: {detail}",
             file=sys.stderr,
         )
         return []
