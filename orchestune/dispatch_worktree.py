@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import subprocess
 import sys
@@ -88,6 +89,12 @@ def create_worktree_and_launch(
             else:
                 cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path)]
                 if base_branch:
+                    # base_branch がローカルに存在しないが、リモート追跡ブランチとして存在する場合はそちらを指すようにする
+                    cmd_local = f"git show-ref --verify 'refs/heads/{base_branch}' >/dev/null 2>&1"
+                    if os.system(cmd_local) != 0:
+                        cmd_remote = f"git show-ref --verify 'refs/remotes/origin/{base_branch}' >/dev/null 2>&1"
+                        if os.system(cmd_remote) == 0:
+                            base_branch = f"origin/{base_branch}"
                     cmd.append(base_branch)
             subprocess.run(
                 cmd,

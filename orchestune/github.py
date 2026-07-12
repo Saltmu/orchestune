@@ -350,26 +350,20 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
         import sys
 
         print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
-        current_branch = None
         try:
-            res_branch = _run(["git", "symbolic-ref", "--short", "HEAD"])
-            current_branch = res_branch.strip()
-        except Exception:
-            pass
-
-        try:
-            _run(["git", "checkout", "main"])
-            _run(["git", "pull", "origin", "main"])
-            _run(["git", "checkout", "-B", parent_branch])
-            _run(["git", "push", "-u", "origin", parent_branch])
+            # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
+            # 直接リモートに親ブランチをプッシュして作成する。
+            _run(["git", "fetch", "origin", "main"])
+            _run(
+                [
+                    "git",
+                    "push",
+                    "origin",
+                    f"refs/remotes/origin/main:refs/heads/{parent_branch}",
+                ]
+            )
         except Exception as e:
             print(
                 f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
                 file=sys.stderr,
             )
-        finally:
-            if current_branch:
-                try:
-                    _run(["git", "checkout", current_branch])
-                except Exception:
-                    pass

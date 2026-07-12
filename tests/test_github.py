@@ -648,3 +648,96 @@ class TestCreatePullRequest:
                     body="b",
                 )
             mock_run.assert_not_called()
+
+
+class TestEnsureParentBranch:
+    def test_ensure_parent_branch_does_not_checkout_and_pushes_directly(self):
+        # リモートに親ブランチが存在しない場合、checkoutを行わずに直接pushする
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # 1. ls-remote -> "" (存在しない)
+            # 2. fetch -> ""
+            # 3. push -> ""
+            mock_run.side_effect = ["", "", ""]
+
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+
+            # git checkout は一度も呼ばれないべき
+            for cmd in called_commands:
+                assert "checkout" not in cmd
+                assert "pull" not in cmd
+
+            # 期待されるコマンドが実行されたことを検証
+            assert mock_run.call_count == 3
+            assert called_commands[0] == [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/parent/issue-129",
+            ]
+            assert called_commands[1] == ["git", "fetch", "origin", "main"]
+            assert called_commands[2] == [
+                "git",
+                "push",
+                "origin",
+                "refs/remotes/origin/main:refs/heads/parent/issue-129",
+            ]
+
+    def test_ensure_parent_branch_does_nothing_if_remote_exists(self):
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # ls-remote が結果（ハッシュ値など）を返す（存在する）
+            mock_run.return_value = "abcdef123456... refs/heads/parent/issue-129"
+
+            ensure_parent_branch(129)
+
+            # ls-remote の呼び出しだけが行われるはず
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+            assert len(called_commands) == 1
+            assert called_commands[0] == [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/parent/issue-129",
+            ]
+
+    def test_ensure_parent_branch_handles_ls_remote_error(self):
+        # ls-remote が例外を投げた場合、存在しないものとみなして作成処理へ進む
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # 1. ls-remote -> Exception
+            # 2. fetch -> ""
+            # 3. push -> ""
+            mock_run.side_effect = [Exception("network error"), "", ""]
+
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+            assert mock_run.call_count == 3
+            assert called_commands[0] == [
+                "git",
+                "ls-remote",
+                "origin",
+                "refs/heads/parent/issue-129",
+            ]
+            assert called_commands[1] == ["git", "fetch", "origin", "main"]
+
+    def test_ensure_parent_branch_handles_push_error_without_crashing(self):
+        # fetch または push が失敗しても、警告を出力してクラッシュしない
+        with patch("orchestune.github._run") as mock_run:
+            from orchestune.github import ensure_parent_branch
+
+            # 1. ls-remote -> ""
+            # 2. fetch -> Exception
+            mock_run.side_effect = ["", Exception("fetch failed")]
+
+            # 例外がスローされないことを確認
+            ensure_parent_branch(129)
+
+            called_commands = [call[0][0] for call in mock_run.call_args_list]
+            assert len(called_commands) == 2
