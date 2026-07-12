@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
@@ -347,30 +348,99 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
     except Exception:
         remote_exists = False
 
-    if not remote_exists:
-        import sys
+    import sys
 
-        print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
-        current_branch = None
+    if remote_exists:
         try:
-            res_branch = _run(["git", "symbolic-ref", "--short", "HEAD"])
-            current_branch = res_branch.strip()
-        except Exception:
-            pass
-
-        try:
-            _run(["git", "checkout", "main"])
-            _run(["git", "pull", "origin", "main"])
-            _run(["git", "checkout", "-B", parent_branch])
-            _run(["git", "push", "-u", "origin", parent_branch])
+            # すでにリモートに親ブランチが存在する場合、そのリモート追跡ブランチ参照を確実にローカルにフェッチする
+            _run(
+                [
+                    "git",
+                    "fetch",
+                    "origin",
+                    f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
+                ]
+            )
         except Exception as e:
             print(
-                f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
+                f"Warning: Failed to fetch existing parent branch '{parent_branch}': {e}",
                 file=sys.stderr,
             )
-        finally:
-            if current_branch:
-                try:
-                    _run(["git", "checkout", current_branch])
-                except Exception:
-                    pass
+        return
+
+    print(f"Creating parent branch '{parent_branch}' from main...", file=sys.stderr)
+    try:
+        # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
+        # FETCH_HEADを指定して直接リモートに親ブランチをプッシュして作成する。
+        _run(["git", "fetch", "origin", "main"])
+        _run(
+            [
+                "git",
+                "push",
+                "origin",
+                f"FETCH_HEAD:refs/heads/{parent_branch}",
+            ]
+        )
+        # プッシュ完了後、リモート追跡ブランチ参照を確実にローカルにフェッチする
+        _run(
+            [
+                "git",
+                "fetch",
+                "origin",
+                f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
+            ]
+        )
+    except Exception as e:
+        print(
+            f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
+            file=sys.stderr,
+        )
+
+
+def resolve_local_or_remote_branch(
+    worktree_path: str | Path, branch: str, *, prefer_remote: bool = False
+) -> str:
+    """指定されたブランチ名を解決して返す。
+    prefer_remote=True の場合はリモート追跡ブランチを最優先し、
+    False の場合はローカルブランチを最優先する。"""
+    _validate_ref_name(branch)
+    worktree_path = Path(worktree_path)
+
+    def check_remote() -> str | None:
+        res_remote = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "show-ref",
+                "--verify",
+                f"refs/remotes/origin/{branch}",
+            ],
+            capture_output=True,
+        )
+        if res_remote.returncode == 0:
+            return f"origin/{branch}"
+        return None
+
+    def check_local() -> str | None:
+        res_local = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "show-ref",
+                "--verify",
+                f"refs/heads/{branch}",
+            ],
+            capture_output=True,
+        )
+        if res_local.returncode == 0:
+            return branch
+        return None
+
+    if prefer_remote:
+        resolved = check_remote() or check_local()
+    else:
+        resolved = check_local() or check_remote()
+
+    return resolved or branch

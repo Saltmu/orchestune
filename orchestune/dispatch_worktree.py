@@ -88,6 +88,13 @@ def create_worktree_and_launch(
             else:
                 cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path)]
                 if base_branch:
+                    from orchestune.github import resolve_local_or_remote_branch
+
+                    base_branch = resolve_local_or_remote_branch(
+                        ".",
+                        base_branch,
+                        prefer_remote=base_branch.startswith("parent/"),
+                    )
                     cmd.append(base_branch)
             subprocess.run(
                 cmd,
