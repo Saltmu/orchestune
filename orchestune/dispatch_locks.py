@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -96,9 +97,24 @@ def check_footprint_deviation(
     バイナリファイル（`git diff --numstat`が行数の代わりに`-`を返す）は
     行数で測れないため、バッファに関わらず常に逸脱として報告する。
     """
+    resolved_base = base
+    # base がローカルに存在しないが、リモート追跡ブランチとして存在する場合はそちらを使用する
+    cmd_local = f"git -C '{worktree_path}' show-ref --verify 'refs/heads/{base}' >/dev/null 2>&1"
+    if os.system(cmd_local) != 0:
+        cmd_remote = f"git -C '{worktree_path}' show-ref --verify 'refs/remotes/origin/{base}' >/dev/null 2>&1"
+        if os.system(cmd_remote) == 0:
+            resolved_base = f"origin/{base}"
+
     try:
         result = subprocess.run(
-            ["git", "-C", str(worktree_path), "diff", "--numstat", f"{base}...HEAD"],
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "diff",
+                "--numstat",
+                f"{resolved_base}...HEAD",
+            ],
             capture_output=True,
             text=True,
             check=True,

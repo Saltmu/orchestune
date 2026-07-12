@@ -269,12 +269,29 @@ def _decide_rebase_target(
     return subtask_branch_map.get(stackable_deps[0])
 
 
-def _decide_rebase_needed(parent_branch: str, child_branch: str) -> bool:
+def _decide_rebase_needed(
+    parent_branch: str, child_branch: str, worktree_path: str | Path
+) -> bool:
     """`parent_branch`が`child_branch`の祖先でない（＝リベースが必要）かを、
     読み取り専用の`git merge-base --is-ancestor`で判定する。"""
+    resolved_parent = parent_branch
+    cmd_local = f"git -C '{worktree_path}' show-ref --verify 'refs/heads/{parent_branch}' >/dev/null 2>&1"
+    if os.system(cmd_local) != 0:
+        cmd_remote = f"git -C '{worktree_path}' show-ref --verify 'refs/remotes/origin/{parent_branch}' >/dev/null 2>&1"
+        if os.system(cmd_remote) == 0:
+            resolved_parent = f"origin/{parent_branch}"
+
     try:
         res = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", parent_branch, child_branch],
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "merge-base",
+                "--is-ancestor",
+                resolved_parent,
+                child_branch,
+            ],
             capture_output=True,
             text=True,
         )
@@ -302,9 +319,17 @@ def _apply_auto_rebase(
             _wait_for_process_terminate(active.pid)
         except Exception:
             pass
+
+    resolved_parent = parent_branch
+    cmd_local = f"git -C '{active.worktree_path}' show-ref --verify 'refs/heads/{parent_branch}' >/dev/null 2>&1"
+    if os.system(cmd_local) != 0:
+        cmd_remote = f"git -C '{active.worktree_path}' show-ref --verify 'refs/remotes/origin/{parent_branch}' >/dev/null 2>&1"
+        if os.system(cmd_remote) == 0:
+            resolved_parent = f"origin/{parent_branch}"
+
     try:
         subprocess.run(
-            ["git", "-C", active.worktree_path, "rebase", parent_branch],
+            ["git", "-C", active.worktree_path, "rebase", resolved_parent],
             capture_output=True,
             text=True,
             check=True,
@@ -382,7 +407,7 @@ def _try_auto_rebase(
     if parent_branch is None:
         return False
 
-    if _decide_rebase_needed(parent_branch, active.branch):
+    if _decide_rebase_needed(parent_branch, active.branch, active.worktree_path):
         assert active_task is not None
         _apply_auto_rebase(active, active_task, key, run_state, parent_branch, config)
         return True

@@ -302,18 +302,18 @@ class TestDecideRebaseNeeded:
     def test_ancestor_means_no_rebase_needed(self):
         with patch("orchestune.dispatch_rebase.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            assert _decide_rebase_needed("main", "feature") is False
+            assert _decide_rebase_needed("main", "feature", "worktrees/w1") is False
 
     def test_not_ancestor_means_rebase_needed(self):
         with patch("orchestune.dispatch_rebase.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
-            assert _decide_rebase_needed("main", "feature") is True
+            assert _decide_rebase_needed("main", "feature", "worktrees/w1") is True
 
     def test_os_error_defaults_to_no_rebase(self):
         with patch(
             "orchestune.dispatch_rebase.subprocess.run", side_effect=OSError("boom")
         ):
-            assert _decide_rebase_needed("main", "feature") is False
+            assert _decide_rebase_needed("main", "feature", "worktrees/w1") is False
 
 
 class TestTryAutoRebase:
