@@ -268,7 +268,8 @@ def is_branch_merged_into(head: str, base: str) -> bool:
 def list_open_prs() -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される
-    GitHub側の正規のIssue参照一覧）も併せて取得する。"""
+    GitHub側の正規のIssue参照一覧）も併せて取得する。
+    パフォーマンス向上のため、一括で取得する。"""
     stdout = _run(
         [
             "gh",
@@ -277,26 +278,15 @@ def list_open_prs() -> list[PrRecord]:
             "--state",
             "open",
             "--json",
-            "number,headRefName,reviewDecision,statusCheckRollup",
+            "number,headRefName,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
         ]
     )
     raw_prs = json.loads(stdout)
     prs: list[PrRecord] = []
     for raw in raw_prs:
         number = raw["number"]
-        detail_stdout = _run(
-            [
-                "gh",
-                "pr",
-                "view",
-                str(number),
-                "--json",
-                "files,closingIssuesReferences",
-            ]
-        )
-        detail = json.loads(detail_stdout)
-        files = detail.get("files", [])
-        closing_refs = detail.get("closingIssuesReferences", [])
+        files = raw.get("files", [])
+        closing_refs = raw.get("closingIssuesReferences", [])
 
         rollup = raw.get("statusCheckRollup") or []
         is_ci_passing = True
