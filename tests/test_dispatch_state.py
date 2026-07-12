@@ -62,6 +62,25 @@ class TestRunState:
         loaded = load_run_state(path)
         assert loaded.completed_worktrees == []
 
+    def test_last_reconciled_at_defaults_to_none(self, tmp_path):
+        state = load_run_state(tmp_path / "run_state.json")
+        assert state.last_reconciled_at is None
+
+    def test_save_and_load_roundtrip_with_last_reconciled_at(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        state = RunState(
+            active_worktrees={}, launch_history=[], last_reconciled_at=1700003600.0
+        )
+        save_run_state(state, path)
+        loaded = load_run_state(path)
+        assert loaded.last_reconciled_at == 1700003600.0
+
+    def test_load_missing_last_reconciled_at_key_defaults_to_none(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))
+        loaded = load_run_state(path)
+        assert loaded.last_reconciled_at is None
+
     def test_load_backwards_compatibility_for_base_branch(self, tmp_path):
         path = tmp_path / "run_state.json"
         old_data = {
