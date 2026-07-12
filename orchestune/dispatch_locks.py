@@ -98,7 +98,10 @@ def check_footprint_deviation(
     """
     resolved_base = base
     # base がローカルに存在しないが、リモート追跡ブランチとして存在する場合はそちらを使用する
-    resolved_base = resolve_local_or_remote_branch(worktree_path, base)
+
+    resolved_base = resolve_local_or_remote_branch(
+        worktree_path, base, prefer_remote=base.startswith("parent/")
+    )
 
     try:
         result = subprocess.run(

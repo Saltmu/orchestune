@@ -14,7 +14,7 @@ def mock_resolve_branch(monkeypatch):
     monkeypatch.setattr(
         orchestune.dispatch_locks,
         "resolve_local_or_remote_branch",
-        lambda worktree_path, branch: branch,
+        lambda worktree_path, branch, prefer_remote=False: branch,
     )
 
 
