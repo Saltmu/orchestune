@@ -55,7 +55,22 @@ output_schema:
 3. **サブタスクIssueの起票（冪等）**: 承認済みの`decomposition_plan.md`の各サブタスクについて、`depends_on`のトポロジカル順（依存元を先に処理する順）で以下を行います。手順2と同様、部分失敗からの再実行でサブタスクIssueを重複作成しないよう、起票前に必ず「既存を再利用できないか」を確認します。
 
    a. そのサブタスクの`issue_number`が既に設定されている場合は、そのIssue番号をそのまま再利用します。`gh issue view <番号>`で存在確認と、`parent`が手順2で確定した親Issue番号と一致することを確認してください。問題なければ手順b・cをスキップし、次のサブタスクへ進みます。
-   b. `issue_number`が未設定の場合、親Issueの`subIssues`（`gh issue view <親Issue番号> --json subIssues`）を確認し、各子Issueの本文に埋め込まれたFootprint YAMLの`subtask_id`が、このサブタスクの`id`と一致するものが無いか検索します（Issueタイトルの一致より`subtask_id`の方が構造化されており安定するため、こちらを優先する）。一致するIssueが見つかった場合はそのIssue番号を再利用します。同一親配下・同一`subtask_id`という強い一致のため、手順2bのような人間への確認は不要です。
+   b. `issue_number`が未設定の場合、親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの`subtask_id`が、このサブタスクの`id`と一致するものが無いか検索します（Issueタイトルの一致より`subtask_id`の方が構造化されており安定するため、こちらを優先する）。**`gh issue view --json subIssues`は`number`/`title`/`state`程度しか返さず本文（body）を含まないため、この照合には使えません。** 代わりに、`gh api graphql`で`subIssues`の`body`まで含めて直接取得してください：
+
+      ```bash
+      gh api graphql -F owner='{owner}' -F name='{repo}' -F number=<親Issue番号> -f query='
+      query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+          issue(number: $number) {
+            subIssues(first: 100) {
+              nodes { number body }
+            }
+          }
+        }
+      }'
+      ```
+
+      （本リポジトリの`orchestune/github.py`の`list_sub_issues()`が同じ理由・同じ手法でこのフィールドを取得している。100件を超えるサブタスクがある大きな石を扱う場合は`pageInfo`によるページネーションが必要になる点も同様。）各`node.body`からFootprint YAMLの`subtask_id`を読み取って照合し、一致するIssueが見つかった場合はそのIssue番号を再利用します。同一親配下・同一`subtask_id`という強い一致のため、手順2bのような人間への確認は不要です。
    c. それでも見つからない場合のみ、新規にIssueを起票します。タイトル・本文は以下の形式とします：
       * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
       * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
