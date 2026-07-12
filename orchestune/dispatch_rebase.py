@@ -18,6 +18,7 @@ from orchestune.dag import (
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree
+from orchestune.github import resolve_local_or_remote_branch
 
 if TYPE_CHECKING:
     from orchestune.dispatch_state import RunState
@@ -274,12 +275,7 @@ def _decide_rebase_needed(
 ) -> bool:
     """`parent_branch`が`child_branch`の祖先でない（＝リベースが必要）かを、
     読み取り専用の`git merge-base --is-ancestor`で判定する。"""
-    resolved_parent = parent_branch
-    cmd_local = f"git -C '{worktree_path}' show-ref --verify 'refs/heads/{parent_branch}' >/dev/null 2>&1"
-    if os.system(cmd_local) != 0:
-        cmd_remote = f"git -C '{worktree_path}' show-ref --verify 'refs/remotes/origin/{parent_branch}' >/dev/null 2>&1"
-        if os.system(cmd_remote) == 0:
-            resolved_parent = f"origin/{parent_branch}"
+    resolved_parent = resolve_local_or_remote_branch(worktree_path, parent_branch)
 
     try:
         res = subprocess.run(
@@ -320,12 +316,9 @@ def _apply_auto_rebase(
         except Exception:
             pass
 
-    resolved_parent = parent_branch
-    cmd_local = f"git -C '{active.worktree_path}' show-ref --verify 'refs/heads/{parent_branch}' >/dev/null 2>&1"
-    if os.system(cmd_local) != 0:
-        cmd_remote = f"git -C '{active.worktree_path}' show-ref --verify 'refs/remotes/origin/{parent_branch}' >/dev/null 2>&1"
-        if os.system(cmd_remote) == 0:
-            resolved_parent = f"origin/{parent_branch}"
+    resolved_parent = resolve_local_or_remote_branch(
+        active.worktree_path, parent_branch
+    )
 
     try:
         subprocess.run(

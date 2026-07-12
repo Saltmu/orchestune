@@ -741,3 +741,85 @@ class TestEnsureParentBranch:
 
             called_commands = [call[0][0] for call in mock_run.call_args_list]
             assert len(called_commands) == 2
+
+
+class TestResolveLocalOrRemoteBranch:
+    def test_resolve_local_or_remote_branch(self, tmp_path):
+        import subprocess
+
+        from orchestune.github import resolve_local_or_remote_branch
+
+        # 1. ローカル・リモートリポジトリの初期化
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        # 初期ユーザーとメールのアドレスを設定しないとコミットに失敗することがあるため設定
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 最初のダミーコミットを作成してプッシュ
+        dummy_file = local_dir / "dummy.txt"
+        dummy_file.write_text("hello")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "HEAD:refs/heads/main"],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 2. ローカルブランチが存在する場合の解決
+        # ローカルブランチ "parent/issue-129" を作成する
+        subprocess.run(
+            ["git", "checkout", "-b", "parent/issue-129"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        assert (
+            resolve_local_or_remote_branch(local_dir, "parent/issue-129")
+            == "parent/issue-129"
+        )
+
+        # 3. ローカルには存在せず、リモート追跡ブランチのみが存在する場合の解決
+        # リモートに push する
+        subprocess.run(
+            ["git", "push", "origin", "parent/issue-129"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        # mainに戻る
+        subprocess.run(["git", "checkout", "main"], cwd=str(local_dir), check=True)
+        # ローカルの parent/issue-129 を削除
+        subprocess.run(
+            ["git", "branch", "-D", "parent/issue-129"], cwd=str(local_dir), check=True
+        )
+
+        # origin/parent/issue-129 というリモート追跡ブランチが存在することを確認
+        assert (
+            resolve_local_or_remote_branch(local_dir, "parent/issue-129")
+            == "origin/parent/issue-129"
+        )
+
+        # 4. どちらも存在しない場合
+        # 存在しないブランチ名を解決しようとすると、そのままのブランチ名が返る
+        assert (
+            resolve_local_or_remote_branch(local_dir, "nonexistent-branch")
+            == "nonexistent-branch"
+        )

@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
@@ -367,3 +368,40 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
                 f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
                 file=sys.stderr,
             )
+
+
+def resolve_local_or_remote_branch(worktree_path: str | Path, branch: str) -> str:
+    """指定されたブランチ名がローカルに存在すればそれを返し、
+    無ければリモート追跡ブランチ `origin/{branch}` が存在するか確認して返す。"""
+    _validate_ref_name(branch)
+    worktree_path = Path(worktree_path)
+
+    res_local = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree_path),
+            "show-ref",
+            "--verify",
+            f"refs/heads/{branch}",
+        ],
+        capture_output=True,
+    )
+    if res_local.returncode == 0:
+        return branch
+
+    res_remote = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree_path),
+            "show-ref",
+            "--verify",
+            f"refs/remotes/origin/{branch}",
+        ],
+        capture_output=True,
+    )
+    if res_remote.returncode == 0:
+        return f"origin/{branch}"
+
+    return branch
