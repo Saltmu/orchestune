@@ -35,6 +35,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    ```markdown
    ---
    title: "One-line summary of the 'big rock' itself"
+   parent_issue_number: null  # filled in by orchestune-dispatch once the parent issue exists
    subtasks:
      - id: task-a
        description: "Implement feature XX"
@@ -51,7 +52,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    (The section below the frontmatter is free text to explain the design approach or background)
    ```
 
-   The top-level `title` is required — `orchestune-dispatch` uses it to create the parent tracking issue for the whole "big rock" (see that skill's Stage A).
+   The top-level `title` is required — `orchestune-dispatch` uses it to create the parent tracking issue for the whole "big rock" (see that skill's Stage A). `parent_issue_number` starts as `null`; do not set it yourself — `orchestune-dispatch` writes the created (or reused) parent issue's number back into this file so that re-running the workflow after a partial failure reuses the same parent instead of creating a duplicate.
 
 ### Stage 2: Validate DAG
 

@@ -33,13 +33,25 @@ output_schema:
 ## ステージA: Issue起票
 
 1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
-2. **親Issueの起票**: `decomposition_plan.md`の`title`を用いて、「大きな石」自体を表す親Issueを起票します。サブタスクIssueより先に、必ずこの手順を実行してください。
+2. **親Issueの起票（冪等）**: `decomposition_plan.md`の`title`を用いて、「大きな石」自体を表す親Issueを用意します。サブタスクIssueより先に、必ずこの手順を実行してください。手順4のサブタスク起票が部分的に失敗して本ステージを再実行した場合でも、親Issueを重複作成しないよう、以下の順で「既存を再利用できないか」を先に確認します。
 
-   ```bash
-   gh issue create --title "[EPIC] <decomposition_plan.mdのtitle>" --body "decomposition_plan.md記載の設計方針の要約。配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-   ```
+   a. `decomposition_plan.md`の`parent_issue_number`が既に設定されている（`null`でない）場合は、そのIssue番号をそのまま再利用します。念のため`gh issue view <番号>`で存在・オープン状態を確認し、問題なければ手順bをスキップして手順3へ進みます。
 
-   起票後に返却されたIssue番号を控え、以降すべてのサブタスクIssue起票の`--parent`として使用します（この番号を得るまで、次のサブタスクIssue起票を開始しないこと）。
+   b. `parent_issue_number`が未設定の場合、同一タイトルのopenな親Issueが既に存在しないか検索します（過去の実行が親Issue作成後・`decomposition_plan.md`書き戻し前に中断した可能性があるため）：
+
+      ```bash
+      gh issue list --search "in:title \"[EPIC] <decomposition_plan.mdのtitle>\"" --state open
+      ```
+
+      該当するIssueが見つかった場合は、それを誤って重複作成しないよう、そのIssue番号を再利用してよいか必ず人間に確認を求めてください。見つからない場合のみ、新規に起票します：
+
+      ```bash
+      gh issue create --title "[EPIC] <decomposition_plan.mdのtitle>" --body "decomposition_plan.md記載の設計方針の要約。配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+      ```
+
+   c. 上記a/bで確定したIssue番号を、**必ず**`decomposition_plan.md`のフロントマターの`parent_issue_number`フィールドへ書き戻してから、次の手順へ進みます。これを怠ると、後続のサブタスク起票中にエラーが発生し本ステージを再実行した際、親Issueが重複作成されSub-issue階層が分裂します。
+
+   確定した親Issue番号は、以降すべてのサブタスクIssue起票の`--parent`として使用します。
 3. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
 4. Issueのタイトル・本文は以下の形式とします：
    * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
