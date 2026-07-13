@@ -129,13 +129,56 @@ class IntegrationMerger:
         ci_cmd = self.ci_command or ["./scripts/local-ci.sh"]
 
         env = os.environ.copy()
-        venv_path = self.original_root / ".venv"
-        if "tools/orchestune" in str(venv_path):
-            parent_venv = venv_path.parent.parent.parent / ".venv"
-            if parent_venv.exists():
-                venv_path = parent_venv
+        env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 
-        if venv_path.exists():
+        pyproject_path = self.repository_root / "pyproject.toml"
+        if pyproject_path.exists():
+            try:
+                subprocess.run(
+                    ["poetry", "install"],
+                    cwd=str(self.repository_root),
+                    check=True,
+                    capture_output=True,
+                    env=env,
+                )
+            except subprocess.CalledProcessError as pie:
+                print(
+                    f"Warning: Failed to run poetry install: {(pie.stderr or b'').decode(errors='replace')}",
+                    file=sys.stderr,
+                )
+
+        venv_path = None
+        if pyproject_path.exists():
+            try:
+                res = subprocess.run(
+                    ["poetry", "env", "info", "--path"],
+                    cwd=str(self.repository_root),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                )
+                stdout_str = (
+                    res.stdout.decode(errors="replace")
+                    if isinstance(res.stdout, bytes)
+                    else res.stdout
+                )
+                p = Path(stdout_str.strip())
+                if p.exists():
+                    venv_path = p
+            except subprocess.CalledProcessError:
+                pass
+
+        if venv_path is None:
+            venv_path = self.repository_root / ".venv"
+            if not venv_path.exists():
+                venv_path = self.original_root / ".venv"
+                if "tools/orchestune" in str(venv_path):
+                    parent_venv = venv_path.parent.parent.parent / ".venv"
+                    if parent_venv.exists():
+                        venv_path = parent_venv
+
+        if venv_path and venv_path.exists():
             env["VIRTUAL_ENV"] = str(venv_path.resolve())
             bin_path = venv_path / "bin"
             if bin_path.exists():
