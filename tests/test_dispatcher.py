@@ -3272,3 +3272,156 @@ class TestRunDispatchCycleActorVerification:
         assert report.selected == []
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
+
+
+class TestDispatcherConfigLoading:
+    def _empty_report(self):
+        return CycleReport(
+            selected=[],
+            quota_slots_available=0,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=False,
+        )
+
+    def test_load_config_from_orchestune_toml(self, tmp_path):
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n"
+            "dispatch-target = 'local'\n"
+            "run-state-path = 'custom_state.json'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[0] == "local"
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 5
+        assert config_arg.run_state_path == Path("custom_state.json")
+
+    def test_load_config_from_pyproject_toml(self, tmp_path):
+        config_path = tmp_path / "pyproject.toml"
+        config_path.write_text(
+            "[tool.orchestune]\n"
+            "max-concurrent = 7\n"
+            "dispatch-target = 'claude-cli'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 7
+
+    def test_cli_arg_overrides_config_file(self, tmp_path):
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n" "dispatch-target = 'local'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(
+                [
+                    "--no-apply",
+                    "--max-concurrent",
+                    "3",
+                    "--dispatch-target",
+                    "claude-cli",
+                ],
+                cwd=tmp_path,
+            )
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 3
+
+    @pytest.mark.parametrize(
+        ("config", "expected_error"),
+        [
+            ("dispatch-target = 'claude-clii'\n", "dispatch-target"),
+            ("max-concurent = 5\n", "unknown key"),
+            ('max-concurrent = "5"\n', "must be an integer"),
+            ('apply = "false"\n', "must be a boolean"),
+            ("max-concurrent = -1\n", "greater than or equal to 0"),
+            ("window-seconds = 0\n", "greater than or equal to 1"),
+            ("parent-issue = 0\n", "greater than or equal to 1"),
+            ("run-state-path = 1\n", "must be a string path"),
+        ],
+    )
+    def test_rejects_invalid_config_values(
+        self, tmp_path, config, expected_error, capsys
+    ):
+        (tmp_path / "orchestune.toml").write_text(config, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as error:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert error.value.code == 2
+        assert expected_error in capsys.readouterr().err
+
+    def test_rejects_invalid_toml_without_falling_back_to_pyproject(
+        self, tmp_path, capsys
+    ):
+        (tmp_path / "orchestune.toml").write_text(
+            "max-concurrent = [\n", encoding="utf-8"
+        )
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.orchestune]\nmax-concurrent = 5\n", encoding="utf-8"
+        )
+
+        with pytest.raises(SystemExit) as error:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert error.value.code == 2
+        assert "failed to load" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "dispatch_target",
+        ["local", "cloud-routine", "claude-cli", "agy-cli", "codex-cli", "auto"],
+    )
+    def test_accepts_each_dispatch_target(self, tmp_path, dispatch_target):
+        (tmp_path / "orchestune.toml").write_text(
+            f"dispatch-target = '{dispatch_target}'\n", encoding="utf-8"
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert mock_build.call_args.args[0] == dispatch_target
