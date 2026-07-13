@@ -307,7 +307,276 @@ def _sync_external_locks(
     return lock_result
 
 
-def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
+def _filter_by_parent(
+    issues: list[IssueRecord], parent_issue_number: int | None
+) -> list[IssueRecord]:
+    """`parent_issue_number`が指定されている場合、親Issueが一致するものだけに絞る。"""
+    if parent_issue_number is None:
+        return issues
+    return [
+        i for i in issues if i.parent and i.parent.get("number") == parent_issue_number
+    ]
+
+
+@dataclass
+class IssuesByStatus:
+    """ステータスラベル別に取得したIssueの束。
+
+    Issue取得直後は`list[IssueRecord]`が6個ばらばらのローカル変数になりがちで、
+    後段で似た名前の変数を取り違えるミスを誘発しやすいため、1つの型にまとめる。
+    """
+
+    queued: list[IssueRecord]
+    locked: list[IssueRecord]
+    in_progress: list[IssueRecord]
+    blocked: list[IssueRecord]
+    done: list[IssueRecord]
+    not_needed: list[IssueRecord]
+
+    def all(self) -> list[IssueRecord]:
+        return [
+            *self.queued,
+            *self.locked,
+            *self.in_progress,
+            *self.blocked,
+            *self.done,
+            *self.not_needed,
+        ]
+
+    def filtered_by_parent(self, parent_issue_number: int | None) -> IssuesByStatus:
+        """`parent_issue_number`が指定されている場合、親Issueが一致する子Issueのみに絞る。"""
+        return IssuesByStatus(
+            queued=_filter_by_parent(self.queued, parent_issue_number),
+            locked=_filter_by_parent(self.locked, parent_issue_number),
+            in_progress=_filter_by_parent(self.in_progress, parent_issue_number),
+            blocked=_filter_by_parent(self.blocked, parent_issue_number),
+            done=_filter_by_parent(self.done, parent_issue_number),
+            not_needed=_filter_by_parent(self.not_needed, parent_issue_number),
+        )
+
+
+def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
+    """#156: `github.list_sub_issues`が返す親Issue配下の全Issueを、
+    `list_issues_by_label`のstate引数（open/all）と同じ意味論でステータス
+    ラベル別に分類する（`status:done`/`status:not-needed`はclosedも含める）。"""
+    queued: list[IssueRecord] = []
+    locked: list[IssueRecord] = []
+    in_progress: list[IssueRecord] = []
+    blocked: list[IssueRecord] = []
+    done: list[IssueRecord] = []
+    not_needed: list[IssueRecord] = []
+
+    for issue in issues:
+        is_open = issue.state == "OPEN"
+        if is_open and "status:queued" in issue.labels:
+            queued.append(issue)
+        if is_open and "status:external-lock" in issue.labels:
+            locked.append(issue)
+        if is_open and "status:in-progress" in issue.labels:
+            in_progress.append(issue)
+        if is_open and "status:blocked" in issue.labels:
+            blocked.append(issue)
+        if "status:done" in issue.labels:
+            done.append(issue)
+        if "status:not-needed" in issue.labels:
+            not_needed.append(issue)
+
+    return IssuesByStatus(
+        queued=queued,
+        locked=locked,
+        in_progress=in_progress,
+        blocked=blocked,
+        done=done,
+        not_needed=not_needed,
+    )
+
+
+def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
+    """ステータスラベルごとにIssueをGitHubから取得する。
+
+    #156: `config.parent_issue_number`が指定されている場合、無関係な親配下の
+    Issueまでリポジトリ全体から取得して後段で破棄する無駄を避けるため、
+    `github.list_sub_issues`による親Issue起点のfast pathを使う。
+    """
+    if config.parent_issue_number is not None:
+        return _group_by_status(github.list_sub_issues(config.parent_issue_number))
+
+    return IssuesByStatus(
+        queued=github.list_issues_by_label("status:queued"),
+        locked=github.list_issues_by_label("status:external-lock"),
+        in_progress=github.list_issues_by_label("status:in-progress"),
+        blocked=github.list_issues_by_label("status:blocked"),
+        # #236: 完了Issueは人間が通常のGitHub運用でCloseすることが多いため、
+        # 依存解決判定はclosedなIssueも含めて検索する。
+        done=github.list_issues_by_label("status:done", state="all"),
+        # #280: セッションがstatus:not-neededを付与すると同時にstatus:in-progressを
+        # 外すため、in_progress側の一覧には現れなくなる。tasks_by_issueに含めて
+        # おかないと_process_active_worktrees側で完了検知できず、依存解決からも
+        # 漏れてしまう（closedなIssueもクローズ後の依存解決に必要なためstate="all"）。
+        not_needed=github.list_issues_by_label("status:not-needed", state="all"),
+    )
+
+
+def _self_heal_run_state(
+    run_state: RunState,
+    config: DispatcherConfig,
+) -> None:
+    """自己修復（ステート復元・不整合修復）。
+
+    run_state.json が存在しない場合、かつ apply=True の場合のみ復元処理を実行する。
+
+    #156: `run_state.json`は複数の親Issue（big rock）にまたがって共有されうる
+    ため、`parent_issue_number`指定時のfast pathでスコープが絞られた
+    `IssuesByStatus`は使わず、常にリポジトリ全体のstatus:in-progress Issueを
+    読み直す。範囲を絞ってしまうと、他の親Issue配下のactive worktreeが
+    復元されないまま`run_state.json`が新規保存され、以後永遠に復元機会を
+    失うおそれがある。
+    """
+    if not (config.apply and not Path(config.run_state_path).exists()):
+        return
+    in_progress_issues = github.list_issues_by_label("status:in-progress")
+    if recover_run_state(run_state, in_progress_issues, config):
+        save_run_state(run_state, config.run_state_path)
+
+
+def _build_cycle_context(
+    issues: IssuesByStatus,
+    run_state: RunState,
+    config: DispatcherConfig,
+) -> CycleContext:
+    """取得済みIssue群から、後続の各ステージが読み取り専用で参照する
+    `CycleContext`を組み立てる。"""
+    all_issues = issues.all()
+
+    issue_to_subtask_id: dict[int, str] = {}
+    for issue in all_issues:
+        sub_id = _extract_raw_subtask_id(issue)
+        if sub_id:
+            issue_to_subtask_id[issue.number] = sub_id
+
+    tasks_by_issue = {
+        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
+        for issue in all_issues
+    }
+    issue_number_by_subtask_id = {
+        task.subtask_id: task.issue_number
+        for task in tasks_by_issue.values()
+        if task.subtask_id
+    }
+
+    prs = github.list_open_prs()
+
+    done_subtask_ids = {
+        task.subtask_id
+        for task in tasks_by_issue.values()
+        if "status:done" in task.status_labels and task.subtask_id
+    }
+
+    pr_by_branch = {pr.head_ref: pr for pr in prs}
+    ci_passed_pr_subtask_ids = set()
+    changes_requested_subtask_ids = set()
+    subtask_branch_map = {}
+
+    for task in tasks_by_issue.values():
+        if not task.subtask_id:
+            continue
+        branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+        subtask_branch_map[task.subtask_id] = branch_name
+
+        pr = pr_by_branch.get(branch_name)
+        if pr:
+            if pr.review_decision == "CHANGES_REQUESTED":
+                changes_requested_subtask_ids.add(task.subtask_id)
+            elif pr.is_ci_passing:
+                ci_passed_pr_subtask_ids.add(task.subtask_id)
+
+    return CycleContext(
+        run_state=run_state,
+        tasks_by_issue=tasks_by_issue,
+        issue_number_by_subtask_id=issue_number_by_subtask_id,
+        done_subtask_ids=done_subtask_ids,
+        ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+        changes_requested_subtask_ids=changes_requested_subtask_ids,
+        subtask_branch_map=subtask_branch_map,
+        prs=prs,
+        pr_by_branch=pr_by_branch,
+        config=config,
+    )
+
+
+def _determine_candidate_tasks(
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    lock_result: ExternalLockScanResult,
+    completed_subtask_ids: set[str],
+    any_forced_serial: bool,
+) -> tuple[list[Task], dict[int, str]]:
+    """起動候補タスクを、外部ロック・actor権限・スタッキング可否・重複起動・
+    強制直列化の各観点で絞り込んで確定させる。"""
+    newly_locked = {t.issue_number for t in lock_result.to_lock}
+    queued_candidates = [
+        ctx.tasks_by_issue[issue.number]
+        for issue in issues.queued
+        if issue.number not in newly_locked
+    ]
+
+    # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、
+    # 権限不足のタスクを起動候補から除外する（status:blockedからのスタッキング
+    # 起動であるstack_eligible_tasksは対象外）。
+    actor_decisions = _decide_actor_verification(queued_candidates)
+    queued_candidates = _apply_actor_verification(actor_decisions, ctx.config)
+
+    stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
+        issues.blocked,
+        ctx.tasks_by_issue,
+        ctx.done_subtask_ids,
+        ctx.ci_passed_pr_subtask_ids,
+        ctx.subtask_branch_map,
+        completed_subtask_ids=completed_subtask_ids,
+    )
+
+    candidate_tasks = queued_candidates + stack_eligible_tasks
+
+    # 重複起動の防止: 既にオープンなPRが存在するcandidate_tasksを検知し、
+    # 起動対象から除外して status:blocked-human-review へ移行させる。
+    duplicate_decisions = _decide_duplicate_candidates(candidate_tasks, ctx)
+    candidate_tasks = _apply_duplicate_skip(duplicate_decisions, ctx)
+
+    if any_forced_serial:
+        candidate_tasks = _filter_candidates_for_forced_serial(
+            candidate_tasks,
+            ctx.run_state,
+            ctx.tasks_by_issue,
+        )
+
+    return candidate_tasks, task_to_base_branch
+
+
+def _finalize_launch(
+    selected: list[Task],
+    task_to_base_branch: dict[int, str],
+    candidate_tasks: list[Task],
+    ctx: CycleContext,
+    now: float,
+    config: DispatcherConfig,
+) -> list[Task]:
+    """apply時のみ、選出タスクを実起動しrun_stateを永続化する。"""
+    if not config.apply:
+        return selected
+    selected = _launch_selected_tasks(
+        selected,
+        task_to_base_branch,
+        candidate_tasks,
+        ctx.run_state,
+        now,
+        config,
+    )
+    ctx.run_state.last_reconciled_at = now
+    save_run_state(ctx.run_state, config.run_state_path)
+    return selected
+
+
+def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
     lock_path = Path(config.run_state_path).with_suffix(".lock")
     with file_lock(lock_path):
         run_state = load_run_state(config.run_state_path)
@@ -316,123 +585,11 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
         if config.parent_issue_number is not None and config.apply:
             github.ensure_parent_branch(config.parent_issue_number)
 
-        queued_issues = github.list_issues_by_label("status:queued")
-        locked_issues = github.list_issues_by_label("status:external-lock")
-        in_progress_issues = github.list_issues_by_label("status:in-progress")
-        blocked_issues = github.list_issues_by_label("status:blocked")
-        # #236: 完了Issueは人間が通常のGitHub運用でCloseすることが多いため、
-        # 依存解決判定はclosedなIssueも含めて検索する。
-        done_issues = github.list_issues_by_label("status:done", state="all")
-        # #280: セッションがstatus:not-neededを付与すると同時にstatus:in-progressを
-        # 外すため、in_progress_issuesの一覧には現れなくなる。tasks_by_issueに含めて
-        # おかないと_process_active_worktrees側で完了検知できず、依存解決からも
-        # 漏れてしまう（closedなIssueもクローズ後の依存解決に必要なためstate="all"）。
-        not_needed_issues = github.list_issues_by_label(
-            "status:not-needed", state="all"
-        )
+        issues = _fetch_issues(config)
+        _self_heal_run_state(run_state, config)
+        issues = issues.filtered_by_parent(config.parent_issue_number)
 
-        # 自己修復（ステート復元・不整合修復）
-        # run_state.json が存在しない場合、かつ apply=True の場合のみ復元処理を実行する
-        if config.apply and not Path(config.run_state_path).exists():
-            if recover_run_state(run_state, in_progress_issues, config):
-                save_run_state(run_state, config.run_state_path)
-
-        # parent_issue_number が指定されている場合、親Issueが一致する子Issueのみにフィルタリングする
-        if config.parent_issue_number is not None:
-            queued_issues = [
-                i
-                for i in queued_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            locked_issues = [
-                i
-                for i in locked_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            in_progress_issues = [
-                i
-                for i in in_progress_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            blocked_issues = [
-                i
-                for i in blocked_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            done_issues = [
-                i
-                for i in done_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-            not_needed_issues = [
-                i
-                for i in not_needed_issues
-                if i.parent and i.parent.get("number") == config.parent_issue_number
-            ]
-
-        all_issues = [
-            *queued_issues,
-            *locked_issues,
-            *in_progress_issues,
-            *blocked_issues,
-            *done_issues,
-            *not_needed_issues,
-        ]
-
-        issue_to_subtask_id = {}
-        for issue in all_issues:
-            sub_id = _extract_raw_subtask_id(issue)
-            if sub_id:
-                issue_to_subtask_id[issue.number] = sub_id
-
-        tasks_by_issue = {
-            issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
-            for issue in all_issues
-        }
-        issue_number_by_subtask_id = {
-            task.subtask_id: task.issue_number
-            for task in tasks_by_issue.values()
-            if task.subtask_id
-        }
-
-        prs = github.list_open_prs()
-
-        done_subtask_ids = {
-            task.subtask_id
-            for task in tasks_by_issue.values()
-            if "status:done" in task.status_labels and task.subtask_id
-        }
-
-        pr_by_branch = {pr.head_ref: pr for pr in prs}
-        ci_passed_pr_subtask_ids = set()
-        changes_requested_subtask_ids = set()
-        subtask_branch_map = {}
-
-        for task in tasks_by_issue.values():
-            if not task.subtask_id:
-                continue
-            branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id}"
-            subtask_branch_map[task.subtask_id] = branch_name
-
-            pr = pr_by_branch.get(branch_name)
-            if pr:
-                if pr.review_decision == "CHANGES_REQUESTED":
-                    changes_requested_subtask_ids.add(task.subtask_id)
-                elif pr.is_ci_passing:
-                    ci_passed_pr_subtask_ids.add(task.subtask_id)
-
-        ctx = CycleContext(
-            run_state=run_state,
-            tasks_by_issue=tasks_by_issue,
-            issue_number_by_subtask_id=issue_number_by_subtask_id,
-            done_subtask_ids=done_subtask_ids,
-            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-            changes_requested_subtask_ids=changes_requested_subtask_ids,
-            subtask_branch_map=subtask_branch_map,
-            prs=prs,
-            pr_by_branch=pr_by_branch,
-            config=config,
-        )
+        ctx = _build_cycle_context(issues, run_state, config)
 
         (
             completion_events,
@@ -442,60 +599,28 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
         ) = _process_active_worktrees(ctx)
 
         gc_events = _collect_zombies_and_timeouts(
-            run_state,
-            tasks_by_issue,
-            config,
+            ctx.run_state, ctx.tasks_by_issue, config
         )
         completion_events.extend(gc_events)
 
         promotion_events = _promote_blocked_tasks(
-            blocked_issues,
-            done_issues + not_needed_issues,
+            issues.blocked,
+            issues.done + issues.not_needed,
             completed_subtask_ids,
-            tasks_by_issue,
+            ctx.tasks_by_issue,
             config,
         )
 
-        lock_result = _sync_external_locks(tasks_by_issue, prs, run_state, config)
-
-        newly_locked = {t.issue_number for t in lock_result.to_lock}
-        queued_candidates = [
-            tasks_by_issue[issue.number]
-            for issue in queued_issues
-            if issue.number not in newly_locked
-        ]
-
-        # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、
-        # 権限不足のタスクを起動候補から除外する（status:blockedからのスタッキング
-        # 起動であるstack_eligible_tasksは対象外）。
-        actor_decisions = _decide_actor_verification(queued_candidates)
-        queued_candidates = _apply_actor_verification(actor_decisions, config)
-
-        stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
-            blocked_issues,
-            tasks_by_issue,
-            done_subtask_ids,
-            ci_passed_pr_subtask_ids,
-            subtask_branch_map,
-            completed_subtask_ids=completed_subtask_ids,
+        lock_result = _sync_external_locks(
+            ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
         )
 
-        candidate_tasks = queued_candidates + stack_eligible_tasks
-
-        # 重複起動の防止: 既にオープンなPRが存在するcandidate_tasksを検知し、
-        # 起動対象から除外して status:blocked-human-review へ移行させる。
-        duplicate_decisions = _decide_duplicate_candidates(candidate_tasks, ctx)
-        candidate_tasks = _apply_duplicate_skip(duplicate_decisions, ctx)
-
-        if any_forced_serial:
-            candidate_tasks = _filter_candidates_for_forced_serial(
-                candidate_tasks,
-                run_state,
-                tasks_by_issue,
-            )
+        candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
+            ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
+        )
 
         quota_slots = quota_available(
-            run_state,
+            ctx.run_state,
             now,
             config.max_concurrent,
             config.max_launches_per_window,
@@ -503,24 +628,15 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:  # noqa: C901
         )
         selected = select_next_tasks(
             candidate_tasks,
-            run_state,
+            ctx.run_state,
             now,
             config.max_concurrent,
             config.max_launches_per_window,
             config.window_seconds,
         )
-
-        if config.apply:
-            selected = _launch_selected_tasks(
-                selected,
-                task_to_base_branch,
-                candidate_tasks,
-                run_state,
-                now,
-                config,
-            )
-            run_state.last_reconciled_at = now
-            save_run_state(run_state, config.run_state_path)
+        selected = _finalize_launch(
+            selected, task_to_base_branch, candidate_tasks, ctx, now, config
+        )
 
         report = CycleReport(
             selected=selected,

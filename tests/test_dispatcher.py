@@ -1,3 +1,4 @@
+import argparse
 import json
 import subprocess
 import time
@@ -9,12 +10,17 @@ import pytest
 from orchestune.dag import FootprintConflict
 from orchestune.dispatcher import (
     ActiveWorktree,
+    ClaudeCodeCloudRoutineDispatchTarget,
     CompletedWorktree,
     CycleReport,
     DispatcherConfig,
+    LocalProcessDispatchTarget,
     RunState,
     Task,
+    _decide_semantic_review_enabled,
     _is_worktree_complete,
+    _poll_pending_not_needed_reviews,
+    _run_semantic_integrator,
     append_event_log,
     build_event_log_entry,
     load_run_state,
@@ -292,6 +298,11 @@ class TestRunDispatchCycle:
         assert report.quota_slots_available == 0
 
     def test_run_dispatch_cycle_filters_by_parent_issue_number(self, tmp_path):
+        """#156: parent_issue_number指定時は、github.list_sub_issuesによる
+        fast pathへ正しく配線され、その結果がそのまま使われることを確認する。
+        『親を問わず返された候補から正しい親だけに絞る』という判定自体は、
+        list_sub_issuesの実装（github.py）側の責務のためここでは検証しない。
+        """
         config = DispatcherConfig(
             max_concurrent=2,
             max_launches_per_window=2,
@@ -306,49 +317,18 @@ class TestRunDispatchCycle:
             1,
             labels=("status:queued",),
             subtask_id="task-a",
-        )
-        sub_issue_1 = IssueRecord(
-            number=sub_issue_1.number,
-            title=sub_issue_1.title,
-            body=sub_issue_1.body,
-            labels=sub_issue_1.labels,
-            created_at=sub_issue_1.created_at,
-            parent={"number": 100},
-        )
-        sub_issue_2 = _issue(
-            2,
-            labels=("status:queued",),
-            subtask_id="task-b",
-        )
-        sub_issue_2 = IssueRecord(
-            number=sub_issue_2.number,
-            title=sub_issue_2.title,
-            body=sub_issue_2.body,
-            labels=sub_issue_2.labels,
-            created_at=sub_issue_2.created_at,
-            parent={"number": 200},
-        )
-        sub_issue_3 = _issue(
-            3,
-            labels=("status:queued",),
-            subtask_id="task-c",
+            parent_number=100,
         )
 
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
         ):
-
-            def _list(label, **_):
-                if label == "status:queued":
-                    return [sub_issue_1, sub_issue_2, sub_issue_3]
-                return []
-
-            mock_list.side_effect = _list
+            mock_list.return_value = [sub_issue_1]
             report = run_dispatch_cycle(config)
 
-        # parent=100 の sub_issue_1 のみが選出される
+        mock_list.assert_called_once_with(100)
         assert [t.issue_number for t in report.selected] == [1]
 
     def test_run_dispatch_cycle_resolves_depends_on_from_blocked_by(self, tmp_path):
@@ -568,7 +548,7 @@ class TestRunDispatchCycleFootprintRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -586,9 +566,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.notify_recompute", return_value=["body"]
             ) as mock_notify,
         ):
-            mock_list.side_effect = lambda label, **_: (
-                [in_progress_issue] if label == "status:in-progress" else []
-            )
+            mock_list.return_value = [in_progress_issue]
             mock_recompute.return_value = (MagicMock(), [conflict])
 
             report = run_dispatch_cycle(config)
@@ -637,7 +615,7 @@ class TestRunDispatchCycleFootprintRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -654,9 +632,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.notify_recompute", return_value=["dry body"]
             ) as mock_notify,
         ):
-            mock_list.side_effect = lambda label, **_: (
-                [in_progress_issue] if label == "status:in-progress" else []
-            )
+            mock_list.return_value = [in_progress_issue]
             mock_recompute.return_value = (MagicMock(), [conflict])
 
             run_dispatch_cycle(config)
@@ -714,7 +690,7 @@ class TestRunDispatchCycleFootprintRecompute:
             return selected
 
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -733,15 +709,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
         ):
-
-            def _list(label, **_):
-                if label == "status:queued":
-                    return [other_queued_issue]
-                if label == "status:in-progress":
-                    return [in_progress_issue]
-                return []
-
-            mock_list.side_effect = _list
+            mock_list.return_value = [other_queued_issue, in_progress_issue]
 
             report = run_dispatch_cycle(config)
 
@@ -808,7 +776,7 @@ class TestRunDispatchCycleFootprintRecompute:
             return selected
 
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
@@ -821,15 +789,12 @@ class TestRunDispatchCycleFootprintRecompute:
                 return_value=[],
             ),
         ):
-
-            def _list(label, **_):
-                if label == "status:queued":
-                    return [conflicting_issue, dependent_issue, independent_issue]
-                if label == "status:in-progress":
-                    return [in_progress_issue]
-                return []
-
-            mock_list.side_effect = _list
+            mock_list.return_value = [
+                conflicting_issue,
+                dependent_issue,
+                independent_issue,
+                in_progress_issue,
+            ]
             report = run_dispatch_cycle(config)
 
         assert report.quota_slots_available == 2
@@ -861,7 +826,7 @@ class TestRunDispatchCycleFootprintRecompute:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         with (
-            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_sub_issues") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
@@ -875,9 +840,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
         ):
-            mock_list.side_effect = lambda label, **_: (
-                [in_progress_issue] if label == "status:in-progress" else []
-            )
+            mock_list.return_value = [in_progress_issue]
             report = run_dispatch_cycle(config)
 
         mock_recompute.assert_not_called()
@@ -3103,6 +3066,120 @@ class TestMainDispatchTargetAutoDetection:
             )
 
         assert mock_build.call_args.args[0] == "local"
+
+
+class TestDecideSemanticReviewEnabled:
+    """#150: ORCHESTUNE_SEMANTIC_REVIEW環境変数によるON/OFF判定（副作用なし）。"""
+
+    def test_enabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("ORCHESTUNE_SEMANTIC_REVIEW", raising=False)
+        assert _decide_semantic_review_enabled() is True
+
+    def test_disabled_when_env_var_is_zero(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTUNE_SEMANTIC_REVIEW", "0")
+        assert _decide_semantic_review_enabled() is False
+
+    def test_enabled_when_env_var_is_nonzero(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTUNE_SEMANTIC_REVIEW", "1")
+        assert _decide_semantic_review_enabled() is True
+
+
+class TestPollPendingNotNeededReviews:
+    """#150/#282: 保留中のstatus:not-needed検証レビューのポーリング（ベストエフォート）。"""
+
+    def test_returns_report_on_success(self, tmp_path):
+        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        with patch(
+            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            return_value={"processed": 1},
+        ) as mock_poll:
+            result = _poll_pending_not_needed_reviews(args)
+
+        assert result == {"processed": 1}
+        mock_poll.assert_called_once_with(args.not_needed_review_state_path)
+
+    def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
+        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        with patch(
+            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = _poll_pending_not_needed_reviews(args)
+
+        assert result is None
+        assert "boom" in capsys.readouterr().err
+
+
+class TestRunSemanticIntegrator:
+    """#150: Integrator実行と、クラウドルーチン利用時のみ意味的レビューを
+    有効化する分岐（ベストエフォート）。"""
+
+    def test_enables_semantic_review_for_cloud_routine_target(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"ok": True}
+        with (
+            patch(
+                "orchestune.integrator.Integrator", return_value=mock_instance
+            ) as mock_integrator_cls,
+            patch(
+                "orchestune.integration_coordinator.IntegrationCoordinator"
+            ) as mock_coordinator_cls,
+        ):
+            result = _run_semantic_integrator(config, semantic_review_enabled=True)
+
+        assert result == {"ok": True}
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.enable_semantic_review is True
+        mock_coordinator_cls.assert_called_once_with(config.dispatch_target)
+
+    def test_disables_semantic_review_when_flag_off(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"ok": True}
+        with patch(
+            "orchestune.integrator.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.enable_semantic_review is False
+
+    def test_disables_semantic_review_for_non_cloud_routine_target(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"ok": True}
+        with patch(
+            "orchestune.integrator.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=True)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.enable_semantic_review is False
+
+    def test_returns_none_and_warns_on_failure(self, capsys):
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        with patch(
+            "orchestune.integrator.Integrator", side_effect=RuntimeError("boom")
+        ):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert result is None
+        assert "boom" in capsys.readouterr().err
 
 
 class TestRunDispatchCycleActorVerification:

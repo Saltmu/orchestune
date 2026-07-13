@@ -34,6 +34,8 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 
    ```markdown
    ---
+   title: "One-line summary of the 'big rock' itself"
+   parent_issue_number: null  # filled in by orchestune-dispatch once the parent issue exists
    subtasks:
      - id: task-a
        description: "Implement feature XX"
@@ -46,13 +48,16 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
        symbols:
          - foo.Foo
        depends_on: []
-       priority: medium  # high, medium, low (default: medium)
-       risk: false       # true if touching API keys, credentials, or risky subprocesses
+       priority: medium    # high, medium, low (default: medium)
+       risk: false         # true if touching API keys, credentials, or risky subprocesses
+       issue_number: null  # filled in by orchestune-dispatch once this subtask's issue exists
    ---
 
    # Decomposition Plan
    (The section below the frontmatter is free text to explain the design approach or background)
    ```
+
+   The top-level `title` is required — `orchestune-dispatch` uses it to create the parent tracking issue for the whole "big rock" (see that skill's Stage A). `parent_issue_number` and each subtask's `issue_number` start as `null`; do not set them yourself — `orchestune-dispatch` writes the created (or reused) issue numbers back into this file so that re-running the workflow after a partial failure reuses the same issues instead of creating duplicates.
 
 ### Stage 2: Validate DAG
 

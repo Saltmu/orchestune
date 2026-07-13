@@ -173,6 +173,75 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _decide_semantic_review_enabled() -> bool:
+    """統合コーディネーターによる意味的レビュー（LLMによる統合PRのバグ検知、結果は
+    PRコメントのみで完結）と、#282のstatus:not-needed独立検証レビューの両方を、
+    `ORCHESTUNE_SEMANTIC_REVIEW=0`でまとめて無効化できる。"""
+    return os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0"
+
+
+def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> dict | None:
+    """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
+
+    ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
+    """
+    try:
+        from orchestune.integration_coordinator import (
+            process_pending_not_needed_reviews,
+        )
+
+        not_needed_review_report = process_pending_not_needed_reviews(
+            args.not_needed_review_state_path
+        )
+        print("Pending Not-Needed Review Report:")
+        print(json.dumps(not_needed_review_report, ensure_ascii=False, indent=2))
+        return not_needed_review_report
+    except Exception as re:
+        print(
+            f"Warning: failed to process pending not-needed reviews: {re}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _run_semantic_integrator(
+    config: DispatcherConfig, semantic_review_enabled: bool
+) -> dict | None:
+    """統合コーディネーターによる意味的レビューを含め、Integratorを実行する。
+
+    レビューはdispatcherと同一のクラウドルーチンを再利用して起動するため、
+    実ディスパッチ先がクラウドルーチンのときのみ意味的レビューを有効化する。
+    レビューセッションは統合PRへコメントを残すのみで、自動マージ等の後続処理は
+    Python側では一切行わない。ベストエフォート処理: 失敗しても警告を出すだけで
+    main()は続行する。
+    """
+    try:
+        from orchestune.integrator import Integrator, IntegratorConfig
+
+        integrator_config = IntegratorConfig(
+            parent_issue_number=config.parent_issue_number,
+            apply=config.apply,
+        )
+        if semantic_review_enabled and isinstance(
+            config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
+        ):
+            from orchestune.integration_coordinator import IntegrationCoordinator
+
+            integrator_config.enable_semantic_review = True
+            integrator_config.coordinator = IntegrationCoordinator(
+                config.dispatch_target
+            )
+        else:
+            integrator_config.enable_semantic_review = False
+        integrator_run_report = Integrator(integrator_config).run()
+        print("Integrator Report:")
+        print(json.dumps(integrator_run_report, ensure_ascii=False, indent=2))
+        return integrator_run_report
+    except Exception as ie:
+        print(f"Warning: Integrator failed to run: {ie}", file=sys.stderr)
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
@@ -208,65 +277,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(_report_to_dict(report), ensure_ascii=False, indent=2))
 
         if config.apply:
-            # 統合コーディネーターによる意味的レビュー（LLMによる統合PRのバグ検知、結果は
-            # PRコメントのみで完結）と、#282のstatus:not-needed独立検証レビューの
-            # 両方を、`ORCHESTUNE_SEMANTIC_REVIEW=0`でまとめて無効化できる。
-            semantic_review_enabled = (
-                os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0"
-            )
-
+            semantic_review_enabled = _decide_semantic_review_enabled()
             if semantic_review_enabled:
-                # #282: status:not-needed判定の独立検証レビュー（保留分）のポーリング。
-                try:
-                    from orchestune.integration_coordinator import (
-                        process_pending_not_needed_reviews,
-                    )
-
-                    not_needed_review_report = process_pending_not_needed_reviews(
-                        args.not_needed_review_state_path
-                    )
-                    print("Pending Not-Needed Review Report:")
-                    print(
-                        json.dumps(
-                            not_needed_review_report, ensure_ascii=False, indent=2
-                        )
-                    )
-                except Exception as re:
-                    print(
-                        f"Warning: failed to process pending not-needed reviews: {re}",
-                        file=sys.stderr,
-                    )
-
-            try:
-                from orchestune.integrator import Integrator, IntegratorConfig
-
-                integrator_config = IntegratorConfig(
-                    parent_issue_number=config.parent_issue_number,
-                    apply=config.apply,
-                )
-                # レビューはdispatcherと同一のクラウドルーチンを再利用して起動するため、
-                # 実ディスパッチ先がクラウドルーチンのときのみ意味的レビューを有効化する。
-                # レビューセッションは統合PRへコメントを残すのみで、自動マージ等の
-                # 後続処理はPython側では一切行わない。
-                if semantic_review_enabled and isinstance(
-                    config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
-                ):
-                    from orchestune.integration_coordinator import (
-                        IntegrationCoordinator,
-                    )
-
-                    integrator_config.enable_semantic_review = True
-                    integrator_config.coordinator = IntegrationCoordinator(
-                        config.dispatch_target
-                    )
-                else:
-                    integrator_config.enable_semantic_review = False
-                integrator = Integrator(integrator_config)
-                integrator_run_report = integrator.run()
-                print("Integrator Report:")
-                print(json.dumps(integrator_run_report, ensure_ascii=False, indent=2))
-            except Exception as ie:
-                print(f"Warning: Integrator failed to run: {ie}", file=sys.stderr)
+                _poll_pending_not_needed_reviews(args)
+            integrator_run_report = _run_semantic_integrator(
+                config, semantic_review_enabled
+            )
 
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary_path:
