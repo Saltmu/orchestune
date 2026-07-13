@@ -3,8 +3,14 @@
 ## 概要 (Overview)
 {{overview}}
 
+## 変更内容 (Proposed Changes)
+{{proposed_changes}}
+
 ## 受け入れ基準 (Acceptance Criteria)
 {{acceptance_criteria}}
+
+## 修正・検証計画 (Verification Plan)
+{{verification_plan}}
 
 ## Footprint
 ```yaml
