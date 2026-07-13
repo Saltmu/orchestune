@@ -9,6 +9,7 @@ from orchestune.dispatch_cycle import (
     _group_by_status,
     _process_active_worktrees,
     _self_heal_run_state,
+    run_dispatch_cycle,
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
@@ -203,6 +204,52 @@ class TestFetchIssues:
             _fetch_issues(config)
 
         assert mock_list.call_count == 6
+
+
+class TestRunDispatchCycleLockScope:
+    """#97: GitHub通信などの長時間処理をrun_stateロック外へ出す。"""
+
+    def test_fetches_issues_after_releasing_run_state_lock(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        lock_depth = 0
+
+        class TrackingLock:
+            def __init__(self, _path):
+                pass
+
+            def __enter__(self):
+                nonlocal lock_depth
+                lock_depth += 1
+
+            def __exit__(self, exc_type, exc, tb):
+                nonlocal lock_depth
+                lock_depth -= 1
+
+        def assert_unlocked_fetch(*_args, **_kwargs):
+            assert lock_depth == 0
+            return []
+
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            worktree_root=str(tmp_path / "worktrees"),
+            apply=False,
+        )
+
+        with (
+            patch("orchestune.dispatch_cycle.file_lock", TrackingLock),
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label",
+                side_effect=assert_unlocked_fetch,
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches",
+                return_value=[],
+            ),
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
 
 
 class TestSelfHealRunState:

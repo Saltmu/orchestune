@@ -572,86 +572,94 @@ def _finalize_launch(
         config,
     )
     ctx.run_state.last_reconciled_at = now
-    save_run_state(ctx.run_state, config.run_state_path)
+    lock_path = Path(config.run_state_path).with_suffix(".lock")
+    with file_lock(lock_path):
+        save_run_state(ctx.run_state, config.run_state_path)
     return selected
 
 
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
     lock_path = Path(config.run_state_path).with_suffix(".lock")
+    run_state_path = Path(config.run_state_path)
     with file_lock(lock_path):
-        run_state = load_run_state(config.run_state_path)
-        now = time.time()
+        run_state = load_run_state(run_state_path)
+        needs_self_heal = config.apply and not run_state_path.exists()
 
-        if config.parent_issue_number is not None and config.apply:
-            github.ensure_parent_branch(config.parent_issue_number)
+    now = time.time()
 
-        issues = _fetch_issues(config)
-        _self_heal_run_state(run_state, config)
-        issues = issues.filtered_by_parent(config.parent_issue_number)
+    if config.parent_issue_number is not None and config.apply:
+        github.ensure_parent_branch(config.parent_issue_number)
 
-        ctx = _build_cycle_context(issues, run_state, config)
+    if needs_self_heal:
+        in_progress_issues = github.list_issues_by_label("status:in-progress")
+        if recover_run_state(run_state, in_progress_issues, config):
+            with file_lock(lock_path):
+                save_run_state(run_state, run_state_path)
 
-        (
-            completion_events,
-            deviation_events,
-            any_forced_serial,
-            completed_subtask_ids,
-        ) = _process_active_worktrees(ctx)
+    issues = _fetch_issues(config)
+    issues = issues.filtered_by_parent(config.parent_issue_number)
 
-        gc_events = _collect_zombies_and_timeouts(
-            ctx.run_state, ctx.tasks_by_issue, config
-        )
-        completion_events.extend(gc_events)
+    ctx = _build_cycle_context(issues, run_state, config)
 
-        promotion_events = _promote_blocked_tasks(
-            issues.blocked,
-            issues.done + issues.not_needed,
-            completed_subtask_ids,
-            ctx.tasks_by_issue,
-            config,
-        )
+    (
+        completion_events,
+        deviation_events,
+        any_forced_serial,
+        completed_subtask_ids,
+    ) = _process_active_worktrees(ctx)
 
-        lock_result = _sync_external_locks(
-            ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
-        )
+    gc_events = _collect_zombies_and_timeouts(ctx.run_state, ctx.tasks_by_issue, config)
+    completion_events.extend(gc_events)
 
-        candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
-            ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
-        )
+    promotion_events = _promote_blocked_tasks(
+        issues.blocked,
+        issues.done + issues.not_needed,
+        completed_subtask_ids,
+        ctx.tasks_by_issue,
+        config,
+    )
 
-        quota_slots = quota_available(
-            ctx.run_state,
-            now,
-            config.max_concurrent,
-            config.max_launches_per_window,
-            config.window_seconds,
-        )
-        selected = select_next_tasks(
-            candidate_tasks,
-            ctx.run_state,
-            now,
-            config.max_concurrent,
-            config.max_launches_per_window,
-            config.window_seconds,
-        )
-        selected = _finalize_launch(
-            selected, task_to_base_branch, candidate_tasks, ctx, now, config
-        )
+    lock_result = _sync_external_locks(
+        ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
+    )
 
-        report = CycleReport(
-            selected=selected,
-            quota_slots_available=quota_slots,
-            lock_changes={
-                "to_lock": lock_result.to_lock,
-                "to_unlock": lock_result.to_unlock,
-            },
-            deviation_events=deviation_events,
-            completion_events=completion_events,
-            promotion_events=promotion_events,
-            applied=config.apply,
-        )
+    candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
+        ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
+    )
 
-        if config.apply:
-            append_event_log(build_event_log_entry(report, now), config.events_log_path)
+    quota_slots = quota_available(
+        ctx.run_state,
+        now,
+        config.max_concurrent,
+        config.max_launches_per_window,
+        config.window_seconds,
+    )
+    selected = select_next_tasks(
+        candidate_tasks,
+        ctx.run_state,
+        now,
+        config.max_concurrent,
+        config.max_launches_per_window,
+        config.window_seconds,
+    )
+    selected = _finalize_launch(
+        selected, task_to_base_branch, candidate_tasks, ctx, now, config
+    )
 
-        return report
+    report = CycleReport(
+        selected=selected,
+        quota_slots_available=quota_slots,
+        lock_changes={
+            "to_lock": lock_result.to_lock,
+            "to_unlock": lock_result.to_unlock,
+        },
+        deviation_events=deviation_events,
+        completion_events=completion_events,
+        promotion_events=promotion_events,
+        applied=config.apply,
+    )
+
+    if config.apply:
+        append_event_log(build_event_log_entry(report, now), config.events_log_path)
+
+    return report

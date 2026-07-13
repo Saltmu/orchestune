@@ -5,13 +5,14 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orchestune import github
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
-from orchestune.dispatch_worktree import create_worktree_and_launch
+from orchestune.dispatch_worktree import create_worktree_and_launch, file_lock
 from orchestune.github import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
@@ -287,7 +288,9 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_state,
         )
         run_state.launch_history.append(now)
-        save_run_state(run_state, config.run_state_path)
+        lock_path = Path(config.run_state_path).with_suffix(".lock")
+        with file_lock(lock_path):
+            save_run_state(run_state, config.run_state_path)
 
         if "status:queued" in task.status_labels:
             github.remove_label(task.issue_number, "status:queued")
@@ -296,7 +299,9 @@ def _apply_task_launches(
         github.add_label(task.issue_number, "status:in-progress")
         actually_selected.append(task)
 
-    save_run_state(run_state, config.run_state_path)
+    lock_path = Path(config.run_state_path).with_suffix(".lock")
+    with file_lock(lock_path):
+        save_run_state(run_state, config.run_state_path)
     return actually_selected
 
 
