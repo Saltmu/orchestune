@@ -65,6 +65,12 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
     `completed_no_commits`エスカレーション経路に合流させ、実体のない完了確定を防ぐ）。
     """
     try:
+        # #172: 親ブランチがリモート追跡ブランチとしてのみ存在する場合に対応するため、
+        # 比較前に解決を試みる（デフォルトでローカル優先、なければリモートにフォールバック）。
+        resolved_base = github.resolve_local_or_remote_branch(
+            worktree_path,
+            base_branch,
+        )
         result = subprocess.run(
             [
                 "git",
@@ -72,7 +78,7 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
                 str(worktree_path),
                 "rev-list",
                 "--count",
-                f"{base_branch}..HEAD",
+                f"{resolved_base}..HEAD",
             ],
             capture_output=True,
             text=True,
