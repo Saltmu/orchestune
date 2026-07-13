@@ -9,10 +9,7 @@
 ## Footprint
 ```yaml
 subtask_id: {{subtask_id}}
-footprint:
-{{footprint}}
-symbols:
-{{symbols}}
-depends_on:
-{{depends_on}}
+footprint: {{footprint}}
+symbols: {{symbols}}
+depends_on: {{depends_on}}
 ```

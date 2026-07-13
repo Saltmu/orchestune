@@ -78,19 +78,9 @@ output_schema:
          * `{{description}}`: `description` の内容
          * `{{overview}}`: `overview` の内容。未定義の場合は「特になし」とする。
          * `{{acceptance_criteria}}`: `acceptance_criteria` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
-         * `{{footprint}}`: YAMLフォーマットでインデント（スペース4つ）されたリスト形式
-           ```yaml
-               - <path/to/file>
-           ```
-         * `{{symbols}}`: YAMLフォーマットでインデント（スペース4つ）されたリスト形式
-           ```yaml
-               - <class_or_function>
-           ```
-         * `{{depends_on}}`: YAMLフォーマットでインデント（スペース4つ）されたリスト形式
-           ```yaml
-               - <dep_subtask_id>
-           ```
-           ※依存関係が無い場合は、YAMLフォーマット上は `depends_on: []` などの形にします（プレースホルダーのままであれば `depends_on:` のままか、`[]` に置換）。
+         * `{{footprint}}`: YAMLのリスト形式で置換。例: `[path1, path2]`（空の場合は `[]`）
+         * `{{symbols}}`: YAMLのリスト形式で置換。例: `[class1, class2]`（空の場合は `[]`）
+         * `{{depends_on}}`: YAMLのリスト形式で置換。例: `[dep_task1, dep_task2]`（空の場合は `[]`）
 
       ラベルおよびGitHub関係性の付与:
       * **親子関係の紐付け**: 手順2で確定した親Issueの番号（例: `#100`）を設定するため `--parent <親Issue番号>` を必ず付与します。
