@@ -90,6 +90,36 @@ orchestune-dispatch
 | `--max-launches-per-window <int>` | `10` | Rate limiting: maximum number of agent launches allowed in `--window-seconds`. |
 | `--window-seconds <int>` | `3600` | The sliding window duration in seconds for launch rate-limiting (default is 1 hour). |
 
+### Configuration File for Omitting Options
+
+You can place a configuration file in your project root directory to omit specifying options on the command line.
+
+The dispatcher searches for configuration files in the following order and loads the first one found:
+1. `orchestune.toml` in the project root.
+2. `[tool.orchestune]` section in `pyproject.toml` in the project root.
+
+#### Example Config (`orchestune.toml`)
+```toml
+max-concurrent = 2
+dispatch-target = "claude-cli"
+parent-issue = 181
+run-state-path = "run_state.json"
+```
+
+#### Example Config (`pyproject.toml`)
+```toml
+[tool.orchestune]
+max-concurrent = 2
+dispatch-target = "claude-cli"
+parent-issue = 181
+run-state-path = "run_state.json"
+```
+
+> [!NOTE]
+> Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
+> If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
+> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, and `max-recompute-retries` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
+
 ---
 
 ## 4. Integration & Auto-Rebase

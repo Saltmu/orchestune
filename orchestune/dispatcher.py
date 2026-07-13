@@ -4,7 +4,9 @@ import argparse
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
+from typing import Any, NoReturn, cast
 
 # 実装コード自体はgithub.*を直接呼ばないが、tests/test_dispatcher.pyが
 # orchestune.dispatcher.github.* をmock.patchの対象にしている（githubは共有モジュール
@@ -254,8 +256,110 @@ def _run_semantic_integrator(
         return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def load_config_file(cwd: Path | None = None) -> dict[str, Any]:
+    """Load the first dispatcher configuration file found in *cwd*.
+
+    Configuration syntax errors are deliberately fatal to the caller: falling
+    through to another file or to CLI defaults would make a misspelled setting
+    look like a successful dispatch.
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+
+    orchestune_toml = cwd / "orchestune.toml"
+    if orchestune_toml.exists():
+        try:
+            with open(orchestune_toml, "rb") as f:
+                return cast(dict[str, Any], tomllib.load(f))
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
+
+    pyproject_toml = cwd / "pyproject.toml"
+    if pyproject_toml.exists():
+        try:
+            with open(pyproject_toml, "rb") as f:
+                data = tomllib.load(f)
+                config = data.get("tool", {}).get("orchestune", {})
+                if not isinstance(config, dict):
+                    raise ValueError(
+                        f"{pyproject_toml}: [tool.orchestune] must be a table"
+                    )
+                return cast(dict[str, Any], config)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
+
+    return {}
+
+
+def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
+    parser.error(f"invalid dispatcher config: {message}")
+
+
+def _config_defaults(
+    parser: argparse.ArgumentParser, config_data: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate TOML values before using them as argparse defaults."""
+    actions = {action.dest: action for action in parser._actions}
+    path_keys = {
+        "run_state_path",
+        "worktree_root",
+        "log_dir",
+        "events_log_path",
+        "not_needed_review_state_path",
+    }
+    non_negative_int_keys = {
+        "max_concurrent",
+        "max_launches_per_window",
+        "deviation_buffer_lines",
+        "max_recompute_retries",
+    }
+    positive_int_keys = {"window_seconds", "parent_issue"}
+    defaults: dict[str, Any] = {}
+
+    for key, value in config_data.items():
+        normalized_key = key.replace("-", "_")
+        if normalized_key == "parent_issue_number":
+            normalized_key = "parent_issue"
+        action = actions.get(normalized_key)
+        if action is None or normalized_key == "help":
+            _config_error(parser, f"unknown key {key!r}")
+
+        if normalized_key == "apply":
+            if not isinstance(value, bool):
+                _config_error(parser, f"{key!r} must be a boolean")
+        elif normalized_key in path_keys:
+            if not isinstance(value, str):
+                _config_error(parser, f"{key!r} must be a string path")
+            value = Path(value)
+        elif normalized_key in non_negative_int_keys | positive_int_keys:
+            if not isinstance(value, int) or isinstance(value, bool):
+                _config_error(parser, f"{key!r} must be an integer")
+            if normalized_key in non_negative_int_keys and value < 0:
+                _config_error(parser, f"{key!r} must be greater than or equal to 0")
+            if normalized_key in positive_int_keys and value < 1:
+                _config_error(parser, f"{key!r} must be greater than or equal to 1")
+        elif action.choices is not None:
+            if not isinstance(value, str) or value not in action.choices:
+                choices = ", ".join(repr(choice) for choice in action.choices)
+                _config_error(parser, f"{key!r} must be one of: {choices}")
+        elif not isinstance(value, str):
+            _config_error(parser, f"{key!r} must be a string")
+
+        defaults[normalized_key] = value
+
+    return defaults
+
+
+def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
     parser = _build_arg_parser()
+
+    try:
+        config_data = load_config_file(cwd)
+    except ValueError as e:
+        _config_error(parser, str(e))
+    if config_data:
+        parser.set_defaults(**_config_defaults(parser, config_data))
+
     args = parser.parse_args(argv)
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
         os.environ
