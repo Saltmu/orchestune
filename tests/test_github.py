@@ -23,6 +23,7 @@ from orchestune.github import (
     list_issues_by_label,
     list_open_prs,
     list_remote_branches,
+    list_sub_issues,
     remove_label,
 )
 
@@ -167,6 +168,117 @@ class TestListIssuesByLabel:
         with patch("orchestune.github.subprocess.run") as mock_run:
             with pytest.raises(ValueError):
                 list_issues_by_label("status:done", state="bogus")
+            mock_run.assert_not_called()
+
+
+class TestListSubIssues:
+    """#156: parent_issue_number指定時のfast path。gh api graphqlの
+    subIssuesフィールド経由で親Issue配下の子Issueをまとめて取得する。"""
+
+    def _page(self, nodes, has_next_page=False, end_cursor=None):
+        import json
+
+        return json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "issue": {
+                            "subIssues": {
+                                "pageInfo": {
+                                    "hasNextPage": has_next_page,
+                                    "endCursor": end_cursor,
+                                },
+                                "nodes": nodes,
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    def _node(self, **overrides):
+        defaults = dict(
+            number=1,
+            title="t",
+            body="b",
+            state="OPEN",
+            createdAt="2026-01-01T00:00:00Z",
+            labels={"nodes": [{"name": "status:queued"}]},
+            parent={"number": 100},
+            blockedBy={"nodes": []},
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_calls_gh_api_graphql_with_parent_number(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=self._page([]), stderr=""
+            )
+            list_sub_issues(100)
+
+        called_args = mock_run.call_args.args[0]
+        assert called_args[0:3] == ["gh", "api", "graphql"]
+        assert "number=100" in called_args
+
+    def test_parses_full_issue_record_fields(self):
+        node = self._node(
+            number=1,
+            title="task-a",
+            body="body text",
+            state="OPEN",
+            createdAt="2026-01-01T00:00:00Z",
+            labels={"nodes": [{"name": "status:queued"}]},
+            parent={"number": 100},
+            blockedBy={"nodes": [{"number": 5}]},
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=self._page([node]), stderr=""
+            )
+            result = list_sub_issues(100)
+
+        assert result == [
+            IssueRecord(
+                number=1,
+                title="task-a",
+                body="body text",
+                labels=("status:queued",),
+                created_at="2026-01-01T00:00:00Z",
+                state="OPEN",
+                parent={"number": 100},
+                blocked_by=(5,),
+            )
+        ]
+
+    def test_paginates_until_no_next_page(self):
+        node_1 = self._node(number=1)
+        node_2 = self._node(number=2)
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout=self._page(
+                        [node_1], has_next_page=True, end_cursor="cursor-1"
+                    ),
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=self._page([node_2]), stderr=""
+                ),
+            ]
+            result = list_sub_issues(100)
+
+        assert [r.number for r in result] == [1, 2]
+        assert mock_run.call_count == 2
+        second_call_args = mock_run.call_args_list[1].args[0]
+        assert "after=cursor-1" in second_call_args
+
+    def test_rejects_invalid_parent_issue_number_before_calling_subprocess(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                list_sub_issues(-1)
             mock_run.assert_not_called()
 
 

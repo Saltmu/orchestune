@@ -119,6 +119,93 @@ def list_issues_by_label(label: str, state: str = "open") -> list[IssueRecord]:
     ]
 
 
+_SUB_ISSUES_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      subIssues(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          title
+          body
+          state
+          createdAt
+          labels(first: 50) { nodes { name } }
+          parent { number }
+          blockedBy(first: 50) { nodes { number } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def list_sub_issues(parent_issue_number: int | str) -> list[IssueRecord]:
+    """#156: 親Issue配下のサブタスクIssueを、GraphQLの`subIssues`フィールド経由で
+    まとめて取得する。
+
+    `list_issues_by_label`はステータスラベル別にリポジトリ全体を検索するため、
+    `parent_issue_number`が判明している単一big-rockディスパッチのケースでも、
+    無関係な親配下のIssueまで取得してから`IssuesByStatus.filtered_by_parent`で
+    破棄する、という無駄が生じる。親Issueが分かっている場合はこちらを使うことで、
+    GitHub API呼び出しを（ページネーション分を除き）1回にまとめられる。
+
+    `gh issue view --json subIssues`（CLIラッパー）は`number`/`title`/`state`
+    程度しか返さず`IssueRecord`の構築に不足するため、`gh api graphql`で必要な
+    フィールドを直接指定している。
+    """
+    number = _validate_issue_number(parent_issue_number)
+
+    records: list[IssueRecord] = []
+    after: str | None = None
+    while True:
+        args = [
+            "gh",
+            "api",
+            "graphql",
+            "-F",
+            "owner={owner}",
+            "-F",
+            "name={repo}",
+            "-F",
+            f"number={number}",
+            "-f",
+            f"query={_SUB_ISSUES_QUERY}",
+        ]
+        if after is not None:
+            args += ["-F", f"after={after}"]
+        stdout = _run(args)
+        sub_issues = json.loads(stdout)["data"]["repository"]["issue"]["subIssues"]
+
+        for node in sub_issues["nodes"]:
+            records.append(
+                IssueRecord(
+                    number=node["number"],
+                    title=node["title"],
+                    body=node["body"],
+                    labels=tuple(
+                        entry["name"]
+                        for entry in node.get("labels", {}).get("nodes", [])
+                    ),
+                    created_at=node["createdAt"],
+                    state=node.get("state", "OPEN"),
+                    parent=node.get("parent"),
+                    blocked_by=tuple(
+                        b["number"] for b in node.get("blockedBy", {}).get("nodes", [])
+                    ),
+                )
+            )
+
+        page_info = sub_issues["pageInfo"]
+        if not page_info["hasNextPage"]:
+            break
+        after = page_info["endCursor"]
+
+    return records
+
+
 def add_label(issue_number: int | str, label: str) -> None:
     number = _validate_issue_number(issue_number)
     _validate_label(label)
