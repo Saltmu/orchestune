@@ -243,6 +243,51 @@ class PrepareTasksStep(IntegrationComponent):
                     )
 
 
+class RetryChildIssueCloseStep(IntegrationComponent):
+    """#170レビュー対応: `integration:included`は`AutoMergeChildIntegrationStep`が
+    マージ成功後にのみ付与するようになったため、「マージ済みだがクローズには
+    失敗した」子Issueを検知する信頼できるシグナルとして再利用できる。
+
+    マージ成功・クローズ失敗のケースでは、対象の子ブランチは既に`base_branch`へ
+    取り込まれているため、次サイクルの統合PR作成は差分無しで失敗し、通常の
+    マージ経路では二度とクローズが再試行されない。本ステップはその独立した
+    回復パスとして、`PrepareTasksStep`の直後に実行する。
+    """
+
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply or ctx.config.parent_issue_number is None:
+            return {"status": "success"}
+
+        remaining_tasks = []
+        retried_closed: list[int] = []
+        for task in ctx.active_done_tasks:
+            if "integration:included" not in task.status_labels:
+                remaining_tasks.append(task)
+                continue
+            try:
+                github.close_issue(
+                    task.issue_number,
+                    "completed",
+                    comment=(
+                        "Integratorが親ブランチへの自動マージを完了済みですが、"
+                        "前回のクローズ処理に失敗していたため再試行しました。"
+                    ),
+                )
+                retried_closed.append(task.issue_number)
+            except Exception as e:
+                print(
+                    "Warning: Failed to retry closing issue "
+                    f"#{task.issue_number}: {e}",
+                    file=sys.stderr,
+                )
+                remaining_tasks.append(task)
+
+        ctx.active_done_tasks = remaining_tasks
+        if not ctx.active_done_tasks:
+            return {"status": "no_done_tasks", "retried_closed_issues": retried_closed}
+        return {"status": "success", "retried_closed_issues": retried_closed}
+
+
 class SetupWorktreeStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> dict:
         if not ctx.config.apply:
@@ -479,7 +524,12 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 f"#{ctx.integration_pr_number}: {e}",
                 file=sys.stderr,
             )
-            return {"status": "success", "auto_merged": False}
+            self._comment_on_merge_failure(ctx, e)
+            return {
+                "status": "auto_merge_failed",
+                "error": str(e),
+                "auto_merged": False,
+            }
 
         closed_issues = self._close_merged_child_issues(ctx)
         return {
@@ -487,6 +537,34 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             "auto_merged": True,
             "closed_issues": closed_issues,
         }
+
+    def _comment_on_merge_failure(
+        self, ctx: IntegrationContext, error: Exception
+    ) -> None:
+        task_by_subtask_id = {
+            t.subtask_id: t for t in ctx.active_done_tasks if t.subtask_id
+        }
+        for subtask_id in ctx.merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is None:
+                continue
+            try:
+                github.add_comment(
+                    task.issue_number,
+                    (
+                        "Integratorによる統合PR "
+                        f"#{ctx.integration_pr_number} の自動マージに失敗しました"
+                        f"（{error}）。次回のディスパッチサイクルで自動的に"
+                        "再試行されます。ブランチ保護や権限設定に起因する場合は、"
+                        "人間による確認が必要です。"
+                    ),
+                )
+            except Exception as e:
+                print(
+                    "Warning: Failed to comment on merge failure for issue "
+                    f"#{task.issue_number}: {e}",
+                    file=sys.stderr,
+                )
 
     def _close_merged_child_issues(self, ctx: IntegrationContext) -> list[int]:
         closed_issues: list[int] = []
@@ -556,13 +634,14 @@ class Integrator:
         pipeline = IntegrationPipeline(
             [
                 PrepareTasksStep(),
+                RetryChildIssueCloseStep(),
                 SetupWorktreeStep(),
                 MergeAndTestStep(),
                 PushTempBranchStep(),
                 EnsureIntegrationPrStep(),
                 SemanticReviewStep(),
-                LabelIncludedStep(),
                 AutoMergeChildIntegrationStep(),
+                LabelIncludedStep(),
             ]
         )
 
