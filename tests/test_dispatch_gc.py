@@ -595,3 +595,90 @@ class TestWorktreeHasNewCommitsIntegration:
 
         # 5. 検証: worktree_has_new_commits に "parent/issue-129" を渡したときに、True が返ることを確認する。
         assert worktree_has_new_commits(local_dir, "parent/issue-129") is True
+
+    def test_prefers_local_parent_when_remote_parent_is_stale(self, tmp_path):
+        import subprocess
+
+        # 1. リモートとローカルのリポジトリをセットアップ
+        remote_dir = tmp_path / "remote"
+        remote_dir.mkdir()
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+
+        # リモート初期化
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+
+        # ローカル初期化と最初のコミット
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "checkout", "-b", "main"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # initial commit
+        (local_dir / "file.txt").write_text("initial")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"], cwd=str(local_dir), check=True
+        )
+
+        # リモートを登録し、main を push
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"], cwd=str(local_dir), check=True
+        )
+
+        # 2. 親ブランチ作成し、コミット A を作成
+        subprocess.run(
+            ["git", "checkout", "-b", "parent/issue-129"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        (local_dir / "file.txt").write_text("commit A")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit A"], cwd=str(local_dir), check=True
+        )
+
+        # リモートへ push (リモートの parent/issue-129 はコミット A を指す)
+        subprocess.run(
+            ["git", "push", "origin", "parent/issue-129"],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 3. ローカルの parent/issue-129 に追加のコミット B を積む (ローカル parent/issue-129: A - B)
+        # (リモートへは push しない。これによりリモート追跡はコミット A を指したまま)
+        (local_dir / "file.txt").write_text("commit B")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit B"], cwd=str(local_dir), check=True
+        )
+
+        # 4. 子ブランチをローカルの parent/issue-129 から作成 (子固有のコミットはなし、HEAD はコミット B)
+        subprocess.run(
+            [
+                "git",
+                "checkout",
+                "-b",
+                "claude/issue-130-task",
+                "parent/issue-129",
+            ],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # 5. 検証: ローカルを優先して解決するため、HEAD (B) と ローカル parent (B) を比較し、新規コミットなし (False) となることを確認。
+        # (もしリモート優先バグがあると、HEAD (B) と origin/parent (A) を比較して新規コミットあり (True) と判定されてしまう)
+        assert worktree_has_new_commits(local_dir, "parent/issue-129") is False
