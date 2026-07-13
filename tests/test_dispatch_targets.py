@@ -136,6 +136,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         body = json.loads(request.data.decode("utf-8"))
         assert "claude/issue-1-task-a" in body["text"]
         assert "#1" in body["text"]
+        # #157: クラウドルーチンも非対話実行のため、承認待ちで停止しないよう明示する。
+        assert "非対話" in body["text"]
+        assert "承認待ちで停止せず" in body["text"]
 
     def test_fire_text_fires_arbitrary_prompt_and_returns_handle(self):
         # #186: 統合コーディネーターが同一ルーチンへ任意指示を投げる汎用fire。
@@ -346,6 +349,18 @@ class TestBuildDispatchTarget:
         target = build_dispatch_target("agy-cli", None, None, tmp_path / "logs")
         assert "--sandbox" in target._local_cmd
         assert "--dangerously-skip-permissions" in target._local_cmd
+
+    def test_claude_cli_preset_instructs_noninteractive_execution(self, tmp_path):
+        # #157: 非対話型のバックグラウンド起動ではplanning_modeの承認待ちで
+        # 停止してしまうため、プロンプト側で自動実行であることを明示する。
+        target = build_dispatch_target("claude-cli", None, None, tmp_path / "logs")
+        assert "非対話" in target._local_cmd
+        assert "承認待ちで停止せず" in target._local_cmd
+
+    def test_agy_cli_preset_instructs_noninteractive_execution(self, tmp_path):
+        target = build_dispatch_target("agy-cli", None, None, tmp_path / "logs")
+        assert "非対話" in target._local_cmd
+        assert "承認待ちで停止せず" in target._local_cmd
 
     def test_agy_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
         target = build_dispatch_target(

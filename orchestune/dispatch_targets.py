@@ -29,17 +29,25 @@ if TYPE_CHECKING:
 ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
 ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
 
+NONINTERACTIVE_DISPATCH_INSTRUCTION = (
+    "これは非対話型のバックグラウンド自動実行であり、標準入力からの応答は得られません。"
+    "planning_modeによるユーザー承認待ちで停止せず、"
+    "実装プラン作成後は直ちに実装・検証・コミットまで完了させてください。"
+)
+
 CLAUDE_CLI_LOCAL_CMD_TEMPLATE = (
     'claude -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
-    '標準開発ワークフローに従って実装してください。" '
+    "標準開発ワークフローに従って実装してください。"
+    f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--permission-mode bypassPermissions"
 )
 
 AGY_CLI_LOCAL_CMD_TEMPLATE = (
     'agy -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
-    '標準開発ワークフローに従って実装してください。" '
+    "標準開発ワークフローに従って実装してください。"
+    f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--sandbox --dangerously-skip-permissions"
 )
 
@@ -180,6 +188,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             "標準開発ワークフローに従って実装してください。\n"
             f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
             f"想定footprint: {footprint}\n"
+            f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
         )
 
     def _fire(self, text: str) -> dict[str, Any]:
