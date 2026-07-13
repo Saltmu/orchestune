@@ -133,17 +133,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dispatch-target",
-        choices=["local", "cloud-routine", "claude-cli", "agy-cli"],
+        choices=[
+            "local",
+            "cloud-routine",
+            "claude-cli",
+            "agy-cli",
+            "codex-cli",
+            "auto",
+        ],
         default=None,
-        help="#215: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
+        help="#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
         "（GitHub Actions実行時（GITHUB_ACTIONS=true）は'cloud-routine'、"
-        "それ以外のローカル/対話実行時は'claude-cli'）。"
+        "それ以外のローカル/対話実行時は'auto'）。"
+        "'auto'はPATH上にインストールされているローカルCLIを検出し"
+        "（'claude'優先、次点'agy'、'codex'）、見つかったCLIへ'claude-cli'/"
+        "'agy-cli'/'codex-cli'を指定した場合と同様にディスパッチする。"
+        "いずれも見つからない場合は警告を出し、後方互換のダミー起動（no-op）に"
+        "フォールバックする。"
         "明示的に'local'を指定した場合のみ、後方互換のダミー起動（no-op、"
         "テスト・dry-run用途）になる。'cloud-routine'はClaude Codeクラウド"
         "ルーチンのfire APIへディスパッチする（要 --routine-id/--routine-token または"
         "ORCHESTUNE_ROUTINE_ID/ORCHESTUNE_ROUTINE_TOKEN環境変数）。"
-        "'claude-cli'/'agy-cli'はそれぞれローカルのclaude/agy CLIへ、"
-        "許可プロンプトを毎回バイパスするプリセットのコマンドテンプレートで"
+        "'claude-cli'/'agy-cli'/'codex-cli'はそれぞれローカルのclaude/agy/codex "
+        "CLIへ、許可プロンプトを毎回バイパスするプリセットのコマンドテンプレートで"
         "ディスパッチする（--local-cmdで上書き可能）",
     )
     parser.add_argument(
