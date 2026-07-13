@@ -18,12 +18,14 @@ from orchestune.github import (
     create_pull_request,
     get_actor_permission,
     get_issue_labels,
+    get_issue_state,
     get_label_actor,
     is_branch_merged_into,
     list_issues_by_label,
     list_open_prs,
     list_remote_branches,
     list_sub_issues,
+    merge_pull_request,
     remove_label,
 )
 
@@ -794,6 +796,55 @@ class TestCreatePullRequest:
                     title="t",
                     body="b",
                 )
+            mock_run.assert_not_called()
+
+
+class TestMergePullRequest:
+    def test_merges_with_merge_commit(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            merge_pull_request(315)
+        called_args = mock_run.call_args.args[0]
+        assert called_args == ["gh", "pr", "merge", "315", "--merge"]
+
+    def test_propagates_failure_on_unmergeable_pr(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1, ["gh", "pr", "merge"], stderr="not mergeable"
+            )
+            with pytest.raises(subprocess.CalledProcessError):
+                merge_pull_request(315)
+
+    def test_rejects_invalid_pr_number(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                merge_pull_request("315; rm -rf /")  # type: ignore[arg-type]
+            mock_run.assert_not_called()
+
+
+class TestGetIssueState:
+    def test_returns_open_state(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='{"state": "OPEN"}'
+            )
+            state = get_issue_state(170)
+        assert state == "OPEN"
+
+    def test_returns_closed_state(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='{"state": "CLOSED"}'
+            )
+            state = get_issue_state(170)
+        assert state == "CLOSED"
+
+    def test_rejects_invalid_issue_number(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            with pytest.raises(ValueError):
+                get_issue_state("170; rm -rf /")
             mock_run.assert_not_called()
 
 

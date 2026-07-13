@@ -52,32 +52,37 @@ Typically, orchestrator states are tracked in a local state file like `run_state
 
 ## 3. Integration & Auto-Rebase
 
-When multiple agents complete their tasks and open PRs, downstream tasks must integrate those updates. Orchestune's integrator coordinates rebases and merges autonomously.
+When multiple agents complete their tasks, downstream tasks must integrate those updates. Orchestune's integrator coordinates this via a **two-tier branch model**, so that human review effort is concentrated on the one merge that actually matters (getting the "big rock" into `main`), while every intermediate child merge runs unattended.
 
 ```mermaid
 sequenceDiagram
     participant AG as Agent (Subtask B)
-    participant DP as Orchestune Dispatcher
+    participant DP as Orchestune Integrator
+    participant PB as GitHub (parent/issue-{N})
     participant GH as GitHub (main)
 
-    AG->>GH: Open Pull Request
-    Note over DP: Detect completed Subtask B
-    DP->>GH: Create temporary integration merge
-    DP->>DP: Run CI Verification
+    Note over DP: Detect completed Subtask B (status:done)
+    DP->>PB: Create temporary integration merge + run CI
     alt CI Passes
-        DP->>GH: Merge Subtask B into main
-        DP->>GH: Rebase downstream tasks (Subtask C) on main
+        DP->>PB: Auto-merge integration PR into parent/issue-{N}
+        DP->>GH: Auto-close Subtask B's Issue ("completed")
     else CI Fails
-        DP->>GH: Reset merge & Report CI logs to PR
+        DP->>PB: Reset merge & report CI logs to Subtask B's Issue
     end
+    Note over DP: Once every child Issue under #N is closed
+    DP->>GH: Open final PR: parent/issue-{N} -> main
+    Note over GH: Human reviews and merges (the only merge gate)
+    DP->>GH: Detect the merge, auto-close parent Issue #N ("completed")
 ```
 
-1. **Pre-merge CI Verification**:
-   When a subtask PR is detected, the integrator creates a temporary merge branch and runs the local CI.
-2. **Auto-Rebase**:
-   Once a preceding task merges, the integrator automatically rebases active downstream branches (that depend on it or touch related files) on `main`, ensuring agents work with fresh code.
-3. **Semantic Review**:
-   During integration, an LLM reviews the combined changes to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) before finalization.
+1. **Child branches off the parent branch**: when the dispatcher is run with `--parent-issue <N>`, the parent Issue gets its own long-lived branch (`parent/issue-{N}`, created from `main`), and every child subtask branches off it instead of off `main`.
+2. **Pre-merge CI Verification**: when a child Issue reaches `status:done`, the integrator creates a temporary merge branch off `parent/issue-{N}`, merges the child's commits into it, and runs the local CI.
+3. **Automatic child merge & close**: once CI passes, the integrator merges that temporary branch's PR into `parent/issue-{N}` **without waiting for a human** and closes the child Issue (`reason: completed`). No per-child review gate exists at this tier — CI is the quality gate (see Section 4).
+4. **Final PR, once every child is done**: when all child Issues under a parent are closed, the integrator opens a PR from `parent/issue-{N}` to `main`. This PR is never auto-merged.
+5. **Acceptance merge & parent close**: a human reviews and merges that final PR. Once merged, the integrator detects it and closes the parent Issue automatically.
+6. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR for the human who will later review the final PR — it never blocks or reverses the automatic child merge.
+
+If the dispatcher is run without `--parent-issue`, Orchestune falls back to the flat, single-tier mode: child branches merge directly toward `main` and, matching the "final merge" semantics above, that merge is always left for a human (the integrator only opens the PR).
 
 ---
 
@@ -86,12 +91,12 @@ sequenceDiagram
 Orchestune is designed so a human makes a decision at exactly two points in the lifecycle — everything between them runs autonomously.
 
 1. **Decomposition Gate**: Before dispatch begins, a human reviews and approves `decomposition_plan.md` (subtask boundaries, footprints, dependencies).
-2. **Acceptance Gate**: After all subtasks are integrated into `main`, a human reviews the final result of the "big rock" and accepts it (closes the parent Issue).
+2. **Acceptance Gate**: The final PR from `parent/issue-{N}` into `main` (see Section 3) is the one merge a human must perform. Once it's merged, Orchestune closes the parent Issue automatically — no separate manual close step is needed.
 
-Between these two gates, subtask PR merges, CI verification, rebases, and conflict resolution all proceed without per-task human approval. `risk:flagged` labels surface sensitive subtasks for visibility, but are informational only — they do not add a third blocking gate.
+Between these two gates, child-level integration PRs, CI verification, and the resulting Issue closes all proceed without per-task human approval. `risk:flagged` labels surface sensitive subtasks for visibility, but are informational only — they do not add a third blocking gate.
 
-**Why two gates are enough**: every subtask's history (Issue, PR, commits, CI logs) is preserved on GitHub, so human review effort doesn't need to happen inline with every merge — it can be scoped up front (decomposition) and reconciled after the fact (acceptance) without losing traceability.
+**Why two gates are enough**: every subtask's history (Issue, PR, commits, CI logs) is preserved on GitHub, so human review effort doesn't need to happen inline with every child merge — it can be scoped up front (decomposition) and reconciled at the very end (the single acceptance merge) without losing traceability.
 
-**CI as the de facto quality gate**: the pre-merge CI verification described in Section 3 substitutes for per-task human review — every subtask PR must pass CI before it is merged into `main`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
+**CI as the de facto quality gate**: the pre-merge CI verification described in Section 3 substitutes for per-task human review — every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
 
-This keeps human review effort concentrated where judgment matters most (scoping and final acceptance), while everything mechanical in between is fully automated.
+This keeps human review effort concentrated where judgment matters most (scoping and the final acceptance merge), while everything mechanical in between — including Issue closing at both tiers — is fully automated.

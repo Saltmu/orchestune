@@ -20,6 +20,7 @@ from orchestune.dispatcher import (
     _decide_semantic_review_enabled,
     _is_worktree_complete,
     _poll_pending_not_needed_reviews,
+    _process_parent_completion,
     _run_semantic_integrator,
     append_event_log,
     build_event_log_entry,
@@ -3189,6 +3190,42 @@ class TestRunSemanticIntegrator:
             "orchestune.integrator.Integrator", side_effect=RuntimeError("boom")
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert result is None
+        assert "boom" in capsys.readouterr().err
+
+
+class TestProcessParentCompletion:
+    """#170: 親Issue完了検知（best-effort）の配線を確認する。"""
+
+    def test_returns_report_on_success(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            parent_issue_number=100,
+            apply=True,
+        )
+        with patch(
+            "orchestune.parent_completion.process_parent_completion",
+            return_value={"status": "waiting_on_children", "open_children": [101]},
+        ) as mock_process:
+            result = _process_parent_completion(config)
+
+        assert result == {"status": "waiting_on_children", "open_children": [101]}
+        mock_process.assert_called_once_with(100, True)
+
+    def test_returns_none_and_warns_on_failure(self, capsys):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            parent_issue_number=100,
+            apply=True,
+        )
+        with patch(
+            "orchestune.parent_completion.process_parent_completion",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = _process_parent_completion(config)
 
         assert result is None
         assert "boom" in capsys.readouterr().err

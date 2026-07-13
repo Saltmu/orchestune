@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
@@ -94,8 +94,16 @@ class TestIntegrator:
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
     def test_success_integration(
-        self, mock_create_pr, mock_open_prs, mock_run, mock_list
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
     ):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         issue_b = _issue(
@@ -132,8 +140,10 @@ class TestIntegrator:
         assert any("claude/issue-1-task-1" in arg for arg in merge_calls[0].args[0])
         assert any("claude/issue-2-task-2" in arg for arg in merge_calls[1].args[0])
 
-        # 統合ブランチからmainへのPRが作成され、成功時の統合作業はここで完結する
-        # （最終マージは常に人間が行う）。
+        # 統合ブランチから親ブランチへのPRが作成される。子レベル
+        # （parent_issue_number指定時）は、この後Integratorが自らこのPRを
+        # 自動マージし、対象Issueも自動クローズする（最終マージ＝親ブランチ→main
+        # のみ人間が行う）。
         mock_create_pr.assert_called_once()
         assert (
             mock_create_pr.call_args.kwargs["head"]
@@ -141,7 +151,14 @@ class TestIntegrator:
         )
         assert mock_create_pr.call_args.kwargs["base"] == "parent/issue-100"
         assert "task-1" in mock_create_pr.call_args.kwargs["body"]
-        assert "人間が行ってください" in mock_create_pr.call_args.kwargs["body"]
+        assert "自動的にマージ" in mock_create_pr.call_args.kwargs["body"]
+
+        mock_merge_pr.assert_called_once_with(999)
+        mock_close_issue.assert_any_call(1, "completed", comment=ANY)
+        mock_close_issue.assert_any_call(2, "completed", comment=ANY)
+        assert mock_close_issue.call_count == 2
+        assert res["auto_merged"] is True
+        assert sorted(res["closed_issues"]) == [1, 2]
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
@@ -186,14 +203,23 @@ class TestIntegrator:
     @patch("orchestune.integrator.github.list_open_prs")
     @patch("orchestune.integrator.github.create_pull_request")
     @patch("orchestune.integrator.github.add_label")
-    def test_already_included_task_is_not_relabeled_but_still_remerged(
-        self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
+    @patch("orchestune.integrator.github.close_issue")
+    def test_already_included_task_is_recovered_via_retry_not_remerged(
+        self,
+        mock_close_issue,
+        mock_add,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
     ):
-        # #139: 統合ブランチはbase_branchの前進に追従するため毎回ベースから
-        # 再構築される。既に`integration:included`が付いたタスクもre-merge
-        # 対象からは除外しない（除外すると再構築のたびに統合ブランチから
-        # そのタスクの変更が消えてしまう）が、ラベルの再付与とnewly_includedへの
-        # 算入だけは行わない。
+        # #170レビュー対応: integration:includedは、マージ成功が確定した場合
+        # にのみ付与されるようになったため（`AutoMergeChildIntegrationStep`が
+        # `LabelIncludedStep`より前段で実行される）、既にこのラベルを持つ
+        # タスクは「base_branchへ既に安全に取り込まれ済み」であることの
+        # 信頼できるシグナルになる。`RetryChildIssueCloseStep`がこれを検知して
+        # クローズを独立に再試行し、統合ブランチへの再マージ対象からは除外する
+        # （既にbase_branchに含まれているため、再マージする必要がない）。
         issue_a = _issue(
             1,
             labels=("status:done", "integration:included"),
@@ -220,16 +246,25 @@ class TestIntegrator:
         res = integrator.run()
 
         assert res["status"] == "success"
-        assert res["merged"] == ["task-1", "task-2"]
+        assert res["merged"] == ["task-2"]
+        assert res["retried_closed_issues"] == [1]
         assert res["newly_included"] == ["task-2"]
+        mock_close_issue.assert_any_call(1, "completed", comment=ANY)
+        mock_close_issue.assert_any_call(2, "completed", comment=ANY)
+        assert mock_close_issue.call_count == 2
         mock_add.assert_called_once_with(2, "integration:included")
 
-        # 既にintegration:includedを持つtask-1もre-mergeの対象からは
-        # 除外されていないこと（統合ブランチ再構築の正しさを維持する）。
+        # task-1は既にbase_branchに含まれている前提のため再マージされない。
+        # `git merge`のみを数える（#170: parent_issue_number指定時は、この後
+        # `gh pr merge`による自動マージ呼び出しも同じsubprocess.runモックを
+        # 経由するため、それらと混同しないようgitコマンドに限定する）。
         merge_calls = [
-            call for call in mock_run.call_args_list if "merge" in call.args[0]
+            call
+            for call in mock_run.call_args_list
+            if call.args[0][0] == "git" and "merge" in call.args[0]
         ]
-        assert len(merge_calls) == 2
+        assert len(merge_calls) == 1
+        assert any("claude/issue-2-task-2" in arg for arg in merge_calls[0].args[0])
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
@@ -284,6 +319,170 @@ class TestIntegrator:
         # integration:includedは付与しない。
         assert res["newly_included"] == []
         mock_add.assert_not_called()
+
+
+class TestAutoMergeChildIntegration:
+    """#170: `parent_issue_number`指定時のみ、統合PRを自動マージし対象の
+    子Issueを自動クローズする。最終マージ（親ブランチ→main）は引き続き
+    人間が行うため、`parent_issue_number`未指定（base_branch=main）時は
+    一切自動マージ・クローズを行わない。
+    """
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_no_auto_merge_when_parent_issue_number_is_none(
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert "人間が行ってください" in mock_create_pr.call_args.kwargs["body"]
+        mock_merge_pr.assert_not_called()
+        mock_close_issue.assert_not_called()
+        assert res.get("auto_merged") is None
+        assert res.get("closed_issues") is None
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.add_comment")
+    def test_auto_merge_failure_leaves_pr_open_and_skips_closing(
+        self,
+        mock_comment,
+        mock_add_label,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        # レビュー指摘(#170): マージ失敗を`status: success`で握り潰さず、
+        # かつマージが確定していない以上`integration:included`も付与しない
+        # （パイプライン順序をAutoMerge→Labelに変更し、非successでラベル
+        # ステップ自体をスキップさせる）。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+        mock_merge_pr.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "pr", "merge"], stderr=b"not mergeable"
+        )
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "auto_merge_failed"
+        assert res["integration_pr_number"] == 999
+        mock_merge_pr.assert_called_once_with(999)
+        mock_close_issue.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_comment.assert_any_call(1, ANY)
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_close_issue_failure_for_one_task_does_not_block_others(
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        issue_b = _issue(
+            2, labels=("status:done",), subtask_id="task-2", depends_on=("task-1",)
+        )
+
+        def list_side_effect(label, *args, **kwargs):
+            if label == "status:done":
+                return [issue_b, issue_a]
+            return [issue_a, issue_b]
+
+        mock_list.side_effect = list_side_effect
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+        mock_close_issue.side_effect = [
+            subprocess.CalledProcessError(1, ["gh", "issue", "close"]),
+            None,
+        ]
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert mock_close_issue.call_count == 2
+        assert res["closed_issues"] == [2]
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_no_auto_merge_when_pr_creation_failed(
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+
+        with patch(
+            "orchestune.integrator.github.create_pull_request",
+            side_effect=RuntimeError("no commits"),
+        ):
+            config = IntegratorConfig(apply=True, parent_issue_number=100)
+            integrator = Integrator(config)
+            res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["integration_pr_number"] is None
+        mock_merge_pr.assert_not_called()
+        mock_close_issue.assert_not_called()
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
@@ -1090,6 +1289,154 @@ class TestIntegrator:
         ]
         assert len(merge_calls) == 1
         assert any("claude/issue-3-task-3" in arg for arg in merge_calls[0].args[0])
+
+
+class TestRetryChildIssueCloseStep:
+    """#170レビュー対応: マージ成功が確定した信頼できるシグナルである
+    `integration:included`ラベルを再利用し、マージ済み・クローズ未了の
+    子Issueを独立に再試行してクローズする。
+    """
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.github.close_issue")
+    def test_retries_closing_issue_already_marked_integration_included(
+        self, mock_close_issue, mock_list
+    ):
+        issue_a = _issue(
+            1,
+            labels=("status:done", "integration:included"),
+            subtask_id="task-1",
+        )
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "no_done_tasks"
+        mock_close_issue.assert_called_once_with(1, "completed", comment=ANY)
+        assert res["retried_closed_issues"] == [1]
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_retry_close_does_not_block_normal_processing_of_other_tasks(
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        issue_a = _issue(
+            1,
+            labels=("status:done", "integration:included"),
+            subtask_id="task-1",
+        )
+        issue_b = _issue(2, labels=("status:done",), subtask_id="task-2")
+
+        def list_side_effect(label, *args, **kwargs):
+            if label == "status:done":
+                return [issue_a, issue_b]
+            return [issue_a, issue_b]
+
+        mock_list.side_effect = list_side_effect
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-2"]
+        assert res["retried_closed_issues"] == [1]
+        mock_close_issue.assert_any_call(1, "completed", comment=ANY)
+        mock_close_issue.assert_any_call(2, "completed", comment=ANY)
+        assert mock_close_issue.call_count == 2
+        mock_merge_pr.assert_called_once_with(999)
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_retry_close_failure_falls_back_to_normal_reprocessing(
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        issue_a = _issue(
+            1,
+            labels=("status:done", "integration:included"),
+            subtask_id="task-1",
+        )
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+        mock_close_issue.side_effect = [
+            subprocess.CalledProcessError(1, ["gh", "issue", "close"]),
+            None,
+        ]
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["retried_closed_issues"] == []
+        assert res["merged"] == ["task-1"]
+        assert res["closed_issues"] == [1]
+        assert mock_close_issue.call_count == 2
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.close_issue")
+    def test_no_retry_close_when_parent_issue_number_is_none(
+        self,
+        mock_close_issue,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        issue_a = _issue(
+            1,
+            labels=("status:done", "integration:included"),
+            subtask_id="task-1",
+        )
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+
+        config = IntegratorConfig(apply=True)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-1"]
+        mock_close_issue.assert_not_called()
+        assert not res.get("retried_closed_issues")
 
 
 class TestIntegratorWorktreeIsolation:
