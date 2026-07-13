@@ -3365,3 +3365,57 @@ class TestDispatcherConfigLoading:
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 3
+
+    @pytest.mark.parametrize(
+        ("config", "expected_error"),
+        [
+            ("dispatch-target = 'claude-clii'\n", "dispatch-target"),
+            ("max-concurent = 5\n", "unknown key"),
+            ('max-concurrent = "5"\n', "must be an integer"),
+            ('apply = "false"\n', "must be a boolean"),
+            ("max-concurrent = -1\n", "greater than or equal to 0"),
+            ("window-seconds = 0\n", "greater than or equal to 1"),
+            ("parent-issue = 0\n", "greater than or equal to 1"),
+            ("run-state-path = 1\n", "must be a string path"),
+        ],
+    )
+    def test_rejects_invalid_config_values(self, tmp_path, config, expected_error, capsys):
+        (tmp_path / "orchestune.toml").write_text(config, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as error:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert error.value.code == 2
+        assert expected_error in capsys.readouterr().err
+
+    def test_rejects_invalid_toml_without_falling_back_to_pyproject(self, tmp_path, capsys):
+        (tmp_path / "orchestune.toml").write_text("max-concurrent = [\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.orchestune]\nmax-concurrent = 5\n", encoding="utf-8"
+        )
+
+        with pytest.raises(SystemExit) as error:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert error.value.code == 2
+        assert "failed to load" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "dispatch_target",
+        ["local", "cloud-routine", "claude-cli", "agy-cli", "codex-cli", "auto"],
+    )
+    def test_accepts_each_dispatch_target(self, tmp_path, dispatch_target):
+        (tmp_path / "orchestune.toml").write_text(
+            f"dispatch-target = '{dispatch_target}'\n", encoding="utf-8"
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert mock_build.call_args.args[0] == dispatch_target
