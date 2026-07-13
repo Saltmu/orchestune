@@ -34,6 +34,8 @@ class SubTask:
     risk: bool
     risk_reasons: tuple[str, ...]
     priority: str = "medium"
+    overview: str = ""
+    acceptance_criteria: tuple[str, ...] = ()
 
     def touch_set(self) -> frozenset[str]:
         footprint = frozenset(
@@ -68,6 +70,8 @@ class DagResult:
                     "depends_on": list(subtask.depends_on),
                     "risk": subtask.risk,
                     "risk_reasons": list(subtask.risk_reasons),
+                    "overview": subtask.overview,
+                    "acceptance_criteria": list(subtask.acceptance_criteria),
                 }
                 for subtask_id, subtask in self.subtasks.items()
             },

@@ -73,6 +73,45 @@ class TestParseDecompositionPlan:
         assert subtasks[0].priority == "high"
         assert subtasks[1].priority == "low"
 
+    def test_parses_overview_and_acceptance_criteria(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+            overview: "This is a detailed overview of task-a."
+            acceptance_criteria:
+              - "Criterion 1"
+              - "Criterion 2"
+          - id: task-b
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        subtasks = parse_decomposition_plan(path)
+        assert subtasks[0].overview == "This is a detailed overview of task-a."
+        assert subtasks[0].acceptance_criteria == ("Criterion 1", "Criterion 2")
+        assert subtasks[1].overview == ""
+        assert subtasks[1].acceptance_criteria == ()
+
+        # to_dictのテスト
+        from orchestune.dag_models import DagResult
+
+        res = DagResult(
+            subtasks={subtasks[0].id: subtasks[0]},
+            edges=[],
+            topological_order=["task-a"],
+            parallel_leaves=["task-a"],
+            risky_subtask_ids=[],
+        )
+        d = res.to_dict()
+        assert (
+            d["subtasks"]["task-a"]["overview"]
+            == "This is a detailed overview of task-a."
+        )
+        assert d["subtasks"]["task-a"]["acceptance_criteria"] == [
+            "Criterion 1",
+            "Criterion 2",
+        ]
+
     def test_missing_frontmatter_raises(self, tmp_path):
         path = _write_plan(tmp_path, "# no frontmatter here\n")
         with pytest.raises(ValueError, match="フロントマター"):

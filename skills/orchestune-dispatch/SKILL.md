@@ -34,22 +34,26 @@ output_schema:
 
 1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
 2. 承認済みの`decomposition_plan.md`の各サブタスクについて、GitHub Issueを起票します。
-3. Issueのタイトル・本文は以下の形式とします：
+3. **Issueのテンプレート適用**: `.github/issue_template.md` のテンプレートファイルをベースに、サブタスクの情報をプレースホルダーに埋め込んで一時ファイル（例: `/tmp/issue_body.md`）を作成します。
    * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
-   * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
-
-     ```markdown
-     ## Footprint
-     ```yaml
-     subtask_id: <subtask_id>
-     footprint:
-       - <path/to/file>
-     symbols:
-       - <class_or_function>
-     depends_on:
-       - <dep_subtask_id>
-     ```
-     ```
+   * **置換ルール**:
+     * `{{subtask_id}}`: サブタスクID
+     * `{{description}}`: `description` の内容
+     * `{{overview}}`: `overview` の内容。未定義の場合は「特になし」とする。
+     * `{{acceptance_criteria}}`: `acceptance_criteria` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
+     * `{{footprint}}`: YAMLフォーマットでインデント（スペース4つ）されたリスト形式
+       ```yaml
+           - <path/to/file>
+       ```
+     * `{{symbols}}`: YAMLフォーマットでインデント（スペース4つ）されたリスト形式
+       ```yaml
+           - <class_or_function>
+       ```
+     * `{{depends_on}}`: YAMLフォーマットでインデント（スペース4つ）されたリスト形式
+       ```yaml
+           - <dep_subtask_id>
+       ```
+       ※依存関係が無い場合は、YAMLフォーマット上は `depends_on: []` などの形にします（プレースホルダーのままであれば `depends_on:` のままか、`[]` に置換）。
 
 4. ラベルおよびGitHub関係性を付与します：
    * **親子関係の紐付け**: 親となる「大きな石」のIssue番号（例: `#100`）がある場合、新しく作成するサブタスクIssueに親を設定するため `--parent <親Issue番号>` を付与します。
