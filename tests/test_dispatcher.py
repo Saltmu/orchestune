@@ -3379,7 +3379,9 @@ class TestDispatcherConfigLoading:
             ("run-state-path = 1\n", "must be a string path"),
         ],
     )
-    def test_rejects_invalid_config_values(self, tmp_path, config, expected_error, capsys):
+    def test_rejects_invalid_config_values(
+        self, tmp_path, config, expected_error, capsys
+    ):
         (tmp_path / "orchestune.toml").write_text(config, encoding="utf-8")
 
         with pytest.raises(SystemExit) as error:
@@ -3388,8 +3390,12 @@ class TestDispatcherConfigLoading:
         assert error.value.code == 2
         assert expected_error in capsys.readouterr().err
 
-    def test_rejects_invalid_toml_without_falling_back_to_pyproject(self, tmp_path, capsys):
-        (tmp_path / "orchestune.toml").write_text("max-concurrent = [\n", encoding="utf-8")
+    def test_rejects_invalid_toml_without_falling_back_to_pyproject(
+        self, tmp_path, capsys
+    ):
+        (tmp_path / "orchestune.toml").write_text(
+            "max-concurrent = [\n", encoding="utf-8"
+        )
         (tmp_path / "pyproject.toml").write_text(
             "[tool.orchestune]\nmax-concurrent = 5\n", encoding="utf-8"
         )
