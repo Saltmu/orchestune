@@ -66,6 +66,10 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     priority = str(raw.get("priority", "medium")).lower()
     if priority not in _VALID_PRIORITIES:
         priority = "medium"
+    overview = str(raw.get("overview", ""))
+    acceptance_criteria = tuple(
+        str(item) for item in raw.get("acceptance_criteria", []) or []
+    )
 
     risk, risk_reasons = detect_risk_from_values(
         footprint,
@@ -82,6 +86,8 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         risk=risk,
         risk_reasons=risk_reasons,
         priority=priority,
+        overview=overview,
+        acceptance_criteria=acceptance_criteria,
     )
 
 
