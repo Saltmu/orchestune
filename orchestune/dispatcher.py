@@ -4,7 +4,9 @@ import argparse
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
+from typing import Any, cast
 
 # 実装コード自体はgithub.*を直接呼ばないが、tests/test_dispatcher.pyが
 # orchestune.dispatcher.github.* をmock.patchの対象にしている（githubは共有モジュール
@@ -254,8 +256,54 @@ def _run_semantic_integrator(
         return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def load_config_file(cwd: Path | None = None) -> dict[str, Any]:
+    if cwd is None:
+        cwd = Path.cwd()
+
+    orchestune_toml = cwd / "orchestune.toml"
+    if orchestune_toml.exists():
+        try:
+            with open(orchestune_toml, "rb") as f:
+                return cast(dict[str, Any], tomllib.load(f))
+        except Exception as e:
+            print(f"Warning: failed to load orchestune.toml: {e}", file=sys.stderr)
+
+    pyproject_toml = cwd / "pyproject.toml"
+    if pyproject_toml.exists():
+        try:
+            with open(pyproject_toml, "rb") as f:
+                data = tomllib.load(f)
+                return cast(dict[str, Any], data.get("tool", {}).get("orchestune", {}))
+        except Exception as e:
+            print(f"Warning: failed to load pyproject.toml: {e}", file=sys.stderr)
+
+    return {}
+
+
+def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
     parser = _build_arg_parser()
+
+    config_data = load_config_file(cwd)
+    if config_data:
+        defaults = {}
+        for k, v in config_data.items():
+            norm_key = k.replace("-", "_")
+            if norm_key == "parent_issue_number":
+                norm_key = "parent_issue"
+
+            path_keys = {
+                "run_state_path",
+                "worktree_root",
+                "log_dir",
+                "events_log_path",
+                "not_needed_review_state_path",
+            }
+            if norm_key in path_keys and isinstance(v, str):
+                v = Path(v)
+
+            defaults[norm_key] = v
+        parser.set_defaults(**defaults)
+
     args = parser.parse_args(argv)
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
         os.environ
