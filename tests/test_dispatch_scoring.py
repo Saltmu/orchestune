@@ -108,6 +108,25 @@ class TestParseTaskFromIssue:
         issue = _issue(7, depends_on=("task-a", "task-b"))
         assert parse_task_from_issue(issue).depends_on == ("task-a", "task-b")
 
+    def test_depends_on_inline_empty_parsed_from_body(self):
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-a\n"
+            "footprint: []\n"
+            "symbols: []\n"
+            "depends_on: []\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=71,
+            title="t",
+            body=body,
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        assert parse_task_from_issue(issue).depends_on == ()
+
     def test_missing_depends_on_defaults_to_empty(self):
         issue = IssueRecord(
             number=8,
