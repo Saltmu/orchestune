@@ -2054,3 +2054,27 @@ class TestIntegrationMergerCI:
             ci_env = ci_call[0].kwargs.get("env", {})
             assert ci_env.get("VIRTUAL_ENV") == str(dummy_venv_path.resolve())
             assert str(dummy_venv_path / "bin") in ci_env.get("PATH", "")
+
+    def test_run_ci_poetry_install_missing_poetry(self, tmp_path):
+        from unittest.mock import patch
+
+        from orchestune.integrator_git_ops import IntegrationMerger
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        orig_root = tmp_path / "orig"
+        orig_root.mkdir()
+
+        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
+
+        merger = IntegrationMerger(
+            repository_root=repo_root,
+            original_root=orig_root,
+            ci_command=["./scripts/local-ci.sh"],
+        )
+
+        with patch("subprocess.run", side_effect=FileNotFoundError("poetry")):
+            ok, output = merger.run_ci_with_flaky_check()
+
+        assert ok is False
+        assert "poetry" in output

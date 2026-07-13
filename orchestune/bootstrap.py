@@ -82,7 +82,7 @@ def _initialize_empty_repo(cwd: Path) -> None:
         text=True,
         check=True,
     )
-    if "origin" in res_remote.stdout:
+    if "origin" in res_remote.stdout.splitlines():
         print("Pushing initial commit to origin/main...", file=sys.stderr)
         subprocess.run(
             ["git", "push", "-u", "origin", "main"],
