@@ -77,9 +77,11 @@ output_schema:
          * `{{subtask_id}}`: サブタスクID
          * `{{description}}`: `description` の内容
          * `{{overview}}`: `overview` の内容。未定義の場合は「特になし」とする。
+         * `{{proposed_changes}}`: `proposed_changes` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
          * `{{acceptance_criteria}}`: `acceptance_criteria` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
+         * `{{verification_plan}}`: `verification_plan` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
          * `{{footprint}}`: YAMLのリスト形式で置換。例: `[path1, path2]`（空の場合は `[]`）
-         * `{{symbols}}`: YAMLのリスト形式で置換。例: `[class1, class2]`（空の場合は `[]`）
+         * `{{symbols}}`: YAMLのリスト形式で置換. 例: `[class1, class2]`（空の場合は `[]`）
          * `{{depends_on}}`: YAMLのリスト形式で置換。例: `[dep_task1, dep_task2]`（空の場合は `[]`）
 
       ラベルおよびGitHub関係性の付与:
