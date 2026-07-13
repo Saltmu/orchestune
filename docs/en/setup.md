@@ -90,10 +90,10 @@ Currently, the only supported cloud execution target for `--dispatch-target clou
 
 ---
 
-## 4. Setting Up Local `claude` / `agy` CLI Dispatch
+## 4. Setting Up Local `claude` / `agy` / `codex` CLI Dispatch
 
 > [!NOTE]
-> When `--dispatch-target` is not explicitly specified, `claude-cli` from this section is automatically selected outside of GitHub Actions (local/interactive runs).
+> When `--dispatch-target` is not explicitly specified, outside of GitHub Actions (local/interactive runs) the dispatcher automatically selects `auto`, which detects and dispatches to whichever of `claude`/`agy`/`codex` is installed on `PATH` (preferring `claude`, then `agy`, then `codex`). If none are installed, it warns and falls back to the no-op dummy. To pin a specific CLI instead, pass `claude-cli`/`agy-cli`/`codex-cli` from this section explicitly.
 
 ### Prerequisite: Installing the `claude` CLI (Claude Code)
 
@@ -106,12 +106,16 @@ npm install -g @anthropic-ai/claude-code
 
 After installing, confirm the CLI is recognized with `claude --version`.
 
-To dispatch subtasks to a local `claude` or `agy` (Antigravity) CLI session without hand-writing a `--local-cmd` template, use the built-in presets:
+To dispatch subtasks to a local `claude`, `agy` (Antigravity), or `codex` (Codex CLI) session without hand-writing a `--local-cmd` template, use the built-in presets:
 
 ```bash
 orchestune dispatch --dispatch-target claude-cli
 # or
 orchestune dispatch --dispatch-target agy-cli
+# or
+orchestune dispatch --dispatch-target codex-cli
+# to auto-detect whichever CLI is installed, omit --dispatch-target or pass auto
+orchestune dispatch --dispatch-target auto
 ```
 
-These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions` (non-interactive print mode) in each subtask's own worktree. Both presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt — the subtask's dedicated `git worktree` is the safety boundary, the same pattern used by cloud-based agent orchestrators. There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
+These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt — the subtask's dedicated `git worktree` is the safety boundary, the same pattern used by cloud-based agent orchestrators. There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
