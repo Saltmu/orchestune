@@ -71,22 +71,16 @@ output_schema:
       ```
 
       （本リポジトリの`orchestune/github.py`の`list_sub_issues()`が同じ理由・同じ手法でこのフィールドを取得している。100件を超えるサブタスクがある大きな石を扱う場合は`pageInfo`によるページネーションが必要になる点も同様。）各`node.body`からFootprint YAMLの`subtask_id`を読み取って照合し、一致するIssueが見つかった場合はそのIssue番号を再利用します。同一親配下・同一`subtask_id`という強い一致のため、手順2bのような人間への確認は不要です。
-   c. それでも見つからない場合のみ、新規にIssueを起票します。タイトル・本文は以下の形式とします：
-      * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
-      * **本文**: ディスパッチャーがパースできるよう、末尾に以下のFootprint YAMLブロックを埋め込みます：
-
-        ```markdown
-        ## Footprint
-        ```yaml
-        subtask_id: <subtask_id>
-        footprint:
-          - <path/to/file>
-        symbols:
-          - <class_or_function>
-        depends_on:
-          - <dep_subtask_id>
-        ```
-        ```
+    c. それでも見つからない場合のみ、新規にIssueを起票します。`.github/issue_template.md` のテンプレートファイルをベースに、サブタスクの情報をプレースホルダーに埋め込んで一時ファイル（例: `/tmp/issue_body.md`）を作成し、本文として使用します。
+       * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
+       * **置換ルール**:
+         * `{{subtask_id}}`: サブタスクID
+         * `{{description}}`: `description` の内容
+         * `{{overview}}`: `overview` の内容。未定義の場合は「特になし」とする。
+         * `{{acceptance_criteria}}`: `acceptance_criteria` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
+         * `{{footprint}}`: YAMLのリスト形式で置換。例: `[path1, path2]`（空の場合は `[]`）
+         * `{{symbols}}`: YAMLのリスト形式で置換。例: `[class1, class2]`（空の場合は `[]`）
+         * `{{depends_on}}`: YAMLのリスト形式で置換。例: `[dep_task1, dep_task2]`（空の場合は `[]`）
 
       ラベルおよびGitHub関係性の付与:
       * **親子関係の紐付け**: 手順2で確定した親Issueの番号（例: `#100`）を設定するため `--parent <親Issue番号>` を必ず付与します。

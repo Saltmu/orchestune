@@ -39,6 +39,10 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    subtasks:
      - id: task-a
        description: "Implement feature XX"
+       overview: "Detailed overview of what feature XX should do."
+       acceptance_criteria:
+         - "Must handle edge case YY"
+         - "Must be tested"
        footprint:
          - src/foo.py
        symbols:
