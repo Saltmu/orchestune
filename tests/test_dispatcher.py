@@ -3272,3 +3272,96 @@ class TestRunDispatchCycleActorVerification:
         assert report.selected == []
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
+
+
+class TestDispatcherConfigLoading:
+    def _empty_report(self):
+        return CycleReport(
+            selected=[],
+            quota_slots_available=0,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=False,
+        )
+
+    def test_load_config_from_orchestune_toml(self, tmp_path):
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n"
+            "dispatch-target = 'local'\n"
+            "run-state-path = 'custom_state.json'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[0] == "local"
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 5
+        assert config_arg.run_state_path == Path("custom_state.json")
+
+    def test_load_config_from_pyproject_toml(self, tmp_path):
+        config_path = tmp_path / "pyproject.toml"
+        config_path.write_text(
+            "[tool.orchestune]\n"
+            "max-concurrent = 7\n"
+            "dispatch-target = 'claude-cli'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 7
+
+    def test_cli_arg_overrides_config_file(self, tmp_path):
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n" "dispatch-target = 'local'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(
+                [
+                    "--no-apply",
+                    "--max-concurrent",
+                    "3",
+                    "--dispatch-target",
+                    "claude-cli",
+                ],
+                cwd=tmp_path,
+            )
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 3
