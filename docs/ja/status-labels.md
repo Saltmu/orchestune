@@ -156,6 +156,38 @@ stateDiagram-v2
 - 他のライフサイクルとは独立に、任意のタイミングで付与・解除され得る
   横断的な状態。
 
+## Issueのクローズ（子Issue・親Issue）
+
+上記の遷移は、いずれもオープンなIssue上での`status:*`ラベルの変化を扱っている。
+本節では、通常完了した（`status:not-needed`ではない）サブタスクについて、
+Orchestuneが実際にIssueをクローズする2箇所を説明する。いずれも
+[#170](https://github.com/Saltmu/orchestune/issues/170)で追加されたもので、
+ディスパッチャーが`--parent-issue <N>`付きで実行されていることが前提となる
+（[アーキテクチャ §3](./architecture.md#3-統合integrationと自動リベース)参照）。
+
+### 子Issue: `status:done`（オープン） → クローズ（`completed`）
+- 発生元: `orchestune/integrator.py`の`AutoMergeChildIntegrationStep`
+- 条件: 子ブランチの統合PR（一時ブランチ → `parent/issue-{N}`）がCIを
+  通過し、Integratorによって自動マージされた場合。マージ直後、人間を
+  介さず`reason=completed`で子Issueをクローズする。自動マージ自体が
+  失敗した場合（一時ブランチのCIでは検出できなかったコンフリクト等）は、
+  PRはオープンのまま残り、Issueは**クローズされない**。
+- ディスパッチャーが`--parent-issue`無しで実行された場合は適用されない:
+  そのフラット（単層）モードでは統合PRは引き続き`main`を直接の対象とし、
+  「最終マージは常に人間が行う」という原則により、
+  `AutoMergeChildIntegrationStep`は何もしない。
+
+### 親Issue: オープン → クローズ（`completed`）
+- 発生元: `orchestune/parent_completion.py`の`process_parent_completion`。
+  `--parent-issue`指定時、apply モードの各ディスパッチサイクルで1回呼ばれる。
+- 条件: `parent/issue-{N}`が`main`へマージされたこと
+  （`github.is_branch_merged_into`で確認）——すなわち、親Issue配下の
+  全子Issueがクローズされた時点で`ensure_parent_final_pr`
+  （`orchestune/integrator_pr.py`）が作成した最終PRを、人間がマージした
+  ことを意味する。親Issueは`reason=completed`でクローズされる。既に
+  クローズ済みの親Issueは（`github.get_issue_state`で確認の上）そのまま
+  にし、二重のクローズ呼び出しを避ける。
+
 ## 関連ラベル（`status:*`ではないが密接に関わるもの）
 
 - `not-needed-review:passed` / `not-needed-review:failed`:

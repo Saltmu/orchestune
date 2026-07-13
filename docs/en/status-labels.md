@@ -159,6 +159,37 @@ independently of the lifecycle above (see "External lock" below).
 - This is a cross-cutting state that can be applied/removed at any point,
   independently of the rest of the lifecycle.
 
+## Issue closing (child and parent)
+
+The transitions above cover `status:*` label changes on an *open* Issue. This
+section covers the two places where Orchestune actually closes an Issue for
+a normally-completed (non-`not-needed`) subtask, both added in
+[#170](https://github.com/Saltmu/orchestune/issues/170) and both gated on the
+dispatcher having been run with `--parent-issue <N>` (see
+[Architecture §3](./architecture.md#3-integration--auto-rebase)).
+
+### Child Issue: `status:done` (still open) → closed (`completed`)
+- Source: `AutoMergeChildIntegrationStep` in `orchestune/integrator.py`
+- Condition: the child's integration PR (temp branch → `parent/issue-{N}`)
+  passed CI and was auto-merged by the Integrator. The child Issue is closed
+  immediately afterward with `reason=completed`, with no human involved. If
+  the auto-merge itself fails (e.g. a conflict the temp-branch CI run didn't
+  catch), the PR is left open and the Issue is **not** closed.
+- Does not apply when the dispatcher runs without `--parent-issue`: in that
+  flat/single-tier mode the integration PR still targets `main` directly, and
+  per the "final merge is always by a human" rule, `AutoMergeChildIntegrationStep`
+  is a no-op.
+
+### Parent Issue: open → closed (`completed`)
+- Source: `process_parent_completion` in `orchestune/parent_completion.py`,
+  called once per apply-mode dispatch cycle when `--parent-issue` is set.
+- Condition: `parent/issue-{N}` has been merged into `main` (checked via
+  `github.is_branch_merged_into`) — i.e. a human merged the final PR that
+  `ensure_parent_final_pr` (in `orchestune/integrator_pr.py`) opened once every
+  child Issue under the parent was closed. The parent Issue is closed with
+  `reason=completed`; already-closed parent Issues are left alone (checked via
+  `github.get_issue_state`) to avoid a redundant close call.
+
 ## Related labels (not `status:*`, but closely related)
 
 - `not-needed-review:passed` / `not-needed-review:failed`: outcome of the

@@ -453,6 +453,69 @@ class LabelIncludedStep(IntegrationComponent):
         return newly_included
 
 
+class AutoMergeChildIntegrationStep(IntegrationComponent):
+    """#170: `parent_issue_number`指定時（子ブランチ→親ブランチの統合）のみ、
+    CI通過済みの統合PRを人間の確認を待たずに自動マージし、対象の子Issueを
+    自動クローズする。`parent_issue_number`が未指定（base_branch=main、＝
+    親ブランチ→mainの最終マージに相当するケース）では何もしない。最終マージは
+    引き続き人間が行う。
+    """
+
+    def execute(self, ctx: IntegrationContext) -> dict:
+        if not ctx.config.apply or ctx.config.parent_issue_number is None:
+            return {"status": "success"}
+        if (
+            ctx.failed_tasks
+            or not ctx.merged_tasks
+            or ctx.integration_pr_number is None
+        ):
+            return {"status": ctx.status}
+
+        try:
+            github.merge_pull_request(ctx.integration_pr_number)
+        except Exception as e:
+            print(
+                "Warning: Failed to auto-merge integration PR "
+                f"#{ctx.integration_pr_number}: {e}",
+                file=sys.stderr,
+            )
+            return {"status": "success", "auto_merged": False}
+
+        closed_issues = self._close_merged_child_issues(ctx)
+        return {
+            "status": "success",
+            "auto_merged": True,
+            "closed_issues": closed_issues,
+        }
+
+    def _close_merged_child_issues(self, ctx: IntegrationContext) -> list[int]:
+        closed_issues: list[int] = []
+        task_by_subtask_id = {
+            t.subtask_id: t for t in ctx.active_done_tasks if t.subtask_id
+        }
+        for subtask_id in ctx.merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is None:
+                continue
+            try:
+                github.close_issue(
+                    task.issue_number,
+                    "completed",
+                    comment=(
+                        "Integratorが親ブランチへの自動マージを完了したため、"
+                        "このIssueを自動的にクローズしました。"
+                    ),
+                )
+                closed_issues.append(task.issue_number)
+            except Exception as e:
+                print(
+                    f"Warning: Failed to close issue #{task.issue_number} "
+                    f"after auto-merge: {e}",
+                    file=sys.stderr,
+                )
+        return closed_issues
+
+
 class Integrator:
     def __init__(self, config: IntegratorConfig):
         self.config = config
@@ -499,6 +562,7 @@ class Integrator:
                 EnsureIntegrationPrStep(),
                 SemanticReviewStep(),
                 LabelIncludedStep(),
+                AutoMergeChildIntegrationStep(),
             ]
         )
 

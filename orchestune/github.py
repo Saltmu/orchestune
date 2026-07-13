@@ -239,6 +239,23 @@ def add_comment(issue_number: int | str, body: str) -> None:
     _run(["gh", "issue", "comment", str(number), "--body-file", "-"], input_text=body)
 
 
+def merge_pull_request(pr_number: int | str) -> None:
+    """#170: 子Issue→親ブランチの統合PRを、人間の確認を待たずに自動マージする。
+
+    マージ不可（コンフリクト等）の場合は`subprocess.CalledProcessError`をそのまま
+    伝播させる。呼び出し側でbest-effort処理し、PRはオープンのまま残す。
+    """
+    number = _validate_issue_number(pr_number)
+    _run(["gh", "pr", "merge", str(number), "--merge"])
+
+
+def get_issue_state(issue_number: int | str) -> str:
+    """#170: 親Issueの二重クローズを避けるため、現在のIssue状態を取得する。"""
+    number = _validate_issue_number(issue_number)
+    stdout = _run(["gh", "issue", "view", str(number), "--json", "state"])
+    return str(json.loads(stdout).get("state", "OPEN"))
+
+
 def get_issue_labels(issue_number: int | str) -> tuple[str, ...]:
     """#186: 統合コーディネーターの意味的レビュー結果（合否ラベル）をポーリングするために使う。"""
     number = _validate_issue_number(issue_number)

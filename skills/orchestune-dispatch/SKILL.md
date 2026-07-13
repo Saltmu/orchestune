@@ -103,14 +103,14 @@ output_schema:
 
 ## ステージB: ディスパッチャーのスケジュール実行
 
-1. ディスパッチャーを実行し、タスクをエージェントに割り振ります：
+1. ディスパッチャーを実行し、タスクをエージェントに割り振ります。ステージA手順2で確定した親Issue番号を、必ず `--parent-issue` に渡してください。これにより、子Issueのブランチが親ブランチ（`parent/issue-{番号}`）から分岐し、完了した子ブランチはIntegratorが人間の確認を待たずに親ブランチへ自動マージ・自動クローズするようになります（`parent/issue-{番号}` → `main` への最終マージのみ、引き続き人間が行います）。このフラグを渡さないと、親ブランチによる二層マージモデルが有効化されず、フラットモード（`main`への直接統合、常に人間によるマージ待ち）で動作してしまいます。
 
    ```bash
    # ドライラン（影響を出さずにプレビューのみ）
-   orchestune-dispatch --no-apply
+   orchestune-dispatch --no-apply --parent-issue <decomposition_plan.mdのparent_issue_number>
 
    # 実際に適用して並列ワークスペースを起動
-   orchestune-dispatch
+   orchestune-dispatch --parent-issue <decomposition_plan.mdのparent_issue_number>
    ```
 
 2. 状態ファイル `run_state.json` が消失した場合（GitHub Actionsのキャッシュ切れなど）でも、ディスパッチャーは `status:in-progress` になっている GitHub Issue の情報とオープンな PR のヘッドブランチを元に、自動的に実行状態を修復・再構築（自己修復）してディスパッチを継続します。
