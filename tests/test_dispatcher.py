@@ -3002,6 +3002,18 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--dispatch-target", "local"])
         assert args.dispatch_target == "local"
 
+    def test_dispatch_target_explicit_auto_is_preserved(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--dispatch-target", "auto"])
+        assert args.dispatch_target == "auto"
+
+    def test_dispatch_target_explicit_codex_cli_is_preserved(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cli"])
+        assert args.dispatch_target == "codex-cli"
+
 
 class TestMainDispatchTargetAutoDetection:
     """#121: --dispatch-target未指定時、mainが実行環境に応じた実ディスパッチ先を
@@ -3018,7 +3030,7 @@ class TestMainDispatchTargetAutoDetection:
             applied=False,
         )
 
-    def test_defaults_to_claude_cli_outside_github_actions(self, tmp_path, monkeypatch):
+    def test_defaults_to_auto_outside_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         with (
             patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
@@ -3029,7 +3041,7 @@ class TestMainDispatchTargetAutoDetection:
         ):
             main(["--no-apply", "--run-state-path", str(tmp_path / "rs.json")])
 
-        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_build.call_args.args[0] == "auto"
 
     def test_defaults_to_cloud_routine_in_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")

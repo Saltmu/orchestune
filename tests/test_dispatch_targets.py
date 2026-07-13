@@ -7,11 +7,13 @@ import pytest
 from orchestune.dispatch_targets import (
     AGY_CLI_LOCAL_CMD_TEMPLATE,
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+    CODEX_CLI_LOCAL_CMD_TEMPLATE,
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
     LocalProcessDispatchTarget,
     build_dispatch_target,
     default_dry_run_command_builder,
+    detect_installed_local_cli,
     resolve_default_dispatch_target_name,
 )
 from orchestune.dispatcher import Task
@@ -284,6 +286,58 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             assert target.is_complete(handle) is False
 
 
+class TestDetectInstalledLocalCli:
+    def test_returns_claude_when_only_claude_installed(self):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
+        ):
+            assert detect_installed_local_cli() == "claude"
+
+    def test_returns_agy_when_only_agy_installed(self):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/agy" if name == "agy" else None,
+        ):
+            assert detect_installed_local_cli() == "agy"
+
+    def test_returns_codex_when_only_codex_installed(self):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/codex" if name == "codex" else None,
+        ):
+            assert detect_installed_local_cli() == "codex"
+
+    def test_prefers_claude_when_all_three_installed(self):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: f"/usr/bin/{name}",
+        ):
+            assert detect_installed_local_cli() == "claude"
+
+    def test_prefers_claude_over_codex_when_both_installed(self):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: f"/usr/bin/{name}"
+            if name in ("claude", "codex")
+            else None,
+        ):
+            assert detect_installed_local_cli() == "claude"
+
+    def test_prefers_agy_over_codex_when_both_installed(self):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: f"/usr/bin/{name}"
+            if name in ("agy", "codex")
+            else None,
+        ):
+            assert detect_installed_local_cli() == "agy"
+
+    def test_returns_none_when_none_installed(self):
+        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+            assert detect_installed_local_cli() is None
+
+
 class TestBuildDispatchTarget:
     def test_local_name_returns_local_process_target(self, tmp_path):
         target = build_dispatch_target("local", None, None, tmp_path / "logs")
@@ -373,15 +427,108 @@ class TestBuildDispatchTarget:
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "agy -p 'custom {issue_number}'"
 
+    def test_codex_cli_without_local_cmd_uses_preset_template(self, tmp_path):
+        target = build_dispatch_target("codex-cli", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_codex_cli_preset_bypasses_approvals_and_sandbox(self, tmp_path):
+        target = build_dispatch_target("codex-cli", None, None, tmp_path / "logs")
+        assert "--dangerously-bypass-approvals-and-sandbox" in target._local_cmd
+
+    def test_codex_cli_preset_instructs_noninteractive_execution(self, tmp_path):
+        target = build_dispatch_target("codex-cli", None, None, tmp_path / "logs")
+        assert "非対話" in target._local_cmd
+        assert "承認待ちで停止せず" in target._local_cmd
+
+    def test_codex_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
+        target = build_dispatch_target(
+            "codex-cli",
+            None,
+            None,
+            tmp_path / "logs",
+            local_cmd="codex exec 'custom {issue_number}'",
+        )
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == "codex exec 'custom {issue_number}'"
+
+    def test_auto_resolves_to_claude_cli_when_claude_installed(self, tmp_path):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
+        ):
+            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_auto_prefers_claude_when_all_installed(self, tmp_path):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: f"/usr/bin/{name}",
+        ):
+            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+        assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_auto_falls_back_to_agy_cli_when_only_agy_installed(self, tmp_path):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/agy" if name == "agy" else None,
+        ):
+            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == AGY_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_auto_falls_back_to_codex_cli_when_only_codex_installed(self, tmp_path):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/codex" if name == "codex" else None,
+        ):
+            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_auto_warns_and_falls_back_to_dummy_when_none_installed(
+        self, tmp_path, capsys
+    ):
+        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd is None
+        captured = capsys.readouterr()
+        assert "claude" in captured.err
+        assert "agy" in captured.err
+        assert "codex" in captured.err
+
+    def test_auto_with_explicit_local_cmd_overrides_detected_preset(self, tmp_path):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
+        ):
+            target = build_dispatch_target(
+                "auto",
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="claude -p 'custom {issue_number}'",
+            )
+        assert target._local_cmd == "claude -p 'custom {issue_number}'"
+
+    def test_auto_with_explicit_local_cmd_used_even_when_none_detected(self, tmp_path):
+        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+            target = build_dispatch_target(
+                "auto", None, None, tmp_path / "logs", local_cmd="custom-cmd"
+            )
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == "custom-cmd"
+
 
 class TestResolveDefaultDispatchTargetName:
-    def test_defaults_to_claude_cli_when_env_empty(self):
-        assert resolve_default_dispatch_target_name({}) == "claude-cli"
+    def test_defaults_to_auto_when_env_empty(self):
+        assert resolve_default_dispatch_target_name({}) == "auto"
 
-    def test_defaults_to_claude_cli_when_github_actions_not_true(self):
+    def test_defaults_to_auto_when_github_actions_not_true(self):
         assert (
-            resolve_default_dispatch_target_name({"GITHUB_ACTIONS": "false"})
-            == "claude-cli"
+            resolve_default_dispatch_target_name({"GITHUB_ACTIONS": "false"}) == "auto"
         )
 
     def test_defaults_to_cloud_routine_in_github_actions(self):
