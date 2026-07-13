@@ -141,11 +141,8 @@ class IntegrationMerger:
                     capture_output=True,
                     env=env,
                 )
-            except subprocess.CalledProcessError as pie:
-                print(
-                    f"Warning: Failed to run poetry install: {(pie.stderr or b'').decode(errors='replace')}",
-                    file=sys.stderr,
-                )
+            except (subprocess.CalledProcessError, OSError) as exc:
+                return False, f"Failed to install Poetry dependencies: {exc}"
 
         venv_path = None
         if pyproject_path.exists():
@@ -166,7 +163,7 @@ class IntegrationMerger:
                 p = Path(stdout_str.strip())
                 if p.exists():
                     venv_path = p
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, OSError):
                 pass
 
         if venv_path is None:
