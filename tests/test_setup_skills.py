@@ -176,6 +176,8 @@ def test_setup_skills_dynamic_discovery(tmp_path):
     (skills_dir / "skill-a" / "SKILL.md").touch()
     (skills_dir / "skill-b").mkdir()
     (skills_dir / "skill-b" / "SKILL.md").touch()
+    (skills_dir / "local-ci-developer").mkdir()
+    (skills_dir / "local-ci-developer" / "SKILL.md").touch()
 
     # 検出されないべきスキル（SKILL.mdなし）
     (skills_dir / "ignored-folder").mkdir()
@@ -190,4 +192,5 @@ def test_setup_skills_dynamic_discovery(tmp_path):
     assert (mock_home / ".claude" / "skills" / "orchestune").is_symlink()
     assert (mock_home / ".claude" / "skills" / "skill-a").is_symlink()
     assert (mock_home / ".claude" / "skills" / "skill-b").is_symlink()
+    assert not (mock_home / ".claude" / "skills" / "local-ci-developer").exists()
     assert not (mock_home / ".claude" / "skills" / "ignored-folder").exists()
