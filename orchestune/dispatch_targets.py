@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -51,17 +52,41 @@ AGY_CLI_LOCAL_CMD_TEMPLATE = (
     "--sandbox --dangerously-skip-permissions"
 )
 
+CODEX_CLI_LOCAL_CMD_TEMPLATE = (
+    'codex exec "GitHub Issue #{issue_number} を、'
+    "必ず作業ブランチ `{branch_name}` で、"
+    "標準開発ワークフローに従って実装してください。"
+    f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
+    "--dangerously-bypass-approvals-and-sandbox"
+)
+
+LOCAL_CLI_CANDIDATES: tuple[str, ...] = ("claude", "agy", "codex")
+
+
+def detect_installed_local_cli() -> str | None:
+    """PATH上にインストールされているローカルCLIを検出する（`auto`モード用）。
+
+    `claude`を優先し、無ければ`agy`、それも無ければ`codex`にフォールバックする。
+    いずれも見つからない場合は`None`を返す。
+    """
+    for candidate in LOCAL_CLI_CANDIDATES:
+        if shutil.which(candidate) is not None:
+            return candidate
+    return None
+
 
 def resolve_default_dispatch_target_name(env: Mapping[str, str]) -> str:
     """`--dispatch-target`未指定時、実行環境から実ディスパッチ先を自動選択する。
 
     GitHub Actions実行環境（`GITHUB_ACTIONS=true`）ではクラウドルーチンへ、
-    それ以外（ローカル/対話実行）ではローカルの`claude` CLIへディスパッチする。
-    資格情報未設定時のフォールバックは`build_dispatch_target`側の既存ロジックに委ねる。
+    それ以外（ローカル/対話実行）では`auto`（PATH上のローカルCLI自動検出。
+    `claude`優先、次点`agy`、`codex`）へディスパッチする。
+    CLI未検出時・資格情報未設定時のフォールバックは`build_dispatch_target`側の
+    既存ロジックに委ねる。
     """
     if env.get("GITHUB_ACTIONS") == "true":
         return "cloud-routine"
-    return "claude-cli"
+    return "auto"
 
 
 @dataclass(frozen=True)
@@ -278,6 +303,9 @@ def build_dispatch_target(
     `cloud-routine`が指定されていても`routine_id`/`routine_token`が
     環境変数・引数のいずれからも解決できない場合は、警告を出した上で
     ローカルのダミー動作（`LocalProcessDispatchTarget`）へ自動フォールバックする。
+    `auto`が指定された場合はPATH上のローカルCLI（`claude`優先、次点`agy`、
+    `codex`）を検出し、見つかったCLIを指定した場合と同じ挙動にフォールスルーする。
+    いずれも見つからない場合も同様に警告を出し、ダミー動作へフォールバックする。
     """
     if dispatch_target_name == "cloud-routine":
         resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
@@ -290,6 +318,16 @@ def build_dispatch_target(
             "ローカルのダミー起動にフォールバックします。",
             file=sys.stderr,
         )
+    if dispatch_target_name == "auto":
+        detected = detect_installed_local_cli()
+        if detected is not None:
+            dispatch_target_name = f"{detected}-cli"
+        else:
+            print(
+                "警告: PATH上にclaude/agy/codexのいずれのCLIも見つかりませんでした。"
+                "ローカルのダミー起動にフォールバックします。",
+                file=sys.stderr,
+            )
     if dispatch_target_name == "claude-cli":
         return LocalProcessDispatchTarget(
             log_dir=log_dir, local_cmd=local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE
@@ -297,5 +335,9 @@ def build_dispatch_target(
     if dispatch_target_name == "agy-cli":
         return LocalProcessDispatchTarget(
             log_dir=log_dir, local_cmd=local_cmd or AGY_CLI_LOCAL_CMD_TEMPLATE
+        )
+    if dispatch_target_name == "codex-cli":
+        return LocalProcessDispatchTarget(
+            log_dir=log_dir, local_cmd=local_cmd or CODEX_CLI_LOCAL_CMD_TEMPLATE
         )
     return LocalProcessDispatchTarget(log_dir=log_dir, local_cmd=local_cmd)

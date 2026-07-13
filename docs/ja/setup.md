@@ -90,10 +90,10 @@ orchestune setup
 
 ---
 
-## 4. ローカルの`claude` / `agy` CLIへのディスパッチ設定
+## 4. ローカルの`claude` / `agy` / `codex` CLIへのディスパッチ設定
 
 > [!NOTE]
-> `--dispatch-target` を明示指定しない場合、GitHub Actions以外（ローカル/対話実行）では本セクションの `claude-cli` が自動的に選択されます。
+> `--dispatch-target` を明示指定しない場合、GitHub Actions以外（ローカル/対話実行）では `auto` が自動選択され、PATH上にインストールされている `claude`/`agy`/`codex` のいずれか（`claude`優先、次点`agy`、`codex`）へ自動的にディスパッチされます。いずれもインストールされていない場合は警告を出した上でダミー起動（no-op）にフォールバックします。特定のCLIに固定したい場合は、本セクションの `claude-cli`/`agy-cli`/`codex-cli` を明示指定してください。
 
 ### 前提: `claude` CLI（Claude Code）のインストール
 
@@ -106,12 +106,16 @@ npm install -g @anthropic-ai/claude-code
 
 インストール後、`claude --version` でCLIが認識されることを確認してください。
 
-`--local-cmd` テンプレートを手書きせずに、ローカルの`claude`または`agy`(Antigravity) CLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
+`--local-cmd` テンプレートを手書きせずに、ローカルの`claude`・`agy`(Antigravity)・`codex`(Codex CLI) いずれかのCLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
 
 ```bash
 orchestune dispatch --dispatch-target claude-cli
 # または
 orchestune dispatch --dispatch-target agy-cli
+# または
+orchestune dispatch --dispatch-target codex-cli
+# インストール済みのCLIを自動検出させたい場合は --dispatch-target を省略するか auto を指定
+orchestune dispatch --dispatch-target auto
 ```
 
-これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions`（非対話・print モード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。サブタスクごとの`git worktree`自体が安全境界となる、クラウド型のエージェントオーケストレーターと同じ考え方です。別途、許可設定ファイルを準備するステップは不要です。`orchestune bootstrap`は必須のGitHubラベルの起票のみを行います。
+これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。サブタスクごとの`git worktree`自体が安全境界となる、クラウド型のエージェントオーケストレーターと同じ考え方です。別途、許可設定ファイルを準備するステップは不要です。`orchestune bootstrap`は必須のGitHubラベルの起票のみを行います。
