@@ -59,3 +59,61 @@ class TestMain:
                 main()
 
         assert exc_info.value.code == 1
+
+
+class TestEmptyRepoInit:
+    def test_empty_repo_initialization(self, tmp_path):
+        import subprocess
+
+        # リモート用のベアリポジトリを作成
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+
+        # ローカル用のリポジトリを作成
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        # コミットがないことを確認
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(local_dir), capture_output=True
+        )
+        assert res.returncode != 0
+
+        forge = _fake_forge(
+            result=BootstrapResult(created_labels=(), existing_labels=())
+        )
+
+        # run_bootstrap を実行する
+        # この時点では cwd 引数をサポートしていないため、エラーになるか、あるいは初期コミットが作成されないはず
+        exit_code = run_bootstrap(forge=forge, cwd=local_dir)
+
+        assert exit_code == 0
+
+        # 初期コミットが作成されていることを確認
+        res_log = subprocess.run(
+            ["git", "log", "-n", "1", "--oneline"],
+            cwd=str(local_dir),
+            capture_output=True,
+            text=True,
+        )
+        assert res_log.returncode == 0
+        assert "Initial commit" in res_log.stdout
+
+        # README.md が作成されていることを確認
+        assert (local_dir / "README.md").exists()
+
+        # リモートに push されていることを確認
+        res_remote = subprocess.run(
+            ["git", "ls-remote", "origin", "refs/heads/main"],
+            cwd=str(local_dir),
+            capture_output=True,
+            text=True,
+        )
+        assert "refs/heads/main" in res_remote.stdout
