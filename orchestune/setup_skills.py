@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer"}
+
 
 def get_skills_source_dir() -> Path:
     cwd = Path.cwd()
@@ -43,7 +45,11 @@ def setup_skills() -> None:
         [
             d.name
             for d in skills_dir.iterdir()
-            if d.is_dir() and (d / "SKILL.md").is_file()
+            if (
+                d.is_dir()
+                and (d / "SKILL.md").is_file()
+                and d.name not in SKILLS_EXCLUDED_FROM_SETUP
+            )
         ]
     )
     setup_any = False
