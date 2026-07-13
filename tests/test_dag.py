@@ -112,6 +112,43 @@ class TestParseDecompositionPlan:
             "Criterion 2",
         ]
 
+    def test_parses_proposed_changes_and_verification_plan(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+            proposed_changes:
+              - "Modify src/foo.py"
+            verification_plan:
+              - "Run pytest tests/test_foo.py"
+          - id: task-b
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        subtasks = parse_decomposition_plan(path)
+        assert subtasks[0].proposed_changes == ("Modify src/foo.py",)
+        assert subtasks[0].verification_plan == ("Run pytest tests/test_foo.py",)
+        assert subtasks[1].proposed_changes == ()
+        assert subtasks[1].verification_plan == ()
+
+        # to_dictのテスト
+        from orchestune.dag_models import DagResult
+
+        res = DagResult(
+            subtasks={subtasks[0].id: subtasks[0]},
+            edges=[],
+            topological_order=["task-a"],
+            parallel_leaves=["task-a"],
+            risky_subtask_ids=[],
+        )
+        d = res.to_dict()
+        assert d["subtasks"]["task-a"]["proposed_changes"] == [
+            "Modify src/foo.py",
+        ]
+        assert d["subtasks"]["task-a"]["verification_plan"] == [
+            "Run pytest tests/test_foo.py",
+        ]
+
     def test_missing_frontmatter_raises(self, tmp_path):
         path = _write_plan(tmp_path, "# no frontmatter here\n")
         with pytest.raises(ValueError, match="フロントマター"):

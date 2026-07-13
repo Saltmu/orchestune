@@ -70,6 +70,12 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     acceptance_criteria = tuple(
         str(item) for item in raw.get("acceptance_criteria", []) or []
     )
+    proposed_changes = tuple(
+        str(item) for item in raw.get("proposed_changes", []) or []
+    )
+    verification_plan = tuple(
+        str(item) for item in raw.get("verification_plan", []) or []
+    )
 
     risk, risk_reasons = detect_risk_from_values(
         footprint,
@@ -88,6 +94,8 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         priority=priority,
         overview=overview,
         acceptance_criteria=acceptance_criteria,
+        proposed_changes=proposed_changes,
+        verification_plan=verification_plan,
     )
 
 
