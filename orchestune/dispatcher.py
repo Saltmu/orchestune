@@ -256,6 +256,23 @@ def _run_semantic_integrator(
         return None
 
 
+def _process_parent_completion(config: DispatcherConfig) -> dict | None:
+    """#170: 親Issue配下の全子Issue完了検知→最終PR用意、および最終PRの
+    マージ検知→親Issueクローズを行う。ベストエフォート処理: 失敗しても警告を
+    出すだけでmain()は続行する。
+    """
+    try:
+        from orchestune.parent_completion import process_parent_completion
+
+        report = process_parent_completion(config.parent_issue_number, config.apply)
+        print("Parent Completion Report:")
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return report
+    except Exception as pe:
+        print(f"Warning: failed to process parent completion: {pe}", file=sys.stderr)
+        return None
+
+
 def load_config_file(cwd: Path | None = None) -> dict[str, Any]:
     """Load the first dispatcher configuration file found in *cwd*.
 
@@ -399,6 +416,8 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             integrator_run_report = _run_semantic_integrator(
                 config, semantic_review_enabled
             )
+            if config.parent_issue_number is not None:
+                _process_parent_completion(config)
 
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary_path:

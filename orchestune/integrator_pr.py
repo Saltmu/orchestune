@@ -24,6 +24,13 @@ def ensure_integration_pr(
             return existing[0].number
 
         base = base_branch.removeprefix("origin/")
+        if base.startswith("parent/"):
+            merge_note = (
+                "このPRはOrchestune Integratorが自動的にマージし、"
+                "対象Issueも自動的にクローズします。"
+            )
+        else:
+            merge_note = "最終マージは人間が行ってください。"
         return github.create_pull_request(
             head=temp_branch,
             base=base,
@@ -31,11 +38,43 @@ def ensure_integration_pr(
             body=(
                 "Orchestune Integrator が仮マージCI通過後に作成した統合PRです。\n"
                 f"統合済みタスク: {', '.join(merged_tasks)}\n\n"
-                "最終マージは人間が行ってください。"
+                f"{merge_note}"
             ),
         )
     except Exception as e:
         print(f"Warning: Failed to ensure integration PR: {e}", file=sys.stderr)
+        return None
+
+
+def ensure_parent_final_pr(
+    parent_issue_number: int, base_branch: str = "main"
+) -> int | None:
+    """#170: 親Issue配下の全子Issueが完了した際、`parent/issue-{N}`から
+    `base_branch`への最終統合PRを用意する。
+
+    このPRのマージが「最終マージ」であり、常に人間が行う。マージ検知後の
+    親Issueクローズは`parent_completion.process_parent_completion`が担う。
+    """
+    try:
+        head = f"parent/issue-{parent_issue_number}"
+        existing = [pr for pr in github.list_open_prs() if pr.head_ref == head]
+        if existing:
+            return existing[0].number
+
+        return github.create_pull_request(
+            head=head,
+            base=base_branch,
+            title=f"Integrate parent issue #{parent_issue_number} into {base_branch}",
+            body=(
+                f"親Issue #{parent_issue_number} 配下の全子Issueが完了したため、"
+                "Orchestune Integratorが作成した最終統合PRです。\n\n"
+                "このPRのマージが最終マージです。人間がレビューの上マージして"
+                "ください。マージが検知され次第、Orchestuneが親Issueを"
+                "自動的にクローズします。"
+            ),
+        )
+    except Exception as e:
+        print(f"Warning: Failed to ensure parent final PR: {e}", file=sys.stderr)
         return None
 
 
