@@ -1990,3 +1990,91 @@ class TestIntegratorHybridPattern:
         )
         res = runner.execute(ctx)
         assert res["status"] == "composite_failure"
+
+
+class TestIntegrationMergerCI:
+    def test_run_ci_poetry_install_and_env_detection(self, tmp_path):
+        import subprocess
+        from unittest.mock import patch
+
+        from orchestune.integrator_git_ops import IntegrationMerger
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        orig_root = tmp_path / "orig"
+        orig_root.mkdir()
+
+        # pyproject.toml を作成
+        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
+
+        merger = IntegrationMerger(
+            repository_root=repo_root,
+            original_root=orig_root,
+            ci_command=["./scripts/local-ci.sh"],
+        )
+
+        dummy_venv_path = tmp_path / "dummy_venv"
+        (dummy_venv_path / "bin").mkdir(parents=True)
+
+        def mock_run_impl(args, **kwargs):
+            if "poetry" in args and "install" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=b"", stderr=b""
+                )
+            elif "poetry" in args and "info" in args and "--path" in args:
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout=f"{dummy_venv_path}\n".encode(),
+                    stderr=b"",
+                )
+            elif "./scripts/local-ci.sh" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=b"", stderr=b""
+                )
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=b"", stderr=b""
+            )
+
+        with patch("subprocess.run", side_effect=mock_run_impl) as mock_run:
+            passed, err = merger.run_ci_with_flaky_check()
+            assert passed
+
+            calls = mock_run.call_args_list
+            assert len(calls) >= 3
+
+            poetry_install_call = [
+                c for c in calls if "poetry" in c.args[0] and "install" in c.args[0]
+            ]
+            assert len(poetry_install_call) == 1
+            assert poetry_install_call[0].kwargs.get("cwd") == str(repo_root)
+
+            ci_call = [c for c in calls if "./scripts/local-ci.sh" in c.args[0]]
+            assert len(ci_call) == 1
+            ci_env = ci_call[0].kwargs.get("env", {})
+            assert ci_env.get("VIRTUAL_ENV") == str(dummy_venv_path.resolve())
+            assert str(dummy_venv_path / "bin") in ci_env.get("PATH", "")
+
+    def test_run_ci_poetry_install_missing_poetry(self, tmp_path):
+        from unittest.mock import patch
+
+        from orchestune.integrator_git_ops import IntegrationMerger
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        orig_root = tmp_path / "orig"
+        orig_root.mkdir()
+
+        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
+
+        merger = IntegrationMerger(
+            repository_root=repo_root,
+            original_root=orig_root,
+            ci_command=["./scripts/local-ci.sh"],
+        )
+
+        with patch("subprocess.run", side_effect=FileNotFoundError("poetry")):
+            ok, output = merger.run_ci_with_flaky_check()
+
+        assert ok is False
+        assert "poetry" in output
