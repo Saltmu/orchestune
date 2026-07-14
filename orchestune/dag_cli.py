@@ -41,6 +41,11 @@ def _print_text_result(dag: dict[str, Any]) -> None:
                 f"  {edge['source']} -> {edge['target']} "
                 f"[reason: {edge['reason']}{score_text}]"
             )
+    warnings = dag.get("warnings") or []
+    if warnings:
+        print("Warnings:")
+        for warning in warnings:
+            print(f"  {warning}")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
