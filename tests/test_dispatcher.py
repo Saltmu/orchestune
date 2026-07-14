@@ -30,6 +30,7 @@ from orchestune.dispatcher import (
     run_dispatch_cycle,
     save_run_state,
 )
+from orchestune.forge import ForgeAuthError
 from orchestune.github import IssueRecord, PrRecord
 
 
@@ -3128,6 +3129,20 @@ class TestPollPendingNotNeededReviews:
         assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
 
+    def test_returns_fatal_failure_on_forge_auth_error(self, tmp_path, capsys):
+        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        with patch(
+            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            side_effect=ForgeAuthError("auth-failed"),
+        ):
+            result = _poll_pending_not_needed_reviews(args)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.FATAL_FAILURE
+        assert result.retryable is False
+        assert "auth-failed" in result.error_message
+        assert "auth-failed" in capsys.readouterr().err
+
 
 class TestRunSemanticIntegrator:
     """#150: Integrator実行と、クラウドルーチン利用時のみ意味的レビューを
@@ -3223,6 +3238,22 @@ class TestRunSemanticIntegrator:
         assert result.retryable is True
         assert result.report == {"status": "failure", "failed": ["task-1"]}
 
+    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        with patch(
+            "orchestune.integrator.Integrator",
+            side_effect=ForgeAuthError("auth-failed"),
+        ):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.FATAL_FAILURE
+        assert result.retryable is False
+        assert "auth-failed" in result.error_message
+        assert "auth-failed" in capsys.readouterr().err
+
 
 class TestProcessParentCompletion:
     """#170: 親Issue完了検知（best-effort）の配線を確認する。"""
@@ -3266,6 +3297,25 @@ class TestProcessParentCompletion:
         assert result.retryable is True
         assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
+
+    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            parent_issue_number=100,
+            apply=True,
+        )
+        with patch(
+            "orchestune.parent_completion.process_parent_completion",
+            side_effect=ForgeAuthError("auth-failed"),
+        ):
+            result = _process_parent_completion(config)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.FATAL_FAILURE
+        assert result.retryable is False
+        assert "auth-failed" in result.error_message
+        assert "auth-failed" in capsys.readouterr().err
 
 
 class TestRunDispatchCycleActorVerification:

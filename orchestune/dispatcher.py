@@ -60,6 +60,7 @@ from orchestune.dispatch_targets import (
     resolve_default_dispatch_target_name,
 )
 from orchestune.dispatch_worktree import file_lock
+from orchestune.forge import ForgeAuthError
 
 __all__ = [
     "ActiveWorktree",
@@ -208,12 +209,26 @@ def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> PhaseResult:
         not_needed_review_report = process_pending_not_needed_reviews(
             args.not_needed_review_state_path
         )
-        print("Pending Not-Needed Review Report:")
-        print(json.dumps(not_needed_review_report, ensure_ascii=False, indent=2))
+        print("Pending Not-Needed Review Report:", file=sys.stderr)
+        print(
+            json.dumps(not_needed_review_report, ensure_ascii=False, indent=2),
+            file=sys.stderr,
+        )
         return PhaseResult(
             phase_name="poll_pending_not_needed_reviews",
             status=PhaseStatus.SUCCESS,
             report=not_needed_review_report,
+        )
+    except ForgeAuthError as re:
+        print(
+            f"Error: authentication failed while polling reviews: {re}",
+            file=sys.stderr,
+        )
+        return PhaseResult(
+            phase_name="poll_pending_not_needed_reviews",
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(re),
+            retryable=False,
         )
     except Exception as re:
         print(
@@ -258,8 +273,11 @@ def _run_semantic_integrator(
         else:
             integrator_config.enable_semantic_review = False
         integrator_run_report = Integrator(integrator_config).run()
-        print("Integrator Report:")
-        print(json.dumps(integrator_run_report, ensure_ascii=False, indent=2))
+        print("Integrator Report:", file=sys.stderr)
+        print(
+            json.dumps(integrator_run_report, ensure_ascii=False, indent=2),
+            file=sys.stderr,
+        )
 
         status = PhaseStatus.SUCCESS
         retryable = False
@@ -274,6 +292,17 @@ def _run_semantic_integrator(
             status=status,
             report=integrator_run_report,
             retryable=retryable,
+        )
+    except ForgeAuthError as ie:
+        print(
+            f"Error: authentication failed while running Integrator: {ie}",
+            file=sys.stderr,
+        )
+        return PhaseResult(
+            phase_name="run_semantic_integrator",
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(ie),
+            retryable=False,
         )
     except Exception as ie:
         print(f"Warning: Integrator failed to run: {ie}", file=sys.stderr)
@@ -294,12 +323,23 @@ def _process_parent_completion(config: DispatcherConfig) -> PhaseResult:
         from orchestune.parent_completion import process_parent_completion
 
         report = process_parent_completion(config.parent_issue_number, config.apply)
-        print("Parent Completion Report:")
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print("Parent Completion Report:", file=sys.stderr)
+        print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr)
         return PhaseResult(
             phase_name="process_parent_completion",
             status=PhaseStatus.SUCCESS,
             report=report,
+        )
+    except ForgeAuthError as pe:
+        print(
+            f"Error: authentication failed while processing parent completion: {pe}",
+            file=sys.stderr,
+        )
+        return PhaseResult(
+            phase_name="process_parent_completion",
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(pe),
+            retryable=False,
         )
     except Exception as pe:
         print(f"Warning: failed to process parent completion: {pe}", file=sys.stderr)
