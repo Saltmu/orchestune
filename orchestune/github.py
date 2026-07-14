@@ -570,3 +570,10 @@ def fetch_remote_branch(repository_root: str | Path, branch: str) -> str:
         ]
     )
     return f"origin/{branch}"
+
+
+def normalize_remote_branch_name(branch: str) -> str:
+    """`origin/` 接頭辞の有無を吸収し、リモートのブランチ名を返す。"""
+    if branch.startswith("origin/"):
+        branch = branch.removeprefix("origin/")
+    return _validate_ref_name(branch)
