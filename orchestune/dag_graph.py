@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from orchestune.dag_contracts import find_unowned_shared_contract_hotspots
 from orchestune.dag_models import (
     DagCycleError,
     DagEdge,
@@ -154,6 +155,7 @@ def _assemble_dag(subtasks: list[SubTask], edges: list[DagEdge]) -> DagResult:
         topological_order=topological_order,
         parallel_leaves=sorted(node for node in node_ids if node not in targets),
         risky_subtask_ids=sorted(subtask.id for subtask in subtasks if subtask.risk),
+        warnings=tuple(find_unowned_shared_contract_hotspots(subtasks, resolved_edges)),
     )
 
 

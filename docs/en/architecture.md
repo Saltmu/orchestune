@@ -23,6 +23,32 @@ graph TD
 * **Safe Parallelization**:
   Only completely independent subtasks are allowed to run concurrently. This topological sorting ensures that parallel branches are mergeable with minimal conflict.
 
+### Ordinary Footprint Overlap vs. the Shared-Contract Gate
+
+The overlap analysis above (`dag_similarity.py`) only inserts an implicit
+dependency edge when subtasks' **declared** footprint/symbol strings actually
+match (or score above the weighted cosine-similarity threshold). That works
+well for the common case of multiple tasks editing an already-existing file,
+but greenfield decomposition plans have a different failure mode: several
+subtasks may implicitly need to establish or edit a shared extension point
+that doesn't exist yet — e.g. a format registry or a CLI wiring module — each
+assuming a different plausible path for it. Since none of their declared
+footprints share a literal string, the existing overlap detection has nothing
+to match on and cannot catch this case.
+
+To address this, Stage 1 of the `orchestune` skill asks the planner to
+explicitly identify such shared extension points (registries, CLI wiring,
+dependency manifests, public API index files) up front, create a dedicated
+`shared-contract` / `integration-scaffold` subtask that owns them, and make
+dependent subtasks declare `depends_on` on it. As a secondary safety net,
+`orchestune/dag_contracts.py`'s `find_unowned_shared_contract_hotspots`
+flags — as a non-blocking `Warnings:` entry in `orchestune-dag`'s output —
+any case where multiple subtasks' footprints fall into the same
+shared-extension-point category without being connected by any explicit or
+inferred edge. This doesn't help when the shared file is missing from every
+subtask's footprint entirely, but it does catch the case where the extension
+point was declared, just under inconsistent names.
+
 ---
 
 ## 2. Self-healing State Recovery

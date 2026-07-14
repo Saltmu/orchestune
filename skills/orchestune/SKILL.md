@@ -30,7 +30,12 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 1. Survey the current repository codebase and directory structure to understand the task requested by the user.
 2. Identify which modules and files need to be modified (`footprint`), and what classes or functions need to be created or modified (`symbols`).
 3. Decompose the task into subtasks that can be executed in parallel independently, or that are logically sequenced.
-4. Create a `decomposition_plan.md` in the repository root. Use the YAML frontmatter format as follows:
+4. **Shared-contract gate (greenfield decomposition)**: When the "big rock" targets a greenfield area of the repository (new package, new plugin/adapter system, etc.), explicitly look for shared extension points that multiple subtasks are likely to touch even though the file doesn't exist yet — e.g. a plugin/format registry, CLI registration/wiring module, or a dependency manifest. If two or more otherwise-parallel subtasks would need to establish or edit the same such extension point:
+   - Create a dedicated `shared-contract` / `integration-scaffold` subtask that owns those files (creates the registry module, defines the interface/contract).
+   - Make every subtask that plugs into that contract declare `depends_on: [<shared-contract-subtask-id>]`, rather than leaving them as independent parallel leaves.
+   - Keep each feature subtask's own footprint limited to its adapter implementation and tests wherever possible.
+   This is a distinct failure mode from ordinary footprint overlap (see Stage 2): the shared file is often *absent* from every subtask's declared `footprint` in the first place, since it doesn't exist yet and each subtask may independently assume a different name/path for it — so `orchestune-dag`'s similarity-based overlap detection cannot catch it by itself. Declaring the shared-contract subtask up front is the primary defense; `orchestune-dag`'s hotspot-category warning (Stage 2) is a secondary safety net for when the extension point *is* declared but under inconsistent names.
+5. Create a `decomposition_plan.md` in the repository root. Use the YAML frontmatter format as follows:
 
    ```markdown
    ---
@@ -72,6 +77,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    ```
 
    * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `decomposition_plan.md` and re-run this command until it passes.
+   * If the output includes a `Warnings:` section, `orchestune-dag` has detected multiple subtasks whose declared `footprint` entries fall into the same shared-extension-point category (registry, CLI wiring, public API index, dependency manifest — see the shared-contract gate in Stage 1) without any explicit or inferred dependency connecting them. This is not a blocking error, but it should normally be resolved by revising `decomposition_plan.md` (introduce a `shared-contract` subtask and `depends_on` edges, or confirm the paths genuinely refer to unrelated files) before moving to Stage 3.
 
 ### Stage 3: Present Plan and Iterate with the User
 
