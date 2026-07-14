@@ -30,11 +30,12 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 1. Survey the current repository codebase and directory structure to understand the task requested by the user.
 2. Identify which modules and files need to be modified (`footprint`), and what classes or functions need to be created or modified (`symbols`).
 3. Decompose the task into subtasks that can be executed in parallel independently, or that are logically sequenced.
-4. **Shared-contract gate (greenfield decomposition)**: When the "big rock" targets a greenfield area of the repository (new package, new plugin/adapter system, etc.), explicitly look for shared extension points that multiple subtasks are likely to touch even though the file doesn't exist yet — e.g. a plugin/format registry, CLI registration/wiring module, or a dependency manifest. If two or more otherwise-parallel subtasks would need to establish or edit the same such extension point:
+4. **Shared-contract gate (greenfield decomposition)**: When the "big rock" targets a greenfield area of the repository (new package, new plugin/adapter system, etc.), explicitly look for shared extension points that multiple subtasks are likely to touch even though the file doesn't exist yet — e.g. a plugin/format registry, CLI registration/wiring module, or a dependency manifest. If two or more subtasks would need to establish or edit the same such extension point:
    - Create a dedicated `shared-contract` / `integration-scaffold` subtask that owns those files (creates the registry module, defines the interface/contract).
-   - Make every subtask that plugs into that contract declare `depends_on: [<shared-contract-subtask-id>]`, rather than leaving them as independent parallel leaves.
+   - Tag every subtask that plugs into that contract — including the owning subtask itself — with the same `shared_contract: <id>` value (a short slug you choose, e.g. `format-registry`). This is the authoritative signal `orchestune-dag` uses to group them; it does not depend on the subtasks agreeing on a literal file path.
+   - Beyond tagging, make sure the subtasks are actually *ordered* relative to each other, not just each dependent on the owner: if `csv` and `yaml` both `depends_on: [shared-contract]` but not on each other, they can still run in parallel and race on the shared file. Either keep each subtask's own footprint from touching the shared file at all (the owning subtask creates it; dependents only read/import it), or add an explicit `depends_on` chain between the dependents themselves (e.g. `yaml` also `depends_on: [csv]`) if they truly must both edit it.
    - Keep each feature subtask's own footprint limited to its adapter implementation and tests wherever possible.
-   This is a distinct failure mode from ordinary footprint overlap (see Stage 2): the shared file is often *absent* from every subtask's declared `footprint` in the first place, since it doesn't exist yet and each subtask may independently assume a different name/path for it — so `orchestune-dag`'s similarity-based overlap detection cannot catch it by itself. Declaring the shared-contract subtask up front is the primary defense; `orchestune-dag`'s hotspot-category warning (Stage 2) is a secondary safety net for when the extension point *is* declared but under inconsistent names.
+   This is a distinct failure mode from ordinary footprint overlap (see Stage 2): the shared file is often *absent* from every subtask's declared `footprint` in the first place, since it doesn't exist yet and each subtask may independently assume a different name/path for it — so `orchestune-dag`'s similarity-based overlap detection cannot catch it by itself. Declaring and tagging the shared-contract subtask up front is the primary defense; `orchestune-dag`'s hotspot-category warning (Stage 2) is a secondary, heuristic safety net that only catches same-directory naming mismatches, not the `shared_contract` tag's full coverage.
 5. Create a `decomposition_plan.md` in the repository root. Use the YAML frontmatter format as follows:
 
    ```markdown
@@ -59,6 +60,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
        depends_on: []
        priority: medium    # high, medium, low (default: medium)
        risk: false         # true if touching API keys, credentials, or risky subprocesses
+       shared_contract: null  # e.g. "format-registry" — tag subtasks sharing an unestablished extension point (see Stage 1 "Shared-contract gate")
        issue_number: null  # filled in by orchestune-dispatch once this subtask's issue exists
    ---
 
@@ -77,7 +79,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    ```
 
    * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `decomposition_plan.md` and re-run this command until it passes.
-   * If the output includes a `Warnings:` section, `orchestune-dag` has detected multiple subtasks whose declared `footprint` entries fall into the same shared-extension-point category (registry, CLI wiring, public API index, dependency manifest — see the shared-contract gate in Stage 1) without any explicit or inferred dependency connecting them. This is not a blocking error, but it should normally be resolved by revising `decomposition_plan.md` (introduce a `shared-contract` subtask and `depends_on` edges, or confirm the paths genuinely refer to unrelated files) before moving to Stage 3.
+   * If the output includes a `Warnings:` section, `orchestune-dag` has detected two or more subtasks that share a `shared_contract` tag, or whose declared `footprint` entries fall into the same shared-extension-point category *and* directory (registry, CLI wiring, public API index, dependency manifest — see the shared-contract gate in Stage 1), and that are not ordered relative to each other in the DAG (neither is reachable from the other via `depends_on`/inferred edges — having a common ancestor task is not enough, since siblings of a shared ancestor can still run in parallel). This is not a blocking error, but it should normally be resolved by revising `decomposition_plan.md` (add a `shared_contract` tag and/or a `depends_on` edge directly between the affected subtasks, or confirm the paths genuinely refer to unrelated files) before moving to Stage 3.
 
 ### Stage 3: Present Plan and Iterate with the User
 

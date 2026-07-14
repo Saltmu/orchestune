@@ -5,11 +5,12 @@ import textwrap
 from orchestune.dag import DagEdge, SubTask, build_dag, build_dag_from_plan
 from orchestune.dag_contracts import (
     _categorize,
+    _scope,
     find_unowned_shared_contract_hotspots,
 )
 
 
-def _subtask(id_, footprint, depends_on=()):
+def _subtask(id_, footprint, depends_on=(), shared_contract=None):
     return SubTask(
         id=id_,
         description="",
@@ -18,6 +19,7 @@ def _subtask(id_, footprint, depends_on=()):
         depends_on=tuple(depends_on),
         risk=False,
         risk_reasons=(),
+        shared_contract=shared_contract,
     )
 
 
@@ -42,15 +44,27 @@ class TestCategorize:
         assert _categorize("src/adapters/csv_adapter.py") is None
 
 
+class TestScope:
+    def test_scope_is_parent_directory(self):
+        assert _scope("packages/auth/__init__.py") == "packages/auth"
+        assert _scope("packages/payments/__init__.py") == "packages/payments"
+
+    def test_scope_of_root_file_is_empty(self):
+        assert _scope("pyproject.toml") == ""
+
+
 class TestFindUnownedSharedContractHotspots:
-    def test_disconnected_same_category_warns(self):
+    def test_disconnected_same_scope_warns(self):
+        """同一ディレクトリ配下で想定ファイル名だけが異なるケースはヒューリス
+        ティック（カテゴリ+scope）で検出できる。"""
         subtasks = [
             _subtask(
-                "task-csv", ["src/adapters/csv_adapter.py", "src/formats/registry.py"]
+                "task-csv",
+                ["src/adapters/csv_adapter.py", "src/formats/registry.py"],
             ),
             _subtask(
                 "task-yaml",
-                ["src/adapters/yaml_adapter.py", "src/format_registration.py"],
+                ["src/adapters/yaml_adapter.py", "src/formats/registration.py"],
             ),
         ]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
@@ -59,45 +73,61 @@ class TestFindUnownedSharedContractHotspots:
         assert "task-yaml" in warnings[0]
         assert "registry" in warnings[0]
 
-    def test_connected_via_explicit_edge_does_not_warn(self):
+    def test_different_scope_is_not_grouped_by_heuristic(self):
+        """ディレクトリが異なる別パッケージのpublic-apiは、カテゴリが同じでも
+        別ホットスポットとして扱い、誤検知しない。"""
         subtasks = [
-            _subtask("task-csv", ["src/formats/registry.py"]),
-            _subtask("task-yaml", ["src/format_registration.py"]),
+            _subtask("task-auth", ["packages/auth/__init__.py"]),
+            _subtask("task-payments", ["packages/payments/__init__.py"]),
         ]
-        edges = [DagEdge(source="task-csv", target="task-yaml", reason="explicit")]
-        warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
         assert warnings == []
 
-    def test_connected_via_similarity_edge_does_not_warn(self):
-        subtasks = [
-            _subtask("task-csv", ["src/formats/registry.py"]),
-            _subtask("task-yaml", ["src/format_registration.py"]),
-        ]
-        edges = [
-            DagEdge(
-                source="task-yaml", target="task-csv", reason="similarity", score=0.4
-            )
-        ]
-        warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
-        assert warnings == []
-
-    def test_transitively_connected_chain_does_not_warn(self):
+    def test_common_ancestor_only_still_warns(self):
+        """`shared -> csv`, `shared -> yaml` のように共通の祖先を持つだけの
+        2タスクは、互いには到達不能なため並列実行され得る。連結性ではなく
+        到達可能性で判定しなければ、この見逃しが発生する（#175レビュー指摘）。"""
         subtasks = [
             _subtask("task-csv", ["src/formats/registry.py"]),
             _subtask("task-shared", []),
-            _subtask("task-yaml", ["src/format_registration.py"]),
+            _subtask("task-yaml", ["src/formats/registration.py"]),
         ]
         edges = [
             DagEdge(source="task-shared", target="task-csv", reason="explicit"),
             DagEdge(source="task-shared", target="task-yaml", reason="explicit"),
         ]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
+        assert len(warnings) == 1
+        assert "task-csv" in warnings[0]
+        assert "task-yaml" in warnings[0]
+
+    def test_direct_dependency_between_pair_does_not_warn(self):
+        subtasks = [
+            _subtask("task-csv", ["src/formats/registry.py"]),
+            _subtask("task-yaml", ["src/formats/registration.py"]),
+        ]
+        edges = [DagEdge(source="task-csv", target="task-yaml", reason="explicit")]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
         assert warnings == []
 
-    def test_two_categories_each_disconnected_warn_separately(self):
+    def test_chain_of_three_all_ordered_does_not_warn(self):
+        """A -> B -> C のように全ペアが祖先/子孫関係にあれば並列実行されない。"""
         subtasks = [
-            _subtask("task-a", ["src/registry.py", "pyproject.toml"]),
-            _subtask("task-b", ["src/registration_helper.py", "package.json"]),
+            _subtask("task-a", ["src/formats/registry.py"]),
+            _subtask("task-b", ["src/formats/registration.py"]),
+            _subtask("task-c", ["src/formats/registrar.py"]),
+        ]
+        edges = [
+            DagEdge(source="task-a", target="task-b", reason="explicit"),
+            DagEdge(source="task-b", target="task-c", reason="explicit"),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
+        assert warnings == []
+
+    def test_two_scopes_each_disconnected_warn_separately(self):
+        subtasks = [
+            _subtask("task-a", ["src/formats/registry.py", "pyproject.toml"]),
+            _subtask("task-b", ["src/formats/registration.py", "package.json"]),
         ]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
         assert len(warnings) == 2
@@ -106,6 +136,20 @@ class TestFindUnownedSharedContractHotspots:
         subtasks = [_subtask("task-solo", ["src/registry.py"])]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
         assert warnings == []
+
+    def test_same_subtask_multiple_paths_in_same_scope_deduplicated(self):
+        """1サブタスクが同一(カテゴリ,scope)に複数パスで触れていても、
+        重複エントリを1件に集約する（他のサブタスクとの比較対象は変わらない）。"""
+        subtasks = [
+            _subtask(
+                "task-a",
+                ["src/formats/registry.py", "src/formats/registration.py"],
+            ),
+            _subtask("task-b", ["src/formats/registrar.py"]),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
+        assert len(warnings) == 1
+        assert warnings[0].count("task-a:") == 1
 
     def test_ordinary_footprint_without_hotspot_pattern_does_not_warn(self):
         subtasks = [
@@ -116,24 +160,111 @@ class TestFindUnownedSharedContractHotspots:
         assert warnings == []
 
 
+class TestExplicitSharedContractTag:
+    def test_same_tag_unordered_pair_warns_even_across_directories(self):
+        """明示的なshared_contractタグは、ディレクトリが異なりヒューリス
+        ティックでは捕捉できないケース（想定パスのディレクトリごと異なる
+        レジストリ）でも検出できる。"""
+        subtasks = [
+            _subtask(
+                "task-csv",
+                ["src/adapters/csv_adapter.py", "src/formats/registry.py"],
+                shared_contract="format-registry",
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/adapters/yaml_adapter.py", "src/format_registration.py"],
+                shared_contract="format-registry",
+            ),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
+        assert len(warnings) == 1
+        assert "format-registry" in warnings[0]
+        assert "task-csv" in warnings[0]
+        assert "task-yaml" in warnings[0]
+
+    def test_same_tag_ordered_via_shared_contract_task_does_not_warn(self):
+        subtasks = [
+            _subtask(
+                "task-shared-contract",
+                ["src/formats/registry.py"],
+                shared_contract="format-registry",
+            ),
+            _subtask(
+                "task-csv",
+                ["src/adapters/csv_adapter.py"],
+                depends_on=["task-shared-contract"],
+                shared_contract="format-registry",
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/adapters/yaml_adapter.py", "src/format_registration.py"],
+                depends_on=["task-shared-contract"],
+                shared_contract="format-registry",
+            ),
+        ]
+        edges = [
+            DagEdge(
+                source="task-shared-contract", target="task-csv", reason="explicit"
+            ),
+            DagEdge(
+                source="task-shared-contract", target="task-yaml", reason="explicit"
+            ),
+        ]
+        # task-csv と task-yaml 自身は互いに未接続の並列タスクのため、
+        # shared_contractタグを共有していても警告は消えない。
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
+        assert len(warnings) == 1
+        assert "task-csv" in warnings[0]
+        assert "task-yaml" in warnings[0]
+
+    def test_different_tags_do_not_interact(self):
+        subtasks = [
+            _subtask("task-a", ["src/a.py"], shared_contract="contract-a"),
+            _subtask("task-b", ["src/b.py"], shared_contract="contract-b"),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
+        assert warnings == []
+
+    def test_tagged_subtasks_are_excluded_from_heuristic_pass(self):
+        """タグ付き同士の重複はexplicit側で1件のみ報告され、ヒューリス
+        ティック側で二重報告されない。"""
+        subtasks = [
+            _subtask(
+                "task-csv",
+                ["src/formats/registry.py"],
+                shared_contract="format-registry",
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/formats/registration.py"],
+                shared_contract="format-registry",
+            ),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
+        assert len(warnings) == 1
+
+
 class TestBuildDagWarningsIntegration:
-    def _plan_without_shared_contract_task(self) -> str:
+    def _plan_with_shared_contract_tag(self) -> str:
         return """\
         ---
         subtasks:
           - id: task-csv
             description: "CSVアダプターを実装する"
             footprint: ["src/adapters/csv_adapter.py", "src/formats/registry.py"]
+            shared_contract: format-registry
           - id: task-yaml
             description: "YAMLアダプターを実装する"
             footprint: ["src/adapters/yaml_adapter.py", "src/format_registration.py"]
+            shared_contract: format-registry
         ---
         """
 
     def test_build_dag_from_plan_surfaces_warning(self, tmp_path):
         path = tmp_path / "decomposition_plan.md"
         path.write_text(
-            textwrap.dedent(self._plan_without_shared_contract_task()),
+            textwrap.dedent(self._plan_with_shared_contract_tag()),
             encoding="utf-8",
         )
         dag_dict = build_dag_from_plan(path, threshold=0.9)
@@ -141,19 +272,45 @@ class TestBuildDagWarningsIntegration:
         assert len(dag_dict["warnings"]) == 1
         assert "task-csv" in dag_dict["warnings"][0]
         assert "task-yaml" in dag_dict["warnings"][0]
+        assert dag_dict["subtasks"]["task-csv"]["shared_contract"] == "format-registry"
 
-    def test_shared_contract_task_with_explicit_depends_on_clears_warning(self):
+    def test_explicit_owner_task_with_depends_on_still_flags_parallel_siblings(self):
+        """所有タスクへdepends_onするだけでは、依存先同士(csv/yaml)が並列の
+        ままなら警告は消えない — これは本来検出すべき障害そのものであるため。"""
         subtasks = [
-            _subtask("task-shared-contract", ["src/formats/registry.py"]),
+            _subtask(
+                "task-shared-contract",
+                ["src/formats/registry.py"],
+            ),
             _subtask(
                 "task-csv",
-                ["src/adapters/csv_adapter.py"],
+                ["src/adapters/csv_adapter.py", "src/formats/registration.py"],
                 depends_on=["task-shared-contract"],
             ),
             _subtask(
                 "task-yaml",
-                ["src/adapters/yaml_adapter.py", "src/format_registration.py"],
+                ["src/adapters/yaml_adapter.py", "src/formats/registrar.py"],
                 depends_on=["task-shared-contract"],
+            ),
+        ]
+        dag = build_dag(subtasks, threshold=0.9)
+
+        assert len(dag.warnings) == 1
+        assert "task-csv" in dag.warnings[0]
+        assert "task-yaml" in dag.warnings[0]
+
+    def test_direct_dependency_between_dependents_clears_warning(self):
+        subtasks = [
+            _subtask("task-shared-contract", ["src/formats/registry.py"]),
+            _subtask(
+                "task-csv",
+                ["src/adapters/csv_adapter.py", "src/formats/registration.py"],
+                depends_on=["task-shared-contract"],
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/adapters/yaml_adapter.py", "src/formats/registrar.py"],
+                depends_on=["task-shared-contract", "task-csv"],
             ),
         ]
         dag = build_dag(subtasks, threshold=0.9)
@@ -161,14 +318,14 @@ class TestBuildDagWarningsIntegration:
         assert dag.warnings == ()
         reasons = {(edge.source, edge.target): edge.reason for edge in dag.edges}
         assert reasons[("task-shared-contract", "task-csv")] == "explicit"
-        assert reasons[("task-shared-contract", "task-yaml")] == "explicit"
+        assert reasons[("task-csv", "task-yaml")] == "explicit"
 
     def test_warnings_are_json_serializable(self, tmp_path):
         import json
 
         path = tmp_path / "decomposition_plan.md"
         path.write_text(
-            textwrap.dedent(self._plan_without_shared_contract_task()),
+            textwrap.dedent(self._plan_with_shared_contract_tag()),
             encoding="utf-8",
         )
         dag_dict = build_dag_from_plan(path, threshold=0.9)
@@ -187,8 +344,10 @@ class TestDagCliWarnings:
         subtasks:
           - id: task-csv
             footprint: ["src/adapters/csv_adapter.py", "src/formats/registry.py"]
+            shared_contract: format-registry
           - id: task-yaml
             footprint: ["src/adapters/yaml_adapter.py", "src/format_registration.py"]
+            shared_contract: format-registry
         ---
         """
         plan_path = tmp_path / "plan.md"

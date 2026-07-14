@@ -76,6 +76,9 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     verification_plan = tuple(
         str(item) for item in raw.get("verification_plan", []) or []
     )
+    shared_contract = (
+        str(raw["shared_contract"]) if raw.get("shared_contract") else None
+    )
 
     risk, risk_reasons = detect_risk_from_values(
         footprint,
@@ -96,6 +99,7 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         acceptance_criteria=acceptance_criteria,
         proposed_changes=proposed_changes,
         verification_plan=verification_plan,
+        shared_contract=shared_contract,
     )
 
 
