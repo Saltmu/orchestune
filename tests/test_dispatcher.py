@@ -1041,6 +1041,9 @@ class TestRunDispatchCycleCompletion:
                 "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
                 return_value=None,
             ),
+            patch(
+                "orchestune.dispatch_gc.apply_human_review_escalation"
+            ) as mock_escalate,
             patch("orchestune.dispatch_gc.remove_worktree"),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1049,7 +1052,7 @@ class TestRunDispatchCycleCompletion:
             report = run_dispatch_cycle(config)
 
         assert report.completion_events[0]["action"] == "completed_no_commits"
-        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_escalate.assert_called_once()
         assert all(
             call.args != (1, "status:done") for call in mock_add_label.call_args_list
         )
