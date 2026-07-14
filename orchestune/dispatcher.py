@@ -203,19 +203,10 @@ def _poll_pending_not_needed_reviews(
 
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
     """
-    if auth_error is not None:
-        print(
-            f"Error: authentication failed while polling reviews: {auth_error}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="poll_pending_not_needed_reviews",
-            status=PhaseStatus.FATAL_FAILURE,
-            error_message=str(auth_error),
-            retryable=False,
-        )
-
     try:
+        if auth_error is not None:
+            raise auth_error
+
         from orchestune.integration_coordinator import (
             process_pending_not_needed_reviews,
         )
@@ -270,19 +261,10 @@ def _run_semantic_integrator(
     Python側では一切行わない。ベストエフォート処理: 失敗しても警告を出すだけで
     main()は続行する。
     """
-    if auth_error is not None:
-        print(
-            f"Error: authentication failed while running Integrator: {auth_error}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="run_semantic_integrator",
-            status=PhaseStatus.FATAL_FAILURE,
-            error_message=str(auth_error),
-            retryable=False,
-        )
-
     try:
+        if auth_error is not None:
+            raise auth_error
+
         from orchestune.integrator import Integrator, IntegratorConfig
 
         integrator_config = IntegratorConfig(
@@ -349,19 +331,10 @@ def _process_parent_completion(
     マージ検知→親Issueクローズを行う。ベストエフォート処理: 失敗しても警告を
     出すだけでmain()は続行する。
     """
-    if auth_error is not None:
-        print(
-            f"Error: authentication failed while processing parent completion: {auth_error}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="process_parent_completion",
-            status=PhaseStatus.FATAL_FAILURE,
-            error_message=str(auth_error),
-            retryable=False,
-        )
-
     try:
+        if auth_error is not None:
+            raise auth_error
+
         from orchestune.parent_completion import process_parent_completion
 
         report = process_parent_completion(config.parent_issue_number, config.apply)
