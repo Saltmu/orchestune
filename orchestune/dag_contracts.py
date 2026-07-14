@@ -13,6 +13,11 @@
 （例: `shared -> csv`, `shared -> yaml`）互いには到達不能であり、実際には並列に
 実行され得るため、これは警告対象である。
 
+ただし、比較対象は共有ファイルへ実際に「書き込む」サブタスク同士に限る。
+契約タスクにdepends_onするだけで自身は共有ファイルに触れない消費者サブタスク
+（読み取り・importのみ）は、たとえ`shared_contract`タグを共有していても、
+互いに未接続なまま安全に並列実行できるため対象外とする。
+
 `dispatch_locks.py` の `_HOTSPOT_PATTERNS` はディスパッチ実行時のチャーン抑制
 （既知の頻出変更ファイルを無視する）が目的であり、意図が異なるためパターンは
 共有しない。
@@ -48,6 +53,33 @@ def _categorize(path: str) -> str | None:
         if pattern.search(path):
             return category
     return None
+
+
+def _touches_hotspot_category(subtask: SubTask) -> bool:
+    return any(_categorize(path) is not None for path in subtask.footprint)
+
+
+def _is_contract_writer(subtask: SubTask) -> bool:
+    """サブタスクが共有拡張ポイントの「書き込み者」かどうかを判定する。
+
+    `shared_contract`タグは「同一の契約に関与している」ことしか意味しない —
+    契約タスクにdepends_onするだけで自身のfootprintがその共有ファイルに
+    触れない（依存・importするだけの）消費者サブタスクも同じタグを持ち得る。
+    そうした消費者同士は互いに未接続でも安全に並列実行できるため、比較対象
+    から除外する必要がある。書き込み者かどうかは、明示的な
+    `writes_shared_contract`フラグ、またはfootprintがいずれかの共有拡張
+    ポイントカテゴリに一致するかで判定する（後者は一般的な命名のレジストリ
+    ファイル等を自動検出するためのヒューリスティックであり、命名パターンに
+    一致しない独自のファイル名を書き込む場合は明示的なフラグの指定が必要）。
+    """
+    return subtask.writes_shared_contract or _touches_hotspot_category(subtask)
+
+
+def _representative_path(subtask: SubTask) -> str:
+    for path in subtask.footprint:
+        if _categorize(path) is not None:
+            return path
+    return subtask.footprint[0] if subtask.footprint else "(footprint未指定)"
 
 
 def _scope(path: str) -> str:
@@ -111,8 +143,11 @@ def find_unowned_shared_contract_hotspots(
 
     2段階で検出する:
     1. 明示的な`shared_contract`タグ（プラン作成者が同一の未確立コントラクトだと
-       明示したサブタスク群）。ヒューリスティックに頼らない、最も信頼できる
-       シグナル。
+       明示したサブタスク群）のうち、実際に共有ファイルへ「書き込む」サブタスク
+       同士（`_is_contract_writer`参照）。同じタグを持っていても、契約に
+       depends_onするだけで自身は共有ファイルに触れない消費者サブタスクは
+       比較対象から除外する（消費者同士・書き込み者と消費者の組み合わせは、
+       共有ファイルへの同時書き込みが発生しないため安全）。
     2. カテゴリ(registry/cli-wiring/public-api/dependency-manifest)とディレクトリ
        スコープに基づくヒューリスティックなフォールバック（`shared_contract`が
        付与されていないサブタスクのみが対象）。ディレクトリが異なる場合は
@@ -133,9 +168,10 @@ def find_unowned_shared_contract_hotspots(
         if not subtask.shared_contract:
             continue
         tagged_ids.add(subtask.id)
-        path_hint = subtask.footprint[0] if subtask.footprint else "(footprint未指定)"
+        if not _is_contract_writer(subtask):
+            continue
         explicit_groups.setdefault(subtask.shared_contract, []).append(
-            (subtask.id, path_hint)
+            (subtask.id, _representative_path(subtask))
         )
 
     for contract_id, entries in sorted(explicit_groups.items()):

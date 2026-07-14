@@ -39,6 +39,7 @@ class SubTask:
     proposed_changes: tuple[str, ...] = ()
     verification_plan: tuple[str, ...] = ()
     shared_contract: str | None = None
+    writes_shared_contract: bool = False
 
     def touch_set(self) -> frozenset[str]:
         footprint = frozenset(
@@ -79,6 +80,7 @@ class DagResult:
                     "proposed_changes": list(subtask.proposed_changes),
                     "verification_plan": list(subtask.verification_plan),
                     "shared_contract": subtask.shared_contract,
+                    "writes_shared_contract": subtask.writes_shared_contract,
                 }
                 for subtask_id, subtask in self.subtasks.items()
             },

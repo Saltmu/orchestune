@@ -10,7 +10,9 @@ from orchestune.dag_contracts import (
 )
 
 
-def _subtask(id_, footprint, depends_on=(), shared_contract=None):
+def _subtask(
+    id_, footprint, depends_on=(), shared_contract=None, writes_shared_contract=False
+):
     return SubTask(
         id=id_,
         description="",
@@ -20,6 +22,7 @@ def _subtask(id_, footprint, depends_on=(), shared_contract=None):
         risk=False,
         risk_reasons=(),
         shared_contract=shared_contract,
+        writes_shared_contract=writes_shared_contract,
     )
 
 
@@ -183,7 +186,12 @@ class TestExplicitSharedContractTag:
         assert "task-csv" in warnings[0]
         assert "task-yaml" in warnings[0]
 
-    def test_same_tag_ordered_via_shared_contract_task_does_not_warn(self):
+    def test_pure_consumers_of_shared_contract_do_not_warn(self):
+        """所有タスクが共有ファイルを作成し、依存タスクは自身のfootprintに
+        その共有ファイルを含めず読み取り・importするだけの場合、消費者同士
+        (task-csv, task-yaml)が互いに未接続でも安全に並列実行できるため
+        警告しない（#175再レビュー指摘: shared_contractタグは「契約への
+        関与」を意味するだけで「書き込み」を意味しない）。"""
         subtasks = [
             _subtask(
                 "task-shared-contract",
@@ -198,7 +206,7 @@ class TestExplicitSharedContractTag:
             ),
             _subtask(
                 "task-yaml",
-                ["src/adapters/yaml_adapter.py", "src/format_registration.py"],
+                ["src/adapters/yaml_adapter.py"],
                 depends_on=["task-shared-contract"],
                 shared_contract="format-registry",
             ),
@@ -211,17 +219,74 @@ class TestExplicitSharedContractTag:
                 source="task-shared-contract", target="task-yaml", reason="explicit"
             ),
         ]
-        # task-csv と task-yaml 自身は互いに未接続の並列タスクのため、
-        # shared_contractタグを共有していても警告は消えない。
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
+        assert warnings == []
+
+    def test_tagged_writers_with_common_ancestor_only_still_warn(self):
+        """消費者とは異なり、実際に共有ファイルへ書き込む(footprintがカテゴリに
+        一致する)サブタスク同士は、共通の祖先を持つだけでは警告が消えない。"""
+        subtasks = [
+            _subtask("task-shared-contract", [], shared_contract="format-registry"),
+            _subtask(
+                "task-csv",
+                ["src/formats/registry.py"],
+                depends_on=["task-shared-contract"],
+                shared_contract="format-registry",
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/format_registration.py"],
+                depends_on=["task-shared-contract"],
+                shared_contract="format-registry",
+            ),
+        ]
+        edges = [
+            DagEdge(
+                source="task-shared-contract", target="task-csv", reason="explicit"
+            ),
+            DagEdge(
+                source="task-shared-contract", target="task-yaml", reason="explicit"
+            ),
+        ]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges)
         assert len(warnings) == 1
         assert "task-csv" in warnings[0]
         assert "task-yaml" in warnings[0]
 
+    def test_explicit_writes_flag_overrides_naming_heuristic(self):
+        """カテゴリ正規表現に一致しない独自のファイル名でも、
+        `writes_shared_contract=True`を明示すれば書き込み者として扱われる。"""
+        subtasks = [
+            _subtask(
+                "task-csv",
+                ["src/adapters/csv_adapter.py", "src/formats/plugin_table.py"],
+                shared_contract="format-registry",
+                writes_shared_contract=True,
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/adapters/yaml_adapter.py", "src/other/plugin_map.py"],
+                shared_contract="format-registry",
+                writes_shared_contract=True,
+            ),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
+        assert len(warnings) == 1
+
     def test_different_tags_do_not_interact(self):
         subtasks = [
-            _subtask("task-a", ["src/a.py"], shared_contract="contract-a"),
-            _subtask("task-b", ["src/b.py"], shared_contract="contract-b"),
+            _subtask(
+                "task-a",
+                ["src/a.py"],
+                shared_contract="contract-a",
+                writes_shared_contract=True,
+            ),
+            _subtask(
+                "task-b",
+                ["src/b.py"],
+                shared_contract="contract-b",
+                writes_shared_contract=True,
+            ),
         ]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
         assert warnings == []

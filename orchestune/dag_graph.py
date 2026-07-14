@@ -206,6 +206,7 @@ def _updated_subtask(
         risk_reasons=tuple(dict.fromkeys([*subtask.risk_reasons, *heuristic_reasons])),
         priority=subtask.priority,
         shared_contract=subtask.shared_contract,
+        writes_shared_contract=subtask.writes_shared_contract,
     )
 
 
