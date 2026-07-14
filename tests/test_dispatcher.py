@@ -981,6 +981,92 @@ class TestRunDispatchCycleCompletion:
         logged_entry = json.loads(events_lines[0])
         assert logged_entry["completion_events"] == report.completion_events
 
+    def test_cloud_completion_uses_remote_branch_commits(self, tmp_path):
+        """#177: クラウド実行の結果は、起動時のローカルworktreeではなく
+        fetch済みのリモートブランチで検証する。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, external_id="session-1")
+        dispatch_target = MagicMock()
+        dispatch_target.is_complete.return_value = True
+        config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
+        in_progress_issue = _issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label"),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=False,
+            ) as mock_local_commits,
+            patch(
+                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                return_value="remote-commit",
+            ) as mock_remote_commits,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed"
+        assert report.completion_events[0]["commit_sha"] == "remote-commit"
+        mock_local_commits.assert_not_called()
+        mock_remote_commits.assert_called_once_with(
+            config.worktree_root.parent,
+            "claude/issue-1-task-a",
+            "origin/main",
+        )
+        mock_add_label.assert_any_call(1, "status:done")
+
+    def test_cloud_completion_without_verified_sha_is_not_marked_done(self, tmp_path):
+        """#177: SHAを取得できなければ、完了ラベルへ遷移しない。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, external_id="session-1")
+        dispatch_target = MagicMock()
+        dispatch_target.is_complete.return_value = True
+        config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
+        in_progress_issue = _issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label"),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                return_value=None,
+            ),
+            patch(
+                "orchestune.dispatch_gc.apply_human_review_escalation"
+            ) as mock_escalate,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed_no_commits"
+        mock_escalate.assert_called_once()
+        assert all(
+            call.args != (1, "status:done") for call in mock_add_label.call_args_list
+        )
+
     def test_dirty_worktree_completion_is_skipped(self, tmp_path):
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path)

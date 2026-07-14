@@ -560,3 +560,26 @@ def resolve_local_or_remote_branch(
         resolved = check_local() or check_remote()
 
     return resolved or branch
+
+
+def fetch_remote_branch(repository_root: str | Path, branch: str) -> str:
+    """指定ブランチのリモート追跡参照を最新化して、その参照名を返す。"""
+    _validate_ref_name(branch)
+    _run(
+        [
+            "git",
+            "-C",
+            str(repository_root),
+            "fetch",
+            "origin",
+            f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        ]
+    )
+    return f"origin/{branch}"
+
+
+def normalize_remote_branch_name(branch: str) -> str:
+    """`origin/` 接頭辞の有無を吸収し、リモートのブランチ名を返す。"""
+    if branch.startswith("origin/"):
+        branch = branch.removeprefix("origin/")
+    return _validate_ref_name(branch)

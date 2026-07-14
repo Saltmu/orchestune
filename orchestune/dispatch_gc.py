@@ -94,6 +94,53 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
         return False
 
 
+def remote_branch_commit_sha_if_ahead(
+    repository_root: str | Path, branch: str, base_branch: str
+) -> str | None:
+    """#177: 外部実行ブランチがベースより進んでいれば、そのhead SHAを返す。
+
+    クラウドルーチンは起動時に作成したローカルworktreeを更新しないため、完了時は
+    作業・ベース両ブランチのリモート追跡参照を fetch して比較する。fetch・比較・
+    SHA取得のいずれかに失敗した場合、または差分がない場合は、実コミットを証明でき
+    ないため安全側の ``None`` を返す。
+    """
+    try:
+        remote_branch = github.fetch_remote_branch(repository_root, branch)
+        remote_base = github.fetch_remote_branch(
+            repository_root,
+            github.normalize_remote_branch_name(base_branch),
+        )
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "rev-list",
+                "--count",
+                f"{remote_base}..{remote_branch}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if int(result.stdout.strip() or "0") == 0:
+            return None
+        sha_result = subprocess.run(
+            ["git", "-C", str(repository_root), "rev-parse", remote_branch],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return sha_result.stdout.strip() or None
+    except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+        print(
+            f"Warning: failed to check remote branch {branch!r} against "
+            f"{base_branch!r}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def remove_worktree(worktree_path: str | Path) -> None:
     """#193: 完了したworktreeを撤去する。既に手動削除済み等の失敗は無視する
     （run_stateからのクオータ解放を妨げないことを優先する）。"""
@@ -112,11 +159,13 @@ def remove_worktree(worktree_path: str | Path) -> None:
 class CompletedWorktreeDecision:
     action: str
     subtask_id: str = ""
+    commit_sha: str | None = None
 
 
 def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: Task | None,
+    repository_root: str | Path | None = None,
 ) -> CompletedWorktreeDecision:
     """#193/#74: プロセス終了を検知したactive worktreeへの対応方針を、副作用なし
     （worktree削除・githubラベル変更を行わない）で判定する。"""
@@ -127,7 +176,19 @@ def _decide_completed_worktree_outcome(
         # 確認を待つ（安全側に倒し、作業内容の消失を防ぐ）。
         return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
 
-    if not worktree_has_new_commits(active.worktree_path, active.base_branch):
+    if active.external_id is not None:
+        repository_root = repository_root or Path(active.worktree_path).parent
+        commit_sha = remote_branch_commit_sha_if_ahead(
+            repository_root, active.branch, active.base_branch
+        )
+        has_new_commits = commit_sha is not None
+    else:
+        has_new_commits = worktree_has_new_commits(
+            active.worktree_path, active.base_branch
+        )
+        commit_sha = None
+
+    if not has_new_commits:
         # #74: プロセスは終了しworktreeもcleanだが、base_branchに対して新規コミットが
         # 1件も無い＝権限拒否等で実際には何も実装されず終了したと考えられる。
         # ここでstatus:doneを付与すると、依存先タスクが同一サイクル内で実体のない
@@ -136,7 +197,9 @@ def _decide_completed_worktree_outcome(
             action="completed_no_commits", subtask_id=subtask_id
         )
 
-    return CompletedWorktreeDecision(action="completed", subtask_id=subtask_id)
+    return CompletedWorktreeDecision(
+        action="completed", subtask_id=subtask_id, commit_sha=commit_sha
+    )
 
 
 def _apply_completed_worktree_outcome(
@@ -171,19 +234,20 @@ def _apply_completed_worktree_outcome(
         return event
 
     # decision.action == "completed"
-    commit_sha = None
+    commit_sha = decision.commit_sha
     if config.apply:
-        try:
-            res = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=active.worktree_path,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            commit_sha = res.stdout.strip()
-        except Exception:
-            pass
+        if active.external_id is None:
+            try:
+                res = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=active.worktree_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                commit_sha = res.stdout.strip()
+            except Exception:
+                pass
 
         remove_worktree(active.worktree_path)
         github.remove_label(active.issue_number, "status:in-progress")
@@ -200,7 +264,9 @@ def _finalize_completed_worktree(
     config: DispatcherConfig,
 ) -> dict:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    decision = _decide_completed_worktree_outcome(active, active_task)
+    decision = _decide_completed_worktree_outcome(
+        active, active_task, config.worktree_root.parent
+    )
     return _apply_completed_worktree_outcome(active, decision, config)
 
 

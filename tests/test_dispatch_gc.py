@@ -9,6 +9,7 @@ from orchestune.dispatch_gc import (
     _finalize_not_needed_worktree,
     _rule_completed,
     is_process_alive,
+    remote_branch_commit_sha_if_ahead,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
@@ -154,6 +155,62 @@ class TestWorktreeHasNewCommits:
         captured = capsys.readouterr()
         assert "worktrees/w1" in captured.err
         assert "origin/main" in captured.err
+
+
+class TestRemoteBranchCommitChecks:
+    """#177: クラウド実行の成果はリモート追跡ブランチで検証する。"""
+
+    def test_fetches_fresh_base_and_returns_no_sha_when_branch_is_merged(self):
+        with (
+            patch(
+                "orchestune.dispatch_gc.github.fetch_remote_branch",
+                side_effect=("origin/claude/issue-177-task-a", "origin/main"),
+            ) as mock_fetch,
+            patch("orchestune.dispatch_gc.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="0\n", stderr=""
+            )
+            assert (
+                remote_branch_commit_sha_if_ahead(
+                    "repository", "claude/issue-177-task-a", "origin/main"
+                )
+                is None
+            )
+
+        assert mock_fetch.call_args_list == [
+            (("repository", "claude/issue-177-task-a"), {}),
+            (("repository", "main"), {}),
+        ]
+        assert mock_run.call_args.args[0][-1] == (
+            "origin/main..origin/claude/issue-177-task-a"
+        )
+
+    def test_returns_sha_from_the_verified_remote_snapshot(self):
+        with (
+            patch(
+                "orchestune.dispatch_gc.github.fetch_remote_branch",
+                side_effect=("origin/claude/issue-177-task-a", "origin/main"),
+            ) as mock_fetch,
+            patch("orchestune.dispatch_gc.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = (
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="1\n", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="abc123\n", stderr=""
+                ),
+            )
+            assert (
+                remote_branch_commit_sha_if_ahead(
+                    "repository", "claude/issue-177-task-a", "main"
+                )
+                == "abc123"
+            )
+
+        assert mock_fetch.call_count == 2
+        assert mock_run.call_args.args[0][-1] == "origin/claude/issue-177-task-a"
 
 
 class TestFinalizeCompletedWorktree:
