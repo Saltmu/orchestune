@@ -457,6 +457,32 @@ class TestListOpenPrs:
         assert prs[0].is_ci_passing is True
         assert prs[1].is_ci_passing is False
 
+    @pytest.mark.parametrize(
+        "status_check_rollup",
+        [
+            "[]",
+            '{"contexts": []}',
+            "null",
+        ],
+    )
+    def test_treats_absent_or_empty_status_checks_as_not_passing(
+        self, status_check_rollup
+    ):
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", '
+            f'"statusCheckRollup": {status_check_rollup}}}'
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is False
+
     def test_includes_closing_issue_references(self):
         """#239: ブランチ名がAIセッションの指示通りにならない場合でも
         自己PR判定できるよう、PRが閉じるIssue番号一覧も取得する。"""
@@ -464,6 +490,7 @@ class TestListOpenPrs:
             "["
             '{"number": 5, "headRefName": "claude/elegant-noether-5rli7u", '
             '"files": [{"path": "src/a.py"}], '
+            '"statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}], '
             '"closingIssuesReferences": [{"number": 218}]}'
             "]"
         )
