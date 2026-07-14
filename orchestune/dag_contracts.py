@@ -119,12 +119,15 @@ def _is_ordered(a: str, b: str, reachable: dict[str, set[str]]) -> bool:
     return b in reachable[a] or a in reachable[b]
 
 
-def _has_unordered_pair(ids: list[str], reachable: dict[str, set[str]]) -> bool:
-    return any(
-        not _is_ordered(a, b, reachable)
+def _unordered_pairs(
+    ids: list[str], reachable: dict[str, set[str]]
+) -> list[tuple[str, str]]:
+    return [
+        (a, b)
         for index, a in enumerate(ids)
         for b in ids[index + 1 :]
-    )
+        if not _is_ordered(a, b, reachable)
+    ]
 
 
 def _format_warning(label: str, entries: list[tuple[str, str]], hint: str) -> str:
@@ -149,11 +152,15 @@ def find_unowned_shared_contract_hotspots(
        比較対象から除外する（消費者同士・書き込み者と消費者の組み合わせは、
        共有ファイルへの同時書き込みが発生しないため安全）。
     2. カテゴリ(registry/cli-wiring/public-api/dependency-manifest)とディレクトリ
-       スコープに基づくヒューリスティックなフォールバック（`shared_contract`が
-       付与されていないサブタスクのみが対象）。ディレクトリが異なる場合は
-       同一ホットスポットとみなさないため、レジストリのように想定パスの
-       ディレクトリごと異なるケースまでは捕捉できない — そうしたケースは
-       明示的な`shared_contract`タグの付与が推奨される。
+       スコープに基づくヒューリスティックなフォールバック。`shared_contract`が
+       付与されているかどうかに関わらず、footprintがカテゴリに一致する全サブ
+       タスクを対象とする — タグ付けが一部のサブタスクにしか行われなかった
+       場合（例: 片方だけタグ付けを忘れた）でも、同じ共有ファイルへの並列書き込み
+       を見逃さないため（#175再レビュー指摘）。ディレクトリが異なる場合は同一
+       ホットスポットとみなさないため、レジストリのように想定パスのディレクトリ
+       ごと異なるケースまでは捕捉できない — そうしたケースは明示的な
+       `shared_contract`タグの付与が推奨される。
+       段階1で既に警告済みのペアは、段階2で重複して警告しない。
 
     いずれの段階でも、判定は連結性ではなく有向の到達可能性（一方が他方の祖先か）
     で行う。ブロッキングエラーにはしない。
@@ -161,14 +168,11 @@ def find_unowned_shared_contract_hotspots(
     reachable = _forward_reachable((subtask.id for subtask in subtasks), edges)
 
     warnings: list[str] = []
+    warned_pairs: set[frozenset[str]] = set()
 
     explicit_groups: dict[str, list[tuple[str, str]]] = {}
-    tagged_ids: set[str] = set()
     for subtask in subtasks:
-        if not subtask.shared_contract:
-            continue
-        tagged_ids.add(subtask.id)
-        if not _is_contract_writer(subtask):
+        if not subtask.shared_contract or not _is_contract_writer(subtask):
             continue
         explicit_groups.setdefault(subtask.shared_contract, []).append(
             (subtask.id, _representative_path(subtask))
@@ -176,8 +180,10 @@ def find_unowned_shared_contract_hotspots(
 
     for contract_id, entries in sorted(explicit_groups.items()):
         ids = sorted({subtask_id for subtask_id, _ in entries})
-        if len(ids) < 2 or not _has_unordered_pair(ids, reachable):
+        pairs = _unordered_pairs(ids, reachable)
+        if len(ids) < 2 or not pairs:
             continue
+        warned_pairs.update(frozenset(pair) for pair in pairs)
         warnings.append(
             _format_warning(
                 f"共有コントラクト（shared_contract: {contract_id}）",
@@ -188,8 +194,6 @@ def find_unowned_shared_contract_hotspots(
 
     heuristic_touches: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for subtask in subtasks:
-        if subtask.id in tagged_ids:
-            continue
         seen_keys: set[tuple[str, str]] = set()
         for path in subtask.footprint:
             category = _categorize(path)
@@ -203,7 +207,12 @@ def find_unowned_shared_contract_hotspots(
 
     for (category, scope), entries in sorted(heuristic_touches.items()):
         ids = sorted({subtask_id for subtask_id, _ in entries})
-        if len(ids) < 2 or not _has_unordered_pair(ids, reachable):
+        pairs = [
+            pair
+            for pair in _unordered_pairs(ids, reachable)
+            if frozenset(pair) not in warned_pairs
+        ]
+        if len(ids) < 2 or not pairs:
             continue
         warnings.append(
             _format_warning(

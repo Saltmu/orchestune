@@ -291,9 +291,9 @@ class TestExplicitSharedContractTag:
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
         assert warnings == []
 
-    def test_tagged_subtasks_are_excluded_from_heuristic_pass(self):
-        """タグ付き同士の重複はexplicit側で1件のみ報告され、ヒューリス
-        ティック側で二重報告されない。"""
+    def test_tagged_pair_is_not_double_reported_by_heuristic_pass(self):
+        """タグ付き同士の重複はexplicit側で1件報告され、同一ペアがヒューリス
+        ティック側で重複報告されない（warned_pairsによる抑止）。"""
         subtasks = [
             _subtask(
                 "task-csv",
@@ -308,6 +308,27 @@ class TestExplicitSharedContractTag:
         ]
         warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
         assert len(warnings) == 1
+
+    def test_missing_tag_on_one_side_still_detected_by_heuristic_pass(self):
+        """タグ付けが片方のサブタスクにしか行われなかった場合（宣言漏れ）でも、
+        ヒューリスティック段階は全サブタスクを対象とするため、同じ共有ファイル
+        への並列書き込みを見逃さない（#175再々レビュー指摘）。"""
+        subtasks = [
+            _subtask(
+                "task-csv",
+                ["src/formats/registry.py"],
+                shared_contract="format-registry",
+            ),
+            _subtask(
+                "task-yaml",
+                ["src/formats/registration.py"],
+                # shared_contract の付け忘れを想定
+            ),
+        ]
+        warnings = find_unowned_shared_contract_hotspots(subtasks, edges=[])
+        assert len(warnings) == 1
+        assert "task-csv" in warnings[0]
+        assert "task-yaml" in warnings[0]
 
 
 class TestBuildDagWarningsIntegration:
