@@ -2,6 +2,7 @@
 # ruff: noqa: F401 -- compatibility re-exports
 
 from orchestune.dag_cli import main
+from orchestune.dag_contracts import find_unowned_shared_contract_hotspots
 from orchestune.dag_graph import (
     _assemble_dag,
     _collect_explicit_edges,
@@ -57,6 +58,7 @@ __all__ = [
     "build_dag",
     "build_dag_from_plan",
     "build_similarity_edges",
+    "find_unowned_shared_contract_hotspots",
     "main",
     "parse_decomposition_plan",
     "recompute_dag_for_footprint_change",

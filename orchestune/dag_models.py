@@ -61,6 +61,7 @@ class DagResult:
     topological_order: list[str]
     parallel_leaves: list[str]
     risky_subtask_ids: list[str]
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +92,7 @@ class DagResult:
             "topological_order": list(self.topological_order),
             "parallel_leaves": list(self.parallel_leaves),
             "risky_subtask_ids": list(self.risky_subtask_ids),
+            "warnings": list(self.warnings),
         }
 
 
