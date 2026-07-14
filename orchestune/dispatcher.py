@@ -196,13 +196,26 @@ def _decide_semantic_review_enabled() -> bool:
     return os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0"
 
 
-def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> PhaseResult:
+def _poll_pending_not_needed_reviews(
+    args: argparse.Namespace, auth_error: ForgeAuthError | None = None
+) -> PhaseResult:
     """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
 
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
     """
+    if auth_error is not None:
+        print(
+            f"Error: authentication failed while polling reviews: {auth_error}",
+            file=sys.stderr,
+        )
+        return PhaseResult(
+            phase_name="poll_pending_not_needed_reviews",
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(auth_error),
+            retryable=False,
+        )
+
     try:
-        GitHubForge().check_auth()
         from orchestune.integration_coordinator import (
             process_pending_not_needed_reviews,
         )
@@ -245,7 +258,9 @@ def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> PhaseResult:
 
 
 def _run_semantic_integrator(
-    config: DispatcherConfig, semantic_review_enabled: bool
+    config: DispatcherConfig,
+    semantic_review_enabled: bool,
+    auth_error: ForgeAuthError | None = None,
 ) -> PhaseResult:
     """統合コーディネーターによる意味的レビューを含め、Integratorを実行する。
 
@@ -255,8 +270,19 @@ def _run_semantic_integrator(
     Python側では一切行わない。ベストエフォート処理: 失敗しても警告を出すだけで
     main()は続行する。
     """
+    if auth_error is not None:
+        print(
+            f"Error: authentication failed while running Integrator: {auth_error}",
+            file=sys.stderr,
+        )
+        return PhaseResult(
+            phase_name="run_semantic_integrator",
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(auth_error),
+            retryable=False,
+        )
+
     try:
-        GitHubForge().check_auth()
         from orchestune.integrator import Integrator, IntegratorConfig
 
         integrator_config = IntegratorConfig(
@@ -316,13 +342,26 @@ def _run_semantic_integrator(
         )
 
 
-def _process_parent_completion(config: DispatcherConfig) -> PhaseResult:
+def _process_parent_completion(
+    config: DispatcherConfig, auth_error: ForgeAuthError | None = None
+) -> PhaseResult:
     """#170: 親Issue配下の全子Issue完了検知→最終PR用意、および最終PRの
     マージ検知→親Issueクローズを行う。ベストエフォート処理: 失敗しても警告を
     出すだけでmain()は続行する。
     """
+    if auth_error is not None:
+        print(
+            f"Error: authentication failed while processing parent completion: {auth_error}",
+            file=sys.stderr,
+        )
+        return PhaseResult(
+            phase_name="process_parent_completion",
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(auth_error),
+            retryable=False,
+        )
+
     try:
-        GitHubForge().check_auth()
         from orchestune.parent_completion import process_parent_completion
 
         report = process_parent_completion(config.parent_issue_number, config.apply)
@@ -491,15 +530,23 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         report = run_dispatch_cycle(config)
 
         if config.apply:
+            auth_error = None
+            try:
+                GitHubForge().check_auth()
+            except ForgeAuthError as e:
+                auth_error = e
+
             semantic_review_enabled = _decide_semantic_review_enabled()
             if semantic_review_enabled:
-                r1 = _poll_pending_not_needed_reviews(args)
+                r1 = _poll_pending_not_needed_reviews(args, auth_error=auth_error)
                 post_cycle_results.append(r1)
-            r2 = _run_semantic_integrator(config, semantic_review_enabled)
+            r2 = _run_semantic_integrator(
+                config, semantic_review_enabled, auth_error=auth_error
+            )
             post_cycle_results.append(r2)
             integrator_run_report = r2.report
             if config.parent_issue_number is not None:
-                r3 = _process_parent_completion(config)
+                r3 = _process_parent_completion(config, auth_error=auth_error)
                 post_cycle_results.append(r3)
 
         # 機械判定可能なレポート（標準出力のJSON）に後処理結果を統合する

@@ -3139,11 +3139,9 @@ class TestPollPendingNotNeededReviews:
 
     def test_returns_fatal_failure_on_forge_auth_error(self, tmp_path, capsys):
         args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
-        with patch(
-            "orchestune.forge.GitHubForge.check_auth",
-            side_effect=ForgeAuthError("auth-failed"),
-        ):
-            result = _poll_pending_not_needed_reviews(args)
+        result = _poll_pending_not_needed_reviews(
+            args, auth_error=ForgeAuthError("auth-failed")
+        )
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.FATAL_FAILURE
@@ -3250,11 +3248,11 @@ class TestRunSemanticIntegrator:
         config = DispatcherConfig(
             run_state_path="dummy.json", worktree_root="worktrees"
         )
-        with patch(
-            "orchestune.forge.GitHubForge.check_auth",
-            side_effect=ForgeAuthError("auth-failed"),
-        ):
-            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+        result = _run_semantic_integrator(
+            config,
+            semantic_review_enabled=False,
+            auth_error=ForgeAuthError("auth-failed"),
+        )
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.FATAL_FAILURE
@@ -3313,11 +3311,9 @@ class TestProcessParentCompletion:
             parent_issue_number=100,
             apply=True,
         )
-        with patch(
-            "orchestune.forge.GitHubForge.check_auth",
-            side_effect=ForgeAuthError("auth-failed"),
-        ):
-            result = _process_parent_completion(config)
+        result = _process_parent_completion(
+            config, auth_error=ForgeAuthError("auth-failed")
+        )
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.FATAL_FAILURE
@@ -3635,3 +3631,23 @@ class TestDispatcherConfigLoading:
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert out["post_cycle_results"][1]["status"] == "fatal_failure"
+
+        # ケース4: main()のcheck_auth()自体がForgeAuthErrorを投げる場合
+        with (
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.check_auth",
+                side_effect=ForgeAuthError("main-auth-failed"),
+            ),
+        ):
+            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            assert code == 1
+            out = json.loads(capsys.readouterr().out)
+            assert "post_cycle_results" in out
+            assert len(out["post_cycle_results"]) == 3
+            for res in out["post_cycle_results"]:
+                assert res["status"] == "fatal_failure"
+                assert "main-auth-failed" in res["error_message"]
