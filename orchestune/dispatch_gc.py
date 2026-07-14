@@ -94,21 +94,21 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
         return False
 
 
-def remote_branch_has_new_commits(
+def remote_branch_commit_sha_if_ahead(
     repository_root: str | Path, branch: str, base_branch: str
-) -> bool:
-    """#177: 外部実行が更新したリモートブランチに新規コミットがあるか確認する。
+) -> str | None:
+    """#177: 外部実行ブランチがベースより進んでいれば、そのhead SHAを返す。
 
     クラウドルーチンは起動時に作成したローカルworktreeを更新しないため、完了時は
-    必ずリモート追跡参照を fetch して比較する。fetch・参照解決・比較のいずれかに
-    失敗した場合は、実コミットを証明できないため安全側の ``False`` を返す。
+    作業・ベース両ブランチのリモート追跡参照を fetch して比較する。fetch・比較・
+    SHA取得のいずれかに失敗した場合、または差分がない場合は、実コミットを証明でき
+    ないため安全側の ``None`` を返す。
     """
     try:
         remote_branch = github.fetch_remote_branch(repository_root, branch)
-        resolved_base = github.resolve_local_or_remote_branch(
+        remote_base = github.fetch_remote_branch(
             repository_root,
-            base_branch,
-            prefer_remote=True,
+            github.normalize_remote_branch_name(base_branch),
         )
         result = subprocess.run(
             [
@@ -117,34 +117,27 @@ def remote_branch_has_new_commits(
                 str(repository_root),
                 "rev-list",
                 "--count",
-                f"{resolved_base}..{remote_branch}",
+                f"{remote_base}..{remote_branch}",
             ],
             capture_output=True,
             text=True,
             check=True,
         )
-        return int(result.stdout.strip() or "0") > 0
+        if int(result.stdout.strip() or "0") == 0:
+            return None
+        sha_result = subprocess.run(
+            ["git", "-C", str(repository_root), "rev-parse", remote_branch],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return sha_result.stdout.strip() or None
     except (subprocess.CalledProcessError, OSError, ValueError) as exc:
         print(
             f"Warning: failed to check remote branch {branch!r} against "
             f"{base_branch!r}: {exc}",
             file=sys.stderr,
         )
-        return False
-
-
-def remote_branch_commit_sha(repository_root: str | Path, branch: str) -> str | None:
-    """リモート追跡ブランチを最新化して、そのHEAD SHAを返す。"""
-    try:
-        remote_branch = github.fetch_remote_branch(repository_root, branch)
-        result = subprocess.run(
-            ["git", "-C", str(repository_root), "rev-parse", remote_branch],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip() or None
-    except (subprocess.CalledProcessError, OSError):
         return None
 
 
@@ -166,6 +159,7 @@ def remove_worktree(worktree_path: str | Path) -> None:
 class CompletedWorktreeDecision:
     action: str
     subtask_id: str = ""
+    commit_sha: str | None = None
 
 
 def _decide_completed_worktree_outcome(
@@ -184,13 +178,15 @@ def _decide_completed_worktree_outcome(
 
     if active.external_id is not None:
         repository_root = repository_root or Path(active.worktree_path).parent
-        has_new_commits = remote_branch_has_new_commits(
+        commit_sha = remote_branch_commit_sha_if_ahead(
             repository_root, active.branch, active.base_branch
         )
+        has_new_commits = commit_sha is not None
     else:
         has_new_commits = worktree_has_new_commits(
             active.worktree_path, active.base_branch
         )
+        commit_sha = None
 
     if not has_new_commits:
         # #74: プロセスは終了しworktreeもcleanだが、base_branchに対して新規コミットが
@@ -201,7 +197,9 @@ def _decide_completed_worktree_outcome(
             action="completed_no_commits", subtask_id=subtask_id
         )
 
-    return CompletedWorktreeDecision(action="completed", subtask_id=subtask_id)
+    return CompletedWorktreeDecision(
+        action="completed", subtask_id=subtask_id, commit_sha=commit_sha
+    )
 
 
 def _apply_completed_worktree_outcome(
@@ -236,13 +234,9 @@ def _apply_completed_worktree_outcome(
         return event
 
     # decision.action == "completed"
-    commit_sha = None
+    commit_sha = decision.commit_sha
     if config.apply:
-        if active.external_id is not None:
-            commit_sha = remote_branch_commit_sha(
-                config.worktree_root.parent, active.branch
-            )
-        else:
+        if active.external_id is None:
             try:
                 res = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
