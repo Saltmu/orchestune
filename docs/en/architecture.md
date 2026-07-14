@@ -65,6 +65,17 @@ shared file is guessed at entirely different paths in different directories
 (the original registry-naming scenario) — that's what the explicit
 `shared_contract` tag (tier 1) is for.
 
+**Writers vs. consumers**: the `shared_contract` tag only means "participates
+in this contract," not "writes to the shared file." A dependent subtask that
+merely `depends_on` the owner and never touches the shared file in its own
+`footprint` (a pure consumer, reading/importing it) can carry the same tag.
+`find_unowned_shared_contract_hotspots` only compares subtasks that are
+actually judged to be *writers* — either their `footprint` contains a path
+matching one of the shared-extension-point categories, or they explicitly set
+`writes_shared_contract: true`. Pure consumers, and any writer/consumer or
+consumer/consumer pairing, are never flagged, since there's no write race to
+warn about.
+
 ---
 
 ## 2. Self-healing State Recovery
