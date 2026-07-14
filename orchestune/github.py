@@ -78,7 +78,9 @@ def _run(args: list[str], input_text: str | None = None) -> str:
 _VALID_ISSUE_STATES = frozenset({"open", "closed", "all"})
 
 
-def list_issues_by_label(label: str, state: str = "open") -> list[IssueRecord]:
+def list_issues_by_label(
+    label: str, state: str = "open", limit: int = 1000
+) -> list[IssueRecord]:
     """#236: `state`を明示指定できるようにする。既定は従来通り`open`のみ。
 
     `status:done`昇格判定は、人間が完了Issueを通常のGitHub運用でClose
@@ -97,6 +99,8 @@ def list_issues_by_label(label: str, state: str = "open") -> list[IssueRecord]:
             label,
             "--state",
             state,
+            "--limit",
+            str(limit),
             "--json",
             "number,title,body,labels,createdAt,parent,blockedBy,state",
         ]
@@ -371,7 +375,7 @@ def is_branch_merged_into(head: str, base: str) -> bool:
     return bool(json.loads(stdout))
 
 
-def list_open_prs() -> list[PrRecord]:
+def list_open_prs(limit: int = 1000) -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される
     GitHub側の正規のIssue参照一覧）も併せて取得する。
@@ -383,6 +387,8 @@ def list_open_prs() -> list[PrRecord]:
             "list",
             "--state",
             "open",
+            "--limit",
+            str(limit),
             "--json",
             "number,headRefName,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
         ]

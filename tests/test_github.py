@@ -172,6 +172,26 @@ class TestListIssuesByLabel:
                 list_issues_by_label("status:done", state="bogus")
             mock_run.assert_not_called()
 
+    def test_calls_gh_with_limit_arg(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+            list_issues_by_label("status:queued", limit=100)
+        called_args = mock_run.call_args.args[0]
+        assert "--limit" in called_args
+        assert called_args[called_args.index("--limit") + 1] == "100"
+
+    def test_defaults_to_limit_1000(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+            list_issues_by_label("status:queued")
+        called_args = mock_run.call_args.args[0]
+        assert "--limit" in called_args
+        assert called_args[called_args.index("--limit") + 1] == "1000"
+
 
 class TestListSubIssues:
     """#156: parent_issue_number指定時のfast path。gh api graphqlの
@@ -495,6 +515,26 @@ class TestListOpenPrs:
             prs = list_open_prs()
 
         assert prs[0].closes_issue_numbers == ()
+
+    def test_calls_gh_with_limit_arg(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+            list_open_prs(limit=50)
+        called_args = mock_run.call_args.args[0]
+        assert "--limit" in called_args
+        assert called_args[called_args.index("--limit") + 1] == "50"
+
+    def test_defaults_to_limit_1000(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+            list_open_prs()
+        called_args = mock_run.call_args.args[0]
+        assert "--limit" in called_args
+        assert called_args[called_args.index("--limit") + 1] == "1000"
 
 
 class TestBranchChangedFiles:
