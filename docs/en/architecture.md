@@ -47,18 +47,23 @@ rely on literal string matching at all.
 `orchestune/dag_contracts.py`'s `find_unowned_shared_contract_hotspots`
 backs this up in two tiers, flagging results as a non-blocking `Warnings:`
 entry in `orchestune-dag`'s output: (1) subtasks sharing the same
-`shared_contract` tag, and (2) for untagged subtasks, footprints that fall
-into the same category *and* the same directory (scoping by directory keeps
-unrelated sibling packages — e.g. `packages/auth/__init__.py` vs.
-`packages/payments/__init__.py` — from being flagged as the same hotspot).
-In both tiers, the check is **reachability**, not connectivity: a warning
-fires when some pair in the group is not reachable from the other via
-`depends_on`/inferred edges in either direction. This matters because two
-subtasks that merely share a common ancestor (e.g. both `depends_on` the
-same `shared-contract` task, as in `shared -> csv` and `shared -> yaml`) are
-not ordered relative to *each other* and can still run in parallel — the
-gate keeps warning about such pairs even though both declare a dependency on
-the owner.
+`shared_contract` tag, and (2) *every* subtask regardless of tagging, whose
+footprint falls into the same category *and* the same directory (scoping by
+directory keeps unrelated sibling packages — e.g. `packages/auth/__init__.py`
+vs. `packages/payments/__init__.py` — from being flagged as the same
+hotspot). Tier 2 deliberately doesn't skip tagged subtasks: if only one of
+two subtasks writing to the same file remembered to set `shared_contract`
+(a plausible authoring mistake), tier 1 alone would never compare them —
+each would sit alone in its own group — and the exact race this gate exists
+to catch would slip through. Pairs already flagged by tier 1 are tracked and
+not re-flagged by tier 2. In both tiers, the check is **reachability**, not
+connectivity: a warning fires when some pair in the group is not reachable
+from the other via `depends_on`/inferred edges in either direction. This
+matters because two subtasks that merely share a common ancestor (e.g. both
+`depends_on` the same `shared-contract` task, as in `shared -> csv` and
+`shared -> yaml`) are not ordered relative to *each other* and can still run
+in parallel — the gate keeps warning about such pairs even though both
+declare a dependency on the owner.
 
 The directory-scoped heuristic (tier 2) still can't catch cases where the
 shared file is guessed at entirely different paths in different directories
