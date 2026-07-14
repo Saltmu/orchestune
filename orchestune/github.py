@@ -395,17 +395,11 @@ def list_open_prs() -> list[PrRecord]:
         closing_refs = raw.get("closingIssuesReferences", [])
 
         rollup = _status_check_contexts(raw.get("statusCheckRollup"))
-        is_ci_passing = True
-        for check in rollup:
-            status = check.get("status")
-            conclusion = check.get("conclusion")
-            if status != "COMPLETED" or conclusion not in (
-                "SUCCESS",
-                "NEUTRAL",
-                "SKIPPED",
-            ):
-                is_ci_passing = False
-                break
+        is_ci_passing = bool(rollup) and all(
+            check.get("status") == "COMPLETED"
+            and check.get("conclusion") in ("SUCCESS", "NEUTRAL", "SKIPPED")
+            for check in rollup
+        )
         prs.append(
             PrRecord(
                 number=number,
