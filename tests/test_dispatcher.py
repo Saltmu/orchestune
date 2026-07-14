@@ -35,6 +35,14 @@ from orchestune.github import IssueRecord, PrRecord
 
 
 @pytest.fixture(autouse=True)
+def _stub_forge_check_auth_by_default():
+    """テスト環境において GitHubForge.check_auth() が実際の gh 認証エラーを
+    投げないように、デフォルトで pass するようにスタブする。"""
+    with patch("orchestune.forge.GitHubForge.check_auth") as mock_check:
+        yield mock_check
+
+
+@pytest.fixture(autouse=True)
 def _stub_label_actor_permission_by_default():
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
@@ -3132,7 +3140,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_fatal_failure_on_forge_auth_error(self, tmp_path, capsys):
         args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
         with patch(
-            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            "orchestune.forge.GitHubForge.check_auth",
             side_effect=ForgeAuthError("auth-failed"),
         ):
             result = _poll_pending_not_needed_reviews(args)
@@ -3243,7 +3251,7 @@ class TestRunSemanticIntegrator:
             run_state_path="dummy.json", worktree_root="worktrees"
         )
         with patch(
-            "orchestune.integrator.Integrator",
+            "orchestune.forge.GitHubForge.check_auth",
             side_effect=ForgeAuthError("auth-failed"),
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
@@ -3306,7 +3314,7 @@ class TestProcessParentCompletion:
             apply=True,
         )
         with patch(
-            "orchestune.parent_completion.process_parent_completion",
+            "orchestune.forge.GitHubForge.check_auth",
             side_effect=ForgeAuthError("auth-failed"),
         ):
             result = _process_parent_completion(config)
@@ -3552,6 +3560,7 @@ class TestDispatcherConfigLoading:
 
     def test_post_cycle_failures_in_main(self, tmp_path, capsys):
         r1 = PhaseResult("poll_pending_not_needed_reviews", PhaseStatus.SUCCESS)
+        r2 = PhaseResult("run_semantic_integrator", PhaseStatus.SUCCESS)
         r2_retryable = PhaseResult(
             "run_semantic_integrator",
             PhaseStatus.RETRYABLE_FAILURE,
@@ -3575,7 +3584,7 @@ class TestDispatcherConfigLoading:
                 "orchestune.dispatcher._poll_pending_not_needed_reviews",
                 return_value=r1,
             ),
-            patch("orchestune.dispatcher._run_semantic_integrator", return_value=r1),
+            patch("orchestune.dispatcher._run_semantic_integrator", return_value=r2),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
             code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)

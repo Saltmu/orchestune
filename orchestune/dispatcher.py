@@ -60,7 +60,7 @@ from orchestune.dispatch_targets import (
     resolve_default_dispatch_target_name,
 )
 from orchestune.dispatch_worktree import file_lock
-from orchestune.forge import ForgeAuthError
+from orchestune.forge import ForgeAuthError, GitHubForge
 
 __all__ = [
     "ActiveWorktree",
@@ -202,6 +202,7 @@ def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> PhaseResult:
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
     """
     try:
+        GitHubForge().check_auth()
         from orchestune.integration_coordinator import (
             process_pending_not_needed_reviews,
         )
@@ -255,6 +256,7 @@ def _run_semantic_integrator(
     main()は続行する。
     """
     try:
+        GitHubForge().check_auth()
         from orchestune.integrator import Integrator, IntegratorConfig
 
         integrator_config = IntegratorConfig(
@@ -320,6 +322,7 @@ def _process_parent_completion(config: DispatcherConfig) -> PhaseResult:
     出すだけでmain()は続行する。
     """
     try:
+        GitHubForge().check_auth()
         from orchestune.parent_completion import process_parent_completion
 
         report = process_parent_completion(config.parent_issue_number, config.apply)
