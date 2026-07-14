@@ -30,7 +30,13 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 1. Survey the current repository codebase and directory structure to understand the task requested by the user.
 2. Identify which modules and files need to be modified (`footprint`), and what classes or functions need to be created or modified (`symbols`).
 3. Decompose the task into subtasks that can be executed in parallel independently, or that are logically sequenced.
-4. Create a `decomposition_plan.md` in the repository root. Use the YAML frontmatter format as follows:
+4. **Shared-contract gate (greenfield decomposition)**: When the "big rock" targets a greenfield area of the repository (new package, new plugin/adapter system, etc.), explicitly look for shared extension points that multiple subtasks are likely to touch even though the file doesn't exist yet — e.g. a plugin/format registry, CLI registration/wiring module, or a dependency manifest. If two or more subtasks would need to establish or edit the same such extension point:
+   - Create a dedicated `shared-contract` / `integration-scaffold` subtask that owns those files (creates the registry module, defines the interface/contract).
+   - Tag every subtask that plugs into that contract — including the owning subtask itself — with the same `shared_contract: <id>` value (a short slug you choose, e.g. `format-registry`). This is the authoritative signal `orchestune-dag` uses to group them; it does not depend on the subtasks agreeing on a literal file path.
+   - The tag alone only means "participates in this contract," not "writes to the shared file" — `orchestune-dag` only compares subtasks that actually *write* to it (their own `footprint` contains a path matching a shared-extension-point pattern, or they explicitly set `writes_shared_contract: true`). Prefer designing dependents as pure consumers: keep their `footprint` limited to their own adapter implementation and tests, and let them only read/import the contract the owning subtask created. Tagged consumers that never touch the shared file are never compared against each other and don't need to be mutually ordered.
+   - If two or more subtasks *do* need to write to the shared file themselves (not just the owner), make sure they're actually *ordered* relative to each other, not just each dependent on the owner: `csv` and `yaml` both `depends_on: [shared-contract]` but not on each other can still run in parallel and race on the file. Add an explicit `depends_on` between them (e.g. `yaml` also `depends_on: [csv]`) if they truly must both edit it.
+   This is a distinct failure mode from ordinary footprint overlap (see Stage 2): the shared file is often *absent* from every subtask's declared `footprint` in the first place, since it doesn't exist yet and each subtask may independently assume a different name/path for it — so `orchestune-dag`'s similarity-based overlap detection cannot catch it by itself. Declaring and tagging the shared-contract subtask up front is the primary defense; `orchestune-dag`'s hotspot-category warning (Stage 2) is a secondary, heuristic safety net that only catches same-directory naming mismatches, not the `shared_contract` tag's full coverage.
+5. Create a `decomposition_plan.md` in the repository root. Use the YAML frontmatter format as follows:
 
    ```markdown
    ---
@@ -54,6 +60,8 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
        depends_on: []
        priority: medium    # high, medium, low (default: medium)
        risk: false         # true if touching API keys, credentials, or risky subprocesses
+       shared_contract: null  # e.g. "format-registry" — tag subtasks sharing an unestablished extension point (see Stage 1 "Shared-contract gate")
+       writes_shared_contract: false  # true if this subtask's footprint writes to the shared_contract file under a name orchestune-dag's category patterns won't recognize (usually unnecessary — footprint matches are auto-detected)
        issue_number: null  # filled in by orchestune-dispatch once this subtask's issue exists
    ---
 
@@ -72,6 +80,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    ```
 
    * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `decomposition_plan.md` and re-run this command until it passes.
+   * If the output includes a `Warnings:` section, `orchestune-dag` has detected two or more subtasks that both actually *write* to the same shared extension point and are not ordered relative to each other in the DAG (neither is reachable from the other via `depends_on`/inferred edges — having a common ancestor task is not enough, since siblings of a shared ancestor can still run in parallel). "Both write to it" is checked two ways, and either can trigger the warning: (a) subtasks tagged with the same `shared_contract` where each is judged a writer per the footprint/`writes_shared_contract` check in Stage 1, or (b) regardless of tagging — including a tagged subtask paired with one that was never tagged at all, e.g. a declaration was simply missed — any subtasks whose declared `footprint` entries fall into the same shared-extension-point category *and* directory (registry, CLI wiring, public API index, dependency manifest). Pairs already flagged by (a) aren't re-flagged by (b). Tagged subtasks that only depend on the contract without writing to it (pure consumers) are never part of this warning. This is not a blocking error, but it should normally be resolved by revising `decomposition_plan.md` (add a `depends_on` edge directly between the affected writer subtasks, turn a writer into a pure consumer if it doesn't actually need to touch the shared file, add the missing `shared_contract` tag, or confirm the paths genuinely refer to unrelated files) before moving to Stage 3.
 
 ### Stage 3: Present Plan and Iterate with the User
 

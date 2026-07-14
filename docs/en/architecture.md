@@ -23,6 +23,64 @@ graph TD
 * **Safe Parallelization**:
   Only completely independent subtasks are allowed to run concurrently. This topological sorting ensures that parallel branches are mergeable with minimal conflict.
 
+### Ordinary Footprint Overlap vs. the Shared-Contract Gate
+
+The overlap analysis above (`dag_similarity.py`) only inserts an implicit
+dependency edge when subtasks' **declared** footprint/symbol strings actually
+match (or score above the weighted cosine-similarity threshold). That works
+well for the common case of multiple tasks editing an already-existing file,
+but greenfield decomposition plans have a different failure mode: several
+subtasks may implicitly need to establish or edit a shared extension point
+that doesn't exist yet — e.g. a format registry or a CLI wiring module — each
+assuming a different plausible path for it. Since none of their declared
+footprints share a literal string, the existing overlap detection has nothing
+to match on and cannot catch this case.
+
+To address this, Stage 1 of the `orchestune` skill asks the planner to
+explicitly identify such shared extension points (registries, CLI wiring,
+dependency manifests, public API index files) up front, create a dedicated
+`shared-contract` / `integration-scaffold` subtask that owns them, and tag
+every subtask involved (owner and dependents alike) with a matching
+`shared_contract: <id>` value — the most reliable signal, since it doesn't
+rely on literal string matching at all.
+
+`orchestune/dag_contracts.py`'s `find_unowned_shared_contract_hotspots`
+backs this up in two tiers, flagging results as a non-blocking `Warnings:`
+entry in `orchestune-dag`'s output: (1) subtasks sharing the same
+`shared_contract` tag, and (2) *every* subtask regardless of tagging, whose
+footprint falls into the same category *and* the same directory (scoping by
+directory keeps unrelated sibling packages — e.g. `packages/auth/__init__.py`
+vs. `packages/payments/__init__.py` — from being flagged as the same
+hotspot). Tier 2 deliberately doesn't skip tagged subtasks: if only one of
+two subtasks writing to the same file remembered to set `shared_contract`
+(a plausible authoring mistake), tier 1 alone would never compare them —
+each would sit alone in its own group — and the exact race this gate exists
+to catch would slip through. Pairs already flagged by tier 1 are tracked and
+not re-flagged by tier 2. In both tiers, the check is **reachability**, not
+connectivity: a warning fires when some pair in the group is not reachable
+from the other via `depends_on`/inferred edges in either direction. This
+matters because two subtasks that merely share a common ancestor (e.g. both
+`depends_on` the same `shared-contract` task, as in `shared -> csv` and
+`shared -> yaml`) are not ordered relative to *each other* and can still run
+in parallel — the gate keeps warning about such pairs even though both
+declare a dependency on the owner.
+
+The directory-scoped heuristic (tier 2) still can't catch cases where the
+shared file is guessed at entirely different paths in different directories
+(the original registry-naming scenario) — that's what the explicit
+`shared_contract` tag (tier 1) is for.
+
+**Writers vs. consumers**: the `shared_contract` tag only means "participates
+in this contract," not "writes to the shared file." A dependent subtask that
+merely `depends_on` the owner and never touches the shared file in its own
+`footprint` (a pure consumer, reading/importing it) can carry the same tag.
+`find_unowned_shared_contract_hotspots` only compares subtasks that are
+actually judged to be *writers* — either their `footprint` contains a path
+matching one of the shared-extension-point categories, or they explicitly set
+`writes_shared_contract: true`. Pure consumers, and any writer/consumer or
+consumer/consumer pairing, are never flagged, since there's no write race to
+warn about.
+
 ---
 
 ## 2. Self-healing State Recovery
