@@ -35,6 +35,7 @@ from orchestune.dispatch_locks import (
 from orchestune.dispatch_rebase import notify_force_serial, notify_recompute
 from orchestune.dispatch_recovery import recover_run_state
 from orchestune.dispatch_report import _report_to_dict, write_github_step_summary
+from orchestune.dispatch_result import PhaseResult, PhaseStatus
 from orchestune.dispatch_scoring import (
     Task,
     compute_priority_score,
@@ -194,7 +195,7 @@ def _decide_semantic_review_enabled() -> bool:
     return os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0"
 
 
-def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> dict | None:
+def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> PhaseResult:
     """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
 
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
@@ -209,18 +210,27 @@ def _poll_pending_not_needed_reviews(args: argparse.Namespace) -> dict | None:
         )
         print("Pending Not-Needed Review Report:")
         print(json.dumps(not_needed_review_report, ensure_ascii=False, indent=2))
-        return not_needed_review_report
+        return PhaseResult(
+            phase_name="poll_pending_not_needed_reviews",
+            status=PhaseStatus.SUCCESS,
+            report=not_needed_review_report,
+        )
     except Exception as re:
         print(
             f"Warning: failed to process pending not-needed reviews: {re}",
             file=sys.stderr,
         )
-        return None
+        return PhaseResult(
+            phase_name="poll_pending_not_needed_reviews",
+            status=PhaseStatus.RETRYABLE_FAILURE,
+            error_message=str(re),
+            retryable=True,
+        )
 
 
 def _run_semantic_integrator(
     config: DispatcherConfig, semantic_review_enabled: bool
-) -> dict | None:
+) -> PhaseResult:
     """統合コーディネーターによる意味的レビューを含め、Integratorを実行する。
 
     レビューはdispatcherと同一のクラウドルーチンを再利用して起動するため、
@@ -250,13 +260,32 @@ def _run_semantic_integrator(
         integrator_run_report = Integrator(integrator_config).run()
         print("Integrator Report:")
         print(json.dumps(integrator_run_report, ensure_ascii=False, indent=2))
-        return integrator_run_report
+
+        status = PhaseStatus.SUCCESS
+        retryable = False
+        if integrator_run_report.get(
+            "status"
+        ) == "failure" or integrator_run_report.get("failed"):
+            status = PhaseStatus.RETRYABLE_FAILURE
+            retryable = True
+
+        return PhaseResult(
+            phase_name="run_semantic_integrator",
+            status=status,
+            report=integrator_run_report,
+            retryable=retryable,
+        )
     except Exception as ie:
         print(f"Warning: Integrator failed to run: {ie}", file=sys.stderr)
-        return None
+        return PhaseResult(
+            phase_name="run_semantic_integrator",
+            status=PhaseStatus.RETRYABLE_FAILURE,
+            error_message=str(ie),
+            retryable=True,
+        )
 
 
-def _process_parent_completion(config: DispatcherConfig) -> dict | None:
+def _process_parent_completion(config: DispatcherConfig) -> PhaseResult:
     """#170: 親Issue配下の全子Issue完了検知→最終PR用意、および最終PRの
     マージ検知→親Issueクローズを行う。ベストエフォート処理: 失敗しても警告を
     出すだけでmain()は続行する。
@@ -267,10 +296,19 @@ def _process_parent_completion(config: DispatcherConfig) -> dict | None:
         report = process_parent_completion(config.parent_issue_number, config.apply)
         print("Parent Completion Report:")
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        return report
+        return PhaseResult(
+            phase_name="process_parent_completion",
+            status=PhaseStatus.SUCCESS,
+            report=report,
+        )
     except Exception as pe:
         print(f"Warning: failed to process parent completion: {pe}", file=sys.stderr)
-        return None
+        return PhaseResult(
+            phase_name="process_parent_completion",
+            status=PhaseStatus.RETRYABLE_FAILURE,
+            error_message=str(pe),
+            retryable=True,
+        )
 
 
 def load_config_file(cwd: Path | None = None) -> dict[str, Any]:
@@ -404,20 +442,27 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         not_needed_review_state_path=args.not_needed_review_state_path,
     )
     report = None
+    post_cycle_results: list[PhaseResult] = []
     integrator_run_report = None
     try:
         report = run_dispatch_cycle(config)
-        print(json.dumps(_report_to_dict(report), ensure_ascii=False, indent=2))
 
         if config.apply:
             semantic_review_enabled = _decide_semantic_review_enabled()
             if semantic_review_enabled:
-                _poll_pending_not_needed_reviews(args)
-            integrator_run_report = _run_semantic_integrator(
-                config, semantic_review_enabled
-            )
+                r1 = _poll_pending_not_needed_reviews(args)
+                post_cycle_results.append(r1)
+            r2 = _run_semantic_integrator(config, semantic_review_enabled)
+            post_cycle_results.append(r2)
+            integrator_run_report = r2.report
             if config.parent_issue_number is not None:
-                _process_parent_completion(config)
+                r3 = _process_parent_completion(config)
+                post_cycle_results.append(r3)
+
+        # 機械判定可能なレポート（標準出力のJSON）に後処理結果を統合する
+        final_dict = _report_to_dict(report)
+        final_dict["post_cycle_results"] = [res.to_dict() for res in post_cycle_results]
+        print(json.dumps(final_dict, ensure_ascii=False, indent=2))
 
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary_path:
@@ -425,11 +470,21 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
                 cycle_report=report,
                 integrator_report=integrator_run_report,
                 summary_path=summary_path,
+                post_cycle_results=post_cycle_results,
             )
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    return 0
+
+    # 終了コードの決定
+    exit_code = 0
+    for res in post_cycle_results:
+        if res.status == PhaseStatus.FATAL_FAILURE:
+            exit_code = 1
+        elif res.status == PhaseStatus.RETRYABLE_FAILURE and exit_code != 1:
+            exit_code = 2
+
+    return exit_code
 
 
 if __name__ == "__main__":
