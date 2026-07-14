@@ -125,7 +125,7 @@ class DummyGitHub:
         self.issue_states[issue.number] = "open"
 
     def list_issues_by_label(
-        self, label: str, state: str = "open"
+        self, label: str, state: str = "open", limit: int = 1000
     ) -> list[IssueRecord]:
         results = []
         for issue in self.issues.values():
@@ -180,7 +180,7 @@ class DummyGitHub:
         num = int(issue_number)
         self.comments.setdefault(num, []).append(body)
 
-    def list_open_prs(self) -> list[PrRecord]:
+    def list_open_prs(self, limit: int = 1000) -> list[PrRecord]:
         return list(self.prs.values())
 
     def list_remote_branches(self) -> list[str]:
