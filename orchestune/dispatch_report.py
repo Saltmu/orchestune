@@ -7,14 +7,36 @@ import os
 import sys
 
 from orchestune.dispatch_cycle import CycleReport
+from orchestune.dispatch_result import PhaseResult, PhaseStatus
 
 
 def write_github_step_summary(
     cycle_report: CycleReport | None,
     integrator_report: dict | None,
     summary_path: str,
+    post_cycle_results: list[PhaseResult] | None = None,
 ) -> None:
     lines = ["## 🤖 Orchestune Dispatch Summary\n"]
+
+    if post_cycle_results:
+        lines.append("### 🔄 後処理フェーズ結果（Post-Cycle Phases）")
+        lines.append("| フェーズ名 | ステータス | 再試行要否 | 詳細 / エラー |")
+        lines.append("| --- | --- | --- | --- |")
+        for res in post_cycle_results:
+            status_emoji = {
+                PhaseStatus.SUCCESS: "✅ 成功",
+                PhaseStatus.WARNING: "⚠️ 警告",
+                PhaseStatus.RETRYABLE_FAILURE: "❌ 失敗（再試行可能）",
+                PhaseStatus.FATAL_FAILURE: "🚨 致命的失敗",
+            }.get(res.status, res.status.value)
+
+            retry_text = "🔄 必要" if res.retryable else "-"
+            detail = res.error_message if res.error_message else "-"
+
+            lines.append(
+                f"| `{res.phase_name}` | {status_emoji} | {retry_text} | {detail} |"
+            )
+        lines.append("")
 
     if integrator_report:
         lines.append("### 🔍 仮マージ検証（Integrator）結果")
