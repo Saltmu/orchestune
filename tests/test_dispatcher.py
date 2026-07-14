@@ -8,6 +8,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from orchestune.dag import FootprintConflict
+from orchestune.dispatch_result import PhaseResult, PhaseStatus
 from orchestune.dispatcher import (
     ActiveWorktree,
     ClaudeCodeCloudRoutineDispatchTarget,
@@ -3108,7 +3109,9 @@ class TestPollPendingNotNeededReviews:
         ) as mock_poll:
             result = _poll_pending_not_needed_reviews(args)
 
-        assert result == {"processed": 1}
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
+        assert result.report == {"processed": 1}
         mock_poll.assert_called_once_with(args.not_needed_review_state_path)
 
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
@@ -3119,7 +3122,10 @@ class TestPollPendingNotNeededReviews:
         ):
             result = _poll_pending_not_needed_reviews(args)
 
-        assert result is None
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
 
 
@@ -3145,7 +3151,9 @@ class TestRunSemanticIntegrator:
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=True)
 
-        assert result == {"ok": True}
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
+        assert result.report == {"ok": True}
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.enable_semantic_review is True
         mock_coordinator_cls.assert_called_once_with(config.dispatch_target)
@@ -3161,8 +3169,10 @@ class TestRunSemanticIntegrator:
         with patch(
             "orchestune.integrator.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
-            _run_semantic_integrator(config, semantic_review_enabled=False)
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.enable_semantic_review is False
 
@@ -3177,8 +3187,10 @@ class TestRunSemanticIntegrator:
         with patch(
             "orchestune.integrator.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
-            _run_semantic_integrator(config, semantic_review_enabled=True)
+            result = _run_semantic_integrator(config, semantic_review_enabled=True)
 
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.enable_semantic_review is False
 
@@ -3191,8 +3203,25 @@ class TestRunSemanticIntegrator:
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
-        assert result is None
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
+
+    def test_returns_retryable_failure_when_report_has_failed_tasks(self):
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": "failure", "failed": ["task-1"]}
+        with patch("orchestune.integrator.Integrator", return_value=mock_instance):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert result.report == {"status": "failure", "failed": ["task-1"]}
 
 
 class TestProcessParentCompletion:
@@ -3211,7 +3240,12 @@ class TestProcessParentCompletion:
         ) as mock_process:
             result = _process_parent_completion(config)
 
-        assert result == {"status": "waiting_on_children", "open_children": [101]}
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
+        assert result.report == {
+            "status": "waiting_on_children",
+            "open_children": [101],
+        }
         mock_process.assert_called_once_with(100, True)
 
     def test_returns_none_and_warns_on_failure(self, capsys):
@@ -3227,7 +3261,10 @@ class TestProcessParentCompletion:
         ):
             result = _process_parent_completion(config)
 
-        assert result is None
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
 
 
@@ -3462,3 +3499,80 @@ class TestDispatcherConfigLoading:
             main(["--no-apply"], cwd=tmp_path)
 
         assert mock_build.call_args.args[0] == dispatch_target
+
+    def test_post_cycle_failures_in_main(self, tmp_path, capsys):
+        r1 = PhaseResult("poll_pending_not_needed_reviews", PhaseStatus.SUCCESS)
+        r2_retryable = PhaseResult(
+            "run_semantic_integrator",
+            PhaseStatus.RETRYABLE_FAILURE,
+            error_message="retryable-error",
+            retryable=True,
+        )
+        r2_fatal = PhaseResult(
+            "run_semantic_integrator",
+            PhaseStatus.FATAL_FAILURE,
+            error_message="fatal-error",
+        )
+        r3 = PhaseResult("process_parent_completion", PhaseStatus.SUCCESS)
+
+        # ケース1: すべて成功
+        with (
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+            patch(
+                "orchestune.dispatcher._poll_pending_not_needed_reviews",
+                return_value=r1,
+            ),
+            patch("orchestune.dispatcher._run_semantic_integrator", return_value=r1),
+            patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
+        ):
+            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            assert code == 0
+            out = json.loads(capsys.readouterr().out)
+            assert "post_cycle_results" in out
+            assert len(out["post_cycle_results"]) == 3
+            assert out["post_cycle_results"][0]["status"] == "success"
+
+        # ケース2: RETRYABLE_FAILURE
+        with (
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+            patch(
+                "orchestune.dispatcher._poll_pending_not_needed_reviews",
+                return_value=r1,
+            ),
+            patch(
+                "orchestune.dispatcher._run_semantic_integrator",
+                return_value=r2_retryable,
+            ),
+            patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
+        ):
+            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            assert code == 2
+            out = json.loads(capsys.readouterr().out)
+            assert out["post_cycle_results"][1]["status"] == "retryable_failure"
+            assert out["post_cycle_results"][1]["error_message"] == "retryable-error"
+
+        # ケース3: FATAL_FAILURE
+        with (
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+            patch(
+                "orchestune.dispatcher._poll_pending_not_needed_reviews",
+                return_value=r1,
+            ),
+            patch(
+                "orchestune.dispatcher._run_semantic_integrator", return_value=r2_fatal
+            ),
+            patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
+        ):
+            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            assert code == 1
+            out = json.loads(capsys.readouterr().out)
+            assert out["post_cycle_results"][1]["status"] == "fatal_failure"
