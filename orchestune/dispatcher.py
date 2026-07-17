@@ -136,6 +136,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="DAG再計算のリトライ上限。超過時は強制直列化にフォールバックする（#200）",
     )
     parser.add_argument(
+        "--task-timeout-seconds",
+        type=int,
+        default=0,
+        help="ゾンビ・タイムアウトGCを実行するタスクのタイムアウト秒数（0以下でタイムアウトGCは無効、ゾンビ検知のみ実行）",
+    )
+    parser.add_argument(
+        "--zombie-gc",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="ゾンビプロセスの検知・回収を行うかどうか（デフォルト: True）",
+    )
+    parser.add_argument(
         "--dispatch-target",
         choices=[
             "local",
@@ -430,6 +442,7 @@ def _config_defaults(
         "max_launches_per_window",
         "deviation_buffer_lines",
         "max_recompute_retries",
+        "task_timeout_seconds",
     }
     positive_int_keys = {"window_seconds", "parent_issue"}
     defaults: dict[str, Any] = {}
@@ -442,7 +455,7 @@ def _config_defaults(
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")
 
-        if normalized_key == "apply":
+        if normalized_key in {"apply", "zombie_gc"}:
             if not isinstance(value, bool):
                 _config_error(parser, f"{key!r} must be a boolean")
         elif normalized_key in path_keys:
@@ -503,6 +516,8 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         ),
         deviation_buffer_lines=args.deviation_buffer_lines,
         max_recompute_retries=args.max_recompute_retries,
+        task_timeout_seconds=args.task_timeout_seconds,
+        zombie_gc=args.zombie_gc,
         not_needed_review_state_path=args.not_needed_review_state_path,
     )
     report = None

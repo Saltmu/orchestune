@@ -371,6 +371,116 @@ class TestListRemoteBranches:
             branches = list_remote_branches()
         assert branches == ["origin/main", "origin/feat/foo"]
 
+    def test_fetches_all_branches_before_listing(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="origin/main\n", stderr=""
+            )
+            list_remote_branches()
+        called_commands = [call.args[0] for call in mock_run.call_args_list]
+        assert [
+            "git",
+            "fetch",
+            "--prune",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ] in called_commands
+
+    def test_fetch_failure_falls_back_to_local_refs(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+
+            def side_effect(args, **kwargs):
+                if args[:2] == ["git", "fetch"]:
+                    raise subprocess.CalledProcessError(
+                        1, args, stderr="network unreachable"
+                    )
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout="origin/main\n", stderr=""
+                )
+
+            mock_run.side_effect = side_effect
+            branches = list_remote_branches()
+        assert branches == ["origin/main"]
+
+    def test_discovers_branch_never_fetched_locally(self, tmp_path):
+        import os
+
+        # 1. bare originと、mainのみをtrackするローカルcloneを用意する
+        remote_dir = tmp_path / "remote.git"
+        remote_dir.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=str(remote_dir), check=True)
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+            cwd=str(remote_dir),
+            check=True,
+        )
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "checkout", "-b", "main"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(local_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote_dir)],
+            cwd=str(local_dir),
+            check=True,
+        )
+        (local_dir / "dummy.txt").write_text("commit 1")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(local_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "commit 1"], cwd=str(local_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "-u", "origin", "main"], cwd=str(local_dir), check=True
+        )
+
+        # 2. 別クローンからfeature-xブランチをoriginへ直接pushする
+        #    (local_dir側は一度もfetchしていない状態を再現する)
+        other_dir = tmp_path / "other"
+        subprocess.run(["git", "clone", str(remote_dir), str(other_dir)], check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(other_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(other_dir),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "-b", "feature-x"], cwd=str(other_dir), check=True
+        )
+        (other_dir / "feature.txt").write_text("feature")
+        subprocess.run(["git", "add", "feature.txt"], cwd=str(other_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feature commit"], cwd=str(other_dir), check=True
+        )
+        subprocess.run(
+            ["git", "push", "origin", "feature-x"], cwd=str(other_dir), check=True
+        )
+
+        # 3. local_dir側でlist_remote_branches()を実行する
+        original_cwd = os.getcwd()
+        os.chdir(str(local_dir))
+        try:
+            branches = list_remote_branches()
+        finally:
+            os.chdir(original_cwd)
+
+        assert "origin/feature-x" in branches
+
 
 class TestIsBranchMergedInto:
     def test_returns_true_for_matching_merged_pr(self):

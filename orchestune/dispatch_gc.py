@@ -346,33 +346,50 @@ def _finalize_not_needed_worktree(
     return event
 
 
-def _collect_zombies_and_timeouts(
-    run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-) -> list[dict]:
-    """ゾンビプロセス（PID消失かつ未コミット変更あり）およびタイムアウトしたタスクをGC回収する。"""
-    if config.task_timeout_seconds <= 0:
-        return []
-    events = []
-    now = time.time()
-    for key, active in list(run_state.active_worktrees.items()):
-        active_task = tasks_by_issue.get(active.issue_number)
+def _check_zombie_and_timeout(
+    active: ActiveWorktree,
+    zombie_enabled: bool,
+    timeout_limit: int,
+    now: float,
+) -> tuple[bool, bool, bool]:
+    """(is_zombie, is_timeout, process_alive) を判定して返す。"""
+    is_zombie = False
+    is_timeout = False
+    process_alive = is_process_alive(active.pid)
 
-        is_zombie = False
-        is_timeout = False
-
-        process_alive = is_process_alive(active.pid)
+    if zombie_enabled:
         if not process_alive:
             if os.path.exists(
                 active.worktree_path
             ) and worktree_has_uncommitted_changes(active.worktree_path):
                 is_zombie = True
 
-        if not is_zombie and active.started_at:
-            timeout_limit = getattr(config, "task_timeout_seconds", 3600)
-            if timeout_limit > 0 and now - active.started_at > timeout_limit:
-                is_timeout = True
+    if not is_zombie and active.started_at:
+        if timeout_limit > 0 and now - active.started_at > timeout_limit:
+            is_timeout = True
+
+    return is_zombie, is_timeout, process_alive
+
+
+def _collect_zombies_and_timeouts(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+) -> list[dict]:
+    """ゾンビプロセス（PID消失かつ未コミット変更あり）およびタイムアウトしたタスクをGC回収する。"""
+    zombie_enabled = getattr(config, "zombie_gc", True)
+    timeout_limit = getattr(config, "task_timeout_seconds", 0)
+
+    if not zombie_enabled and timeout_limit <= 0:
+        return []
+    events = []
+    now = time.time()
+    for key, active in list(run_state.active_worktrees.items()):
+        active_task = tasks_by_issue.get(active.issue_number)
+
+        is_zombie, is_timeout, process_alive = _check_zombie_and_timeout(
+            active, zombie_enabled, timeout_limit, now
+        )
 
         if is_zombie or is_timeout:
             reason = "process disappeared" if is_zombie else "timeout exceeded"
