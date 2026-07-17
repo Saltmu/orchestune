@@ -13,7 +13,7 @@ Orchestune is provided as a **Skill for Agentic AI development** (e.g., Claude C
 1. **DAG Construction & Conflict Prevention**
    - Statically computes dependencies based on file and symbol overlap similarity metrics, building conflict-free DAGs for safe parallel execution.
 2. **Intelligent Dispatch & Scheduling**
-   - Supports local command execution as well as dispatching agents via Claude Code Cloud Routine.
+   - Supports local command execution as well as dispatching agents via Claude Code Cloud Routine and Codex Cloud.
 3. **Self-healing State Recovery**
    - Optimized for stateless CI/CD environments (like GitHub Actions); automatically reconstructs state using active GitHub Issues and PRs.
 4. **Integration & Rebase Coordination**

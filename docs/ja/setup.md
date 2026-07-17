@@ -68,7 +68,7 @@ orchestune setup
 > [!NOTE]
 > `--dispatch-target` を明示指定しない場合、GitHub Actions実行環境（`GITHUB_ACTIONS=true`）では本セクションの `cloud-routine` が自動的に選択されます。GitHub Actions上でディスパッチャーを動かす場合は、以下の手順で事前に環境変数（Actions Secrets）を設定しておいてください。
 
-現時点で `--dispatch-target cloud-routine` が対応しているクラウド実行先は **Claude Code Cloud Routineのみ** です。
+`--dispatch-target cloud-routine` は **Claude Code Cloud Routine** 用の実行先です。
 
 1. **ルーチンの新規作成**:
    [claude.ai/code/routines](https://claude.ai/code/routines) を開き、「New routine」からルーチンを新規作成します。プロンプト本文は簡単な説明で構いません（実際の作業指示はディスパッチャーが起動のたびに都度送信します）。
@@ -90,7 +90,26 @@ orchestune setup
 
 ---
 
-## 4. ローカルの`claude` / `agy` / `codex` CLIへのディスパッチ設定
+## 4. Codex Cloud のセットアップ手順
+
+`--dispatch-target codex-cloud` は、Codex CLI を通じて設定済みの Codex Cloud environment にサブタスクを投入します。
+
+1. [Codex Cloud](https://chatgpt.com/codex) で対象リポジトリを接続し、environment を作成します。
+2. ローカルの `codex` CLI を同じ ChatGPT アカウントで認証します。
+3. environment ID を環境変数または CLI オプションで渡します。
+
+   ```bash
+   export ORCHESTUNE_CODEX_CLOUD_ENV="<environment_id>"
+   orchestune dispatch --dispatch-target codex-cloud
+   # または
+   orchestune dispatch --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
+   ```
+
+起動前にタスク用ブランチを `origin` へ push し、`codex cloud exec --env <environment_id> --branch <branch>` を非対話で実行します。完了は、そのブランチを head とする open PR の検知で判定します。environment ID が未設定の場合は、警告の上で安全なダミー起動へフォールバックします。
+
+---
+
+## 5. ローカルの`claude` / `agy` / `codex` CLIへのディスパッチ設定
 
 > [!NOTE]
 > `--dispatch-target` を明示指定しない場合、GitHub Actions以外（ローカル/対話実行）では `auto` が自動選択され、PATH上にインストールされている `claude`/`agy`/`codex` のいずれか（`claude`優先、次点`agy`、`codex`）へ自動的にディスパッチされます。いずれもインストールされていない場合は警告を出した上でダミー起動（no-op）にフォールバックします。特定のCLIに固定したい場合は、本セクションの `claude-cli`/`agy-cli`/`codex-cli` を明示指定してください。

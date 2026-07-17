@@ -3111,6 +3111,18 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cli"])
         assert args.dispatch_target == "codex-cli"
 
+    def test_dispatch_target_explicit_codex_cloud_is_preserved(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cloud"])
+        assert args.dispatch_target == "codex-cloud"
+
+    def test_codex_cloud_env_option_is_parsed(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--codex-cloud-env", "env_123"])
+        assert args.codex_cloud_env == "env_123"
+
 
 class TestMainDispatchTargetAutoDetection:
     """#121: --dispatch-target未指定時、mainが実行環境に応じた実ディスパッチ先を
@@ -3622,7 +3634,15 @@ class TestDispatcherConfigLoading:
 
     @pytest.mark.parametrize(
         "dispatch_target",
-        ["local", "cloud-routine", "claude-cli", "agy-cli", "codex-cli", "auto"],
+        [
+            "local",
+            "cloud-routine",
+            "codex-cloud",
+            "claude-cli",
+            "agy-cli",
+            "codex-cli",
+            "auto",
+        ],
     )
     def test_accepts_each_dispatch_target(self, tmp_path, dispatch_target):
         (tmp_path / "orchestune.toml").write_text(
