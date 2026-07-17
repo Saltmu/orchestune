@@ -77,6 +77,7 @@ class TestNotifyRecompute:
         with (
             patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment,
             patch("orchestune.dispatch_rebase.github.add_label") as mock_label,
+            patch("orchestune.dispatch_rebase.github.remove_label"),
         ):
             notify_recompute(
                 conflict,
@@ -87,6 +88,31 @@ class TestNotifyRecompute:
             )
         assert mock_comment.call_count >= 3  # task-a issue, task-b issue, parent issue
         mock_label.assert_any_call(2, "status:blocked-recompute")
+
+    def test_apply_removes_queued_and_adds_blocked_labels(self):
+        conflict = FootprintConflict(
+            subtask_id="task-a",
+            other_subtask_id="task-b",
+            similarity=0.5,
+            blocked_subtask_id="task-b",
+        )
+        with (
+            patch("orchestune.dispatch_rebase.github.add_comment"),
+            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
+            patch(
+                "orchestune.dispatch_rebase.github.remove_label"
+            ) as mock_remove_label,
+        ):
+            notify_recompute(
+                conflict,
+                "作業内容の要約",
+                parent_issue_number=181,
+                apply=True,
+                issue_number_by_subtask_id={"task-a": 1, "task-b": 2},
+            )
+        mock_remove_label.assert_any_call(2, "status:queued")
+        mock_add_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:blocked-recompute")
 
 
 class TestNotifyForceSerial:
