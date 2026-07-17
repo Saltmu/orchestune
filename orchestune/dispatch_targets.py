@@ -339,15 +339,14 @@ class CodexCloudDispatchTarget(DispatchTarget):
             self._build_prompt(task, branch_name),
         ]
         with open(log_path, "ab") as log_fh:
-            process = subprocess.Popen(
+            subprocess.run(
                 command,
                 cwd=str(worktree_path),
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                check=True,
             )
         return DispatchHandle(
-            pid=process.pid,
             external_id=f"codex-cloud:{branch_name}",
             branch_name=branch_name,
         )
