@@ -124,8 +124,8 @@ def _decide_missing_active_worktrees(
             pass
 
         restored_base_branch = "origin/main"
-        if config.parent_issue_number is not None:
-            restored_base_branch = f"parent/issue-{config.parent_issue_number}"
+        if issue.parent and issue.parent.get("number") is not None:
+            restored_base_branch = f"parent/issue-{issue.parent['number']}"
 
         if issue.blocked_by:
             dep_pr = None
