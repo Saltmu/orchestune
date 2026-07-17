@@ -1,6 +1,7 @@
 import json
+import subprocess
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -290,21 +291,24 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
 class TestCodexCloudDispatchTarget:
     def test_launch_pushes_branch_and_submits_codex_cloud_task(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
-        with (
-            patch("orchestune.dispatch_targets.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-        ):
-            mock_popen.return_value.pid = 4242
+        with patch("orchestune.dispatch_targets.subprocess.run") as mock_run:
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
-        mock_run.assert_called_once_with(
-            ["git", "push", "--set-upstream", "origin", "claude/issue-1-task-a"],
-            cwd=str(tmp_path / "wt"),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        command = mock_popen.call_args.args[0]
+        push_call, submit_call = mock_run.call_args_list
+        assert push_call.args[0] == [
+            "git",
+            "push",
+            "--set-upstream",
+            "origin",
+            "claude/issue-1-task-a",
+        ]
+        assert push_call.kwargs == {
+            "cwd": str(tmp_path / "wt"),
+            "capture_output": True,
+            "text": True,
+            "check": True,
+        }
+        command = submit_call.args[0]
         assert command[:7] == [
             "codex",
             "cloud",
@@ -316,9 +320,27 @@ class TestCodexCloudDispatchTarget:
         ]
         assert "#1" in command[-1]
         assert "非対話" in command[-1]
-        assert handle.pid == 4242
+        assert submit_call.kwargs == {
+            "cwd": str(tmp_path / "wt"),
+            "stdout": ANY,
+            "stderr": subprocess.STDOUT,
+            "check": True,
+        }
+        assert handle.pid is None
         assert handle.external_id == "codex-cloud:claude/issue-1-task-a"
         assert handle.branch_name == "claude/issue-1-task-a"
+
+    def test_launch_propagates_codex_cloud_submission_failure(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
+        submission_error = subprocess.CalledProcessError(1, ["codex", "cloud", "exec"])
+        with patch(
+            "orchestune.dispatch_targets.subprocess.run",
+            side_effect=[None, submission_error],
+        ):
+            with pytest.raises(subprocess.CalledProcessError) as error:
+                target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+
+        assert error.value is submission_error
 
     def test_is_complete_when_pr_is_open_for_task_branch(self):
         target = CodexCloudDispatchTarget("env_123")
