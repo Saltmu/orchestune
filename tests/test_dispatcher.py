@@ -2365,6 +2365,126 @@ class TestGC:
         loaded = load_run_state(config.run_state_path)
         assert "1" not in loaded.active_worktrees
 
+    def test_gc_reclaim_zombie_only(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=0,
+            zombie_gc=True,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=""
+            )
+
+            run_dispatch_cycle(config)
+
+        mock_remove_wt.assert_called_once_with(str(wt_path))
+        mock_remove_label.assert_called_with(1, "status:in-progress")
+        mock_add_label.assert_called_with(1, "status:queued")
+        mock_add_comment.assert_called_once()
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" not in loaded.active_worktrees
+
+    def test_gc_reclaim_zombie_disabled(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=0,
+            zombie_gc=False,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=""
+            )
+
+            run_dispatch_cycle(config)
+
+        mock_remove_wt.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_add_comment.assert_not_called()
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" in loaded.active_worktrees
+
     def test_gc_reclaim_timeout(self, tmp_path):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
@@ -3110,6 +3230,56 @@ class TestBuildArgParser:
 
         args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cli"])
         assert args.dispatch_target == "codex-cli"
+
+    def test_task_timeout_seconds_defaults_to_zero(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.task_timeout_seconds == 0
+
+    def test_task_timeout_seconds_arg_is_parsed(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--task-timeout-seconds", "3600"])
+        assert args.task_timeout_seconds == 3600
+
+    def test_zombie_gc_defaults_to_true(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.zombie_gc is True
+
+    def test_no_zombie_gc_disables_zombie_gc(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--no-zombie-gc"])
+        assert args.zombie_gc is False
+
+
+class TestConfigDefaults:
+    def test_config_defaults_load(self):
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        config_data = {
+            "task-timeout-seconds": 1200,
+            "zombie-gc": False,
+        }
+        defaults = _config_defaults(parser, config_data)
+        assert defaults["task_timeout_seconds"] == 1200
+        assert defaults["zombie_gc"] is False
+
+    def test_config_defaults_validation_error(self):
+        import pytest
+
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"task-timeout-seconds": -1})
+
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"zombie-gc": "invalid"})
 
 
 class TestMainDispatchTargetAutoDetection:
