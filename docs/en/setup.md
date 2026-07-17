@@ -68,7 +68,7 @@ orchestune setup
 > [!NOTE]
 > When `--dispatch-target` is not explicitly specified, `cloud-routine` from this section is automatically selected in a GitHub Actions environment (`GITHUB_ACTIONS=true`). If you run the dispatcher on GitHub Actions, set up the environment variables (Actions Secrets) below beforehand.
 
-Currently, the only supported cloud execution target for `--dispatch-target cloud-routine` is **Claude Code Cloud Routine**.
+`--dispatch-target cloud-routine` is the target for **Claude Code Cloud Routine**.
 
 1. **Create a New Routine**:
    Open [claude.ai/code/routines](https://claude.ai/code/routines) and click "New routine". You can use a minimal prompt body (the dispatcher sends the actual task instructions as `text` on every run).
@@ -90,7 +90,26 @@ Currently, the only supported cloud execution target for `--dispatch-target clou
 
 ---
 
-## 4. Setting Up Local `claude` / `agy` / `codex` CLI Dispatch
+## 4. Setting Up Codex Cloud
+
+`--dispatch-target codex-cloud` submits subtasks to a configured Codex Cloud environment through the Codex CLI.
+
+1. Connect the target repository and create an environment in [Codex Cloud](https://chatgpt.com/codex).
+2. Authenticate the local `codex` CLI with the same ChatGPT account.
+3. Provide the environment ID through an environment variable or CLI option.
+
+   ```bash
+   export ORCHESTUNE_CODEX_CLOUD_ENV="<environment_id>"
+   orchestune dispatch --dispatch-target codex-cloud
+   # or
+   orchestune dispatch --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
+   ```
+
+Before submission, Orchestune pushes the task branch to `origin`, then runs `codex cloud exec --env <environment_id> --branch <branch>` non-interactively. Completion is detected when an open PR has that branch as its head. If the environment ID is missing, Orchestune warns and safely falls back to the no-op target.
+
+---
+
+## 5. Setting Up Local `claude` / `agy` / `codex` CLI Dispatch
 
 > [!NOTE]
 > When `--dispatch-target` is not explicitly specified, outside of GitHub Actions (local/interactive runs) the dispatcher automatically selects `auto`, which detects and dispatches to whichever of `claude`/`agy`/`codex` is installed on `PATH` (preferring `claude`, then `agy`, then `codex`). If none are installed, it warns and falls back to the no-op dummy. To pin a specific CLI instead, pass `claude-cli`/`agy-cli`/`codex-cli` from this section explicitly.

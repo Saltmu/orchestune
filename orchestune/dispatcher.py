@@ -140,6 +140,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         choices=[
             "local",
             "cloud-routine",
+            "codex-cloud",
             "claude-cli",
             "agy-cli",
             "codex-cli",
@@ -158,6 +159,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "テスト・dry-run用途）になる。'cloud-routine'はClaude Codeクラウド"
         "ルーチンのfire APIへディスパッチする（要 --routine-id/--routine-token または"
         "ORCHESTUNE_ROUTINE_ID/ORCHESTUNE_ROUTINE_TOKEN環境変数）。"
+        "'codex-cloud'はCodex Cloud CLIへディスパッチする（要 --codex-cloud-env または"
+        "ORCHESTUNE_CODEX_CLOUD_ENV環境変数）。"
         "'claude-cli'/'agy-cli'/'codex-cli'はそれぞれローカルのclaude/agy/codex "
         "CLIへ、許可プロンプトを毎回バイパスするプリセットのコマンドテンプレートで"
         "ディスパッチする（--local-cmdで上書き可能）",
@@ -179,6 +182,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--routine-token",
         default=None,
         help="#215: クラウドルーチンのAPIトークン（未指定時はORCHESTUNE_ROUTINE_TOKEN環境変数を使用）",
+    )
+    parser.add_argument(
+        "--codex-cloud-env",
+        default=None,
+        help="Codex Cloudのenvironment ID（未指定時はORCHESTUNE_CODEX_CLOUD_ENV環境変数を使用）",
     )
     parser.add_argument(
         "--not-needed-review-state-path",
@@ -491,6 +499,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             args.routine_token,
             args.log_dir,
             local_cmd=args.local_cmd,
+            codex_cloud_env=args.codex_cloud_env,
         ),
         deviation_buffer_lines=args.deviation_buffer_lines,
         max_recompute_retries=args.max_recompute_retries,

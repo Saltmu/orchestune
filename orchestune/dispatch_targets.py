@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
 ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
+CODEX_CLOUD_ENV_VAR = "ORCHESTUNE_CODEX_CLOUD_ENV"
 
 NONINTERACTIVE_DISPATCH_INSTRUCTION = (
     "これは非対話型のバックグラウンド自動実行であり、標準入力からの応答は得られません。"
@@ -291,12 +292,75 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         return False
 
 
+class CodexCloudDispatchTarget(DispatchTarget):
+    """Codex Cloud CLIへサブタスクを非対話で投入するターゲット。
+
+    Codex Cloudはリモートブランチをチェックアウトするため、投入前にworktreeの
+    タスクブランチをoriginへpushする。CLIプロセスの終了は投入完了だけを意味するため、
+    完了判定はClaude Code Cloud Routineと同様にPR作成をシグナルとして用いる。
+    """
+
+    def __init__(self, environment_id: str, log_dir: str | Path = Path("logs")):
+        self._environment_id = environment_id
+        self._log_dir = Path(log_dir)
+
+    def _build_prompt(self, task: Task, branch_name: str) -> str:
+        footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
+        return (
+            f"GitHub Issue #{task.issue_number}"
+            f"（サブタスク: {task.subtask_id or '不明'}）を"
+            "標準開発ワークフローに従って実装してください。\n"
+            f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
+            f"想定footprint: {footprint}\n"
+            f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
+        )
+
+    def launch(
+        self, task: Task, branch_name: str, worktree_path: Path
+    ) -> DispatchHandle:
+        subprocess.run(
+            ["git", "push", "--set-upstream", "origin", branch_name],
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        slug = branch_name.replace("/", "-")
+        log_path = self._log_dir / f"{slug}.log"
+        command = [
+            "codex",
+            "cloud",
+            "exec",
+            "--env",
+            self._environment_id,
+            "--branch",
+            branch_name,
+            self._build_prompt(task, branch_name),
+        ]
+        with open(log_path, "ab") as log_fh:
+            process = subprocess.Popen(
+                command,
+                cwd=str(worktree_path),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        return DispatchHandle(pid=process.pid, branch_name=branch_name)
+
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        if handle.branch_name is None:
+            return False
+        return any(pr.head_ref == handle.branch_name for pr in github.list_open_prs())
+
+
 def build_dispatch_target(
     dispatch_target_name: str,
     routine_id: str | None,
     routine_token: str | None,
     log_dir: str | Path,
     local_cmd: str | None = None,
+    codex_cloud_env: str | None = None,
 ) -> DispatchTarget:
     """#215: CLI引数・環境変数からディスパッチターゲットを組み立てる。
 
@@ -316,6 +380,15 @@ def build_dispatch_target(
             f"警告: {ROUTINE_ID_ENV_VAR}/{ROUTINE_TOKEN_ENV_VAR}"
             "が未設定のため、クラウドルーチンへのディスパッチはできません。"
             "ローカルのダミー起動にフォールバックします。",
+            file=sys.stderr,
+        )
+    if dispatch_target_name == "codex-cloud":
+        resolved_env = codex_cloud_env or os.environ.get(CODEX_CLOUD_ENV_VAR)
+        if resolved_env:
+            return CodexCloudDispatchTarget(resolved_env, log_dir=log_dir)
+        print(
+            f"警告: {CODEX_CLOUD_ENV_VAR}が未設定のため、Codex Cloudへの"
+            "ディスパッチはできません。ローカルのダミー起動にフォールバックします。",
             file=sys.stderr,
         )
     if dispatch_target_name == "auto":
