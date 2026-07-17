@@ -88,7 +88,7 @@ def check_footprint_deviation(
     declared_footprint: tuple[str, ...],
     base: str = "origin/main",
     min_changed_lines: int = 0,
-) -> list[str]:
+) -> list[str] | None:
     """宣言footprint外のファイル変更を検知する。
 
     #200: ライブロック（チャーン）防止のため、`min_changed_lines`以下の
@@ -118,7 +118,7 @@ def check_footprint_deviation(
             check=True,
         )
     except (subprocess.CalledProcessError, OSError):
-        return []
+        return None
 
     declared = set(declared_footprint)
     deviated: list[str] = []

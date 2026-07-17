@@ -215,6 +215,8 @@ def _decide_blocked_promotions(
 
     promotable = []
     for issue in blocked_issues:
+        if "status:blocked-recompute" in issue.labels:
+            continue
         task = tasks_by_issue.get(issue.number)
         if task is None or not task.depends_on:
             continue
@@ -611,6 +613,11 @@ def _handle_blocked_recompute_recovery(
             base=active.base_branch,
             min_changed_lines=config.deviation_buffer_lines,
         )
+        if deviated is None:
+            # 検出不能なエラー時は fail-closed とし、自動復帰させない（＝全てのサブタスクが競合中とする）
+            for subtask_id in subtasks_for_recompute:
+                active_conflict_subtask_ids.add(subtask_id)
+            continue
         merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
         try:
             _, conflicts = recompute_dag_for_footprint_change(
