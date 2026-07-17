@@ -11,7 +11,9 @@ from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import IssueRecord
 
 
-def _issue_with_footprint(number, subtask_id=None, footprint=None, blocked_by=()):
+def _issue_with_footprint(
+    number, subtask_id=None, footprint=None, blocked_by=(), parent=None
+):
     if subtask_id is None:
         body = "本文のみでFootprintブロックなし"
     else:
@@ -32,6 +34,7 @@ def _issue_with_footprint(number, subtask_id=None, footprint=None, blocked_by=()
         labels=("status:in-progress",),
         created_at="2026-01-01T00:00:00+00:00",
         blocked_by=blocked_by,
+        parent=parent,
     )
 
 
@@ -110,6 +113,38 @@ class TestDecideMissingActiveWorktrees:
         assert active.declared_footprint == ("src/foo.py",)
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
+
+    def test_missing_issue_base_branch_uses_own_parent_not_multiple_parent_config(
+        self,
+    ):
+        """#182: 自己修復はリポジトリ全体のin-progress Issueを対象にするため、
+        `config.parent_issue_number`（現在のdispatcher起動時の親）ではなく、
+        各Issue自身の`parent`から`base_branch`を復元しなければならない。"""
+        run_state = RunState(active_worktrees={})
+        issue_under_parent_100 = _issue_with_footprint(
+            101, subtask_id="task-a", parent={"number": 100}
+        )
+        issue_under_parent_200 = _issue_with_footprint(
+            201, subtask_id="task-b", parent={"number": 200}
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            parent_issue_number=100,
+        )
+
+        with patch(
+            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[]
+        ):
+            result = _decide_missing_active_worktrees(
+                run_state,
+                [issue_under_parent_100, issue_under_parent_200],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        assert active_by_key["101"].base_branch == "parent/issue-100"
+        assert active_by_key["201"].base_branch == "parent/issue-200"
 
 
 class TestApplyRestoreMissingActiveWorktrees:
