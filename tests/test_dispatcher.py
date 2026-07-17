@@ -9,6 +9,7 @@ import pytest
 
 from orchestune.dag import FootprintConflict
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
+from orchestune.dispatch_targets import CodexCloudDispatchTarget
 from orchestune.dispatcher import (
     ActiveWorktree,
     ClaudeCodeCloudRoutineDispatchTarget,
@@ -888,6 +889,30 @@ class TestIsWorktreeComplete:
         handle = fake_target.is_complete.call_args.args[0]
         assert handle.issue_number == 218
         assert handle.branch_name == "claude/issue-218-review-history-backend-api"
+
+    def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123")
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=target,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=4242,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="codex-cloud:claude/issue-1-task-a",
+        )
+
+        with (
+            patch("orchestune.dispatch_targets.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive,
+        ):
+            assert _is_worktree_complete(active, config) is False
+
+        mock_is_alive.assert_not_called()
 
 
 class TestRunDispatchCycleCompletion:

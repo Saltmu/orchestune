@@ -346,7 +346,11 @@ class CodexCloudDispatchTarget(DispatchTarget):
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        return DispatchHandle(pid=process.pid, branch_name=branch_name)
+        return DispatchHandle(
+            pid=process.pid,
+            external_id=f"codex-cloud:{branch_name}",
+            branch_name=branch_name,
+        )
 
     def is_complete(self, handle: DispatchHandle) -> bool:
         if handle.branch_name is None:
