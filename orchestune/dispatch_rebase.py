@@ -445,6 +445,8 @@ def _rule_footprint_deviation(
         base=active.base_branch,
         min_changed_lines=ctx.config.deviation_buffer_lines,
     )
+    if deviated is None:
+        deviated = []
     if not deviated:
         return ActiveWorktreeRuleOutcome(terminal=True)
 

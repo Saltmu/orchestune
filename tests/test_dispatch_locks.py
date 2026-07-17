@@ -316,3 +316,14 @@ class TestCheckFootprintDeviation:
             mock_run.assert_called_once()
             called_args = mock_run.call_args[0][0]
             assert called_args[5] == "parent/issue-12...HEAD"
+
+    def test_deviation_error_returns_none(self):
+        with patch(
+            "orchestune.dispatch_locks.subprocess.run",
+            side_effect=OSError("git command failed"),
+        ):
+            deviated = check_footprint_deviation(
+                "worktrees/w1",
+                declared_footprint=(),
+            )
+        assert deviated is None
