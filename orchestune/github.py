@@ -347,6 +347,27 @@ def create_pull_request(head: str, base: str, title: str, body: str) -> int:
 
 
 def list_remote_branches() -> list[str]:
+    """#183: 単一ブランチcheckout等でローカルにremote-tracking refが存在しない
+    ブランチも見落とさないよう、列挙前にoriginの全ブランチ参照を明示refspecで
+    fetchして同期する。コマンドラインで渡すrefspecは`remote.origin.fetch`の
+    制限（単一ブランチ設定等）より優先されるため、これで確実に同期できる。
+    fetchが失敗した場合は警告を出し、それまでのローカル参照のみで続行する。"""
+    try:
+        _run(
+            [
+                "git",
+                "fetch",
+                "--prune",
+                "origin",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ]
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() if exc.stderr else str(exc)
+        print(
+            f"Warning: failed to fetch remote branches before listing: {detail}",
+            file=sys.stderr,
+        )
     stdout = _run(["git", "branch", "-r", "--format=%(refname:short)"])
     return [line.strip() for line in stdout.splitlines() if line.strip()]
 
