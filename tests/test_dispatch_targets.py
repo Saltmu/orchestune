@@ -317,6 +317,7 @@ class TestCodexCloudDispatchTarget:
         assert "#1" in command[-1]
         assert "非対話" in command[-1]
         assert handle.pid == 4242
+        assert handle.external_id == "codex-cloud:claude/issue-1-task-a"
         assert handle.branch_name == "claude/issue-1-task-a"
 
     def test_is_complete_when_pr_is_open_for_task_branch(self):
