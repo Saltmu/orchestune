@@ -58,6 +58,8 @@ def notify_recompute(
         if parent_issue_number is not None:
             github.add_comment(parent_issue_number, bodies[-1])
         if blocked_issue is not None:
+            github.remove_label(blocked_issue, "status:queued")
+            github.add_label(blocked_issue, "status:blocked")
             github.add_label(blocked_issue, "status:blocked-recompute")
 
     return bodies
