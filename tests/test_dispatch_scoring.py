@@ -366,7 +366,10 @@ class TestComputePriorityScore:
 
 
 class TestSelectNextTasks:
-    def test_excludes_risk_flagged_tasks(self):
+    def test_risk_flagged_tasks_remain_eligible_for_dispatch(self):
+        # risk:flagged is documentation-only visibility (docs/en/architecture.md
+        # Human Approval Points, docs/en/status-labels.md); it must not act as
+        # a third blocking gate that keeps otherwise-eligible tasks queued forever.
         state = RunState(active_worktrees={}, launch_history=[])
         safe = _task(1)
         risky = _task(2, risk=True, priority="high")
@@ -378,7 +381,7 @@ class TestSelectNextTasks:
             max_launches_per_window=2,
             window_seconds=3600,
         )
-        assert risky not in selected
+        assert risky in selected
         assert safe in selected
 
     def test_excludes_already_active_issue(self):

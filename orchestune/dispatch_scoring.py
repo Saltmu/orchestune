@@ -176,8 +176,7 @@ def select_next_tasks(
     eligible = [
         t
         for t in candidate_tasks
-        if not t.risk
-        and not t.yaml_error
+        if not t.yaml_error
         and "status:external-lock" not in t.status_labels
         and t.issue_number not in active_issue_numbers
     ]
