@@ -480,6 +480,10 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
         )
         assert config.dispatch_target is not None
         return config.dispatch_target.is_complete(handle)
+    # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
+    # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
+    if active.started_at is None:
+        return False
     return not is_process_alive(active.pid)
 
 
@@ -573,18 +577,13 @@ def _rule_completed(
         if active_task is not None and active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
-            completed_at = time.time()
             ctx.run_state.completed_worktrees.append(
                 CompletedWorktree(
                     issue_number=active.issue_number,
                     subtask_id=active_task.subtask_id if active_task else "",
                     branch=active.branch,
-                    started_at=(
-                        active.started_at
-                        if active.started_at is not None
-                        else completed_at
-                    ),
-                    completed_at=completed_at,
+                    started_at=active.started_at,
+                    completed_at=time.time(),
                     recompute_count=active.recompute_count,
                     forced_serial=active.forced_serial,
                     commit_sha=completion_event.get("commit_sha"),

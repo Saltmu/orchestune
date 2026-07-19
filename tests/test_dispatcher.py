@@ -914,6 +914,59 @@ class TestIsWorktreeComplete:
 
         mock_is_alive.assert_not_called()
 
+    def test_recovered_local_active_worktree_waits_for_pid_reconciliation(
+        self, tmp_path
+    ):
+        config = DispatcherConfig(run_state_path=tmp_path / "run_state.json")
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "missing-worktree"),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        assert _is_worktree_complete(active, config) is False
+
+
+class TestRecoveredActiveTask:
+    def test_run_cycle_keeps_recovered_local_task_in_progress(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=60,
+        )
+        issue = _issue(1, labels=("status:in-progress",), subtask_id="task-a")
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch(
+                "orchestune.dispatch_recovery.subprocess.run",
+                return_value=MagicMock(stdout=""),
+            ),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue] if label == "status:in-progress" else []
+            )
+
+            report = run_dispatch_cycle(config)
+
+        restored = load_run_state(config.run_state_path).active_worktrees["1"]
+        assert restored.started_at is None
+        assert report.completion_events == []
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+
 
 class TestRunDispatchCycleCompletion:
     """#193: プロセス終了検知→worktree削除→クオータ解放→status:doneラベル遷移。"""

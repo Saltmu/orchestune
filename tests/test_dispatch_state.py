@@ -75,6 +75,24 @@ class TestRunState:
         loaded = load_run_state(path)
         assert loaded.completed_worktrees == state.completed_worktrees
 
+    def test_completed_worktree_preserves_unknown_start_time(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        state = RunState(
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=11,
+                    subtask_id="task-b",
+                    branch="claude/issue-11-task-b",
+                    started_at=None,
+                    completed_at=1700003600.0,
+                )
+            ]
+        )
+
+        save_run_state(state, path)
+
+        assert load_run_state(path).completed_worktrees[0].started_at is None
+
     def test_load_missing_completed_worktrees_key_defaults_to_empty(self, tmp_path):
         path = tmp_path / "run_state.json"
         path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))

@@ -632,6 +632,27 @@ class TestRuleCompleted:
         assert len(ctx.run_state.completed_worktrees) == 1
         assert ctx.run_state.completed_worktrees[0].base_branch == "parent-branch"
 
+    def test_completed_worktree_preserves_unknown_start_time(self):
+        active = _active(started_at=None)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+
+        with (
+            patch(
+                "orchestune.dispatch_gc._is_worktree_complete",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completed", "commit_sha": "abc123d"},
+            ),
+        ):
+            _rule_completed(ctx, "1", active, task)
+
+        assert ctx.run_state.completed_worktrees[0].started_at is None
+
 
 class TestWorktreeHasNewCommitsIntegration:
     """#172回帰テスト: ローカルに parent/issue-<N> ブランチがなく、
