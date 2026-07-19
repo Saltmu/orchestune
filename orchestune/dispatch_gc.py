@@ -574,6 +574,7 @@ def _rule_completed(
                     recompute_count=active.recompute_count,
                     forced_serial=active.forced_serial,
                     commit_sha=completion_event.get("commit_sha"),
+                    base_branch=active.base_branch,
                 )
             )
             del ctx.run_state.active_worktrees[key]
