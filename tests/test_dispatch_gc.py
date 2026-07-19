@@ -560,6 +560,29 @@ class TestRuleCompleted:
         assert outcome.terminal is True
         assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
 
+    def test_completed_worktree_inherits_base_branch(self):
+        active = _active(base_branch="parent-branch")
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+
+        with (
+            patch(
+                "orchestune.dispatch_gc._is_worktree_complete",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completed", "commit_sha": "abc123d"},
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert len(ctx.run_state.completed_worktrees) == 1
+        assert ctx.run_state.completed_worktrees[0].base_branch == "parent-branch"
+
 
 class TestWorktreeHasNewCommitsIntegration:
     """#172回帰テスト: ローカルに parent/issue-<N> ブランチがなく、

@@ -357,6 +357,7 @@ def _apply_auto_rebase(
         active.external_id = handle.external_id
         active.external_url = handle.external_url
         active.started_at = time.time()
+        active.base_branch = parent_branch
     except (subprocess.CalledProcessError, OSError) as e:
         try:
             subprocess.run(
