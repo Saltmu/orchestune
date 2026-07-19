@@ -9,6 +9,7 @@ import pytest
 
 from orchestune.dag import FootprintConflict
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
+from orchestune.dispatch_targets import CodexCloudDispatchTarget
 from orchestune.dispatcher import (
     ActiveWorktree,
     ClaudeCodeCloudRoutineDispatchTarget,
@@ -888,6 +889,30 @@ class TestIsWorktreeComplete:
         handle = fake_target.is_complete.call_args.args[0]
         assert handle.issue_number == 218
         assert handle.branch_name == "claude/issue-218-review-history-backend-api"
+
+    def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123")
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=target,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=4242,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="codex-cloud:claude/issue-1-task-a",
+        )
+
+        with (
+            patch("orchestune.dispatch_targets.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive,
+        ):
+            assert _is_worktree_complete(active, config) is False
+
+        mock_is_alive.assert_not_called()
 
 
 class TestRunDispatchCycleCompletion:
@@ -3231,6 +3256,18 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cli"])
         assert args.dispatch_target == "codex-cli"
 
+    def test_dispatch_target_explicit_codex_cloud_is_preserved(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cloud"])
+        assert args.dispatch_target == "codex-cloud"
+
+    def test_codex_cloud_env_option_is_parsed(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--codex-cloud-env", "env_123"])
+        assert args.codex_cloud_env == "env_123"
+
     def test_task_timeout_seconds_defaults_to_zero(self):
         from orchestune.dispatcher import _build_arg_parser
 
@@ -3792,7 +3829,15 @@ class TestDispatcherConfigLoading:
 
     @pytest.mark.parametrize(
         "dispatch_target",
-        ["local", "cloud-routine", "claude-cli", "agy-cli", "codex-cli", "auto"],
+        [
+            "local",
+            "cloud-routine",
+            "codex-cloud",
+            "claude-cli",
+            "agy-cli",
+            "codex-cli",
+            "auto",
+        ],
     )
     def test_accepts_each_dispatch_target(self, tmp_path, dispatch_target):
         (tmp_path / "orchestune.toml").write_text(

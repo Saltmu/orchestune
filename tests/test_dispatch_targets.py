@@ -1,6 +1,7 @@
 import json
+import subprocess
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -9,6 +10,7 @@ from orchestune.dispatch_targets import (
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
     CODEX_CLI_LOCAL_CMD_TEMPLATE,
     ClaudeCodeCloudRoutineDispatchTarget,
+    CodexCloudDispatchTarget,
     DispatchHandle,
     LocalProcessDispatchTarget,
     build_dispatch_target,
@@ -286,6 +288,74 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             assert target.is_complete(handle) is False
 
 
+class TestCodexCloudDispatchTarget:
+    def test_launch_pushes_branch_and_submits_codex_cloud_task(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
+        with patch("orchestune.dispatch_targets.subprocess.run") as mock_run:
+            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+
+        push_call, submit_call = mock_run.call_args_list
+        assert push_call.args[0] == [
+            "git",
+            "push",
+            "--set-upstream",
+            "origin",
+            "claude/issue-1-task-a",
+        ]
+        assert push_call.kwargs == {
+            "cwd": str(tmp_path / "wt"),
+            "capture_output": True,
+            "text": True,
+            "check": True,
+        }
+        command = submit_call.args[0]
+        assert command[:7] == [
+            "codex",
+            "cloud",
+            "exec",
+            "--env",
+            "env_123",
+            "--branch",
+            "claude/issue-1-task-a",
+        ]
+        assert "#1" in command[-1]
+        assert "非対話" in command[-1]
+        assert submit_call.kwargs == {
+            "cwd": str(tmp_path / "wt"),
+            "stdout": ANY,
+            "stderr": subprocess.STDOUT,
+            "check": True,
+        }
+        assert handle.pid is None
+        assert handle.external_id == "codex-cloud:claude/issue-1-task-a"
+        assert handle.branch_name == "claude/issue-1-task-a"
+
+    def test_launch_propagates_codex_cloud_submission_failure(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
+        submission_error = subprocess.CalledProcessError(1, ["codex", "cloud", "exec"])
+        with patch(
+            "orchestune.dispatch_targets.subprocess.run",
+            side_effect=[None, submission_error],
+        ):
+            with pytest.raises(subprocess.CalledProcessError) as error:
+                target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+
+        assert error.value is submission_error
+
+    def test_is_complete_when_pr_is_open_for_task_branch(self):
+        target = CodexCloudDispatchTarget("env_123")
+        with patch(
+            "orchestune.dispatch_targets.github.list_open_prs",
+            return_value=[
+                PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
+            ],
+        ):
+            assert (
+                target.is_complete(DispatchHandle(branch_name="claude/issue-1-task-a"))
+                is True
+            )
+
+
 class TestDetectInstalledLocalCli:
     def test_returns_claude_when_only_claude_installed(self):
         with patch(
@@ -358,6 +428,25 @@ class TestBuildDispatchTarget:
         monkeypatch.setenv("ORCHESTUNE_ROUTINE_TOKEN", "token_env")
         target = build_dispatch_target("cloud-routine", None, None, tmp_path / "logs")
         assert isinstance(target, ClaudeCodeCloudRoutineDispatchTarget)
+
+    def test_builds_codex_cloud_target_with_explicit_environment(self, tmp_path):
+        target = build_dispatch_target(
+            "codex-cloud",
+            None,
+            None,
+            tmp_path / "logs",
+            codex_cloud_env="env_123",
+        )
+        assert isinstance(target, CodexCloudDispatchTarget)
+
+    def test_codex_cloud_without_environment_falls_back_to_dummy(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.delenv("ORCHESTUNE_CODEX_CLOUD_ENV", raising=False)
+        target = build_dispatch_target("codex-cloud", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd is None
+        assert "ORCHESTUNE_CODEX_CLOUD_ENV" in capsys.readouterr().err
 
     def test_cloud_routine_without_credentials_falls_back_to_local(
         self, tmp_path, monkeypatch
