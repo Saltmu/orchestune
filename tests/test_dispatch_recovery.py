@@ -8,11 +8,16 @@ from orchestune.dispatch_recovery import (
 )
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
-from orchestune.github import IssueRecord
+from orchestune.github import IssueRecord, PrRecord
 
 
 def _issue_with_footprint(
-    number, subtask_id=None, footprint=None, blocked_by=(), parent=None
+    number,
+    subtask_id=None,
+    footprint=None,
+    blocked_by=(),
+    parent=None,
+    created_at="2026-01-01T00:00:00+00:00",
 ):
     if subtask_id is None:
         body = "本文のみでFootprintブロックなし"
@@ -32,7 +37,7 @@ def _issue_with_footprint(
         title="t",
         body=body,
         labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
+        created_at=created_at,
         blocked_by=blocked_by,
         parent=parent,
     )
@@ -113,6 +118,53 @@ class TestDecideMissingActiveWorktrees:
         assert active.declared_footprint == ("src/foo.py",)
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
+
+    def test_restored_old_issue_has_unknown_start_time(self):
+        """#198: Issue作成日時はdispatch開始日時ではないため、復元Taskの
+        timeout基準に使ってはならない。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            created_at="2020-01-01T00:00:00+00:00",
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+
+        with patch(
+            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[]
+        ):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        assert result[0][2].started_at is None
+
+    def test_restored_cloud_task_has_unknown_start_time(self):
+        """PRに紐付くクラウドTaskでも、PRメタデータから実行開始時刻は復元できない。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            created_at="2020-01-01T00:00:00+00:00",
+        )
+        pr = PrRecord(
+            number=42,
+            head_ref="agent/issue-101-task-a",
+            changed_files=(),
+            closes_issue_numbers=(101,),
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+
+        with patch(
+            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[pr]
+        ):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        active = result[0][2]
+        assert active.external_id == "42"
+        assert active.started_at is None
 
     def test_missing_issue_base_branch_uses_own_parent_not_multiple_parent_config(
         self,

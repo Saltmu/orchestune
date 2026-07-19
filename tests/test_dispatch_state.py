@@ -35,6 +35,25 @@ class TestRunState:
         assert loaded.active_worktrees["10"].branch == "claude/issue-10-x"
         assert loaded.launch_history == [1700000000.0]
 
+    def test_save_and_load_roundtrip_with_unknown_active_start_time(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        state = RunState(
+            active_worktrees={
+                "10": ActiveWorktree(
+                    issue_number=10,
+                    branch="claude/issue-10-x",
+                    worktree_path="worktrees/claude-issue-10-x",
+                    pid=None,
+                    started_at=None,
+                    declared_footprint=("src/foo.py",),
+                )
+            }
+        )
+
+        save_run_state(state, path)
+
+        assert load_run_state(path).active_worktrees["10"].started_at is None
+
     def test_save_and_load_roundtrip_with_completed_worktrees(self, tmp_path):
         path = tmp_path / "run_state.json"
         state = RunState(

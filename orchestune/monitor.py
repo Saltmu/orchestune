@@ -121,8 +121,8 @@ class WorktreeStatus:
     branch: str
     pid: int | None
     alive: bool | None
-    started_at: float
-    elapsed_seconds: float
+    started_at: float | None
+    elapsed_seconds: float | None
     worktree_path: str
     external_id: str | None
     external_url: str | None
@@ -218,7 +218,9 @@ def build_status_snapshot(
                 pid=active.pid,
                 alive=alive,
                 started_at=active.started_at,
-                elapsed_seconds=now - active.started_at,
+                elapsed_seconds=(
+                    now - active.started_at if active.started_at is not None else None
+                ),
                 worktree_path=active.worktree_path,
                 external_id=active.external_id,
                 external_url=active.external_url,
@@ -268,9 +270,12 @@ def format_status_report(snapshot: StatusSnapshot, now: float) -> str:
         lines.append(f"  {_STATE_DESCRIPTIONS[status.state]}")
         if status.labels_fetch_failed:
             lines.append("  (ラベル取得失敗。PID生存状態のみで判定しています)")
-        lines.append(
-            f"  {target_label} / 経過時間: {_format_duration(status.elapsed_seconds)}"
+        elapsed_label = (
+            _format_duration(status.elapsed_seconds)
+            if status.elapsed_seconds is not None
+            else "不明（自己修復により開始時刻を復元できません）"
         )
+        lines.append(f"  {target_label} / 経過時間: {elapsed_label}")
         lines.append(f"  worktree: {status.worktree_path}")
         if status.log_tail:
             lines.append("  ログ末尾:")
