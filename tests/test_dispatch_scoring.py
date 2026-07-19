@@ -469,3 +469,29 @@ class TestSelectNextTasks:
             window_seconds=3600,
         )
         assert selected == [starved]
+
+    def test_select_next_tasks_excludes_blocked_recompute(self):
+        state = RunState(active_worktrees={}, launch_history=[])
+        normal = _task(1)
+        blocked = Task(
+            issue_number=2,
+            subtask_id="task-2",
+            footprint=("src/bar.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued", "status:blocked-recompute"),
+            created_at="2026-01-01T00:00:00+00:00",
+            depends_on=(),
+        )
+        selected = select_next_tasks(
+            [normal, blocked],
+            state,
+            now=1_700_000_000.0,
+            max_concurrent=2,
+            max_launches_per_window=5,
+            window_seconds=3600,
+        )
+        assert normal in selected
+        assert blocked not in selected

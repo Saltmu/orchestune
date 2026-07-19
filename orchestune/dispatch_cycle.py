@@ -215,6 +215,8 @@ def _decide_blocked_promotions(
 
     promotable = []
     for issue in blocked_issues:
+        if "status:blocked-recompute" in issue.labels:
+            continue
         task = tasks_by_issue.get(issue.number)
         if task is None or not task.depends_on:
             continue
@@ -576,6 +578,98 @@ def _finalize_launch(
     return selected
 
 
+def _collect_active_conflict_subtask_ids(
+    run_state: RunState,
+    ctx: CycleContext,
+    subtasks_for_recompute: dict,
+    config: DispatcherConfig,
+) -> set[str]:
+    """アクティブなワークツリーが持つフットプリントと競合するサブタスクIDの集合を収集する。"""
+    active_conflict_subtask_ids = set()
+    for active in run_state.active_worktrees.values():
+        active_task = ctx.tasks_by_issue.get(active.issue_number)
+        if not active_task or not active_task.subtask_id:
+            continue
+
+        from orchestune.dag import recompute_dag_for_footprint_change
+        from orchestune.dispatch_locks import check_footprint_deviation
+
+        deviated = check_footprint_deviation(
+            active.worktree_path,
+            active.declared_footprint,
+            base=active.base_branch,
+            min_changed_lines=config.deviation_buffer_lines,
+        )
+        if deviated is None:
+            # 検出不能なエラー時は fail-closed とし、自動復帰させない（＝全てのサブタスクが競合中とする）
+            for subtask_id in subtasks_for_recompute:
+                active_conflict_subtask_ids.add(subtask_id)
+            continue
+        merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
+        try:
+            _, conflicts = recompute_dag_for_footprint_change(
+                subtasks_for_recompute,
+                active_task.subtask_id,
+                updated_footprint=merged_footprint,
+            )
+            for conflict in conflicts:
+                if conflict.blocked_subtask_id:
+                    active_conflict_subtask_ids.add(conflict.blocked_subtask_id)
+        except Exception:
+            # DAG再計算中の例外発生時も fail-closed とし、自動復帰させない（＝全てのサブタスクを競合中とする）
+            for subtask_id in subtasks_for_recompute:
+                active_conflict_subtask_ids.add(subtask_id)
+    return active_conflict_subtask_ids
+
+
+def _handle_blocked_recompute_recovery(
+    issues: IssuesByStatus,
+    run_state: RunState,
+    ctx: CycleContext,
+    completed_subtask_ids: set[str],
+    config: DispatcherConfig,
+) -> list[dict]:
+    """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
+    recompute_resolved_promoted_events: list[dict] = []
+    blocked_recompute_issues = [
+        issue for issue in issues.all() if "status:blocked-recompute" in issue.labels
+    ]
+
+    if not blocked_recompute_issues:
+        return recompute_resolved_promoted_events
+
+    from orchestune.dispatch_rebase import _build_subtasks_for_recompute
+
+    subtasks_for_recompute = _build_subtasks_for_recompute(ctx.tasks_by_issue)
+    active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(
+        run_state, ctx, subtasks_for_recompute, config
+    )
+
+    for issue in blocked_recompute_issues:
+        task = ctx.tasks_by_issue.get(issue.number)
+        if not task or not task.subtask_id:
+            continue
+
+        if task.subtask_id not in active_conflict_subtask_ids:
+            if config.apply:
+                github.remove_label(issue.number, "status:blocked-recompute")
+
+            done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
+            has_pending_deps = any(
+                dep not in done_subtask_ids for dep in task.depends_on
+            )
+
+            if not has_pending_deps:
+                if config.apply:
+                    github.remove_label(issue.number, "status:blocked")
+                    github.add_label(issue.number, "status:queued")
+                recompute_resolved_promoted_events.append(
+                    {"issue_number": issue.number, "subtask_id": task.subtask_id}
+                )
+
+    return recompute_resolved_promoted_events
+
+
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
     lock_path = Path(config.run_state_path).with_suffix(".lock")
     with file_lock(lock_path):
@@ -611,6 +705,12 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             config,
         )
 
+        # 決定論的な自動復帰（ブロック解除）処理
+        recompute_resolved_promoted_events = _handle_blocked_recompute_recovery(
+            issues, run_state, ctx, completed_subtask_ids, config
+        )
+        promotion_events.extend(recompute_resolved_promoted_events)
+
         lock_result = _sync_external_locks(
             ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
         )
@@ -618,6 +718,24 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
             ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
         )
+
+        # 同一サイクルでfootprint逸脱により新たにブロックされたタスクを除外する
+        newly_blocked_recompute_issues = set()
+        for event in deviation_events:
+            if event.get("action") == "recomputed":
+                for conflict in event.get("conflicts", []):
+                    blocked_id = conflict.get("blocked_subtask_id")
+                    if blocked_id:
+                        num = ctx.issue_number_by_subtask_id.get(blocked_id)
+                        if num is not None:
+                            newly_blocked_recompute_issues.add(num)
+
+        if newly_blocked_recompute_issues:
+            candidate_tasks = [
+                t
+                for t in candidate_tasks
+                if t.issue_number not in newly_blocked_recompute_issues
+            ]
 
         quota_slots = quota_available(
             ctx.run_state,
