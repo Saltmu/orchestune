@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from orchestune import github
@@ -566,10 +566,29 @@ def _rule_stale_entry(
 def _rule_completed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
-    if not _is_worktree_complete(active, ctx.config):
+    completion_active = active
+    if active.started_at is None and active.external_id is None:
+        # #198: 自己修復したローカルTaskはPIDを復元できないため、PID消失を
+        # 完了シグナルにできない。後続サイクルで当該IssueをcloseするPRを検出
+        # した場合だけ、そのリモートブランチを検証して完了判定へ進める。
+        recovery_pr = next(
+            (pr for pr in ctx.prs if active.issue_number in pr.closes_issue_numbers),
+            None,
+        )
+        if recovery_pr is None:
+            return None
+        completion_active = replace(
+            active,
+            branch=recovery_pr.head_ref,
+            external_id=f"recovered-pr:{recovery_pr.number}",
+            external_url=f"PR#{recovery_pr.number}",
+        )
+    elif not _is_worktree_complete(active, ctx.config):
         return None
 
-    completion_event = _finalize_completed_worktree(active, active_task, ctx.config)
+    completion_event = _finalize_completed_worktree(
+        completion_active, active_task, ctx.config
+    )
     action = completion_event["action"]
 
     if action == "completed":
@@ -579,15 +598,15 @@ def _rule_completed(
         if ctx.config.apply:
             ctx.run_state.completed_worktrees.append(
                 CompletedWorktree(
-                    issue_number=active.issue_number,
+                    issue_number=completion_active.issue_number,
                     subtask_id=active_task.subtask_id if active_task else "",
-                    branch=active.branch,
-                    started_at=active.started_at,
+                    branch=completion_active.branch,
+                    started_at=completion_active.started_at,
                     completed_at=time.time(),
-                    recompute_count=active.recompute_count,
-                    forced_serial=active.forced_serial,
+                    recompute_count=completion_active.recompute_count,
+                    forced_serial=completion_active.forced_serial,
                     commit_sha=completion_event.get("commit_sha"),
-                    base_branch=active.base_branch,
+                    base_branch=completion_active.base_branch,
                 )
             )
             del ctx.run_state.active_worktrees[key]
