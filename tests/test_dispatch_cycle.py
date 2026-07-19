@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from orchestune.dispatch_cycle import (
     CycleContext,
+    _apply_external_lock_sync,
     _decide_blocked_promotions,
     _decide_external_lock_sync,
     _fetch_issues,
@@ -10,6 +11,7 @@ from orchestune.dispatch_cycle import (
     _process_active_worktrees,
     _self_heal_run_state,
 )
+from orchestune.dispatch_locks import ExternalLockScanResult
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
@@ -103,6 +105,47 @@ class TestDecideExternalLockSync:
             result = _decide_external_lock_sync({}, [], run_state)
         assert result.to_lock == []
         assert result.to_unlock == []
+
+
+class TestApplyExternalLockSync:
+    def test_unlocking_blocked_task_does_not_requeue_it(self):
+        task = _task(status_labels=("status:blocked", "status:external-lock"))
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
+
+        with (
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+            _apply_external_lock_sync(lock_result, DispatcherConfig(apply=True))
+
+        mock_remove_label.assert_called_once_with(1, "status:external-lock")
+        mock_add_label.assert_not_called()
+
+    def test_unlocking_in_progress_task_does_not_requeue_it(self):
+        task = _task(status_labels=("status:in-progress", "status:external-lock"))
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
+
+        with (
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+            _apply_external_lock_sync(lock_result, DispatcherConfig(apply=True))
+
+        mock_remove_label.assert_called_once_with(1, "status:external-lock")
+        mock_add_label.assert_not_called()
+
+    def test_unlocking_queued_task_requeues_it(self):
+        task = _task(status_labels=("status:queued", "status:external-lock"))
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
+
+        with (
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+            _apply_external_lock_sync(lock_result, DispatcherConfig(apply=True))
+
+        mock_remove_label.assert_called_once_with(1, "status:external-lock")
+        mock_add_label.assert_called_once_with(1, "status:queued")
 
 
 def _sub_issue(number, labels=(), state="OPEN"):
