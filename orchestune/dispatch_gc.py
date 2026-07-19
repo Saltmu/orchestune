@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from orchestune import github
@@ -364,7 +364,7 @@ def _check_zombie_and_timeout(
             ) and worktree_has_uncommitted_changes(active.worktree_path):
                 is_zombie = True
 
-    if not is_zombie and active.started_at:
+    if not is_zombie and active.started_at is not None:
         if timeout_limit > 0 and now - active.started_at > timeout_limit:
             is_timeout = True
 
@@ -394,35 +394,37 @@ def _collect_zombies_and_timeouts(
         if is_zombie or is_timeout:
             reason = "process disappeared" if is_zombie else "timeout exceeded"
 
-            if config.apply and os.path.exists(active.worktree_path):
+            if config.apply:
                 backup_success = True
-                if worktree_has_uncommitted_changes(active.worktree_path):
-                    try:
-                        subprocess.run(
-                            ["git", "-C", active.worktree_path, "add", "-A"],
-                            capture_output=True,
-                            check=True,
-                        )
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                active.worktree_path,
-                                "commit",
-                                "-m",
-                                f"WIP: backup by Orchestune GC ({reason})",
-                            ],
-                            capture_output=True,
-                            check=True,
-                        )
-                    except subprocess.CalledProcessError as e:
-                        backup_success = False
-                        github.add_comment(
-                            active.issue_number,
-                            f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
-                            f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
-                            f"エラー詳細:\n```\n{e.stderr.strip() if e.stderr else str(e)}\n```",
-                        )
+                worktree_exists = os.path.exists(active.worktree_path)
+                if worktree_exists:
+                    if worktree_has_uncommitted_changes(active.worktree_path):
+                        try:
+                            subprocess.run(
+                                ["git", "-C", active.worktree_path, "add", "-A"],
+                                capture_output=True,
+                                check=True,
+                            )
+                            subprocess.run(
+                                [
+                                    "git",
+                                    "-C",
+                                    active.worktree_path,
+                                    "commit",
+                                    "-m",
+                                    f"WIP: backup by Orchestune GC ({reason})",
+                                ],
+                                capture_output=True,
+                                check=True,
+                            )
+                        except subprocess.CalledProcessError as e:
+                            backup_success = False
+                            github.add_comment(
+                                active.issue_number,
+                                f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
+                                f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
+                                f"エラー詳細:\n```\n{e.stderr.strip() if e.stderr else str(e)}\n```",
+                            )
 
                 if not backup_success:
                     continue
@@ -433,13 +435,20 @@ def _collect_zombies_and_timeouts(
                     except Exception:
                         pass
 
-                remove_worktree(active.worktree_path)
+                if worktree_exists:
+                    remove_worktree(active.worktree_path)
 
                 github.remove_label(active.issue_number, "status:in-progress")
                 github.add_label(active.issue_number, "status:queued")
+                worktree_note = (
+                    "作業ブランチにWIPコミットを退避した上で、"
+                    if worktree_exists
+                    else "物理worktreeが見つからなかったため、"
+                )
                 github.add_comment(
                     active.issue_number,
-                    f"タスク実行が {reason} のため、GCにより作業ブランチにWIPコミットを退避した上で、タスクを再キューイング（status:queued）しました。",
+                    f"タスク実行が {reason} のため、GCにより{worktree_note}"
+                    "タスクを再キューイング（status:queued）しました。",
                 )
 
             if config.apply:
@@ -471,6 +480,10 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
         )
         assert config.dispatch_target is not None
         return config.dispatch_target.is_complete(handle)
+    # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
+    # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
+    if active.started_at is None:
+        return False
     return not is_process_alive(active.pid)
 
 
@@ -553,10 +566,29 @@ def _rule_stale_entry(
 def _rule_completed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
-    if not _is_worktree_complete(active, ctx.config):
+    completion_active = active
+    if active.started_at is None and active.external_id is None:
+        # #198: 自己修復したローカルTaskはPIDを復元できないため、PID消失を
+        # 完了シグナルにできない。後続サイクルで当該IssueをcloseするPRを検出
+        # した場合だけ、そのリモートブランチを検証して完了判定へ進める。
+        recovery_pr = next(
+            (pr for pr in ctx.prs if active.issue_number in pr.closes_issue_numbers),
+            None,
+        )
+        if recovery_pr is None:
+            return None
+        completion_active = replace(
+            active,
+            branch=recovery_pr.head_ref,
+            external_id=f"recovered-pr:{recovery_pr.number}",
+            external_url=f"PR#{recovery_pr.number}",
+        )
+    elif not _is_worktree_complete(active, ctx.config):
         return None
 
-    completion_event = _finalize_completed_worktree(active, active_task, ctx.config)
+    completion_event = _finalize_completed_worktree(
+        completion_active, active_task, ctx.config
+    )
     action = completion_event["action"]
 
     if action == "completed":
@@ -566,15 +598,15 @@ def _rule_completed(
         if ctx.config.apply:
             ctx.run_state.completed_worktrees.append(
                 CompletedWorktree(
-                    issue_number=active.issue_number,
+                    issue_number=completion_active.issue_number,
                     subtask_id=active_task.subtask_id if active_task else "",
-                    branch=active.branch,
-                    started_at=active.started_at,
+                    branch=completion_active.branch,
+                    started_at=completion_active.started_at,
                     completed_at=time.time(),
-                    recompute_count=active.recompute_count,
-                    forced_serial=active.forced_serial,
+                    recompute_count=completion_active.recompute_count,
+                    forced_serial=completion_active.forced_serial,
                     commit_sha=completion_event.get("commit_sha"),
-                    base_branch=active.base_branch,
+                    base_branch=completion_active.base_branch,
                 )
             )
             del ctx.run_state.active_worktrees[key]

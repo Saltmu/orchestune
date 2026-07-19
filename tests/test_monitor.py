@@ -366,6 +366,17 @@ class TestBuildStatusSnapshot:
 
         assert snapshot.worktrees[0].elapsed_seconds == 100.0
 
+    def test_unknown_start_time_has_unknown_elapsed_duration(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        state = RunState(active_worktrees={"133": _active(started_at=None)})
+        save_run_state(state, run_state_path)
+
+        snapshot = build_status_snapshot(
+            run_state_path, tmp_path / "logs", now=1_700_000_100.0
+        )
+
+        assert snapshot.worktrees[0].elapsed_seconds is None
+
     def test_log_tail_read_from_log_dir(self, tmp_path):
         run_state_path = tmp_path / "run_state.json"
         log_dir = tmp_path / "logs"
@@ -459,6 +470,17 @@ class TestFormatStatusReport:
         assert "12345" in report
         assert "RUNNING" in report
         assert "hello" in report
+
+    def test_unknown_elapsed_duration_is_rendered_as_unknown(self):
+        report = format_status_report(
+            StatusSnapshot(
+                worktrees=[_status(started_at=None, elapsed_seconds=None)],
+                last_reconciled_at=None,
+            ),
+            now=1_700_000_100.0,
+        )
+
+        assert "不明（自己修復により開始時刻を復元できません）" in report
         assert "world" in report
 
     def test_process_exited_state_shows_description(self):

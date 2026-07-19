@@ -2,6 +2,7 @@ import subprocess
 from unittest.mock import patch
 
 from orchestune.dispatch_gc import (
+    _collect_zombies_and_timeouts,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
     _decide_stale_active_entry,
@@ -22,6 +23,7 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
 )
 from orchestune.dispatcher import DispatcherConfig
+from orchestune.github import PrRecord
 
 
 def _ctx(**overrides):
@@ -88,6 +90,54 @@ class TestIsProcessAlive:
     def test_permission_error_is_treated_as_alive(self):
         with patch("orchestune.dispatch_gc.os.kill", side_effect=PermissionError):
             assert is_process_alive(1) is True
+
+
+class TestCollectZombiesAndTimeouts:
+    def test_unknown_start_time_is_not_timed_out(self, tmp_path):
+        active = _active(
+            started_at=None,
+            worktree_path=str(tmp_path / "missing-worktree"),
+            pid=None,
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with (
+            patch("orchestune.dispatch_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {}, config)
+
+        assert events == []
+        assert run_state.active_worktrees == {"280": active}
+        mock_remove_label.assert_not_called()
+
+    def test_timeout_without_physical_worktree_requeues_issue(self, tmp_path):
+        """#198: run_stateを削除するGC回収は、worktreeの有無にかかわらず
+        GitHubのprimary stateもqueuedへ遷移させる。"""
+        active = _active(
+            started_at=1_000.0,
+            worktree_path=str(tmp_path / "missing-worktree"),
+            pid=None,
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with (
+            patch("orchestune.dispatch_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(
+                run_state, {active.issue_number: task}, config
+            )
+
+        assert events[0]["reason"] == "timeout exceeded"
+        assert run_state.active_worktrees == {}
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:queued")
 
 
 class TestWorktreeHasUncommittedChanges:
@@ -582,6 +632,35 @@ class TestRuleCompleted:
         assert outcome is not None
         assert len(ctx.run_state.completed_worktrees) == 1
         assert ctx.run_state.completed_worktrees[0].base_branch == "parent-branch"
+
+    def test_completed_worktree_preserves_unknown_start_time(self):
+        active = _active(started_at=None)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        ctx.prs = [
+            PrRecord(
+                number=281,
+                head_ref="agent/issue-280-task-a",
+                changed_files=(),
+                closes_issue_numbers=(280,),
+            )
+        ]
+
+        with (
+            patch(
+                "orchestune.dispatch_gc._is_worktree_complete",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completed", "commit_sha": "abc123d"},
+            ),
+        ):
+            _rule_completed(ctx, "1", active, task)
+
+        assert ctx.run_state.completed_worktrees[0].started_at is None
 
 
 class TestWorktreeHasNewCommitsIntegration:
