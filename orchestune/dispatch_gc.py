@@ -364,7 +364,7 @@ def _check_zombie_and_timeout(
             ) and worktree_has_uncommitted_changes(active.worktree_path):
                 is_zombie = True
 
-    if not is_zombie and active.started_at:
+    if not is_zombie and active.started_at is not None:
         if timeout_limit > 0 and now - active.started_at > timeout_limit:
             is_timeout = True
 
@@ -394,35 +394,37 @@ def _collect_zombies_and_timeouts(
         if is_zombie or is_timeout:
             reason = "process disappeared" if is_zombie else "timeout exceeded"
 
-            if config.apply and os.path.exists(active.worktree_path):
+            if config.apply:
                 backup_success = True
-                if worktree_has_uncommitted_changes(active.worktree_path):
-                    try:
-                        subprocess.run(
-                            ["git", "-C", active.worktree_path, "add", "-A"],
-                            capture_output=True,
-                            check=True,
-                        )
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                active.worktree_path,
-                                "commit",
-                                "-m",
-                                f"WIP: backup by Orchestune GC ({reason})",
-                            ],
-                            capture_output=True,
-                            check=True,
-                        )
-                    except subprocess.CalledProcessError as e:
-                        backup_success = False
-                        github.add_comment(
-                            active.issue_number,
-                            f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
-                            f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
-                            f"エラー詳細:\n```\n{e.stderr.strip() if e.stderr else str(e)}\n```",
-                        )
+                worktree_exists = os.path.exists(active.worktree_path)
+                if worktree_exists:
+                    if worktree_has_uncommitted_changes(active.worktree_path):
+                        try:
+                            subprocess.run(
+                                ["git", "-C", active.worktree_path, "add", "-A"],
+                                capture_output=True,
+                                check=True,
+                            )
+                            subprocess.run(
+                                [
+                                    "git",
+                                    "-C",
+                                    active.worktree_path,
+                                    "commit",
+                                    "-m",
+                                    f"WIP: backup by Orchestune GC ({reason})",
+                                ],
+                                capture_output=True,
+                                check=True,
+                            )
+                        except subprocess.CalledProcessError as e:
+                            backup_success = False
+                            github.add_comment(
+                                active.issue_number,
+                                f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
+                                f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
+                                f"エラー詳細:\n```\n{e.stderr.strip() if e.stderr else str(e)}\n```",
+                            )
 
                 if not backup_success:
                     continue
@@ -433,13 +435,20 @@ def _collect_zombies_and_timeouts(
                     except Exception:
                         pass
 
-                remove_worktree(active.worktree_path)
+                if worktree_exists:
+                    remove_worktree(active.worktree_path)
 
                 github.remove_label(active.issue_number, "status:in-progress")
                 github.add_label(active.issue_number, "status:queued")
+                worktree_note = (
+                    "作業ブランチにWIPコミットを退避した上で、"
+                    if worktree_exists
+                    else "物理worktreeが見つからなかったため、"
+                )
                 github.add_comment(
                     active.issue_number,
-                    f"タスク実行が {reason} のため、GCにより作業ブランチにWIPコミットを退避した上で、タスクを再キューイング（status:queued）しました。",
+                    f"タスク実行が {reason} のため、GCにより{worktree_note}"
+                    "タスクを再キューイング（status:queued）しました。",
                 )
 
             if config.apply:
@@ -564,13 +573,18 @@ def _rule_completed(
         if active_task is not None and active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
+            completed_at = time.time()
             ctx.run_state.completed_worktrees.append(
                 CompletedWorktree(
                     issue_number=active.issue_number,
                     subtask_id=active_task.subtask_id if active_task else "",
                     branch=active.branch,
-                    started_at=active.started_at,
-                    completed_at=time.time(),
+                    started_at=(
+                        active.started_at
+                        if active.started_at is not None
+                        else completed_at
+                    ),
+                    completed_at=completed_at,
                     recompute_count=active.recompute_count,
                     forced_serial=active.forced_serial,
                     commit_sha=completion_event.get("commit_sha"),

@@ -14,7 +14,7 @@ class ActiveWorktree:
     branch: str
     worktree_path: str
     pid: int | None
-    started_at: float
+    started_at: float | None
     declared_footprint: tuple[str, ...]
     recompute_count: int = 0
     forced_serial: bool = False
