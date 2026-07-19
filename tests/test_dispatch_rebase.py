@@ -431,3 +431,79 @@ class TestTryAutoRebase:
         mock_apply.assert_called_once_with(
             active, task, "1", run_state, "parent-branch", config
         )
+
+
+class TestApplyAutoRebase:
+    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
+    )
+    def test_updates_base_branch_on_success(self, mock_resolve, mock_run, mock_kill):
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        # mock CI pass
+        mock_run.return_value.returncode = 0
+
+        # mock launch target
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        mock_target.launch.return_value = MagicMock(
+            pid=222, external_id="ext-1", external_url="url-1"
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=mock_target,
+            apply=True,
+        )
+
+        _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        # Assert base_branch updated to parent-branch
+        assert active.base_branch == "parent-branch"
+        assert active.pid == 222
+
+    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
+    )
+    def test_keeps_original_base_branch_on_failure(
+        self, mock_resolve, mock_run, mock_kill
+    ):
+        import subprocess
+
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        # mock rebase fail (subprocess.CalledProcessError)
+        mock_run.side_effect = subprocess.CalledProcessError(1, ["git", "rebase"])
+
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=mock_target,
+            apply=True,
+        )
+
+        with (
+            patch("orchestune.dispatch_rebase.github.remove_label"),
+            patch("orchestune.dispatch_rebase.github.add_label"),
+            patch("orchestune.dispatch_rebase.github.add_comment"),
+        ):
+            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        # Assert base_branch is still origin/main (not updated)
+        assert active.base_branch == "origin/main"
