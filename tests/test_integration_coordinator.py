@@ -215,11 +215,12 @@ class TestProcessPendingNotNeededReviews:
         assert result == {"closed": [], "reopened": [], "still_pending": 0}
         mock_labels.assert_not_called()
 
+    @patch("orchestune.integration_coordinator.github.get_issue_state")
     @patch("orchestune.integration_coordinator.github.close_issue")
     @patch("orchestune.integration_coordinator.github.remove_label")
     @patch("orchestune.integration_coordinator.github.get_issue_labels")
     def test_verified_label_closes_issue_and_mentions_human(
-        self, mock_labels, mock_remove, mock_close, tmp_path
+        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
     ):
         path = tmp_path / "state.json"
         self._state_with(
@@ -229,18 +230,120 @@ class TestProcessPendingNotNeededReviews:
             path=path,
         )
         mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        mock_state.return_value = "OPEN"
+        call_order: list[str] = []
+        mock_close.side_effect = lambda *a, **kw: call_order.append("close")
+        mock_remove.side_effect = lambda *a, **kw: call_order.append("remove")
 
         result = process_pending_not_needed_reviews(path)
 
-        mock_remove.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
         mock_close.assert_called_once()
         close_args = mock_close.call_args.args
         close_kwargs = mock_close.call_args.kwargs
         assert close_args[0] == 250
         assert close_args[1] == "not planned"
         assert "@Saltmu" in close_kwargs["comment"]
+        mock_remove.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
+        # close_issueがremove_labelより先に呼ばれること（#205: クローズ成功確定前に
+        # 完了シグナルを消費しない）。
+        assert call_order == ["close", "remove"]
         assert result["closed"] == [250]
         assert result["still_pending"] == 0
+        assert load_not_needed_review_state(path).pending == []
+
+    @patch("orchestune.integration_coordinator.github.get_issue_state")
+    @patch("orchestune.integration_coordinator.github.close_issue")
+    @patch("orchestune.integration_coordinator.github.remove_label")
+    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    def test_close_failure_keeps_passed_label_unconsumed_and_entry_pending(
+        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+    ):
+        """#205: close_issueが失敗した場合、passedラベルが消費されず、エントリは
+        pendingのまま残って次サイクルで再試行されること。"""
+        path = tmp_path / "state.json"
+        entry = PendingNotNeededReview(
+            issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
+        )
+        self._state_with(entry, path=path)
+        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        mock_state.return_value = "OPEN"
+        mock_close.side_effect = RuntimeError("gh api error")
+
+        result = process_pending_not_needed_reviews(path)
+
+        mock_remove.assert_not_called()
+        assert result["closed"] == []
+        assert result["still_pending"] == 1
+        assert load_not_needed_review_state(path).pending == [entry]
+
+    @patch("orchestune.integration_coordinator.github.get_issue_state")
+    @patch("orchestune.integration_coordinator.github.close_issue")
+    @patch("orchestune.integration_coordinator.github.remove_label")
+    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    def test_one_entry_failure_does_not_block_others_from_saving(
+        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+    ):
+        """#205: 1エントリの失敗が、他エントリの処理結果の状態保存を巻き込まない
+        こと。"""
+        path = tmp_path / "state.json"
+        ok_entry = PendingNotNeededReview(
+            issue_number=100, subtask_id="ok", dispatched_at=1.0
+        )
+        failing_entry = PendingNotNeededReview(
+            issue_number=200, subtask_id="fails", dispatched_at=1.0
+        )
+        self._state_with(ok_entry, failing_entry, path=path)
+        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        mock_state.return_value = "OPEN"
+        mock_close.side_effect = lambda issue_number, *a, **kw: (
+            (_ for _ in ()).throw(RuntimeError("gh api error"))
+            if issue_number == 200
+            else None
+        )
+
+        result = process_pending_not_needed_reviews(path)
+
+        assert result["closed"] == [100]
+        assert result["still_pending"] == 1
+        assert load_not_needed_review_state(path).pending == [failing_entry]
+
+    @patch("orchestune.integration_coordinator.github.get_issue_state")
+    @patch("orchestune.integration_coordinator.github.close_issue")
+    @patch("orchestune.integration_coordinator.github.remove_label")
+    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    def test_remove_label_failure_after_close_retries_without_double_closing(
+        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+    ):
+        """#205: クローズ成功後にremove_labelが失敗しても、次サイクルの再試行で
+        二重クローズが発生しないこと（冪等）。"""
+        path = tmp_path / "state.json"
+        entry = PendingNotNeededReview(
+            issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
+        )
+        self._state_with(entry, path=path)
+        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        mock_state.return_value = "OPEN"
+        mock_remove.side_effect = RuntimeError("gh api error")
+
+        first_result = process_pending_not_needed_reviews(path)
+
+        mock_close.assert_called_once()
+        assert first_result["closed"] == []
+        assert first_result["still_pending"] == 1
+        assert load_not_needed_review_state(path).pending == [entry]
+
+        # 次サイクル: 実際にはクローズは成功済みなのでIssueはCLOSED、
+        # ラベルはまだ消費できていないのでpassedラベルは残ったまま。
+        mock_close.reset_mock()
+        mock_remove.reset_mock(side_effect=True)
+        mock_state.return_value = "CLOSED"
+
+        second_result = process_pending_not_needed_reviews(path)
+
+        mock_close.assert_not_called()
+        mock_remove.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
+        assert second_result["closed"] == [250]
+        assert second_result["still_pending"] == 0
         assert load_not_needed_review_state(path).pending == []
 
     @patch("orchestune.integration_coordinator.github.close_issue")

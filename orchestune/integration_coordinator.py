@@ -208,12 +208,18 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
     実行しないため、この関数が「クローズしても問題ないものを実際にクローズする」
     実行主体を担う。
 
-    - `not-needed-review:passed` を検知 → Issueをクローズし、人間へメンションした
-      コメントを残す（事後の可視性確保）。ラベルを外して記録を消費する。
+    - `not-needed-review:passed` を検知 → まずIssueのクローズを成功確定させてから
+      ラベルを外して記録を消費する（#205: クローズ成功より先にラベルを消費すると、
+      クローズ失敗時に完了シグナルだけ失われ、二度と再試行されなくなる）。
+      Issueが既にクローズ済み（前サイクルでクローズは成功したがラベル除去だけ
+      失敗していた場合）はクローズを再実行せず、ラベル除去のみ再試行する。
     - `not-needed-review:failed` を検知 → `status:queued`への差し戻しは既に
       レビューセッション自身が行っているため、Python側はラベルを外して記録を
       消費するのみ。
     - どちらのラベルもまだ無ければ、記録はそのまま保持し次サイクルで再確認する。
+    - 1エントリの処理中の例外は他エントリの処理・状態保存を巻き込まない。
+      失敗したエントリは警告ログを出したうえでpendingのまま保持し、次サイクルで
+      自動的に再試行する。
     """
     state = load_not_needed_review_state(state_path)
     if not state.pending:
@@ -223,40 +229,60 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
     closed_summary: list[int] = []
     reopened_summary: list[int] = []
 
-    for entry in state.pending:
-        try:
-            labels = github.get_issue_labels(entry.issue_number)
-        except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
-            print(
-                f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
-                file=sys.stderr,
-            )
-            still_pending.append(entry)
-            continue
+    try:
+        for entry in state.pending:
+            try:
+                labels = github.get_issue_labels(entry.issue_number)
+            except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
+                print(
+                    f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
+                    file=sys.stderr,
+                )
+                still_pending.append(entry)
+                continue
 
-        if NOT_NEEDED_VERIFIED_LABEL in labels:
-            github.remove_label(entry.issue_number, NOT_NEEDED_VERIFIED_LABEL)
-            github.close_issue(
-                entry.issue_number,
-                "not planned",
-                comment=(
-                    f"{NOT_NEEDED_ATTENTION_MENTION} "
-                    "独立したレビューセッションでも対応不要と確認できたため、"
-                    "自動的にクローズしました。誤りであれば再オープンしてください。"
-                ),
-            )
-            closed_summary.append(entry.issue_number)
-        elif NOT_NEEDED_REJECTED_LABEL in labels:
-            github.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
-            reopened_summary.append(entry.issue_number)
-        else:
-            still_pending.append(entry)
+            try:
+                if NOT_NEEDED_VERIFIED_LABEL in labels:
+                    _close_verified_issue(entry.issue_number)
+                    github.remove_label(entry.issue_number, NOT_NEEDED_VERIFIED_LABEL)
+                    closed_summary.append(entry.issue_number)
+                elif NOT_NEEDED_REJECTED_LABEL in labels:
+                    github.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
+                    reopened_summary.append(entry.issue_number)
+                else:
+                    still_pending.append(entry)
+            except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
+                print(
+                    f"Warning: failed to finalize not-needed review for issue "
+                    f"{entry.issue_number}: {exc}",
+                    file=sys.stderr,
+                )
+                still_pending.append(entry)
+    finally:
+        save_not_needed_review_state(
+            NotNeededReviewState(pending=still_pending), state_path
+        )
 
-    save_not_needed_review_state(
-        NotNeededReviewState(pending=still_pending), state_path
-    )
     return {
         "closed": closed_summary,
         "reopened": reopened_summary,
         "still_pending": len(still_pending),
     }
+
+
+def _close_verified_issue(issue_number: int) -> None:
+    """#205: クローズ成功確定前にpassedラベルを消費しないよう、クローズだけを
+    独立させたヘルパー。前サイクルで一度クローズに成功していれば（ラベル除去だけが
+    失敗して再試行された場合）、二重クローズによる誤動作（コメント重複等）を
+    避けるためクローズ自体は再実行しない。
+    """
+    if github.get_issue_state(issue_number) == "OPEN":
+        github.close_issue(
+            issue_number,
+            "not planned",
+            comment=(
+                f"{NOT_NEEDED_ATTENTION_MENTION} "
+                "独立したレビューセッションでも対応不要と確認できたため、"
+                "自動的にクローズしました。誤りであれば再オープンしてください。"
+            ),
+        )
