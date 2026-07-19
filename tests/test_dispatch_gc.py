@@ -23,6 +23,7 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
 )
 from orchestune.dispatcher import DispatcherConfig
+from orchestune.github import PrRecord
 
 
 def _ctx(**overrides):
@@ -638,6 +639,14 @@ class TestRuleCompleted:
         ctx = _ctx()
         ctx.config.apply = True
         ctx.run_state.active_worktrees["1"] = active
+        ctx.prs = [
+            PrRecord(
+                number=281,
+                head_ref="agent/issue-280-task-a",
+                changed_files=(),
+                closes_issue_numbers=(280,),
+            )
+        ]
 
         with (
             patch(

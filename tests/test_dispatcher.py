@@ -967,6 +967,60 @@ class TestRecoveredActiveTask:
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
 
+    def test_next_cycle_completes_recovered_task_when_closing_pr_appears(
+        self, tmp_path
+    ):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "worktrees" / "missing-worktree"),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+        save_run_state(RunState(active_worktrees={"1": active}), config.run_state_path)
+        issue = _issue(1, labels=("status:in-progress",), subtask_id="task-a")
+        pr = PrRecord(
+            number=101,
+            head_ref="agent/issue-1-task-a",
+            changed_files=("src/foo.py",),
+            closes_issue_numbers=(1,),
+        )
+
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[pr]),
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.add_label") as mock_add_label,
+            patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                return_value="recovered-commit",
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue] if label == "status:in-progress" else []
+            )
+
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed"
+        assert report.completion_events[0]["commit_sha"] == "recovered-commit"
+        assert load_run_state(config.run_state_path).active_worktrees == {}
+        mock_remove_label.assert_any_call(1, "status:in-progress")
+        mock_add_label.assert_any_call(1, "status:done")
+
 
 class TestRunDispatchCycleCompletion:
     """#193: プロセス終了検知→worktree削除→クオータ解放→status:doneラベル遷移。"""
