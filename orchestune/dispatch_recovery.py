@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -114,15 +113,6 @@ def _decide_missing_active_worktrees(
         slug = branch_name.replace("/", "-")
         worktree_path = Path(config.worktree_root) / slug
 
-        started_at = time.time()
-        try:
-            from datetime import datetime
-
-            dt = datetime.fromisoformat(issue.created_at.replace("Z", "+00:00"))
-            started_at = dt.timestamp()
-        except Exception:
-            pass
-
         restored_base_branch = "origin/main"
         if issue.parent and issue.parent.get("number") is not None:
             restored_base_branch = f"parent/issue-{issue.parent['number']}"
@@ -143,7 +133,9 @@ def _decide_missing_active_worktrees(
             branch=branch_name,
             worktree_path=str(worktree_path),
             pid=None,
-            started_at=started_at,
+            # Issue作成日時やPRメタデータはdispatch開始日時を表さない。信頼
+            # できる開始時刻を復元できないTaskはtimeout判定を保留する。
+            started_at=None,
             declared_footprint=declared_footprint,
             recompute_count=0,
             forced_serial=False,
