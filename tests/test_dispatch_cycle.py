@@ -579,3 +579,414 @@ class TestProcessActiveWorktrees:
 
         assert any_forced_serial is True
         assert "1" not in ctx_two.run_state.active_worktrees
+
+
+class TestDispatchCycleRecomputeExclusionAndRecovery:
+    def test_same_cycle_recompute_exclusion(self, tmp_path):
+        """同一サイクルで逸脱が発生した際、競合先タスクが candidate_tasks から除外されること"""
+        from orchestune.dispatch_cycle import run_dispatch_cycle
+
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}")
+
+        config = DispatcherConfig(
+            run_state_path=run_state_path, worktree_root="worktrees", apply=True
+        )
+
+        # 競合先タスクのTask定義
+        blocked_task = _task(
+            issue_number=2, subtask_id="task-blocked", status_labels=("status:queued",)
+        )
+        normal_task = _task(
+            issue_number=3, subtask_id="task-normal", status_labels=("status:queued",)
+        )
+
+        blocked_body = "## Footprint\n" "```yaml\n" "subtask_id: task-blocked\n" "```\n"
+        normal_body = "## Footprint\n" "```yaml\n" "subtask_id: task-normal\n" "```\n"
+        blocked_issue = IssueRecord(
+            2, "t", blocked_body, ("status:queued",), "2026-01-01T00:00:00Z"
+        )
+        normal_issue = IssueRecord(
+            3, "t", normal_body, ("status:queued",), "2026-01-01T00:00:00Z"
+        )
+
+        class MockIssues:
+            queued = [blocked_issue, normal_issue]
+            locked = []
+            in_progress = []
+            blocked = []
+            done = []
+            not_needed = []
+
+            def all(self):
+                return [blocked_issue, normal_issue]
+
+            def filtered_by_parent(self, parent):
+                return self
+
+        run_state = RunState(active_worktrees={})
+
+        # _process_active_worktrees から返される deviation_events をシミュレート
+        deviation_events = [
+            {
+                "action": "recomputed",
+                "conflicts": [
+                    {
+                        "subtask_id": "task-active",
+                        "other_subtask_id": "task-blocked",
+                        "similarity": 0.8,
+                        "blocked_subtask_id": "task-blocked",
+                    }
+                ],
+            }
+        ]
+
+        with (
+            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch_cycle._process_active_worktrees",
+                return_value=([], deviation_events, False, set()),
+            ),
+            patch("orchestune.dispatch_cycle._promote_blocked_tasks", return_value=[]),
+            patch("orchestune.dispatch_cycle._sync_external_locks"),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="write",
+            ),
+            patch("orchestune.dispatch_cycle.save_run_state"),
+            patch(
+                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                return_value=([blocked_task, normal_task], {}),
+            ),
+            patch("orchestune.dispatch_cycle.select_next_tasks") as mock_select,
+        ):
+            run_dispatch_cycle(config)
+
+        called_candidates = mock_select.call_args[0][0]
+        assert normal_task in called_candidates
+        assert blocked_task not in called_candidates
+
+    def test_recompute_resolved_automatic_recovery(self, tmp_path):
+        """アクティブタスクが完了し競合が解消されたら、status:blocked-recomputeタスクが復帰すること"""
+        from orchestune.dispatch_cycle import run_dispatch_cycle
+
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}")
+
+        config = DispatcherConfig(
+            run_state_path=run_state_path, worktree_root="worktrees", apply=True
+        )
+
+        # アクティブワークツリーは空（競合なし）
+        run_state = RunState(active_worktrees={})
+
+        # status:blocked-recompute を持つ Issue
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-blocked\n"
+            "footprint:\n"
+            "  - src/bar.py\n"
+            "```\n"
+        )
+        blocked_issue = IssueRecord(
+            number=2,
+            title="t",
+            body=body,
+            labels=("status:blocked", "status:blocked-recompute"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        class MockIssues:
+            queued = []
+            locked = []
+            in_progress = []
+            blocked = [blocked_issue]
+            done = []
+            not_needed = []
+
+            def all(self):
+                return [blocked_issue]
+
+            def filtered_by_parent(self, parent):
+                return self
+
+        with (
+            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="write",
+            ),
+            patch("orchestune.dispatch_cycle.save_run_state"),
+            patch(
+                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                return_value=([], {}),
+            ),
+        ):
+            run_dispatch_cycle(config)
+
+        mock_remove_label.assert_any_call(2, "status:blocked-recompute")
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+
+    def test_recompute_recovery_error_fail_closed(self, tmp_path):
+        """逸脱検知でエラー（None）が発生した際、自動復帰が抑止されること (fail-closed)"""
+        from orchestune.dispatch_cycle import run_dispatch_cycle
+
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}")
+
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+
+        # アクティブワークツリーが存在する（逸脱検知を走らせるため）
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="branch-active",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1000.0,
+            declared_footprint=("src/foo.py",),
+            base_branch="origin/main",
+        )
+        run_state = RunState(active_worktrees={1: active})
+
+        # status:blocked-recompute を持つ Issue
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-blocked\n"
+            "footprint:\n"
+            "  - src/bar.py\n"
+            "```\n"
+        )
+        blocked_issue = IssueRecord(
+            number=2,
+            title="t",
+            body=body,
+            labels=("status:blocked", "status:blocked-recompute"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        active_body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-active\n"
+            "footprint:\n"
+            "  - src/foo.py\n"
+            "```\n"
+        )
+        active_issue = IssueRecord(
+            number=1,
+            title="active",
+            body=active_body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        class MockIssues:
+            queued = []
+            locked = []
+            in_progress = [active_issue]
+            blocked = [blocked_issue]
+            done = []
+            not_needed = []
+
+            def all(self):
+                return [active_issue, blocked_issue]
+
+            def filtered_by_parent(self, parent):
+                return self
+
+        with (
+            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch_cycle._process_active_worktrees",
+                return_value=([], [], False, set()),
+            ),
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_label"),
+            patch("orchestune.dispatch_cycle.github.add_comment"),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="write",
+            ),
+            patch("orchestune.dispatch_cycle.save_run_state"),
+            patch(
+                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                return_value=([], {}),
+            ),
+            patch(
+                "orchestune.dispatch_locks.check_footprint_deviation", return_value=None
+            ),  # エラー発生を模す
+        ):
+            run_dispatch_cycle(config)
+
+        # remove_label が呼ばれない（fail-closed）ことを検証
+        mock_remove_label.assert_not_called()
+
+    def test_blocked_promotion_excludes_blocked_recompute(self):
+        """status:blocked-recomputeを持つタスクは、通常のblocked昇格判定から除外されること"""
+        from orchestune.dispatch_cycle import _decide_blocked_promotions
+
+        task = _task(
+            issue_number=2,
+            subtask_id="task-blocked",
+            status_labels=("status:blocked", "status:blocked-recompute"),
+        )
+        issue = IssueRecord(
+            number=2,
+            title="t",
+            body="subtask_id: task-blocked\ndepends_on:\n  - task-dep",
+            labels=("status:blocked", "status:blocked-recompute"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        # 依存先が完了している（done_issuesに含まれる）が、status:blocked-recompute があるため昇格しないはず
+        dep_issue = IssueRecord(
+            3, "dep", "subtask_id: task-dep", ("status:done",), "2026-01-01T00:00:00Z"
+        )
+        dep_task = _task(
+            issue_number=3, subtask_id="task-dep", status_labels=("status:done",)
+        )
+
+        promotable = _decide_blocked_promotions(
+            [issue],
+            [dep_issue],
+            completed_subtask_ids=set(),
+            tasks_by_issue={2: task, 3: dep_task},
+        )
+
+        assert task not in promotable
+
+    def test_recompute_dag_error_fail_closed(self, tmp_path):
+        """DAG再計算で例外が発生した際、自動復帰が抑止されること (fail-closed)"""
+        from orchestune.dispatch_cycle import run_dispatch_cycle
+
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}")
+
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="branch-active",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1000.0,
+            declared_footprint=("src/foo.py",),
+            base_branch="origin/main",
+        )
+        run_state = RunState(active_worktrees={1: active})
+
+        # status:blocked-recompute を持つ Issue
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-blocked\n"
+            "footprint:\n"
+            "  - src/bar.py\n"
+            "```\n"
+        )
+        blocked_issue = IssueRecord(
+            number=2,
+            title="t",
+            body=body,
+            labels=("status:blocked", "status:blocked-recompute"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        active_body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-active\n"
+            "footprint:\n"
+            "  - src/foo.py\n"
+            "```\n"
+        )
+        active_issue = IssueRecord(
+            number=1,
+            title="active",
+            body=active_body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        class MockIssues:
+            queued = []
+            locked = []
+            in_progress = [active_issue]
+            blocked = [blocked_issue]
+            done = []
+            not_needed = []
+
+            def all(self):
+                return [active_issue, blocked_issue]
+
+            def filtered_by_parent(self, parent):
+                return self
+
+        with (
+            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch_cycle._process_active_worktrees",
+                return_value=([], [], False, set()),
+            ),
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_label"),
+            patch("orchestune.dispatch_cycle.github.add_comment"),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="write",
+            ),
+            patch("orchestune.dispatch_cycle.save_run_state"),
+            patch(
+                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                return_value=([], {}),
+            ),
+            patch(
+                "orchestune.dispatch_locks.check_footprint_deviation",
+                return_value=["src/unexpected.py"],
+            ),  # 逸脱ありとする
+            patch(
+                "orchestune.dag.recompute_dag_for_footprint_change",
+                side_effect=ValueError("DAG error"),
+            ),  # DAG計算エラー
+        ):
+            run_dispatch_cycle(config)
+
+        # remove_label が呼ばれない（fail-closed）ことを検証
+        mock_remove_label.assert_not_called()
