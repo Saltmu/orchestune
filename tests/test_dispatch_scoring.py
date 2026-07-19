@@ -96,6 +96,13 @@ class TestParseTaskFromIssue:
         issue = _issue(4, labels=("status:queued",))
         assert parse_task_from_issue(issue).priority == "medium"
 
+    def test_unknown_priority_label_normalized_to_medium(self):
+        # #206: 未知の priority:* ラベル(priority:critical等)は
+        # BASE_PRIORITYに存在せず、そのままKeyErrorでcycle全体を
+        # クラッシュさせていた。既定優先度(medium)へ正規化する。
+        issue = _issue(13, labels=("status:queued", "priority:critical"))
+        assert parse_task_from_issue(issue).priority == "medium"
+
     def test_risk_label_parsed(self):
         issue = _issue(5, labels=("status:queued", "risk:flagged"))
         assert parse_task_from_issue(issue).risk is True
@@ -293,6 +300,16 @@ class TestComputePriorityScore:
         assert compute_priority_score(
             partial, [plain, partial], state, now
         ) > compute_priority_score(plain, [plain, partial], state, now)
+
+    def test_unknown_priority_does_not_raise_keyerror(self):
+        # #206再現: parse_task_from_issueを経由せず直接不正なpriority文字列を
+        # 持つTaskがcompute_priority_scoreに渡っても、KeyErrorでクラッシュ
+        # せず既定優先度(medium相当)としてスコアリングされること。
+        now = 1_700_000_000.0
+        state = RunState(active_worktrees={}, launch_history=[])
+        task = _task(1, priority="critical", created_at="2023-01-01T00:00:00+00:00")
+        score = compute_priority_score(task, [task], state, now)
+        assert score == pytest.approx(2.0)
 
     def test_zero_avg_wait_does_not_raise(self):
         now = 1_700_000_000.0
