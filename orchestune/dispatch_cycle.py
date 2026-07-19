@@ -578,27 +578,14 @@ def _finalize_launch(
     return selected
 
 
-def _handle_blocked_recompute_recovery(
-    issues: IssuesByStatus,
+def _collect_active_conflict_subtask_ids(
     run_state: RunState,
     ctx: CycleContext,
-    completed_subtask_ids: set[str],
+    subtasks_for_recompute: dict,
     config: DispatcherConfig,
-) -> list[dict]:
-    """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
-    recompute_resolved_promoted_events: list[dict] = []
-    blocked_recompute_issues = [
-        issue for issue in issues.all() if "status:blocked-recompute" in issue.labels
-    ]
-
-    if not blocked_recompute_issues:
-        return recompute_resolved_promoted_events
-
-    # 現在アクティブなワークツリーによる競合対象のサブタスクIDを収集
+) -> set[str]:
+    """アクティブなワークツリーが持つフットプリントと競合するサブタスクIDの集合を収集する。"""
     active_conflict_subtask_ids = set()
-    from orchestune.dispatch_rebase import _build_subtasks_for_recompute
-
-    subtasks_for_recompute = _build_subtasks_for_recompute(ctx.tasks_by_issue)
     for active in run_state.active_worktrees.values():
         active_task = ctx.tasks_by_issue.get(active.issue_number)
         if not active_task or not active_task.subtask_id:
@@ -629,7 +616,34 @@ def _handle_blocked_recompute_recovery(
                 if conflict.blocked_subtask_id:
                     active_conflict_subtask_ids.add(conflict.blocked_subtask_id)
         except Exception:
-            pass
+            # DAG再計算中の例外発生時も fail-closed とし、自動復帰させない（＝全てのサブタスクを競合中とする）
+            for subtask_id in subtasks_for_recompute:
+                active_conflict_subtask_ids.add(subtask_id)
+    return active_conflict_subtask_ids
+
+
+def _handle_blocked_recompute_recovery(
+    issues: IssuesByStatus,
+    run_state: RunState,
+    ctx: CycleContext,
+    completed_subtask_ids: set[str],
+    config: DispatcherConfig,
+) -> list[dict]:
+    """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
+    recompute_resolved_promoted_events: list[dict] = []
+    blocked_recompute_issues = [
+        issue for issue in issues.all() if "status:blocked-recompute" in issue.labels
+    ]
+
+    if not blocked_recompute_issues:
+        return recompute_resolved_promoted_events
+
+    from orchestune.dispatch_rebase import _build_subtasks_for_recompute
+
+    subtasks_for_recompute = _build_subtasks_for_recompute(ctx.tasks_by_issue)
+    active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(
+        run_state, ctx, subtasks_for_recompute, config
+    )
 
     for issue in blocked_recompute_issues:
         task = ctx.tasks_by_issue.get(issue.number)

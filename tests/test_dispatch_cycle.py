@@ -881,3 +881,112 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         )
 
         assert task not in promotable
+
+    def test_recompute_dag_error_fail_closed(self, tmp_path):
+        """DAG再計算で例外が発生した際、自動復帰が抑止されること (fail-closed)"""
+        from orchestune.dispatch_cycle import run_dispatch_cycle
+
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}")
+
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="branch-active",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1000.0,
+            declared_footprint=("src/foo.py",),
+            base_branch="origin/main",
+        )
+        run_state = RunState(active_worktrees={1: active})
+
+        # status:blocked-recompute を持つ Issue
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-blocked\n"
+            "footprint:\n"
+            "  - src/bar.py\n"
+            "```\n"
+        )
+        blocked_issue = IssueRecord(
+            number=2,
+            title="t",
+            body=body,
+            labels=("status:blocked", "status:blocked-recompute"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        active_body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-active\n"
+            "footprint:\n"
+            "  - src/foo.py\n"
+            "```\n"
+        )
+        active_issue = IssueRecord(
+            number=1,
+            title="active",
+            body=active_body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        class MockIssues:
+            queued = []
+            locked = []
+            in_progress = [active_issue]
+            blocked = [blocked_issue]
+            done = []
+            not_needed = []
+
+            def all(self):
+                return [active_issue, blocked_issue]
+
+            def filtered_by_parent(self, parent):
+                return self
+
+        with (
+            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch_cycle._process_active_worktrees",
+                return_value=([], [], False, set()),
+            ),
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_label"),
+            patch("orchestune.dispatch_cycle.github.add_comment"),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="write",
+            ),
+            patch("orchestune.dispatch_cycle.save_run_state"),
+            patch(
+                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                return_value=([], {}),
+            ),
+            patch(
+                "orchestune.dispatch_locks.check_footprint_deviation",
+                return_value=["src/unexpected.py"],
+            ),  # 逸脱ありとする
+            patch(
+                "orchestune.dag.recompute_dag_for_footprint_change",
+                side_effect=ValueError("DAG error"),
+            ),  # DAG計算エラー
+        ):
+            run_dispatch_cycle(config)
+
+        # remove_label が呼ばれない（fail-closed）ことを検証
+        mock_remove_label.assert_not_called()
