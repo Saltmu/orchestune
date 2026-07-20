@@ -293,6 +293,8 @@ def _apply_external_lock_sync(
         github.add_label(task.issue_number, "status:external-lock")
     for task in lock_result.to_unlock:
         github.remove_label(task.issue_number, "status:external-lock")
+        # #197 / #214: ロック解除時、Taskの現在のラベル状態に基づき status:queued を冪等に再付与・同期する。
+        # 既に Task オブジェクトが status:queued を持つ場合でも、GitHub上の実ラベル状態を確実に同期するための明示的処理。
         if (
             "status:queued" in task.status_labels
             and "status:done" not in task.status_labels

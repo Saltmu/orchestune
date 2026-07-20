@@ -96,9 +96,7 @@ def check_footprint_deviation(
     バイナリファイル（`git diff --numstat`が行数の代わりに`-`を返す）は
     行数で測れないため、バッファに関わらず常に逸脱として報告する。
     """
-    resolved_base = base
     # base がローカルに存在しないが、リモート追跡ブランチとして存在する場合はそちらを使用する
-
     resolved_base = resolve_local_or_remote_branch(
         worktree_path, base, prefer_remote=base.startswith("parent/")
     )

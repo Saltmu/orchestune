@@ -2511,8 +2511,8 @@ class TestIntegrationMergerCI:
                 return subprocess.CompletedProcess(
                     args=args,
                     returncode=0,
-                    stdout=f"{dummy_venv_path}\n".encode(),
-                    stderr=b"",
+                    stdout=f"{dummy_venv_path}\n",
+                    stderr="",
                 )
             elif "./scripts/local-ci.sh" in args:
                 return subprocess.CompletedProcess(

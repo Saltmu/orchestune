@@ -3013,6 +3013,9 @@ class TestPreventDuplicateSessions:
             apply=True,
         )
         queued_issue = _issue(1, subtask_id="task-1")
+        import time
+
+        recent_time = time.time() - 100.0
         save_run_state(
             RunState(
                 completed_worktrees=[
@@ -3020,13 +3023,14 @@ class TestPreventDuplicateSessions:
                         issue_number=1,
                         subtask_id="task-1",
                         branch="claude/issue-1-task-1",
-                        started_at=100.0,
-                        completed_at=200.0,
+                        started_at=recent_time - 100.0,
+                        completed_at=recent_time,
                         commit_sha="old-sha",
                     )
                 ]
             ),
             config.run_state_path,
+            now=recent_time,
         )
 
         def ls_remote_result(command, **_kwargs):
@@ -3063,7 +3067,7 @@ class TestPreventDuplicateSessions:
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
             patch(
-                "orchestune.dispatch_worktree.subprocess.run",
+                "orchestune.dispatch_launch.subprocess.run",
                 side_effect=ls_remote_result,
             ) as mock_subprocess_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,

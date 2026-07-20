@@ -17,6 +17,7 @@ class TestRunState:
 
     def test_save_and_load_roundtrip(self, tmp_path):
         path = tmp_path / "run_state.json"
+        now = 1700000000.0
         state = RunState(
             active_worktrees={
                 "10": ActiveWorktree(
@@ -30,7 +31,7 @@ class TestRunState:
             },
             launch_history=[1700000000.0],
         )
-        save_run_state(state, path)
+        save_run_state(state, path, now=now)
         loaded = load_run_state(path)
         assert loaded.active_worktrees["10"].branch == "claude/issue-10-x"
         assert loaded.launch_history == [1700000000.0]
@@ -56,6 +57,7 @@ class TestRunState:
 
     def test_save_and_load_roundtrip_with_completed_worktrees(self, tmp_path):
         path = tmp_path / "run_state.json"
+        now = 1700003600.0
         state = RunState(
             active_worktrees={},
             launch_history=[],
@@ -71,12 +73,13 @@ class TestRunState:
                 )
             ],
         )
-        save_run_state(state, path)
+        save_run_state(state, path, now=now)
         loaded = load_run_state(path)
         assert loaded.completed_worktrees == state.completed_worktrees
 
     def test_completed_worktree_preserves_unknown_start_time(self, tmp_path):
         path = tmp_path / "run_state.json"
+        now = 1700003600.0
         state = RunState(
             completed_worktrees=[
                 CompletedWorktree(
@@ -89,7 +92,7 @@ class TestRunState:
             ]
         )
 
-        save_run_state(state, path)
+        save_run_state(state, path, now=now)
 
         assert load_run_state(path).completed_worktrees[0].started_at is None
 
@@ -97,6 +100,68 @@ class TestRunState:
         path = tmp_path / "run_state.json"
         path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))
         loaded = load_run_state(path)
+        assert loaded.completed_worktrees == []
+
+    def test_prune_run_state(self):
+        from orchestune.dispatch_state import prune_run_state
+
+        now = 5000000.0
+        # launch_window = 86400 -> min_launch_time = 4913600
+        # completed_retention = 30 * 86400 (2592000) -> min_completed_time = 2408000
+        state = RunState(
+            launch_history=[
+                4000000.0,
+                4920000.0,
+                4990000.0,
+            ],  # 4000000.0 is older than 24h
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=1,
+                    subtask_id="old",
+                    branch="b1",
+                    started_at=1000000.0,
+                    completed_at=1000000.0,  # 1000000 < 2408000 (very old > 30 days)
+                ),
+                CompletedWorktree(
+                    issue_number=2,
+                    subtask_id="recent",
+                    branch="b2",
+                    started_at=4900000.0,
+                    completed_at=4950000.0,  # 4950000 > 2408000 (recent)
+                ),
+            ],
+        )
+
+        pruned = prune_run_state(
+            state,
+            now=now,
+            launch_window_seconds=86400.0,
+            completed_retention_seconds=2592000.0,
+        )
+
+        assert pruned.launch_history == [4920000.0, 4990000.0]
+        assert len(pruned.completed_worktrees) == 1
+        assert pruned.completed_worktrees[0].subtask_id == "recent"
+
+    def test_save_run_state_prunes_automatically(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        now = 5000000.0
+        state = RunState(
+            launch_history=[4000000.0, 4950000.0],  # 4000000.0 is too old
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=1,
+                    subtask_id="very_old",
+                    branch="b1",
+                    started_at=1000000.0,
+                    completed_at=1000000.0,  # too old
+                ),
+            ],
+        )
+
+        save_run_state(state, path, now=now)
+        loaded = load_run_state(path)
+        assert loaded.launch_history == [4950000.0]
         assert loaded.completed_worktrees == []
 
     def test_last_reconciled_at_defaults_to_none(self, tmp_path):
