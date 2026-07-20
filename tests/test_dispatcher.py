@@ -4125,6 +4125,9 @@ class TestDispatcherConfigLoading:
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
             assert len(out["post_cycle_results"]) == 3
+            for res in out["post_cycle_results"]:
+                assert res["status"] == "fatal_failure"
+                assert "main-auth-failed" in res["error_message"]
 
     def test_custom_window_seconds_preserves_launch_history_quota(self, tmp_path):
         import time

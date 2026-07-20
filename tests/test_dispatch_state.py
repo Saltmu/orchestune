@@ -140,68 +140,96 @@ class TestRunState:
         )
 
         assert pruned.launch_history == [4920000.0, 4990000.0]
-        # issue_number=1 の唯一のレコード "old" も最新1件として保護される
-        assert len(pruned.completed_worktrees) == 2
+        # open PR のない古い Issue 1 のレコードは削除され、直近30日以内の Issue 2 のみが残る
+        assert len(pruned.completed_worktrees) == 1
+        assert pruned.completed_worktrees[0].subtask_id == "recent"
 
-    def test_prune_run_state_preserves_latest_completed_worktree_per_issue(self):
+    def test_prune_run_state_bounded_when_many_old_issues(self):
         from orchestune.dispatch_state import prune_run_state
+
+        now = 5000000.0
+        # 30日以上前(500.0)の CompletedWorktree が 1000 個ある
+        many_old_worktrees = [
+            CompletedWorktree(
+                issue_number=i,
+                subtask_id=f"t{i}",
+                branch=f"b{i}",
+                started_at=100.0,
+                completed_at=500.0,
+            )
+            for i in range(1, 1001)
+        ]
+        state = RunState(completed_worktrees=many_old_worktrees)
+
+        # open PR なし、上限500
+        pruned = prune_run_state(
+            state,
+            now=now,
+            launch_window_seconds=86400.0,
+            completed_retention_seconds=2592000.0,
+            max_completed_worktrees=500,
+        )
+
+        # 古い履歴はすべて削除され 0 件（有界かつ無駄に保持されない）
+        assert len(pruned.completed_worktrees) == 0
+
+    def test_prune_run_state_preserves_open_pr_latest_completed_worktree(self):
+        from orchestune.dispatch_state import prune_run_state
+        from orchestune.github import PrRecord
 
         now = 5000000.0  # min_completed_time = 2408000
         state = RunState(
             completed_worktrees=[
+                # Issue 10: 30日以上前だが、現在 Open PR #101 (closes #10) が存在する
                 CompletedWorktree(
                     issue_number=10,
                     subtask_id="t1",
                     branch="b10",
                     started_at=100.0,
-                    completed_at=500.0,  # 古い（2件目以降）
+                    completed_at=500.0,
                 ),
-                CompletedWorktree(
-                    issue_number=10,
-                    subtask_id="t1",
-                    branch="b10",
-                    started_at=1000.0,
-                    completed_at=1500.0,  # Issue 10 の最新（30日超だが最新1件のため保護される）
-                ),
+                # Issue 20: 30日以上前で、Open PR なし (closed/merged 済み)
                 CompletedWorktree(
                     issue_number=20,
                     subtask_id="t2",
                     branch="b20",
+                    started_at=100.0,
+                    completed_at=500.0,
+                ),
+                # Issue 30: 30日以内の最新 (Open PR なしでも保持)
+                CompletedWorktree(
+                    issue_number=30,
+                    subtask_id="t3",
+                    branch="b30",
                     started_at=4900000.0,
-                    completed_at=4950000.0,  # 30日以内の最新
+                    completed_at=4950000.0,
                 ),
             ],
         )
+
+        open_prs = [
+            PrRecord(
+                number=101,
+                head_ref="b10",
+                changed_files=(),
+                review_decision="",
+                is_ci_passing=True,
+                closes_issue_numbers=(10,),
+            )
+        ]
 
         pruned = prune_run_state(
             state,
             now=now,
             launch_window_seconds=86400.0,
             completed_retention_seconds=2592000.0,
+            open_prs=open_prs,
         )
 
-        # issue 10 の completed_at=500.0 (古い方) は削られ、completed_at=1500.0 (最新) は保護される
+        # Issue 10 (open PRありで保護) と Issue 30 (30日以内) が残り、Issue 20 は削除される
         assert len(pruned.completed_worktrees) == 2
-        issue_10_cw = [cw for cw in pruned.completed_worktrees if cw.issue_number == 10]
-        assert len(issue_10_cw) == 1
-        assert issue_10_cw[0].completed_at == 1500.0
-
-    def test_prune_run_state_respects_custom_launch_window(self):
-        from orchestune.dispatch_state import prune_run_state
-
-        now = 100000.0
-        # 48時間 = 172800秒 -> min_launch_time = 100000 - 172800 = -72800
-        state = RunState(
-            launch_history=[10000.0, 50000.0],
-        )
-
-        pruned = prune_run_state(
-            state,
-            now=now,
-            launch_window_seconds=172800.0,
-        )
-
-        assert pruned.launch_history == [10000.0, 50000.0]
+        issues_in_pruned = {cw.issue_number for cw in pruned.completed_worktrees}
+        assert issues_in_pruned == {10, 30}
 
     def test_save_run_state_prunes_automatically(self, tmp_path):
         path = tmp_path / "run_state.json"
@@ -211,17 +239,10 @@ class TestRunState:
             completed_worktrees=[
                 CompletedWorktree(
                     issue_number=1,
-                    subtask_id="old_first",
+                    subtask_id="old_closed",
                     branch="b1",
                     started_at=1000.0,
                     completed_at=1000.0,  # 古い
-                ),
-                CompletedWorktree(
-                    issue_number=1,
-                    subtask_id="old_latest",
-                    branch="b1",
-                    started_at=2000.0,
-                    completed_at=2000.0,  # 最新1件のため保護される
                 ),
             ],
         )
@@ -229,8 +250,7 @@ class TestRunState:
         save_run_state(state, path, now=now)
         loaded = load_run_state(path)
         assert loaded.launch_history == [4950000.0]
-        assert len(loaded.completed_worktrees) == 1
-        assert loaded.completed_worktrees[0].subtask_id == "old_latest"
+        assert loaded.completed_worktrees == []
 
     def test_last_reconciled_at_defaults_to_none(self, tmp_path):
         state = load_run_state(tmp_path / "run_state.json")

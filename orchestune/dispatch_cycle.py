@@ -588,6 +588,7 @@ def _finalize_launch(
         config.run_state_path,
         now=now,
         launch_window_seconds=config.window_seconds,
+        open_prs=ctx.prs,
     )
     return selected
 
