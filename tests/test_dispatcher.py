@@ -2464,7 +2464,12 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -2528,7 +2533,12 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -2706,6 +2716,12 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
