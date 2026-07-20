@@ -287,13 +287,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             )
             assert target.is_complete(handle) is False
 
-    def test_is_complete_true_when_matching_pr_was_already_closed(self):
-        """#210: PR closure must not make the completion signal disappear."""
+    def test_closed_unmerged_pr_is_abandoned_not_complete(self):
+        """#210 review: rejected PRs must not mark dependencies done."""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         closed_pr = PrRecord(
             number=1,
             head_ref="claude/issue-210-task-a",
             changed_files=(),
+            state="CLOSED",
         )
         with patch(
             "orchestune.dispatch_targets.github.list_prs",
@@ -304,8 +305,10 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-210-task-a",
                 issue_number=210,
             )
-            assert target.is_complete(handle) is True
-        mock_list_prs.assert_called_once_with(state="all")
+            assert target.completion_status(handle) == "abandoned"
+            assert target.is_complete(handle) is False
+        assert mock_list_prs.call_count == 2
+        mock_list_prs.assert_called_with(state="all")
 
 
 class TestCodexCloudDispatchTarget:
@@ -383,6 +386,7 @@ class TestCodexCloudDispatchTarget:
             head_ref="codex/unexpected-branch",
             changed_files=(),
             closes_issue_numbers=(210,),
+            state="MERGED",
         )
         with patch(
             "orchestune.dispatch_targets.github.list_prs",

@@ -536,6 +536,21 @@ class TestListOpenPrs:
 
         called_args = mock_run.call_args.args[0]
         assert called_args[called_args.index("--state") + 1] == "all"
+        assert "state" in called_args[called_args.index("--json") + 1]
+
+    def test_list_prs_records_each_pr_state(self):
+        payload = (
+            '[{"number": 5, "headRefName": "feat/x", "state": "MERGED"},'
+            '{"number": 6, "headRefName": "feat/y", "state": "CLOSED"}]'
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=payload, stderr=""
+            )
+
+            prs = list_prs(state="all")
+
+        assert [pr.state for pr in prs] == ["MERGED", "CLOSED"]
 
     def test_list_prs_rejects_unsupported_state(self):
         with pytest.raises(ValueError, match="Unsupported PR state"):
