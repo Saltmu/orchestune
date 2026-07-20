@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from orchestune import github
 
@@ -113,6 +113,35 @@ class DispatchTarget(ABC):
     @abstractmethod
     def is_complete(self, handle: DispatchHandle) -> bool:
         """`launch`で起動した実行が完了しているかどうかを判定する。"""
+
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        """Return a lifecycle status; local targets only expose pending/completed."""
+        return "completed" if self.is_complete(handle) else "pending"
+
+
+def _task_pr_completion_status(
+    handle: DispatchHandle,
+) -> Literal["pending", "completed", "abandoned"]:
+    """Classify matching cloud-task PRs without treating rejected PRs as done."""
+    if handle.branch_name is None and handle.issue_number is None:
+        return "pending"
+    prs = github.list_prs(state="all")
+    matching_prs = [
+        pr
+        for pr in prs
+        if (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+        or (
+            handle.issue_number is not None
+            and handle.issue_number in pr.closes_issue_numbers
+        )
+    ]
+    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
+        return "completed"
+    if any(pr.state == "CLOSED" for pr in matching_prs):
+        return "abandoned"
+    return "pending"
 
 
 def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str]:
@@ -280,16 +309,12 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
         ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
         （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
-        if handle.branch_name is None and handle.issue_number is None:
-            return False
-        prs = github.list_open_prs()
-        if handle.branch_name is not None and any(
-            pr.head_ref == handle.branch_name for pr in prs
-        ):
-            return True
-        if handle.issue_number is not None:
-            return any(handle.issue_number in pr.closes_issue_numbers for pr in prs)
-        return False
+        return self.completion_status(handle) == "completed"
+
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        return _task_pr_completion_status(handle)
 
 
 class CodexCloudDispatchTarget(DispatchTarget):
@@ -352,9 +377,12 @@ class CodexCloudDispatchTarget(DispatchTarget):
         )
 
     def is_complete(self, handle: DispatchHandle) -> bool:
-        if handle.branch_name is None:
-            return False
-        return any(pr.head_ref == handle.branch_name for pr in github.list_open_prs())
+        return self.completion_status(handle) == "completed"
+
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        return _task_pr_completion_status(handle)
 
 
 def build_dispatch_target(
