@@ -396,18 +396,21 @@ def is_branch_merged_into(head: str, base: str) -> bool:
     return bool(json.loads(stdout))
 
 
-def list_open_prs(limit: int = 1000) -> list[PrRecord]:
+def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される
-    GitHub側の正規のIssue参照一覧）も併せて取得する。
+    GitHub側の正規のIssue参照一覧）も併せて取得する。#210: 完了シグナルが
+    PRのclose/mergeで消えないよう、呼び出し側が`all`を指定できる。
     パフォーマンス向上のため、一括で取得する。"""
+    if state not in {"open", "closed", "merged", "all"}:
+        raise ValueError(f"Unsupported PR state: {state}")
     stdout = _run(
         [
             "gh",
             "pr",
             "list",
             "--state",
-            "open",
+            state,
             "--limit",
             str(limit),
             "--json",
@@ -440,6 +443,11 @@ def list_open_prs(limit: int = 1000) -> list[PrRecord]:
             )
         )
     return prs
+
+
+def list_open_prs(limit: int = 1000) -> list[PrRecord]:
+    """Return open PRs, preserving the existing compatibility API."""
+    return list_prs(state="open", limit=limit)
 
 
 def _status_check_contexts(rollup: object) -> list[dict[str, object]]:

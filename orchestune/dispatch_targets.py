@@ -115,6 +115,20 @@ class DispatchTarget(ABC):
         """`launch`で起動した実行が完了しているかどうかを判定する。"""
 
 
+def _has_task_pr(handle: DispatchHandle) -> bool:
+    """Return whether any current or closed PR identifies this cloud task."""
+    if handle.branch_name is None and handle.issue_number is None:
+        return False
+    prs = github.list_prs(state="all")
+    if handle.branch_name is not None and any(
+        pr.head_ref == handle.branch_name for pr in prs
+    ):
+        return True
+    return handle.issue_number is not None and any(
+        handle.issue_number in pr.closes_issue_numbers for pr in prs
+    )
+
+
 def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str]:
     return ["true"]
 
@@ -280,16 +294,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
         ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
         （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
-        if handle.branch_name is None and handle.issue_number is None:
-            return False
-        prs = github.list_open_prs()
-        if handle.branch_name is not None and any(
-            pr.head_ref == handle.branch_name for pr in prs
-        ):
-            return True
-        if handle.issue_number is not None:
-            return any(handle.issue_number in pr.closes_issue_numbers for pr in prs)
-        return False
+        return _has_task_pr(handle)
 
 
 class CodexCloudDispatchTarget(DispatchTarget):
@@ -352,9 +357,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         )
 
     def is_complete(self, handle: DispatchHandle) -> bool:
-        if handle.branch_name is None:
-            return False
-        return any(pr.head_ref == handle.branch_name for pr in github.list_open_prs())
+        return _has_task_pr(handle)
 
 
 def build_dispatch_target(
