@@ -57,16 +57,32 @@ def create_worktree_and_launch(
     apply: bool,
     base_branch: str | None = None,
 ) -> LaunchResult:
-    _validate_ref_name(branch_name)
-    worktree_root = Path(worktree_root)
-    slug = branch_name.replace("/", "-")
-    worktree_path = worktree_root / slug
-
     pid: int | None = None
     external_id: str | None = None
     external_url: str | None = None
     launched = False
     error_message: str | None = None
+
+    try:
+        _validate_ref_name(branch_name)
+        worktree_root = Path(worktree_root)
+        slug = branch_name.replace("/", "-")
+        worktree_path = worktree_root / slug
+    except ValueError as e:
+        print(
+            f"Error: Invalid branch name {branch_name!r} for issue #{task.issue_number}: {e}",
+            file=sys.stderr,
+        )
+        return LaunchResult(
+            issue_number=task.issue_number,
+            branch=branch_name,
+            worktree_path="",
+            pid=None,
+            launched=False,
+            error_message=str(e),
+            external_id=None,
+            external_url=None,
+        )
 
     if apply:
         try:

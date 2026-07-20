@@ -91,14 +91,19 @@ class TestCreateWorktreeAndLaunch:
         dispatch_target = LocalProcessDispatchTarget(
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
-        with pytest.raises(ValueError):
-            create_worktree_and_launch(
-                task,
-                branch_name="--upload-pack=evil",
-                worktree_root=tmp_path / "worktrees",
-                dispatch_target=dispatch_target,
-                apply=True,
-            )
+        result = create_worktree_and_launch(
+            task,
+            branch_name="--upload-pack=evil",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            apply=True,
+        )
+        assert result.launched is False
+        assert (
+            "無効な" in result.error_message
+            or "Invalid" in result.error_message
+            or "ブランチ名" in result.error_message
+        )
 
     def test_apply_failure_returns_launched_false_with_error(self, tmp_path):
         task = _task(1)
