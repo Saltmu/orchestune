@@ -261,12 +261,21 @@ def _apply_task_launches(
                 github.remove_label(task.issue_number, "status:queued")
             if "status:blocked" in task.status_labels:
                 github.remove_label(task.issue_number, "status:blocked")
-            github.add_label(task.issue_number, "status:blocked")
-            github.add_comment(
-                task.issue_number,
-                f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
-                f"エラー内容:\n```\n{launch.error_message}\n```",
-            )
+
+            if launch.validation_error:
+                github.add_label(task.issue_number, "status:blocked-human-review")
+                github.add_comment(
+                    task.issue_number,
+                    f"ブランチ名またはsubtask_idが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
+                    f"エラー内容:\n```\n{launch.error_message}\n```",
+                )
+            else:
+                github.add_label(task.issue_number, "status:blocked")
+                github.add_comment(
+                    task.issue_number,
+                    f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
+                    f"エラー内容:\n```\n{launch.error_message}\n```",
+                )
             continue
 
         # run_stateへの登録・永続化を先に行い、GitHubラベルの更新は後で行う。
