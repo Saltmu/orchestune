@@ -204,10 +204,6 @@ class TestCreateWorktreeAndLaunch:
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.dispatch_worktree.dispatch_gc.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
-            patch(
                 "orchestune.dispatch_worktree.dispatch_gc.backup_wip_commit",
                 return_value=None,
             ) as mock_backup,
@@ -249,10 +245,6 @@ class TestCreateWorktreeAndLaunch:
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.dispatch_worktree.dispatch_gc.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
-            patch(
                 "orchestune.dispatch_worktree.dispatch_gc.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
@@ -272,6 +264,52 @@ class TestCreateWorktreeAndLaunch:
         # git worktree prune 以降（add等の再作成コマンド）は一切実行されない
         worktree_add_calls = [c for c in mock_run.call_args_list if "add" in c.args[0]]
         assert not worktree_add_calls
+        mock_popen.assert_not_called()
+        assert marker.exists()  # 未コミット作業が残ったworktreeは削除されていない
+
+    def test_dirty_status_check_failure_is_fail_closed_and_aborts_launch(
+        self, tmp_path
+    ):
+        """#213: `git status`自体が失敗し安全性が確認できない場合も、
+        cleanと誤判定してrmtreeへ進まない（fail-closed）ことを直接
+        `subprocess.run`のエラーを通じて検証する。"""
+        task = _task(1)
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        worktree_path = tmp_path / "worktrees" / "claude-issue-1-task-1"
+        worktree_path.mkdir(parents=True)
+        marker = worktree_path / "uncommitted.txt"
+        marker.write_text("agent work in progress")
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+
+            def run_mock(args, **kwargs):
+                if "status" in args:
+                    raise subprocess.CalledProcessError(
+                        128, args, stderr="fatal: not a git repository"
+                    )
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
+
+            mock_run.side_effect = run_mock
+            result = create_worktree_and_launch(
+                task,
+                branch_name="claude/issue-1-task-1",
+                worktree_root=tmp_path / "worktrees",
+                dispatch_target=dispatch_target,
+                apply=True,
+            )
+
+        assert result.launched is False
+        assert "fatal: not a git repository" in result.error_message
+        worktree_add_calls = [c for c in mock_run.call_args_list if "add" in c.args[0]]
+        assert not worktree_add_calls
+        mock_popen.assert_not_called()
+        assert marker.exists()  # dirty確認に失敗したworktreeは削除されていない
         mock_popen.assert_not_called()
         assert marker.exists()  # 未コミット作業が残ったworktreeは削除されていない
 
