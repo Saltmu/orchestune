@@ -187,3 +187,54 @@ class TestDecideDuplicateCandidates:
         )
         decisions = _decide_duplicate_candidates([task], ctx)
         assert decisions[0].is_duplicate is True
+
+
+class TestApplyTaskLaunches:
+    def test_invalid_subtask_id_blocks_only_affected_task(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        ok_task = _task(1, subtask_id="valid-task")
+        bad_task = _task(2, subtask_id="invalid task@")
+
+        plans = [
+            TaskLaunchPlan(ok_task, "claude/issue-1-valid-task", None, "origin/main"),
+            TaskLaunchPlan(
+                bad_task, "claude/issue-2-invalid task@", None, "origin/main"
+            ),
+        ]
+
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.github.add_label") as mock_add_label,
+            patch("orchestune.github.add_comment") as mock_add_comment,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            selected = _apply_task_launches(plans, run_state, 1000.0, config)
+
+        assert selected == [ok_task]
+        assert mock_add_label.called
+        label_calls = [
+            (call.args[0], call.args[1]) for call in mock_add_label.call_args_list
+        ]
+        assert (2, "status:blocked") in label_calls
+        assert mock_add_comment.called
+        assert mock_add_comment.call_args[0][0] == 2

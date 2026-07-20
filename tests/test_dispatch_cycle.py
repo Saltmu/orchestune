@@ -106,6 +106,19 @@ class TestDecideExternalLockSync:
         assert result.to_lock == []
         assert result.to_unlock == []
 
+    def test_ignores_invalid_remote_branch_name(self):
+        run_state = RunState(active_worktrees={})
+        task = _task(issue_number=1, footprint=("src/foo.py",))
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches",
+                return_value=["origin/feature/foo@bar"],
+            ),
+        ):
+            result = _decide_external_lock_sync({1: task}, [], run_state)
+        assert result.to_lock == []
+        assert result.to_unlock == []
+
 
 class TestApplyExternalLockSync:
     def test_unlocking_blocked_task_does_not_requeue_it(self):

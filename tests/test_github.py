@@ -686,11 +686,16 @@ class TestBranchChangedFiles:
         assert "origin/main...origin/feat/x" in called_args
         assert files == ["src/a.py", "src/b.py"]
 
-    def test_rejects_invalid_branch_name(self):
-        with patch("orchestune.github.subprocess.run") as mock_run:
-            with pytest.raises(ValueError):
-                branch_changed_files("--upload-pack=evil")
+    def test_returns_empty_list_for_invalid_branch_name(self):
+        stderr = StringIO()
+        with (
+            patch("orchestune.github.subprocess.run") as mock_run,
+            patch("sys.stderr", stderr),
+        ):
+            files = branch_changed_files("--upload-pack=evil")
             mock_run.assert_not_called()
+        assert files == []
+        assert "Warning: invalid ref name for branch_changed_files" in stderr.getvalue()
 
     def test_returns_empty_list_when_branch_has_no_merge_base(self):
         """#232: mainと共通の祖先を持たない(orphanな)ブランチとの3点diffは
