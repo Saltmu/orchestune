@@ -55,15 +55,36 @@ def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def _describe_git_error(e: subprocess.CalledProcessError | OSError) -> str:
+    stderr = getattr(e, "stderr", None)
+    return stderr.strip() if stderr else str(e)
+
+
 def backup_wip_commit(worktree_path: str | Path, commit_message: str) -> str | None:
-    """#213: dirtyなworktreeを指定のコミットメッセージでWIP退避する
+    """#213: worktreeを指定のコミットメッセージでWIP退避する
     （ゾンビGCと自動リベース/worktree再作成で共通化）。
 
-    cleanな場合は退避不要としてNoneを返す。add/commit自体が失敗した場合は
-    エラー詳細の文字列を返す（呼び出し側は退避未完了として扱うこと）。
+    削除・rebase等の破壊的操作の直前に呼ばれる想定のため、fail-closedとする:
+    - `git status`で確認できてcleanな場合のみ、退避不要としてNoneを返す。
+    - dirty判定でadd/commitが成功した場合もNoneを返す。
+    - `git status`自体が失敗し安全性が確認できない場合、およびadd/commit自体が
+      失敗した場合は、いずれもエラー詳細の文字列を返す（`worktree_has_uncommitted_changes`
+      と異なり、確認不能を「clean」とはみなさない。呼び出し側は非Noneが返った場合、
+      削除・rebaseを中止して退避未完了として扱うこと）。
     """
-    if not worktree_has_uncommitted_changes(worktree_path):
+    try:
+        status = subprocess.run(
+            ["git", "-C", str(worktree_path), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as e:
+        return _describe_git_error(e)
+
+    if not status.stdout.strip():
         return None
+
     try:
         subprocess.run(
             ["git", "-C", str(worktree_path), "add", "-A"],
@@ -77,8 +98,8 @@ def backup_wip_commit(worktree_path: str | Path, commit_message: str) -> str | N
             text=True,
             check=True,
         )
-    except subprocess.CalledProcessError as e:
-        return e.stderr.strip() if e.stderr else str(e)
+    except (subprocess.CalledProcessError, OSError) as e:
+        return _describe_git_error(e)
     return None
 
 

@@ -2470,10 +2470,6 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
-            patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
@@ -2483,9 +2479,15 @@ class TestGC:
             mock_list.side_effect = lambda label, **_: (
                 [issue_a] if label == "status:in-progress" else []
             )
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout=""
-            )
+
+            def run_mock(args, **kwargs):
+                if "status" in args:
+                    return subprocess.CompletedProcess(
+                        args=args, returncode=0, stdout=" M src/foo.py\n"
+                    )
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
+
+            mock_run.side_effect = run_mock
 
             run_dispatch_cycle(config)
 

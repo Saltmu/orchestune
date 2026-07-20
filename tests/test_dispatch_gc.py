@@ -9,6 +9,7 @@ from orchestune.dispatch_gc import (
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     _rule_completed,
+    backup_wip_commit,
     is_process_alive,
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
@@ -165,6 +166,70 @@ class TestWorktreeHasUncommittedChanges:
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             assert worktree_has_uncommitted_changes("worktrees/missing") is False
+
+
+class TestBackupWipCommit:
+    """#213: 破壊的操作（rebase/rmtree）の直前に呼ばれるWIP退避のfail-closed契約。
+    `worktree_has_uncommitted_changes`と異なり、dirty確認自体が失敗した場合も
+    「clean」とはみなさず、呼び出し側が破壊的操作を中止できるようエラーを返す。
+    """
+
+    def test_clean_worktree_returns_none(self):
+        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            assert backup_wip_commit("worktrees/w1", "WIP: backup") is None
+            # cleanなのでadd/commitは呼ばれない
+            assert mock_run.call_count == 1
+
+    def test_dirty_worktree_commits_and_returns_none(self):
+        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=" M src/foo.py\n", stderr=""
+            )
+            assert backup_wip_commit("worktrees/w1", "WIP: backup") is None
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert any("add" in cmd for cmd in calls)
+        assert any("commit" in cmd for cmd in calls)
+
+    def test_status_check_failure_is_fail_closed(self):
+        """dirty確認自体が失敗した場合、cleanと誤判定せずエラーを返す
+        （`worktree_has_uncommitted_changes`のfail-open挙動とは異なる）。"""
+        with patch(
+            "orchestune.dispatch_gc.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                1, [], stderr="fatal: not a git repository"
+            ),
+        ):
+            error = backup_wip_commit("worktrees/w1", "WIP: backup")
+        assert error is not None
+        assert "fatal: not a git repository" in error
+
+    def test_status_check_os_error_is_fail_closed(self):
+        """git実行ファイル不在等のOSErrorも、確認不能としてエラーを返す。"""
+        with patch(
+            "orchestune.dispatch_gc.subprocess.run",
+            side_effect=OSError("git executable not found"),
+        ):
+            error = backup_wip_commit("worktrees/w1", "WIP: backup")
+        assert error is not None
+        assert "git executable not found" in error
+
+    def test_commit_os_error_is_reported(self):
+        """add/commit自体のOSError（`CalledProcessError`以外）も捕捉して返す。"""
+
+        def run_mock(args, **kwargs):
+            if "status" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=" M src/foo.py\n", stderr=""
+                )
+            raise OSError("git executable not found")
+
+        with patch("orchestune.dispatch_gc.subprocess.run", side_effect=run_mock):
+            error = backup_wip_commit("worktrees/w1", "WIP: backup")
+        assert error is not None
+        assert "git executable not found" in error
 
 
 class TestWorktreeHasNewCommits:
