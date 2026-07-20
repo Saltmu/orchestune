@@ -874,6 +874,14 @@ class TestGetActorPermission:
                 get_actor_permission("alice; rm -rf /")
             mock_run.assert_not_called()
 
+    def test_treats_empty_username_as_none_without_calling_subprocess(self):
+        """#208: get_label_actorがghostユーザー等で空文字を返した場合、
+        ValueErrorを送出せず安全側の`none`を返す。"""
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            permission = get_actor_permission("")
+        assert permission == "none"
+        mock_run.assert_not_called()
+
 
 class TestCloseIssue:
     def test_closes_with_reason(self):
