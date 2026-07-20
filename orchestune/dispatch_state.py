@@ -143,14 +143,28 @@ def prune_run_state(
 
     protected_ids = set(id(cw) for cw in protected_latest.values())
 
-    pruned_completed = [
+    protected_cw = [cw for cw in state.completed_worktrees if id(cw) in protected_ids]
+    unprotected_cw = [
         cw
         for cw in state.completed_worktrees
-        if cw.completed_at >= min_completed_time or id(cw) in protected_ids
+        if cw.completed_at >= min_completed_time and id(cw) not in protected_ids
     ]
 
-    if len(pruned_completed) > max_completed_worktrees:
-        pruned_completed = pruned_completed[-max_completed_worktrees:]
+    if len(protected_cw) >= max_completed_worktrees:
+        protected_selected = sorted(
+            protected_cw, key=lambda x: x.completed_at, reverse=True
+        )[:max_completed_worktrees]
+        unprotected_selected = []
+    else:
+        protected_selected = protected_cw
+        remaining_capacity = max_completed_worktrees - len(protected_selected)
+        unprotected_selected = sorted(
+            unprotected_cw, key=lambda x: x.completed_at, reverse=True
+        )[:remaining_capacity]
+
+    pruned_completed = sorted(
+        protected_selected + unprotected_selected, key=lambda x: x.completed_at
+    )
 
     return RunState(
         active_worktrees=state.active_worktrees,

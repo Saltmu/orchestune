@@ -231,6 +231,59 @@ class TestRunState:
         issues_in_pruned = {cw.issue_number for cw in pruned.completed_worktrees}
         assert issues_in_pruned == {10, 30}
 
+    def test_prune_run_state_preserves_old_protected_record_over_new_unprotected_history(
+        self,
+    ):
+        from orchestune.dispatch_state import prune_run_state
+        from orchestune.github import PrRecord
+
+        now = 5000000.0  # min_completed_time = 2408000
+        # 古い保護レコード (30日以上前の open PR 用)
+        old_protected = CompletedWorktree(
+            issue_number=10,
+            subtask_id="t10",
+            branch="b10",
+            started_at=100.0,
+            completed_at=500.0,
+        )
+        # 30日以内の新しい非保護レコード 500 件
+        new_unprotected = [
+            CompletedWorktree(
+                issue_number=1000 + i,
+                subtask_id=f"t{1000 + i}",
+                branch=f"b{1000 + i}",
+                started_at=4900000.0 + i,
+                completed_at=4900000.0 + i,
+            )
+            for i in range(500)
+        ]
+        state = RunState(completed_worktrees=[old_protected] + new_unprotected)
+
+        open_prs = [
+            PrRecord(
+                number=101,
+                head_ref="b10",
+                changed_files=(),
+                review_decision="",
+                is_ci_passing=True,
+                closes_issue_numbers=(10,),
+            )
+        ]
+
+        pruned = prune_run_state(
+            state,
+            now=now,
+            launch_window_seconds=86400.0,
+            completed_retention_seconds=2592000.0,
+            open_prs=open_prs,
+            max_completed_worktrees=500,
+        )
+
+        assert len(pruned.completed_worktrees) == 500
+        issues = {cw.issue_number for cw in pruned.completed_worktrees}
+        # 古い保護対象の Issue 10 が削られずに確実に残っていること
+        assert 10 in issues
+
     def test_save_run_state_prunes_automatically(self, tmp_path):
         path = tmp_path / "run_state.json"
         now = 5000000.0
