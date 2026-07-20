@@ -507,3 +507,98 @@ class TestApplyAutoRebase:
 
         # Assert base_branch is still origin/main (not updated)
         assert active.base_branch == "origin/main"
+
+    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.dispatch_gc.backup_wip_commit")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
+    )
+    def test_backs_up_wip_before_rebase_when_dirty(
+        self, mock_resolve, mock_run, mock_backup, mock_kill
+    ):
+        """#213: dirtyなworktreeでは、rebaseを試みる前にWIP退避が呼ばれること。"""
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        mock_backup.return_value = None  # 退避成功（またはclean）
+        mock_run.return_value.returncode = 0
+
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        mock_target.launch.return_value = MagicMock(
+            pid=222, external_id="ext-1", external_url="url-1"
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=mock_target,
+            apply=True,
+        )
+
+        _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        mock_backup.assert_called_once_with(
+            active.worktree_path, "WIP: backup by Orchestune auto-rebase"
+        )
+        # rebaseコマンドが実行されている（退避成功時は通常フローを継続する）
+        rebase_calls = [
+            call_args
+            for call_args in mock_run.call_args_list
+            if "rebase" in call_args.args[0]
+        ]
+        assert rebase_calls
+        assert active.base_branch == "parent-branch"
+
+    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.dispatch_gc.backup_wip_commit")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    def test_backup_failure_skips_rebase_and_escalates_to_manual_merge(
+        self, mock_run, mock_backup, mock_kill
+    ):
+        """#213: WIP退避自体が失敗した場合、rebaseを試みずmanual-merge-requiredへ
+        エスカレーションし、未コミット作業の消失を防ぐ。"""
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        mock_backup.return_value = "fatal: unable to write new index file"
+
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root="worktrees",
+            dispatch_target=mock_target,
+            apply=True,
+        )
+
+        with (
+            patch("orchestune.dispatch_rebase.github.remove_label") as mock_remove,
+            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment,
+        ):
+            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        mock_backup.assert_called_once_with(
+            active.worktree_path, "WIP: backup by Orchestune auto-rebase"
+        )
+        mock_run.assert_not_called()  # rebaseは一切試みられない
+        mock_remove.assert_called_once_with(active.issue_number, "status:in-progress")
+        mock_add_label.assert_called_once_with(
+            active.issue_number, "status:manual-merge-required"
+        )
+        mock_comment.assert_called_once()
+        assert (
+            "WIPバックアップコミットの作成に失敗しました"
+            in mock_comment.call_args.args[1]
+        )
+        assert "1" not in run_state.active_worktrees
+        assert active.base_branch == "origin/main"

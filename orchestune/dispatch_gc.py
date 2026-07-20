@@ -55,6 +55,33 @@ def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def backup_wip_commit(worktree_path: str | Path, commit_message: str) -> str | None:
+    """#213: dirtyなworktreeを指定のコミットメッセージでWIP退避する
+    （ゾンビGCと自動リベース/worktree再作成で共通化）。
+
+    cleanな場合は退避不要としてNoneを返す。add/commit自体が失敗した場合は
+    エラー詳細の文字列を返す（呼び出し側は退避未完了として扱うこと）。
+    """
+    if not worktree_has_uncommitted_changes(worktree_path):
+        return None
+    try:
+        subprocess.run(
+            ["git", "-C", str(worktree_path), "add", "-A"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(worktree_path), "commit", "-m", commit_message],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return e.stderr.strip() if e.stderr else str(e)
+    return None
+
+
 def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> bool:
     """#74: base_branchに対して実コミットが積まれているかの確認。
 
@@ -398,33 +425,17 @@ def _collect_zombies_and_timeouts(
                 backup_success = True
                 worktree_exists = os.path.exists(active.worktree_path)
                 if worktree_exists:
-                    if worktree_has_uncommitted_changes(active.worktree_path):
-                        try:
-                            subprocess.run(
-                                ["git", "-C", active.worktree_path, "add", "-A"],
-                                capture_output=True,
-                                check=True,
-                            )
-                            subprocess.run(
-                                [
-                                    "git",
-                                    "-C",
-                                    active.worktree_path,
-                                    "commit",
-                                    "-m",
-                                    f"WIP: backup by Orchestune GC ({reason})",
-                                ],
-                                capture_output=True,
-                                check=True,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            backup_success = False
-                            github.add_comment(
-                                active.issue_number,
-                                f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
-                                f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
-                                f"エラー詳細:\n```\n{e.stderr.strip() if e.stderr else str(e)}\n```",
-                            )
+                    backup_error = backup_wip_commit(
+                        active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
+                    )
+                    if backup_error is not None:
+                        backup_success = False
+                        github.add_comment(
+                            active.issue_number,
+                            f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
+                            f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
+                            f"エラー詳細:\n```\n{backup_error}\n```",
+                        )
 
                 if not backup_success:
                     continue
