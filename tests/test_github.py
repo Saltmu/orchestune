@@ -552,6 +552,23 @@ class TestListOpenPrs:
 
         assert [pr.state for pr in prs] == ["MERGED", "CLOSED"]
 
+    def test_list_prs_records_closed_at(self):
+        payload = (
+            '[{"number": 6, "headRefName": "feat/y", "state": "CLOSED", '
+            '"createdAt": "2026-01-01T00:00:00Z", '
+            '"closedAt": "2026-01-03T00:00:00Z"}]'
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=payload, stderr=""
+            )
+
+            prs = list_prs(state="all")
+            called_args = mock_run.call_args.args[0]
+
+        assert prs[0].closed_at == "2026-01-03T00:00:00Z"
+        assert "closedAt" in called_args[called_args.index("--json") + 1]
+
     def test_list_prs_rejects_unsupported_state(self):
         with pytest.raises(ValueError, match="Unsupported PR state"):
             list_prs(state="draft")

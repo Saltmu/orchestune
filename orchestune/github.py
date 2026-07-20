@@ -64,6 +64,7 @@ class PrRecord:
     review_decision: str = ""
     is_ci_passing: bool = True
     state: str = "OPEN"
+    closed_at: str = ""
 
 
 def _run(args: list[str], input_text: str | None = None) -> str:
@@ -420,7 +421,7 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
             "--limit",
             str(limit),
             "--json",
-            "number,headRefName,state,createdAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
+            "number,headRefName,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
         ]
     )
     raw_prs = json.loads(stdout)
@@ -442,6 +443,7 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
                 head_ref=raw["headRefName"],
                 changed_files=tuple(f["path"] for f in files),
                 created_at=raw.get("createdAt") or "",
+                closed_at=raw.get("closedAt") or "",
                 closes_issue_numbers=tuple(
                     sorted(ref["number"] for ref in closing_refs)
                 ),

@@ -499,18 +499,18 @@ def _parse_github_timestamp(value: str) -> float | None:
 def _is_stale_closed_pr_for_active(pr: github.PrRecord, active: ActiveWorktree) -> bool:
     if pr.state != "CLOSED" or active.started_at is None:
         return False
-    created_at = _parse_github_timestamp(pr.created_at)
-    return created_at is not None and created_at < active.started_at
+    closed_at = _parse_github_timestamp(pr.closed_at)
+    return closed_at is not None and closed_at < active.started_at
 
 
-def _cached_pr_completion_status(active: ActiveWorktree, ctx: CycleContext) -> str:
+def _local_pr_completion_status(active: ActiveWorktree) -> str:
     handle = _active_dispatch_handle(active)
     # `ctx.prs` is typically populated from open PRs for lock/CI scans.  Abandoned
     # detection must also see closed-unmerged PRs, so query all PR states here.
     try:
         candidate_prs = github.list_prs(state="all")
     except Exception:
-        candidate_prs = ctx.prs
+        return "unknown"
     matching_prs = [
         pr
         for pr in candidate_prs
@@ -535,7 +535,10 @@ def _cloud_worktree_completion_status(
 ) -> str:
     assert config.dispatch_target is not None
     handle = _active_dispatch_handle(active)
-    status = config.dispatch_target.completion_status(handle)
+    try:
+        status = config.dispatch_target.completion_status(handle)
+    except Exception:
+        return "unknown"
     if isinstance(status, str):
         return status
     return "completed" if config.dispatch_target.is_complete(handle) else "pending"
@@ -674,6 +677,23 @@ def _abandoned_worktree_outcome(
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 
 
+def _find_recovery_pr(
+    active: ActiveWorktree,
+) -> github.PrRecord | None:
+    """Find a current task PR across all states; None means retry next cycle."""
+    try:
+        all_prs = github.list_prs(state="all")
+    except Exception:
+        return None
+    matching_prs = [
+        pr for pr in all_prs if active.issue_number in pr.closes_issue_numbers
+    ]
+    return next(
+        (pr for pr in matching_prs if pr.state.upper() in {"OPEN", "MERGED"}),
+        matching_prs[0] if matching_prs else None,
+    )
+
+
 def _rule_completed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
@@ -682,10 +702,7 @@ def _rule_completed(
         # #198: 自己修復したローカルTaskはPIDを復元できないため、PID消失を
         # 完了シグナルにできない。後続サイクルで当該IssueをcloseするPRを検出
         # した場合だけ、そのリモートブランチを検証して完了判定へ進める。
-        recovery_pr = next(
-            (pr for pr in ctx.prs if active.issue_number in pr.closes_issue_numbers),
-            None,
-        )
+        recovery_pr = _find_recovery_pr(active)
         if recovery_pr is None:
             return None
         if recovery_pr.state.upper() == "CLOSED":
@@ -705,9 +722,11 @@ def _rule_completed(
     else:
         if not _is_worktree_complete(active, ctx.config):
             return None
-        cached_pr_status = _cached_pr_completion_status(active, ctx)
-        if cached_pr_status == "abandoned":
+        local_pr_status = _local_pr_completion_status(active)
+        if local_pr_status == "abandoned":
             return _abandoned_worktree_outcome(ctx, key, active, active_task)
+        if local_pr_status == "unknown":
+            return None
 
     completion_event = _finalize_completed_worktree(
         completion_active, active_task, ctx.config
