@@ -100,10 +100,11 @@ def prune_run_state(
     """#214: 長期運用による run_state.json の単調肥大化を防止するための刈り込み処理。
 
     保持ポリシー:
-    - `launch_history`: 直近24時間（デフォルト 86400秒）以内の起動タイムスタンプのみ保持。
+    - `launch_history`: `launch_window_seconds`（デフォルト24時間 / 設定の `window_seconds`）以内の起動タイムスタンプのみ保持。
       レートリミット算出等のウィンドウ判定に必要な情報のみを留める。
     - `completed_worktrees`: 直近30日間（デフォルト 2592000秒）以内の完了履歴のみ保持。
-      KPI集計（B1/B2/D1）および冷却期間判定に必要な情報を留め、過去の古い履歴を刈り込む。
+      ただし、重複判定（#110-146 `dispatch_launch.py`）に必要な `last_completed` (commit_sha) を保護するため、
+      各 `issue_number` の最新 1 件の `CompletedWorktree` は経過時間に関わらず保持する。
     """
     import time
 
@@ -112,8 +113,18 @@ def prune_run_state(
     min_completed_time = current_time - completed_retention_seconds
 
     pruned_launch_history = [t for t in state.launch_history if t >= min_launch_time]
+
+    latest_per_issue: dict[int, CompletedWorktree] = {}
+    for cw in state.completed_worktrees:
+        existing = latest_per_issue.get(cw.issue_number)
+        if existing is None or cw.completed_at >= existing.completed_at:
+            latest_per_issue[cw.issue_number] = cw
+    protected_ids = set(id(cw) for cw in latest_per_issue.values())
+
     pruned_completed_worktrees = [
-        cw for cw in state.completed_worktrees if cw.completed_at >= min_completed_time
+        cw
+        for cw in state.completed_worktrees
+        if cw.completed_at >= min_completed_time or id(cw) in protected_ids
     ]
 
     return RunState(

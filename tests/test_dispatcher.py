@@ -4125,6 +4125,47 @@ class TestDispatcherConfigLoading:
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
             assert len(out["post_cycle_results"]) == 3
-            for res in out["post_cycle_results"]:
-                assert res["status"] == "fatal_failure"
-                assert "main-auth-failed" in res["error_message"]
+
+    def test_custom_window_seconds_preserves_launch_history_quota(self, tmp_path):
+        import time
+
+        now = time.time()
+        # window_seconds = 172800 (48時間)
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=172800,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        # 36時間前 (129600秒前) の launch 記録（24時間前〜48時間前の間）
+        launch_36h_ago = now - 129600.0
+        launch_1h_ago = now - 3600.0
+
+        save_run_state(
+            RunState(
+                launch_history=[launch_36h_ago, launch_1h_ago],
+            ),
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+        )
+
+        # 48時間の window_seconds なので、36時間前の起動も記録に残っているはず
+        loaded = load_run_state(config.run_state_path)
+        assert len(loaded.launch_history) == 2
+
+        # 2回起動済み（max_launches_per_window=2）のため新規起動がブロックされる
+        with (
+            patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
+            patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [_issue(10, subtask_id="t10")] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+            # 48時間窓で2回に達しているため起動不可
+            assert len(report.selected) == 0

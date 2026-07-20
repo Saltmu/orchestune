@@ -443,7 +443,11 @@ def _self_heal_run_state(
         return
     in_progress_issues = github.list_issues_by_label("status:in-progress")
     if recover_run_state(run_state, in_progress_issues, config):
-        save_run_state(run_state, config.run_state_path)
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+        )
 
 
 def _build_cycle_context(
@@ -579,7 +583,12 @@ def _finalize_launch(
         config,
     )
     ctx.run_state.last_reconciled_at = now
-    save_run_state(ctx.run_state, config.run_state_path)
+    save_run_state(
+        ctx.run_state,
+        config.run_state_path,
+        now=now,
+        launch_window_seconds=config.window_seconds,
+    )
     return selected
 
 
