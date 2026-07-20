@@ -103,6 +103,22 @@ class TestParseTaskFromIssue:
         issue = _issue(13, labels=("status:queued", "priority:critical"))
         assert parse_task_from_issue(issue).priority == "medium"
 
+    def test_unknown_priority_label_wins_regardless_of_order_after_valid(self):
+        # レビュー指摘: 有効なラベルの後に未知ラベルが来ると、既存値が
+        # 残ってしまい medium へフォールバックされない不具合があった。
+        # ラベルの並び順に依存せず、未知ラベルが1つでもあれば medium に
+        # 正規化されなければならない。
+        issue = _issue(
+            14, labels=("status:queued", "priority:high", "priority:critical")
+        )
+        assert parse_task_from_issue(issue).priority == "medium"
+
+    def test_unknown_priority_label_wins_regardless_of_order_before_valid(self):
+        issue = _issue(
+            15, labels=("status:queued", "priority:critical", "priority:high")
+        )
+        assert parse_task_from_issue(issue).priority == "medium"
+
     def test_risk_label_parsed(self):
         issue = _issue(5, labels=("status:queued", "risk:flagged"))
         assert parse_task_from_issue(issue).risk is True
