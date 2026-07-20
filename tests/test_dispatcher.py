@@ -907,7 +907,7 @@ class TestIsWorktreeComplete:
         )
 
         with (
-            patch("orchestune.dispatch_targets.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_targets.github.list_prs", return_value=[]),
             patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive,
         ):
             assert _is_worktree_complete(active, config) is False
