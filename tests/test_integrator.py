@@ -48,6 +48,10 @@ def _stub_label_mutations_by_default():
         yield
 
 
+class _SimulatedProcessCrash(Exception):
+    """#209: プロセス強制終了を模すための、他の例外型と衝突しない専用の例外。"""
+
+
 def _issue(
     number: int,
     labels: tuple[str, ...] = (),
@@ -450,6 +454,141 @@ class TestAutoMergeChildIntegration:
         assert res["status"] == "success"
         assert mock_close_issue.call_count == 2
         assert res["closed_issues"] == [2]
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
+    @patch(
+        "orchestune.integrator.AutoMergeChildIntegrationStep._close_merged_child_issues"
+    )
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_label_granted_before_close_even_if_close_step_crashes(
+        self,
+        mock_merge_pr,
+        mock_close_step,
+        mock_add_label,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        # #209: マージ成功直後にクローズ処理全体が未捕捉例外で中断しても
+        # （プロセス強制終了を模す）、integration:includedのラベル付与だけは
+        # 既に完了していなければならない。そうでなければ、子ブランチは既に
+        # base_branchへ取り込み済みなのに信頼できる回復シグナルが無いまま
+        # 次サイクルの統合PR作成が差分無しで失敗し、当該子Issueが永久に
+        # クローズされないライブロックに陥る。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+        # `except RuntimeError`（統合ブランチのロック競合用）と衝突しない
+        # 独自の例外型で、それ以外のあらゆる箇所で捕捉されないことを保証する。
+        mock_close_step.side_effect = _SimulatedProcessCrash("simulated process crash")
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+
+        with pytest.raises(_SimulatedProcessCrash, match="simulated process crash"):
+            integrator.run()
+
+        mock_add_label.assert_called_once_with(1, "integration:included")
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_label_is_added_before_close_is_attempted(
+        self,
+        mock_merge_pr,
+        mock_close_issue,
+        mock_add_label,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        # #209: `integration:included`の付与がクローズ試行より前に完了して
+        # いることを、実際の呼び出し順序で直接検証する。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+
+        call_order: list[str] = []
+        mock_add_label.side_effect = lambda *a, **k: call_order.append("add_label")
+        mock_close_issue.side_effect = lambda *a, **k: call_order.append("close_issue")
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        integrator = Integrator(config)
+        res = integrator.run()
+
+        assert res["status"] == "success"
+        assert call_order == ["add_label", "close_issue"]
+
+    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.integrator.subprocess.run")
+    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.integrator.github.add_label")
+    @patch(
+        "orchestune.integrator.AutoMergeChildIntegrationStep._close_merged_child_issues"
+    )
+    @patch("orchestune.integrator.github.merge_pull_request")
+    def test_next_cycle_retries_close_after_label_persisted_from_crashed_cycle(
+        self,
+        mock_merge_pr,
+        mock_close_step,
+        mock_add_label,
+        mock_create_pr,
+        mock_open_prs,
+        mock_run,
+        mock_list,
+    ):
+        # #209: 1サイクル目でマージ成功後にクローズ処理全体がプロセス強制終了
+        # 相当の未捕捉例外で中断しても、ラベルは既に付与済み（実際にGitHub側へ
+        # 反映済み）である。2サイクル目はこのラベルを信頼できるシグナルとして
+        # `RetryChildIssueCloseStep`がクローズを独立に再試行できることを確認する。
+        issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        mock_open_prs.return_value = []
+        mock_create_pr.return_value = 999
+        mock_close_step.side_effect = _SimulatedProcessCrash("simulated process crash")
+
+        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        with pytest.raises(_SimulatedProcessCrash):
+            Integrator(config).run()
+        mock_add_label.assert_called_once_with(1, "integration:included")
+
+        # サイクル1でラベルが実際に永続化されたことを、2サイクル目の
+        # `active_done_tasks`取得結果に反映する。
+        issue_a_labeled = _issue(
+            1,
+            labels=("status:done", "integration:included"),
+            subtask_id="task-1",
+        )
+        mock_list.side_effect = lambda label, *args, **kwargs: [issue_a_labeled]
+
+        with patch("orchestune.integrator.github.close_issue") as mock_close_issue:
+            res = Integrator(config).run()
+
+        assert res["status"] == "no_done_tasks"
+        assert res["retried_closed_issues"] == [1]
+        mock_close_issue.assert_called_once_with(1, "completed", comment=ANY)
 
     @patch("orchestune.integrator.github.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
