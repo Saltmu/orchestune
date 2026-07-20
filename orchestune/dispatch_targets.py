@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from orchestune import github
-from orchestune.github import PrRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatcher import Task
@@ -122,12 +121,13 @@ class DispatchTarget(ABC):
         return "completed" if self.is_complete(handle) else "pending"
 
 
-def classify_task_pr_completion_status(
-    handle: DispatchHandle, prs: list[PrRecord]
+def _task_pr_completion_status(
+    handle: DispatchHandle,
 ) -> Literal["pending", "completed", "abandoned"]:
-    """Classify matching task PRs without treating rejected PRs as done."""
+    """Classify matching cloud-task PRs without treating rejected PRs as done."""
     if handle.branch_name is None and handle.issue_number is None:
         return "pending"
+    prs = github.list_prs(state="all")
     matching_prs = [
         pr
         for pr in prs
@@ -137,20 +137,11 @@ def classify_task_pr_completion_status(
             and handle.issue_number in pr.closes_issue_numbers
         )
     ]
-    states = {pr.state.upper() for pr in matching_prs}
-    if states & {"OPEN", "MERGED"}:
+    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
         return "completed"
-    if "CLOSED" in states:
+    if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"
-
-
-def _task_pr_completion_status(
-    handle: DispatchHandle,
-) -> Literal["pending", "completed", "abandoned"]:
-    if handle.branch_name is None and handle.issue_number is None:
-        return "pending"
-    return classify_task_pr_completion_status(handle, github.list_prs(state="all"))
 
 
 def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str]:
