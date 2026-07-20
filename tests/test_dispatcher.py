@@ -3561,7 +3561,7 @@ class TestRunSemanticIntegrator:
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
         )
         mock_instance = MagicMock()
-        mock_instance.run.return_value = {"ok": True}
+        mock_instance.run.return_value = {"status": "success", "ok": True}
         with (
             patch(
                 "orchestune.integrator.Integrator", return_value=mock_instance
@@ -3574,7 +3574,7 @@ class TestRunSemanticIntegrator:
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.SUCCESS
-        assert result.report == {"ok": True}
+        assert result.report == {"status": "success", "ok": True}
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.enable_semantic_review is True
         mock_coordinator_cls.assert_called_once_with(config.dispatch_target)
@@ -3586,7 +3586,7 @@ class TestRunSemanticIntegrator:
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
         )
         mock_instance = MagicMock()
-        mock_instance.run.return_value = {"ok": True}
+        mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
             "orchestune.integrator.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
@@ -3604,7 +3604,7 @@ class TestRunSemanticIntegrator:
             dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
         )
         mock_instance = MagicMock()
-        mock_instance.run.return_value = {"ok": True}
+        mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
             "orchestune.integrator.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
@@ -3643,6 +3643,49 @@ class TestRunSemanticIntegrator:
         assert result.status == PhaseStatus.RETRYABLE_FAILURE
         assert result.retryable is True
         assert result.report == {"status": "failure", "failed": ["task-1"]}
+
+    @pytest.mark.parametrize(
+        "error_status",
+        [
+            "failed_to_create_temp_worktree",
+            "failed_to_create_temp_branch",
+            "failed_to_push_temp_branch",
+            "auto_merge_failed",
+            "integration_branch_locked",
+        ],
+    )
+    def test_returns_retryable_failure_for_pipeline_error_statuses_without_failed_key(
+        self, error_status
+    ):
+        """#207: パイプラインが早期returnするエラーステータスは`failed`キーを
+        伴わないため、ホワイトリスト方式（success/no_done_tasks以外は失敗）で
+        判定されなければならない。"""
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": error_status, "error": "boom"}
+        with patch("orchestune.integrator.Integrator", return_value=mock_instance):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert result.report == {"status": error_status, "error": "boom"}
+
+    @pytest.mark.parametrize("success_status", ["success", "no_done_tasks"])
+    def test_returns_success_for_whitelisted_statuses(self, success_status):
+        config = DispatcherConfig(
+            run_state_path="dummy.json", worktree_root="worktrees"
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": success_status}
+        with patch("orchestune.integrator.Integrator", return_value=mock_instance):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
+        assert result.retryable is False
 
     def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
         config = DispatcherConfig(

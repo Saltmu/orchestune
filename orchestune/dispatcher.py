@@ -268,6 +268,12 @@ def _poll_pending_not_needed_reviews(
         )
 
 
+# Integratorパイプラインが成功として扱う唯一のステータス群（#207: これ以外は
+# すべて失敗として扱うホワイトリスト方式。個別のエラーステータス追加時に
+# 判定漏れが起きるブラックリスト方式を避けるため）。
+_INTEGRATOR_SUCCESS_STATUSES = {"success", "no_done_tasks"}
+
+
 def _run_semantic_integrator(
     config: DispatcherConfig,
     semantic_review_enabled: bool,
@@ -311,9 +317,7 @@ def _run_semantic_integrator(
 
         status = PhaseStatus.SUCCESS
         retryable = False
-        if integrator_run_report.get(
-            "status"
-        ) == "failure" or integrator_run_report.get("failed"):
+        if integrator_run_report.get("status") not in _INTEGRATOR_SUCCESS_STATUSES:
             status = PhaseStatus.RETRYABLE_FAILURE
             retryable = True
 
