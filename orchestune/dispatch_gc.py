@@ -376,16 +376,25 @@ def _collect_zombies_and_timeouts(
     run_state: RunState,
     tasks_by_issue: dict[int, Task],
     config: DispatcherConfig,
+    held_worktree_paths: set[str] | None = None,
 ) -> list[dict]:
-    """ゾンビプロセス（PID消失かつ未コミット変更あり）およびタイムアウトしたタスクをGC回収する。"""
+    """ゾンビプロセスおよびタイムアウトしたタスクをGC回収する。
+
+    同一サイクルの完了判定でdirty worktreeの人間確認待ちが選ばれた場合、
+    その判定を優先し、該当worktreeは回収しない。
+    """
     zombie_enabled = getattr(config, "zombie_gc", True)
     timeout_limit = getattr(config, "task_timeout_seconds", 0)
+    held_worktree_paths = held_worktree_paths or set()
 
     if not zombie_enabled and timeout_limit <= 0:
         return []
     events = []
     now = time.time()
     for key, active in list(run_state.active_worktrees.items()):
+        if active.worktree_path in held_worktree_paths:
+            continue
+
         active_task = tasks_by_issue.get(active.issue_number)
 
         is_zombie, is_timeout, process_alive = _check_zombie_and_timeout(

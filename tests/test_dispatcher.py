@@ -867,7 +867,7 @@ class TestIsWorktreeComplete:
 
     def test_passes_issue_number_to_dispatch_target_handle(self, tmp_path):
         fake_target = MagicMock()
-        fake_target.is_complete.return_value = True
+        fake_target.completion_status.return_value = "completed"
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=fake_target,
@@ -886,7 +886,7 @@ class TestIsWorktreeComplete:
         result = _is_worktree_complete(active, config)
 
         assert result is True
-        handle = fake_target.is_complete.call_args.args[0]
+        handle = fake_target.completion_status.call_args.args[0]
         assert handle.issue_number == 218
         assert handle.branch_name == "claude/issue-218-review-history-backend-api"
 
@@ -1119,7 +1119,7 @@ class TestRunDispatchCycleCompletion:
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
         dispatch_target = MagicMock()
-        dispatch_target.is_complete.return_value = True
+        dispatch_target.completion_status.return_value = "completed"
         config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
         in_progress_issue = _issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
@@ -1164,7 +1164,7 @@ class TestRunDispatchCycleCompletion:
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
         dispatch_target = MagicMock()
-        dispatch_target.is_complete.return_value = True
+        dispatch_target.completion_status.return_value = "completed"
         config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
         in_progress_issue = _issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
@@ -2464,7 +2464,12 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -2528,7 +2533,12 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -2706,6 +2716,12 @@ class TestGC:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",

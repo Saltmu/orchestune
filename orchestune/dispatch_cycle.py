@@ -695,8 +695,19 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             completed_subtask_ids,
         ) = _process_active_worktrees(ctx)
 
+        # #212: dirty worktreeを人間確認まで保留する完了判定を、直後の
+        # ゾンビGCが同一サイクル内で上書きしないよう、該当worktreeを明示的に除外する。
+        held_worktree_paths = {
+            event["worktree_path"]
+            for event in completion_events
+            if event.get("action") == "completion_skipped_dirty_worktree"
+            and event.get("worktree_path")
+        }
         gc_events = _collect_zombies_and_timeouts(
-            ctx.run_state, ctx.tasks_by_issue, config
+            ctx.run_state,
+            ctx.tasks_by_issue,
+            config,
+            held_worktree_paths=held_worktree_paths,
         )
         completion_events.extend(gc_events)
 

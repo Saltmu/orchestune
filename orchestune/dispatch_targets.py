@@ -333,6 +333,9 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         return _task_pr_completion_status(handle)
 
     def is_complete(self, handle: DispatchHandle) -> bool:
+        """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
+        ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
+        （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
         return self.completion_status(handle) == "completed"
 
 
