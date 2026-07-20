@@ -10,6 +10,7 @@ from orchestune.dispatch_cycle import (
     _group_by_status,
     _process_active_worktrees,
     _self_heal_run_state,
+    run_dispatch_cycle,
 )
 from orchestune.dispatch_locks import ExternalLockScanResult
 from orchestune.dispatch_scoring import Task
@@ -436,6 +437,61 @@ class TestProcessActiveWorktrees:
         assert deviation_events == []
         assert any_forced_serial is False
         assert completed_subtask_ids == set()
+
+    def test_dirty_worktree_hold_survives_same_cycle_zombie_gc(self, tmp_path):
+        """#212: 完了判定の保留を同一サイクルのゾンビGCが上書きしない。"""
+        worktree_path = tmp_path / "w1"
+        worktree_path.mkdir()
+        active = _active(worktree_path=str(worktree_path), pid=None)
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=False,
+            zombie_gc=True,
+        )
+        ctx = _ctx(
+            run_state=run_state,
+            tasks_by_issue={1: task},
+            config=config,
+        )
+
+        with (
+            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
+            patch(
+                "orchestune.dispatch_cycle._fetch_issues",
+                return_value=_group_by_status([]),
+            ),
+            patch("orchestune.dispatch_cycle._self_heal_run_state"),
+            patch("orchestune.dispatch_cycle._build_cycle_context", return_value=ctx),
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_cycle._promote_blocked_tasks", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle._handle_blocked_recompute_recovery",
+                return_value=[],
+            ),
+            patch(
+                "orchestune.dispatch_cycle._sync_external_locks",
+                return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            ),
+            patch(
+                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                return_value=([], {}),
+            ),
+            patch("orchestune.dispatch_cycle._finalize_launch", return_value=[]),
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert [event["action"] for event in report.completion_events] == [
+            "completion_skipped_dirty_worktree"
+        ]
+        assert run_state.active_worktrees == {"1": active}
 
     def test_not_needed_label_takes_precedence_over_stale_entry(self):
         active = _active(issue_number=1)
