@@ -139,7 +139,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--task-timeout-seconds",
         type=int,
         default=0,
-        help="ゾンビ・タイムアウトGCを実行するタスクのタイムアウト秒数（0以下でタイムアウトGCは無効、ゾンビ検知のみ実行）",
+        help="ゾンビ・タイムアウトGCを実行するタスクのタイムアウト秒数（0でタイムアウトGCは無効、ゾンビ検知のみ実行）",
     )
     parser.add_argument(
         "--zombie-gc",

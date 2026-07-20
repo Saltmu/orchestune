@@ -91,7 +91,52 @@ def load_run_state(path: str | Path) -> RunState:
     )
 
 
-def save_run_state(state: RunState, path: str | Path) -> None:
+def prune_run_state(
+    state: RunState,
+    now: float | None = None,
+    launch_window_seconds: float = 86400.0,
+    completed_retention_seconds: float = 30 * 86400.0,
+) -> RunState:
+    """#214: 長期運用による run_state.json の単調肥大化を防止するための刈り込み処理。
+
+    保持ポリシー:
+    - `launch_history`: 直近24時間（デフォルト 86400秒）以内の起動タイムスタンプのみ保持。
+      レートリミット算出等のウィンドウ判定に必要な情報のみを留める。
+    - `completed_worktrees`: 直近30日間（デフォルト 2592000秒）以内の完了履歴のみ保持。
+      KPI集計（B1/B2/D1）および冷却期間判定に必要な情報を留め、過去の古い履歴を刈り込む。
+    """
+    import time
+
+    current_time = time.time() if now is None else now
+    min_launch_time = current_time - launch_window_seconds
+    min_completed_time = current_time - completed_retention_seconds
+
+    pruned_launch_history = [t for t in state.launch_history if t >= min_launch_time]
+    pruned_completed_worktrees = [
+        cw for cw in state.completed_worktrees if cw.completed_at >= min_completed_time
+    ]
+
+    return RunState(
+        active_worktrees=state.active_worktrees,
+        launch_history=pruned_launch_history,
+        completed_worktrees=pruned_completed_worktrees,
+        last_reconciled_at=state.last_reconciled_at,
+    )
+
+
+def save_run_state(
+    state: RunState,
+    path: str | Path,
+    now: float | None = None,
+    launch_window_seconds: float = 86400.0,
+    completed_retention_seconds: float = 30 * 86400.0,
+) -> None:
+    state = prune_run_state(
+        state,
+        now=now,
+        launch_window_seconds=launch_window_seconds,
+        completed_retention_seconds=completed_retention_seconds,
+    )
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {

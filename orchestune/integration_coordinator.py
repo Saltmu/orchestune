@@ -73,6 +73,11 @@ def build_review_routine_prompt(
     """
     subtask_list = ", ".join(merged_subtask_ids) if merged_subtask_ids else "(不明)"
     parent_ref = f"#{parent_issue_number}" if parent_issue_number else "(親Issue不明)"
+    merge_statement = (
+        "本PRは統合システムのパイプラインによって自動マージ・管理されます。"
+        if parent_issue_number is not None
+        else "最終的なマージ判断は人間が行います。"
+    )
     return (
         "あなたは複数の並列実装タスクを統合した統合PRの最終レビュアーです。\n"
         "各サブタスクの単体CIおよび仮マージCI（Ruff/Mypy/Pytest）は既に通過しています。\n\n"
@@ -90,7 +95,7 @@ def build_review_routine_prompt(
         f"`gh pr comment {pr_number} --body-file -` でPR #{pr_number} 自身にコメントする。\n"
         "**重要な制約**: あなたはPRへのコメント投稿のみを行ってください。PRのマージ"
         "（`gh pr merge`等）、ラベル付与、Issueのクローズ、mainブランチへの直接の書き込みは"
-        "絶対に実行しないでください。最終的なマージ判断は人間が行います。\n"
+        f"絶対に実行しないでください。{merge_statement}\n"
         "前回のレビュー内容は与えられていません。今回のdiffだけを根拠に判断してください。"
     )
 

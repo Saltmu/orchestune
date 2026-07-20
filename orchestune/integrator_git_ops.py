@@ -155,12 +155,7 @@ class IntegrationMerger:
                     check=True,
                     env=env,
                 )
-                stdout_str = (
-                    res.stdout.decode(errors="replace")
-                    if isinstance(res.stdout, bytes)
-                    else res.stdout
-                )
-                p = Path(stdout_str.strip())
+                p = Path(res.stdout.strip())
                 if p.exists():
                     venv_path = p
             except (subprocess.CalledProcessError, OSError):
