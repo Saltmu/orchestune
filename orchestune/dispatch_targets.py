@@ -111,9 +111,9 @@ class DispatchTarget(ABC):
     ) -> DispatchHandle:
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。"""
 
+    @abstractmethod
     def is_complete(self, handle: DispatchHandle) -> bool:
         """`launch`で起動した実行が完了しているかどうかを判定する。"""
-        return self.completion_status(handle) == "completed"
 
     def completion_status(
         self, handle: DispatchHandle
@@ -320,6 +320,9 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
         return _task_pr_completion_status(handle)
 
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        return self.completion_status(handle) == "completed"
+
 
 class CodexCloudDispatchTarget(DispatchTarget):
     """Codex Cloud CLIへサブタスクを非対話で投入するターゲット。
@@ -384,6 +387,9 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self, handle: DispatchHandle
     ) -> Literal["pending", "completed", "abandoned"]:
         return _task_pr_completion_status(handle)
+
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        return self.completion_status(handle) == "completed"
 
 
 def build_dispatch_target(
