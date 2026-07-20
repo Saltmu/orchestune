@@ -135,8 +135,8 @@ def _parse_github_timestamp(value: str) -> float | None:
 def _is_stale_closed_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool:
     if pr.state != "CLOSED" or handle.started_at is None:
         return False
-    created_at = _parse_github_timestamp(pr.created_at)
-    return created_at is not None and created_at < handle.started_at
+    closed_at = _parse_github_timestamp(pr.closed_at)
+    return closed_at is not None and closed_at < handle.started_at
 
 
 def _task_pr_completion_status(

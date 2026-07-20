@@ -996,6 +996,7 @@ class TestRecoveredActiveTask:
         with (
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[pr]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[pr]),
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
@@ -1067,6 +1068,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
@@ -1347,6 +1349,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),

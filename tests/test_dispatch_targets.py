@@ -265,7 +265,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             )
             assert target.is_complete(handle) is False
 
-    def test_closed_pr_created_before_launch_is_ignored_as_stale(self):
+    def test_closed_pr_closed_before_launch_is_ignored_as_stale(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
             "orchestune.dispatch_targets.github.list_prs",
@@ -275,6 +275,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     head_ref="claude/issue-1-task-a",
                     changed_files=(),
                     created_at="2026-01-01T00:00:00Z",
+                    closed_at="2026-01-02T00:00:00Z",
                     state="CLOSED",
                 )
             ],
@@ -286,7 +287,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             )
             assert target.completion_status(handle) == "pending"
 
-    def test_closed_pr_created_after_launch_is_abandoned(self):
+    def test_existing_pr_closed_after_launch_is_abandoned(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
             "orchestune.dispatch_targets.github.list_prs",
@@ -295,7 +296,8 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     number=1,
                     head_ref="claude/issue-1-task-a",
                     changed_files=(),
-                    created_at="2030-01-01T00:00:00Z",
+                    created_at="2026-01-01T00:00:00Z",
+                    closed_at="2030-01-01T00:00:00Z",
                     state="CLOSED",
                 )
             ],
