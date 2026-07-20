@@ -110,6 +110,66 @@ class TestDecideActorVerification:
     def test_empty_candidate_list_returns_empty(self):
         assert _decide_actor_verification([]) == []
 
+    def test_unauthorized_when_actor_is_empty_ghost_user(self):
+        """#208: labeledイベント無し・author.loginも取得できないghostユーザーは
+        空文字actorとして扱われ、権限`none`＝未認可として判定される。"""
+        task = _task(1)
+        with (
+            patch(
+                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                return_value="",
+            ),
+            patch(
+                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                return_value="none",
+            ),
+        ):
+            decisions = _decide_actor_verification([task])
+        assert decisions == [
+            ActorVerificationDecision(
+                task=task, actor="", permission="none", is_authorized=False
+            )
+        ]
+
+    def test_does_not_crash_when_get_actor_permission_raises(self):
+        """#208: get_actor_permissionがValueErrorを送出しても
+        サイクル全体をクラッシュさせず、当該タスクを未認可として扱う。"""
+        task = _task(1)
+        with (
+            patch(
+                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                return_value="",
+            ),
+            patch(
+                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                side_effect=ValueError("ユーザー名が不正です: ''"),
+            ),
+        ):
+            decisions = _decide_actor_verification([task])
+        assert len(decisions) == 1
+        assert decisions[0].is_authorized is False
+        assert decisions[0].permission == "none"
+
+    def test_continues_to_next_task_after_one_raises(self):
+        """#208: 1件のタスクで例外が発生しても、後続タスクの判定は継続される。"""
+        task_bad, task_ok = _task(1), _task(2)
+        with (
+            patch(
+                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                side_effect=["", "alice"],
+            ),
+            patch(
+                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                side_effect=[ValueError("boom"), "write"],
+            ),
+        ):
+            decisions = _decide_actor_verification([task_bad, task_ok])
+        assert len(decisions) == 2
+        assert decisions[0].is_authorized is False
+        assert decisions[1] == ActorVerificationDecision(
+            task=task_ok, actor="alice", permission="write", is_authorized=True
+        )
+
 
 class TestApplyActorVerification:
     def test_authorized_task_stays_in_candidates(self):

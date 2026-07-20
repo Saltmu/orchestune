@@ -306,8 +306,10 @@ def get_actor_permission(username: str) -> str:
     """#119: 指定ユーザーのこのリポジトリに対する権限を返す。
 
     コラボレーターでない場合や取得に失敗した場合は、安全側のデフォルトとして
-    `"none"`を返す。
+    `"none"`を返す。#208: ユーザー名が空（actor解決不能）の場合も同様に`"none"`を返す。
     """
+    if not username:
+        return "none"
     login = _validate_username(username)
     try:
         stdout = _run(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -26,11 +27,24 @@ class ActorVerificationDecision:
 def _decide_actor_verification(
     candidate_tasks: list[Task],
 ) -> list[ActorVerificationDecision]:
-    """`status:queued`を付与したactorのリポジトリ権限を判定する（読み取りのみ）。"""
+    """`status:queued`を付与したactorのリポジトリ権限を判定する（読み取りのみ）。
+
+    #208: actorを特定できない・権限判定でエラーが発生したタスクは、サイクル全体を
+    停止させず、安全側（未認可）として扱い次のタスクの判定を継続する。
+    """
     decisions = []
     for task in candidate_tasks:
-        actor = github.get_label_actor(task.issue_number, "status:queued")
-        permission = github.get_actor_permission(actor)
+        actor = ""
+        try:
+            actor = github.get_label_actor(task.issue_number, "status:queued")
+            permission = github.get_actor_permission(actor)
+        except Exception as exc:
+            print(
+                f"Warning: actor検証に失敗しました (issue #{task.issue_number}, "
+                f"actor={actor!r}): {exc}. 未認可として扱います。",
+                file=sys.stderr,
+            )
+            permission = "none"
         decisions.append(
             ActorVerificationDecision(
                 task=task,
