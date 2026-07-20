@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from orchestune import github
@@ -473,19 +474,45 @@ def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
         external_url=active.external_url,
         branch_name=active.branch,
         issue_number=active.issue_number,
+        started_at=active.started_at,
     )
+
+
+def _parse_github_timestamp(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _is_stale_closed_pr_for_active(pr: github.PrRecord, active: ActiveWorktree) -> bool:
+    if pr.state != "CLOSED" or active.started_at is None:
+        return False
+    created_at = _parse_github_timestamp(pr.created_at)
+    return created_at is not None and created_at < active.started_at
 
 
 def _cached_pr_completion_status(active: ActiveWorktree, ctx: CycleContext) -> str:
     handle = _active_dispatch_handle(active)
+    # `ctx.prs` is typically populated from open PRs for lock/CI scans.  Abandoned
+    # detection must also see closed-unmerged PRs, so query all PR states here.
+    try:
+        candidate_prs = github.list_prs(state="all")
+    except Exception:
+        candidate_prs = ctx.prs
     matching_prs = [
         pr
-        for pr in ctx.prs
-        if (handle.branch_name is not None and pr.head_ref == handle.branch_name)
-        or (
-            handle.issue_number is not None
-            and handle.issue_number in pr.closes_issue_numbers
+        for pr in candidate_prs
+        if (
+            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+            or (
+                handle.issue_number is not None
+                and handle.issue_number in pr.closes_issue_numbers
+            )
         )
+        and not _is_stale_closed_pr_for_active(pr, active)
     ]
     if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
         return "completed"
@@ -667,13 +694,11 @@ def _rule_completed(
         if completion_status != "completed":
             return None
     else:
-        cached_pr_status = _cached_pr_completion_status(active, ctx)
-        if cached_pr_status == "abandoned" and not is_process_alive(active.pid):
-            return _abandoned_worktree_outcome(ctx, key, active, active_task)
-        if cached_pr_status != "completed" and not _is_worktree_complete(
-            active, ctx.config
-        ):
+        if not _is_worktree_complete(active, ctx.config):
             return None
+        cached_pr_status = _cached_pr_completion_status(active, ctx)
+        if cached_pr_status == "abandoned":
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
 
     completion_event = _finalize_completed_worktree(
         completion_active, active_task, ctx.config
