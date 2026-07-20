@@ -78,6 +78,7 @@ def parse_task_from_issue(
                 pass
 
     priority = "medium"
+    has_unknown_priority_label = False
     risk = False
     progress_partial = False
     for label in issue.labels:
@@ -86,6 +87,7 @@ def parse_task_from_issue(
             if candidate in BASE_PRIORITY:
                 priority = candidate
             else:
+                has_unknown_priority_label = True
                 print(
                     f"Warning: Unknown priority label '{label}' on issue "
                     f"#{issue.number}; falling back to 'medium'.",
@@ -95,6 +97,9 @@ def parse_task_from_issue(
             risk = True
         elif label == "progress:partial":
             progress_partial = True
+
+    if has_unknown_priority_label:
+        priority = "medium"
 
     parent_number = None
     parent_state = None
