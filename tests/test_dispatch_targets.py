@@ -12,6 +12,7 @@ from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
     DispatchHandle,
+    DispatchTarget,
     LocalProcessDispatchTarget,
     build_dispatch_target,
     default_dry_run_command_builder,
@@ -20,6 +21,29 @@ from orchestune.dispatch_targets import (
 )
 from orchestune.dispatcher import Task
 from orchestune.github import PrRecord
+
+
+class _IsCompleteOnlyTarget(DispatchTarget):
+    def __init__(self, complete: bool):
+        self.complete = complete
+
+    def launch(self, task: Task, branch_name: str, worktree_path):
+        return DispatchHandle(branch_name=branch_name)
+
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        return self.complete
+
+
+class TestDispatchTargetContract:
+    def test_default_completion_status_delegates_to_concrete_is_complete(self):
+        assert (
+            _IsCompleteOnlyTarget(True).completion_status(DispatchHandle())
+            == "completed"
+        )
+        assert (
+            _IsCompleteOnlyTarget(False).completion_status(DispatchHandle())
+            == "pending"
+        )
 
 
 def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):
