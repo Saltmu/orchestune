@@ -2073,9 +2073,9 @@ class TestBranchStacking:
 
         # プロセスがkillされ、rebaseされ、再起動されたことを確認
         mock_kill.assert_any_call(12345, 9)  # SIGKILL (or SIGTERM)
-        # rebase実行の引数チェック
-        rebase_call = mock_run.call_args_list[1]
-        assert "rebase" in rebase_call.args[0]
+        # rebase実行の引数チェック（#213: rebase前にWIP退避チェックのgit statusが
+        # 挟まるため、"rebase"を含む呼び出しを探して検証する）
+        rebase_call = next(c for c in mock_run.call_args_list if "rebase" in c.args[0])
         assert "claude/issue-1-task-1" in rebase_call.args[0]
 
         # 新しいPIDで状態が保存されていることを確認
@@ -2326,11 +2326,15 @@ class TestBranchStacking:
                 ProcessLookupError() if sig == 0 else None
             )
             # 1. git merge-base -> 戻り値 1
-            # 2. git rebase -> 戻り値 128 (競合発生で失敗)
-            # 3. git rebase --abort -> 戻り値 0
+            # 2. git status --porcelain (#213: rebase前のWIP退避チェック) -> clean
+            # 3. git rebase -> 戻り値 128 (競合発生で失敗)
+            # 4. git rebase --abort -> 戻り値 0
             mock_run.side_effect = [
                 subprocess.CompletedProcess(
                     args=[], returncode=1, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
                 ),
                 subprocess.CalledProcessError(returncode=128, cmd="git rebase"),
                 subprocess.CompletedProcess(
@@ -2341,7 +2345,7 @@ class TestBranchStacking:
             run_dispatch_cycle(config)
 
         # rebase abort が呼ばれたこと
-        abort_call = mock_run.call_args_list[2]
+        abort_call = mock_run.call_args_list[3]
         assert "--abort" in abort_call.args[0]
 
         # 安全停止（ラベル遷移）が行われたこと

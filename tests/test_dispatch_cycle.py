@@ -506,7 +506,9 @@ class TestProcessActiveWorktrees:
 
             if "rebase" in args:
                 raise subprocess.CalledProcessError(1, args)
-            return subprocess.CompletedProcess(args, 0)
+            # #213: rebase前のWIP退避チェック(`git status --porcelain`)がcleanと
+            # 判定されるよう、空のstdoutを返す。
+            return subprocess.CompletedProcess(args, 0, stdout="")
 
         with (
             patch(

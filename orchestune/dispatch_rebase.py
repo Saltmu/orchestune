@@ -319,6 +319,24 @@ def _apply_auto_rebase(
         except Exception:
             pass
 
+    # #213: dirtyなworktreeのままrebaseすると構造的に必ず失敗し、未コミットの
+    # エージェント作業が退避されないまま失われる。rebase前にWIP退避を確定させる。
+    backup_error = dispatch_gc.backup_wip_commit(
+        active.worktree_path, "WIP: backup by Orchestune auto-rebase"
+    )
+    if backup_error is not None:
+        github.remove_label(active.issue_number, "status:in-progress")
+        github.add_label(active.issue_number, "status:manual-merge-required")
+        github.add_comment(
+            active.issue_number,
+            "自動リベース前のWIPバックアップコミットの作成に失敗しました。\n"
+            f"未コミットの作業データが worktree（{active.worktree_path}）に残っている"
+            "可能性があるため、削除・再作成される前に手動で確認してください。\n"
+            f"エラー詳細:\n```\n{backup_error}\n```",
+        )
+        del run_state.active_worktrees[key]
+        return
+
     resolved_parent = resolve_local_or_remote_branch(
         active.worktree_path,
         parent_branch,
