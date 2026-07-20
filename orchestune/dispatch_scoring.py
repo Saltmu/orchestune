@@ -78,15 +78,28 @@ def parse_task_from_issue(
                 pass
 
     priority = "medium"
+    has_unknown_priority_label = False
     risk = False
     progress_partial = False
     for label in issue.labels:
         if label.startswith("priority:"):
-            priority = label.split(":", 1)[1]
+            candidate = label.split(":", 1)[1]
+            if candidate in BASE_PRIORITY:
+                priority = candidate
+            else:
+                has_unknown_priority_label = True
+                print(
+                    f"Warning: Unknown priority label '{label}' on issue "
+                    f"#{issue.number}; falling back to 'medium'.",
+                    file=sys.stderr,
+                )
         elif label == "risk:flagged":
             risk = True
         elif label == "progress:partial":
             progress_partial = True
+
+    if has_unknown_priority_label:
+        priority = "medium"
 
     parent_number = None
     parent_state = None
@@ -151,7 +164,7 @@ def _wait_seconds(task: Task, run_state: RunState, now: float) -> float:
 def compute_priority_score(
     task: Task, all_candidate_tasks: list[Task], run_state: RunState, now: float
 ) -> float:
-    base_priority = BASE_PRIORITY[task.priority]
+    base_priority = BASE_PRIORITY.get(task.priority, BASE_PRIORITY["medium"])
     waits = [_wait_seconds(t, run_state, now) for t in all_candidate_tasks]
     avg_wait = sum(waits) / len(waits) if waits else 0.0
 
