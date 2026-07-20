@@ -23,6 +23,7 @@ from orchestune.github import (
     is_branch_merged_into,
     list_issues_by_label,
     list_open_prs,
+    list_prs,
     list_remote_branches,
     list_sub_issues,
     merge_pull_request,
@@ -525,6 +526,36 @@ class TestIsBranchMergedInto:
 
 
 class TestListOpenPrs:
+    def test_list_prs_can_include_all_pr_states(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+
+            assert list_prs(state="all") == []
+
+        called_args = mock_run.call_args.args[0]
+        assert called_args[called_args.index("--state") + 1] == "all"
+        assert "state" in called_args[called_args.index("--json") + 1]
+
+    def test_list_prs_records_each_pr_state(self):
+        payload = (
+            '[{"number": 5, "headRefName": "feat/x", "state": "MERGED"},'
+            '{"number": 6, "headRefName": "feat/y", "state": "CLOSED"}]'
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=payload, stderr=""
+            )
+
+            prs = list_prs(state="all")
+
+        assert [pr.state for pr in prs] == ["MERGED", "CLOSED"]
+
+    def test_list_prs_rejects_unsupported_state(self):
+        with pytest.raises(ValueError, match="Unsupported PR state"):
+            list_prs(state="draft")
+
     def test_fetches_pr_list_and_per_pr_files(self):
         list_payload = (
             "["

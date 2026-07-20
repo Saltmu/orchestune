@@ -139,6 +139,30 @@ class TestCollectZombiesAndTimeouts:
         mock_remove_label.assert_called_once_with(280, "status:in-progress")
         mock_add_label.assert_called_once_with(280, "status:queued")
 
+    def test_held_worktree_is_not_reclaimed(self):
+        """同一サイクルで人間確認待ちになったworktreeはGC対象から除外する。"""
+        active = _active(pid=None)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, zombie_gc=True)
+
+        with (
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            events = _collect_zombies_and_timeouts(
+                run_state,
+                {},
+                config,
+                held_worktree_paths={active.worktree_path},
+            )
+
+        assert events == []
+        assert run_state.active_worktrees == {"280": active}
+        mock_remove_label.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_add_comment.assert_not_called()
+
 
 class TestWorktreeHasUncommittedChanges:
     """#193: worktree削除前の未コミット変更確認（安全側フォールバック）。"""
@@ -628,6 +652,43 @@ class TestRuleCompleted:
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         mock_list_prs.assert_called_once_with(state="all")
+        mock_remove.assert_called_once_with(active.worktree_path)
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        mock_add_comment.assert_called_once()
+
+    def test_closed_unmerged_cloud_pr_is_requeued_without_completing_dependency(
+        self,
+    ):
+        active = _active(external_id="session-1")
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+
+        with (
+            patch.object(
+                ctx.config.dispatch_target,
+                "completion_status",
+                return_value="abandoned",
+                create=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.terminal is True
+        assert outcome.completed_subtask_id is None
+        assert outcome.completion_event["action"] == "abandoned_pr_requeued"
+        assert "1" not in ctx.run_state.active_worktrees
         mock_remove.assert_called_once_with(active.worktree_path)
         mock_remove_label.assert_called_once_with(280, "status:in-progress")
         mock_add_label.assert_called_once_with(280, "status:queued")
