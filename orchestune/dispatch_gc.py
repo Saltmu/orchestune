@@ -479,12 +479,52 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
             issue_number=active.issue_number,
         )
         assert config.dispatch_target is not None
-        return config.dispatch_target.is_complete(handle)
+        return config.dispatch_target.completion_status(handle) == "completed"
     # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
     # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
     if active.started_at is None:
         return False
     return not is_process_alive(active.pid)
+
+
+def _cloud_worktree_completion_status(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> str:
+    """Return the tri-state lifecycle result for an externally dispatched task."""
+    handle = DispatchHandle(
+        pid=active.pid,
+        external_id=active.external_id,
+        external_url=active.external_url,
+        branch_name=active.branch,
+        issue_number=active.issue_number,
+    )
+    assert config.dispatch_target is not None
+    return config.dispatch_target.completion_status(handle)
+
+
+def _finalize_abandoned_cloud_worktree(
+    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
+) -> dict:
+    """Requeue a task whose PR was closed without merge, without marking it done."""
+    event = {
+        "issue_number": active.issue_number,
+        "subtask_id": active_task.subtask_id if active_task else "",
+        "worktree_path": active.worktree_path,
+    }
+    if worktree_has_uncommitted_changes(active.worktree_path):
+        event["action"] = "completion_skipped_dirty_worktree"
+        return event
+    if config.apply:
+        remove_worktree(active.worktree_path)
+        github.remove_label(active.issue_number, "status:in-progress")
+        github.add_label(active.issue_number, "status:queued")
+        github.add_comment(
+            active.issue_number,
+            "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
+            "GCによりタスクを再キューイング（status:queued）しました。",
+        )
+    event["action"] = "abandoned_pr_requeued"
+    return event
 
 
 def _rule_not_needed(
@@ -583,6 +623,23 @@ def _rule_completed(
             external_id=f"recovered-pr:{recovery_pr.number}",
             external_url=f"PR#{recovery_pr.number}",
         )
+    elif active.external_id is not None:
+        completion_status = _cloud_worktree_completion_status(active, ctx.config)
+        if completion_status == "abandoned":
+            completion_event = _finalize_abandoned_cloud_worktree(
+                active, active_task, ctx.config
+            )
+            if (
+                completion_event["action"] == "abandoned_pr_requeued"
+                and ctx.config.apply
+            ):
+                del ctx.run_state.active_worktrees[key]
+            return ActiveWorktreeRuleOutcome(
+                completion_event=completion_event,
+                terminal=True,
+            )
+        if completion_status != "completed":
+            return None
     elif not _is_worktree_complete(active, ctx.config):
         return None
 
