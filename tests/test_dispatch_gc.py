@@ -608,6 +608,10 @@ class TestRuleCompleted:
         with (
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
+                "orchestune.dispatch_gc.github.list_prs",
+                return_value=ctx.prs,
+            ) as mock_list_prs,
+            patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
@@ -623,10 +627,52 @@ class TestRuleCompleted:
         assert outcome.completed_subtask_id is None
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
+        mock_list_prs.assert_called_once_with(state="all")
         mock_remove.assert_called_once_with(active.worktree_path)
         mock_remove_label.assert_called_once_with(280, "status:in-progress")
         mock_add_label.assert_called_once_with(280, "status:queued")
         mock_add_comment.assert_called_once()
+
+    def test_local_pr_waits_for_process_before_using_open_pr_as_completion(self):
+        active = _active(pid=123, started_at=1_699_999_000.0)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        with (
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc.github.list_prs") as mock_list_prs,
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is None
+        mock_list_prs.assert_not_called()
+
+    def test_local_closed_pr_created_before_launch_is_ignored_as_stale(self):
+        active = _active(pid=123, started_at=1_800_000_000.0)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        stale_pr = PrRecord(
+            number=210,
+            head_ref=active.branch,
+            changed_files=(),
+            closes_issue_numbers=(active.issue_number,),
+            created_at="2026-01-01T00:00:00Z",
+            state="CLOSED",
+        )
+        with (
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[stale_pr]),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completed_no_commits"},
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.completion_event["action"] == "completed_no_commits"
+        assert "1" not in ctx.run_state.active_worktrees
 
     def test_pending_cloud_completion_status_returns_none(self):
         active = _active(external_id="session-1")
@@ -651,6 +697,7 @@ class TestRuleCompleted:
                 "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=True,
             ),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={"action": "completion_skipped_dirty_worktree"},
@@ -674,6 +721,7 @@ class TestRuleCompleted:
                 "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=True,
             ),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={"action": "completed", "commit_sha": "abc123d"},
