@@ -459,10 +459,16 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
     """#232: `base`と共通の祖先を持たない(orphanな)ブランチとの3点diffは
     `fatal: no merge base`でexit 128になる。dispatch-cycle全体をクラッシュ
     させないよう、footprint差分なし（ロック対象外）として扱う。"""
-    _validate_ref_name(branch)
-    _validate_ref_name(base)
     try:
+        _validate_ref_name(branch)
+        _validate_ref_name(base)
         stdout = _run(["git", "diff", "--name-only", f"{base}...{branch}"])
+    except ValueError as exc:
+        print(
+            f"Warning: invalid ref name for branch_changed_files: {exc}",
+            file=sys.stderr,
+        )
+        return []
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.strip() if exc.stderr else str(exc)
         print(
