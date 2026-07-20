@@ -867,7 +867,7 @@ class TestIsWorktreeComplete:
 
     def test_passes_issue_number_to_dispatch_target_handle(self, tmp_path):
         fake_target = MagicMock()
-        fake_target.is_complete.return_value = True
+        fake_target.completion_status.return_value = "completed"
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=fake_target,
@@ -886,7 +886,7 @@ class TestIsWorktreeComplete:
         result = _is_worktree_complete(active, config)
 
         assert result is True
-        handle = fake_target.is_complete.call_args.args[0]
+        handle = fake_target.completion_status.call_args.args[0]
         assert handle.issue_number == 218
         assert handle.branch_name == "claude/issue-218-review-history-backend-api"
 
@@ -907,7 +907,7 @@ class TestIsWorktreeComplete:
         )
 
         with (
-            patch("orchestune.dispatch_targets.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_targets.github.list_prs", return_value=[]),
             patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive,
         ):
             assert _is_worktree_complete(active, config) is False
@@ -1119,7 +1119,7 @@ class TestRunDispatchCycleCompletion:
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
         dispatch_target = MagicMock()
-        dispatch_target.is_complete.return_value = True
+        dispatch_target.completion_status.return_value = "completed"
         config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
         in_progress_issue = _issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
@@ -1164,7 +1164,7 @@ class TestRunDispatchCycleCompletion:
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
         dispatch_target = MagicMock()
-        dispatch_target.is_complete.return_value = True
+        dispatch_target.completion_status.return_value = "completed"
         config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
         in_progress_issue = _issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
