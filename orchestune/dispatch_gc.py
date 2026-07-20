@@ -15,10 +15,7 @@ from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
-from orchestune.dispatch_targets import (
-    DispatchHandle,
-    classify_task_pr_completion_status,
-)
+from orchestune.dispatch_targets import DispatchHandle
 
 
 def is_process_alive(pid: int | None) -> bool:
@@ -480,7 +477,21 @@ def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
 
 
 def _cached_pr_completion_status(active: ActiveWorktree, ctx: CycleContext) -> str:
-    return classify_task_pr_completion_status(_active_dispatch_handle(active), ctx.prs)
+    handle = _active_dispatch_handle(active)
+    matching_prs = [
+        pr
+        for pr in ctx.prs
+        if (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+        or (
+            handle.issue_number is not None
+            and handle.issue_number in pr.closes_issue_numbers
+        )
+    ]
+    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
+        return "completed"
+    if any(pr.state == "CLOSED" for pr in matching_prs):
+        return "abandoned"
+    return "pending"
 
 
 def _cloud_worktree_completion_status(
@@ -494,7 +505,7 @@ def _cloud_worktree_completion_status(
     return "completed" if config.dispatch_target.is_complete(handle) else "pending"
 
 
-def _finalize_abandoned_worktree(
+def _finalize_abandoned_cloud_worktree(
     active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
 ) -> dict:
     """Requeue a task whose PR was closed without merge, without marking it done."""
@@ -525,7 +536,11 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
     それ以外（従来通りのローカルsubprocess起動）は`is_process_alive`ベースのまま。"""
     if active.external_id is not None:
         assert config.dispatch_target is not None
-        return config.dispatch_target.is_complete(_active_dispatch_handle(active))
+        handle = _active_dispatch_handle(active)
+        status = config.dispatch_target.completion_status(handle)
+        if isinstance(status, str):
+            return status == "completed"
+        return config.dispatch_target.is_complete(handle)
     # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
     # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
     if active.started_at is None:
@@ -615,7 +630,9 @@ def _abandoned_worktree_outcome(
     active: ActiveWorktree,
     active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome:
-    completion_event = _finalize_abandoned_worktree(active, active_task, ctx.config)
+    completion_event = _finalize_abandoned_cloud_worktree(
+        active, active_task, ctx.config
+    )
     if completion_event["action"] == "abandoned_pr_requeued" and ctx.config.apply:
         del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
