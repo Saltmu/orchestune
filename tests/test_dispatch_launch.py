@@ -235,6 +235,83 @@ class TestApplyTaskLaunches:
         label_calls = [
             (call.args[0], call.args[1]) for call in mock_add_label.call_args_list
         ]
-        assert (2, "status:blocked") in label_calls
+        assert (2, "status:blocked-human-review") in label_calls
         assert mock_add_comment.called
         assert mock_add_comment.call_args[0][0] == 2
+
+    def test_invalid_subtask_id_with_resolved_dependency_is_not_requeued_on_next_cycle(
+        self, tmp_path
+    ):
+        """不正なsubtask_idを持つタスクが解決済み依存関係を持っていても、1サイクル目で
+        status:blocked-human-reviewに遷移し、2サイクル目以降にstatus:queuedへ自動昇格
+        （再キュー）されないことを検証する。"""
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_cycle import _decide_blocked_promotions
+        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        # 解決済みの依存先dep-taskを持つ不正タスク(issue #2)
+        bad_task = _task(2, subtask_id="invalid task@")
+        bad_task = Task(
+            issue_number=2,
+            subtask_id="invalid task@",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2023-01-01T00:00:00+00:00",
+            depends_on=("dep-task",),
+            yaml_error=False,
+        )
+
+        plans = [
+            TaskLaunchPlan(
+                bad_task, "claude/issue-2-invalid task@", None, "origin/main"
+            ),
+        ]
+
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            run_state_path="dummy.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+
+        added_labels = []
+
+        def fake_add_label(issue_num, label):
+            added_labels.append((issue_num, label))
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.github.add_label", side_effect=fake_add_label),
+            patch("orchestune.github.add_comment"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            selected = _apply_task_launches(plans, run_state, 1000.0, config)
+
+        assert selected == []
+        assert (2, "status:blocked-human-review") in added_labels
+
+        # 2サイクル目: GitHub側は status:blocked-human-review ラベルが付与された状態
+        # blocked_issues には status:blocked-human-review のIssueは入らない
+        blocked_issues_cycle2 = []
+        promotable = _decide_blocked_promotions(
+            blocked_issues=blocked_issues_cycle2,
+            done_issues=[],
+            completed_subtask_ids={"dep-task"},
+            tasks_by_issue={2: bad_task},
+        )
+        assert bad_task not in promotable
