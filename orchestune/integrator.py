@@ -466,6 +466,11 @@ class LabelIncludedStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> dict:
         if not ctx.config.apply:
             return {"status": "success"}
+        if ctx.config.parent_issue_number is not None:
+            # #209: parent_issue_number指定時（自動マージ経路）は、
+            # AutoMergeChildIntegrationStepがマージ成功直後・クローズ試行前に
+            # 既に付与済みのため、ここでは何もしない（二重付与の回避）。
+            return {"status": "success", "newly_included": ctx.newly_included}
         if (
             ctx.failed_tasks
             or not ctx.merged_tasks
@@ -473,29 +478,33 @@ class LabelIncludedStep(IntegrationComponent):
         ):
             return {"status": ctx.status}
 
-        newly_included = self._mark_newly_included(ctx)
+        newly_included = _mark_tasks_included(ctx)
         ctx.newly_included = newly_included
         return {"status": "success", "newly_included": newly_included}
 
-    def _mark_newly_included(self, ctx: IntegrationContext) -> list[str]:
-        newly_included: list[str] = []
-        task_by_subtask_id = {
-            t.subtask_id: t for t in ctx.active_done_tasks if t.subtask_id
-        }
-        for subtask_id in ctx.merged_tasks:
-            task = task_by_subtask_id.get(subtask_id)
-            if task is None or "integration:included" in task.status_labels:
-                continue
-            try:
-                github.add_label(task.issue_number, "integration:included")
-                newly_included.append(subtask_id)
-            except Exception as e:
-                print(
-                    "Warning: Failed to add integration:included label to "
-                    f"issue #{task.issue_number}: {e}",
-                    file=sys.stderr,
-                )
-        return newly_included
+
+def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
+    """`ctx.merged_tasks`のうち、まだ`integration:included`ラベルを持たない
+    タスクへラベルを付与する。`AutoMergeChildIntegrationStep`と
+    `LabelIncludedStep`の両方から呼び出される共通ロジック。"""
+    newly_included: list[str] = []
+    task_by_subtask_id = {
+        t.subtask_id: t for t in ctx.active_done_tasks if t.subtask_id
+    }
+    for subtask_id in ctx.merged_tasks:
+        task = task_by_subtask_id.get(subtask_id)
+        if task is None or "integration:included" in task.status_labels:
+            continue
+        try:
+            github.add_label(task.issue_number, "integration:included")
+            newly_included.append(subtask_id)
+        except Exception as e:
+            print(
+                "Warning: Failed to add integration:included label to "
+                f"issue #{task.issue_number}: {e}",
+                file=sys.stderr,
+            )
+    return newly_included
 
 
 class AutoMergeChildIntegrationStep(IntegrationComponent):
@@ -531,11 +540,19 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 "auto_merged": False,
             }
 
+        # #209: マージ成功が確定した時点でクローズ試行より前に
+        # `integration:included`を記帳する。以後クローズ処理やプロセスが
+        # 失敗しても、次サイクルのRetryChildIssueCloseStepがこのラベルを
+        # 信頼できる回復シグナルとしてクローズを再試行できる。
+        newly_included = _mark_tasks_included(ctx)
+        ctx.newly_included = newly_included
+
         closed_issues = self._close_merged_child_issues(ctx)
         return {
             "status": "success",
             "auto_merged": True,
             "closed_issues": closed_issues,
+            "newly_included": newly_included,
         }
 
     def _comment_on_merge_failure(
