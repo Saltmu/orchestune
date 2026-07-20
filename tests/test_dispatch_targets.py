@@ -218,7 +218,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_is_complete_true_when_pr_open_for_branch(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_open_prs",
+            "orchestune.dispatch_targets.github.list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
             ],
@@ -231,7 +231,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_is_complete_false_when_no_matching_pr(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_open_prs",
+            "orchestune.dispatch_targets.github.list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="other-branch", changed_files=())
             ],
@@ -250,7 +250,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         PRのclosingIssuesReferences経由で完了を検知できる。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_open_prs",
+            "orchestune.dispatch_targets.github.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -270,7 +270,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_is_complete_false_when_neither_branch_nor_issue_match(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_open_prs",
+            "orchestune.dispatch_targets.github.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -345,7 +345,7 @@ class TestCodexCloudDispatchTarget:
     def test_is_complete_when_pr_is_open_for_task_branch(self):
         target = CodexCloudDispatchTarget("env_123")
         with patch(
-            "orchestune.dispatch_targets.github.list_open_prs",
+            "orchestune.dispatch_targets.github.list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
             ],

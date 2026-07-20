@@ -20,9 +20,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from orchestune import github
+from orchestune.github import PrRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatcher import Task
@@ -110,9 +111,46 @@ class DispatchTarget(ABC):
     ) -> DispatchHandle:
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。"""
 
-    @abstractmethod
     def is_complete(self, handle: DispatchHandle) -> bool:
         """`launch`で起動した実行が完了しているかどうかを判定する。"""
+        return self.completion_status(handle) == "completed"
+
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        """Return a lifecycle status; local targets only expose pending/completed."""
+        return "completed" if self.is_complete(handle) else "pending"
+
+
+def classify_task_pr_completion_status(
+    handle: DispatchHandle, prs: list[PrRecord]
+) -> Literal["pending", "completed", "abandoned"]:
+    """Classify matching task PRs without treating rejected PRs as done."""
+    if handle.branch_name is None and handle.issue_number is None:
+        return "pending"
+    matching_prs = [
+        pr
+        for pr in prs
+        if (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+        or (
+            handle.issue_number is not None
+            and handle.issue_number in pr.closes_issue_numbers
+        )
+    ]
+    states = {pr.state.upper() for pr in matching_prs}
+    if states & {"OPEN", "MERGED"}:
+        return "completed"
+    if "CLOSED" in states:
+        return "abandoned"
+    return "pending"
+
+
+def _task_pr_completion_status(
+    handle: DispatchHandle,
+) -> Literal["pending", "completed", "abandoned"]:
+    if handle.branch_name is None and handle.issue_number is None:
+        return "pending"
+    return classify_task_pr_completion_status(handle, github.list_prs(state="all"))
 
 
 def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str]:
@@ -276,20 +314,11 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         assert last_error is not None
         raise last_error
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
-        """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
-        ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
-        （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
-        if handle.branch_name is None and handle.issue_number is None:
-            return False
-        prs = github.list_open_prs()
-        if handle.branch_name is not None and any(
-            pr.head_ref == handle.branch_name for pr in prs
-        ):
-            return True
-        if handle.issue_number is not None:
-            return any(handle.issue_number in pr.closes_issue_numbers for pr in prs)
-        return False
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
+        return _task_pr_completion_status(handle)
 
 
 class CodexCloudDispatchTarget(DispatchTarget):
@@ -351,10 +380,10 @@ class CodexCloudDispatchTarget(DispatchTarget):
             branch_name=branch_name,
         )
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
-        if handle.branch_name is None:
-            return False
-        return any(pr.head_ref == handle.branch_name for pr in github.list_open_prs())
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        return _task_pr_completion_status(handle)
 
 
 def build_dispatch_target(

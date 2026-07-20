@@ -590,6 +590,58 @@ class TestDecideStaleActiveEntry:
 
 
 class TestRuleCompleted:
+    def test_closed_unmerged_local_pr_is_requeued_without_completing_dependency(self):
+        active = _active(pid=123, started_at=1_699_999_000.0)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        ctx.prs = [
+            PrRecord(
+                number=210,
+                head_ref=active.branch,
+                changed_files=(),
+                closes_issue_numbers=(active.issue_number,),
+                state="CLOSED",
+            )
+        ]
+        with (
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.terminal is True
+        assert outcome.completed_subtask_id is None
+        assert outcome.completion_event["action"] == "abandoned_pr_requeued"
+        assert "1" not in ctx.run_state.active_worktrees
+        mock_remove.assert_called_once_with(active.worktree_path)
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        mock_add_comment.assert_called_once()
+
+    def test_pending_cloud_completion_status_returns_none(self):
+        active = _active(external_id="session-1")
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        with patch.object(
+            ctx.config.dispatch_target,
+            "completion_status",
+            return_value="pending",
+            create=True,
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is None
+
     def test_dirty_worktree_is_terminal(self):
         active = _active()
         task = _task()

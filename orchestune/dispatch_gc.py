@@ -15,7 +15,10 @@ from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
-from orchestune.dispatch_targets import DispatchHandle
+from orchestune.dispatch_targets import (
+    DispatchHandle,
+    classify_task_pr_completion_status,
+)
 
 
 def is_process_alive(pid: int | None) -> bool:
@@ -466,20 +469,63 @@ def _collect_zombies_and_timeouts(
     return events
 
 
+def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
+    return DispatchHandle(
+        pid=active.pid,
+        external_id=active.external_id,
+        external_url=active.external_url,
+        branch_name=active.branch,
+        issue_number=active.issue_number,
+    )
+
+
+def _cached_pr_completion_status(active: ActiveWorktree, ctx: CycleContext) -> str:
+    return classify_task_pr_completion_status(_active_dispatch_handle(active), ctx.prs)
+
+
+def _cloud_worktree_completion_status(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> str:
+    assert config.dispatch_target is not None
+    handle = _active_dispatch_handle(active)
+    status = config.dispatch_target.completion_status(handle)
+    if isinstance(status, str):
+        return status
+    return "completed" if config.dispatch_target.is_complete(handle) else "pending"
+
+
+def _finalize_abandoned_worktree(
+    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
+) -> dict:
+    """Requeue a task whose PR was closed without merge, without marking it done."""
+    event = {
+        "issue_number": active.issue_number,
+        "subtask_id": active_task.subtask_id if active_task else "",
+        "worktree_path": active.worktree_path,
+    }
+    if worktree_has_uncommitted_changes(active.worktree_path):
+        event["action"] = "completion_skipped_dirty_worktree"
+        return event
+    if config.apply:
+        remove_worktree(active.worktree_path)
+        github.remove_label(active.issue_number, "status:in-progress")
+        github.add_label(active.issue_number, "status:queued")
+        github.add_comment(
+            active.issue_number,
+            "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
+            "GCによりタスクを再キューイング（status:queued）しました。",
+        )
+    event["action"] = "abandoned_pr_requeued"
+    return event
+
+
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
     """#215: `external_id`が設定されている（ローカルpid以外でディスパッチされた）
     active worktreeは、設定されたdispatch_targetの`is_complete`に完了判定を委譲する。
     それ以外（従来通りのローカルsubprocess起動）は`is_process_alive`ベースのまま。"""
     if active.external_id is not None:
-        handle = DispatchHandle(
-            pid=active.pid,
-            external_id=active.external_id,
-            external_url=active.external_url,
-            branch_name=active.branch,
-            issue_number=active.issue_number,
-        )
         assert config.dispatch_target is not None
-        return config.dispatch_target.is_complete(handle)
+        return config.dispatch_target.is_complete(_active_dispatch_handle(active))
     # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
     # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
     if active.started_at is None:
@@ -563,6 +609,18 @@ def _rule_stale_entry(
     return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
 
 
+def _abandoned_worktree_outcome(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> ActiveWorktreeRuleOutcome:
+    completion_event = _finalize_abandoned_worktree(active, active_task, ctx.config)
+    if completion_event["action"] == "abandoned_pr_requeued" and ctx.config.apply:
+        del ctx.run_state.active_worktrees[key]
+    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
+
+
 def _rule_completed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
@@ -577,14 +635,28 @@ def _rule_completed(
         )
         if recovery_pr is None:
             return None
+        if recovery_pr.state.upper() == "CLOSED":
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
         completion_active = replace(
             active,
             branch=recovery_pr.head_ref,
             external_id=f"recovered-pr:{recovery_pr.number}",
             external_url=f"PR#{recovery_pr.number}",
         )
-    elif not _is_worktree_complete(active, ctx.config):
-        return None
+    elif active.external_id is not None:
+        completion_status = _cloud_worktree_completion_status(active, ctx.config)
+        if completion_status == "abandoned":
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
+        if completion_status != "completed":
+            return None
+    else:
+        cached_pr_status = _cached_pr_completion_status(active, ctx)
+        if cached_pr_status == "abandoned" and not is_process_alive(active.pid):
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
+        if cached_pr_status != "completed" and not _is_worktree_complete(
+            active, ctx.config
+        ):
+            return None
 
     completion_event = _finalize_completed_worktree(
         completion_active, active_task, ctx.config
