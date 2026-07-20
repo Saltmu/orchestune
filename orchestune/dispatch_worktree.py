@@ -13,6 +13,7 @@ try:
 except ImportError:
     fcntl = None  # type: ignore[assignment]
 
+from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import DispatchTarget
 from orchestune.github import _validate_ref_name
@@ -93,6 +94,34 @@ def create_worktree_and_launch(
 
             # 2. すでにディレクトリが存在する場合のクリーンアップ
             if worktree_path.exists():
+                # #213: 未コミットの変更が残ったまま削除すると、前回のエージェント
+                # 作業が黙って消失する。削除前にWIPコミットとして退避を試みる。
+                # `backup_wip_commit`はfail-closed（dirty判定自体に失敗した場合も
+                # 退避未完了扱い）なので、None以外が返れば削除せず起動を失敗させる。
+                backup_error = dispatch_gc.backup_wip_commit(
+                    worktree_path,
+                    "WIP: backup by Orchestune before worktree recreation",
+                )
+                if backup_error is not None:
+                    error_message = (
+                        f"Uncommitted changes in {worktree_path} could not be "
+                        f"backed up before recreation: {backup_error}"
+                    )
+                    print(
+                        f"Error: Failed to back up uncommitted changes for issue "
+                        f"#{task.issue_number} before recreation: {backup_error}",
+                        file=sys.stderr,
+                    )
+                    return LaunchResult(
+                        issue_number=task.issue_number,
+                        branch=branch_name,
+                        worktree_path=str(worktree_path),
+                        pid=None,
+                        launched=False,
+                        error_message=error_message,
+                        external_id=None,
+                        external_url=None,
+                    )
                 try:
                     shutil.rmtree(worktree_path)
                 except Exception:
