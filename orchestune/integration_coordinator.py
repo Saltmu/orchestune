@@ -225,6 +225,9 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
     - 1エントリの処理中の例外は他エントリの処理・状態保存を巻き込まない。
       失敗したエントリは警告ログを出したうえでpendingのまま保持し、次サイクルで
       自動的に再試行する。
+    - #226: 状態ファイルの保存はループ正常終了後に1回だけ行う。BaseException
+      （割り込み・強制終了）でループが中断した場合は保存に到達せず、元の全pending
+      エントリをそのまま温存して次回起動で全件を再処理させる。
     """
     state = load_not_needed_review_state(state_path)
     if not state.pending:
@@ -234,39 +237,44 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
     closed_summary: list[int] = []
     reopened_summary: list[int] = []
 
-    try:
-        for entry in state.pending:
-            try:
-                labels = github.get_issue_labels(entry.issue_number)
-            except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
-                print(
-                    f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
-                    file=sys.stderr,
-                )
-                still_pending.append(entry)
-                continue
+    for entry in state.pending:
+        try:
+            labels = github.get_issue_labels(entry.issue_number)
+        except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
+            print(
+                f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
+                file=sys.stderr,
+            )
+            still_pending.append(entry)
+            continue
 
-            try:
-                if NOT_NEEDED_VERIFIED_LABEL in labels:
-                    _close_verified_issue(entry.issue_number)
-                    github.remove_label(entry.issue_number, NOT_NEEDED_VERIFIED_LABEL)
-                    closed_summary.append(entry.issue_number)
-                elif NOT_NEEDED_REJECTED_LABEL in labels:
-                    github.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
-                    reopened_summary.append(entry.issue_number)
-                else:
-                    still_pending.append(entry)
-            except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
-                print(
-                    f"Warning: failed to finalize not-needed review for issue "
-                    f"{entry.issue_number}: {exc}",
-                    file=sys.stderr,
-                )
+        try:
+            if NOT_NEEDED_VERIFIED_LABEL in labels:
+                _close_verified_issue(entry.issue_number)
+                github.remove_label(entry.issue_number, NOT_NEEDED_VERIFIED_LABEL)
+                closed_summary.append(entry.issue_number)
+            elif NOT_NEEDED_REJECTED_LABEL in labels:
+                github.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
+                reopened_summary.append(entry.issue_number)
+            else:
                 still_pending.append(entry)
-    finally:
-        save_not_needed_review_state(
-            NotNeededReviewState(pending=still_pending), state_path
-        )
+        except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
+            print(
+                f"Warning: failed to finalize not-needed review for issue "
+                f"{entry.issue_number}: {exc}",
+                file=sys.stderr,
+            )
+            still_pending.append(entry)
+
+    # #226: ループ内の通常のExceptionはすべて上の内側try/exceptで捕捉済みのため、
+    # ここに到達した時点でstill_pendingは全エントリをreconcile済みである。保存を
+    # try/finallyに入れると、finallyが実際に発火するのはBaseException（割り込み・
+    # 強制終了）時だけで、その際に未処理エントリを取りこぼしたstill_pendingを書き込み、
+    # 台帳を切り詰めてしまう（#205と同種の恒久リーク）。BaseException時は状態ファイルを
+    # 書き換えず、元の全pendingエントリを温存して次回起動で全件を再処理させる。
+    save_not_needed_review_state(
+        NotNeededReviewState(pending=still_pending), state_path
+    )
 
     return {
         "closed": closed_summary,
