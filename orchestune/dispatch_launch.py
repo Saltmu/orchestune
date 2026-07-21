@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -241,9 +242,17 @@ def _apply_task_launches(
     run_state: RunState,
     now: float,
     config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> list[Task]:
     """decide層が立てた起動計画に基づき、worktree作成・エージェント（LLM）の実起動
-    ・run_state/githubラベルの更新を行う。"""
+    ・run_state/githubラベルの更新を行う。
+
+    #225レビュー対応: ループ内・末尾のsave_run_state呼び出しには必ず
+    config.window_seconds/open_prsを渡す。ここで渡さないと、起動ループ途中の
+    プロセス異常終了時にディスクへ残る中間状態がデフォルトの24時間窓・
+    無保護のまま刈り込まれ、レート制限誤判定や重複起動誤判定を再発させる
+    （最終的な_finalize_launch側の再保存で通常は上書きされて隠れてしまう）。
+    """
     actually_selected = []
     for plan in plans:
         task = plan.task
@@ -296,7 +305,13 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_state,
         )
         run_state.launch_history.append(now)
-        save_run_state(run_state, config.run_state_path)
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            now=now,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
 
         if "status:queued" in task.status_labels:
             github.remove_label(task.issue_number, "status:queued")
@@ -305,7 +320,13 @@ def _apply_task_launches(
         github.add_label(task.issue_number, "status:in-progress")
         actually_selected.append(task)
 
-    save_run_state(run_state, config.run_state_path)
+    save_run_state(
+        run_state,
+        config.run_state_path,
+        now=now,
+        launch_window_seconds=config.window_seconds,
+        open_prs=open_prs,
+    )
     return actually_selected
 
 
@@ -316,10 +337,11 @@ def _launch_selected_tasks(
     run_state: RunState,
     now: float,
     config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> list[Task]:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     yaml_error_tasks = _decide_yaml_error_tasks(candidate_tasks)
     _apply_yaml_error_blocking(yaml_error_tasks)
 
     plans = _decide_task_launch_plan(selected, task_to_base_branch, config)
-    return _apply_task_launches(plans, run_state, now, config)
+    return _apply_task_launches(plans, run_state, now, config, open_prs=open_prs)

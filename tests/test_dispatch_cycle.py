@@ -7,6 +7,7 @@ from orchestune.dispatch_cycle import (
     _decide_blocked_promotions,
     _decide_external_lock_sync,
     _fetch_issues,
+    _finalize_launch,
     _group_by_status,
     _process_active_worktrees,
     _self_heal_run_state,
@@ -316,6 +317,37 @@ class TestSelfHealRunState:
 
         mock_list.assert_called_once_with("status:in-progress")
         mock_recover.assert_called_once_with(run_state, [], config)
+
+
+class TestFinalizeLaunch:
+    """#225レビュー対応: 起動確定時の永続化がconfig.window_secondsと現在のopen PR
+    一覧(ctx.prs)を後続の起動処理まで正しく伝播することを検証する。"""
+
+    def test_forwards_window_seconds_and_open_prs_to_launch_selected_tasks(
+        self, tmp_path
+    ):
+        from orchestune.github import PrRecord
+
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            window_seconds=172800,
+            apply=True,
+        )
+        pr = PrRecord(
+            number=1,
+            head_ref="claude/issue-1-task-a",
+            changed_files=(),
+            closes_issue_numbers=(1,),
+        )
+        ctx = _ctx(run_state=RunState(active_worktrees={}), prs=[pr], config=config)
+
+        with patch(
+            "orchestune.dispatch_cycle._launch_selected_tasks", return_value=[]
+        ) as mock_launch:
+            _finalize_launch([], {}, [], ctx, 1000.0, config)
+
+        assert mock_launch.call_args.kwargs.get("open_prs") == [pr]
 
 
 class TestProcessActiveWorktrees:

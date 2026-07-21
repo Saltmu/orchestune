@@ -581,6 +581,7 @@ def _finalize_launch(
         ctx.run_state,
         now,
         config,
+        open_prs=ctx.prs,
     )
     ctx.run_state.last_reconciled_at = now
     save_run_state(
