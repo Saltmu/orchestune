@@ -1,3 +1,6 @@
+import tempfile
+from pathlib import Path
+
 from orchestune.dispatch_cycle import CycleContext
 from orchestune.dispatch_launch import (
     _decide_duplicate_candidates,
@@ -8,6 +11,8 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import CompletedWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import PrRecord
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _ctx(**overrides):
@@ -21,7 +26,10 @@ def _ctx(**overrides):
         subtask_branch_map={},
         prs=[],
         pr_by_branch={},
-        config=DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+        config=DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        ),
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
@@ -61,7 +69,8 @@ class TestDecideTaskLaunchPlan:
     def test_uses_stack_base_branch_when_available(self):
         task = _task(1)
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         plans = _decide_task_launch_plan([task], {1: "claude/issue-0-task-0"}, config)
         assert len(plans) == 1
@@ -72,7 +81,8 @@ class TestDecideTaskLaunchPlan:
     def test_falls_back_to_origin_main_without_parent(self):
         task = _task(1)
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         plans = _decide_task_launch_plan([task], {}, config)
         assert plans[0].base_branch_for_launch is None
@@ -81,8 +91,8 @@ class TestDecideTaskLaunchPlan:
     def test_uses_parent_branch_when_configured(self):
         task = _task(1)
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             parent_issue_number=99,
         )
         plans = _decide_task_launch_plan([task], {}, config)
@@ -213,7 +223,7 @@ class TestApplyTaskLaunches:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json",
+            run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
         )
@@ -280,7 +290,7 @@ class TestApplyTaskLaunches:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json",
+            run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
         )

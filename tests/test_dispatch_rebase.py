@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 from unittest.mock import ANY, call, patch
 
 from orchestune.dag import FootprintConflict
@@ -12,6 +14,8 @@ from orchestune.dispatch_rebase import (
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):
@@ -372,7 +376,8 @@ class TestTryAutoRebase:
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
 
         with (
@@ -406,7 +411,8 @@ class TestTryAutoRebase:
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
 
         with (
@@ -457,8 +463,8 @@ class TestApplyAutoRebase:
             pid=222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
             apply=True,
         )
@@ -492,8 +498,8 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
             apply=True,
         )
@@ -534,8 +540,8 @@ class TestApplyAutoRebase:
             pid=222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
             apply=True,
         )
@@ -574,8 +580,8 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
             apply=True,
         )

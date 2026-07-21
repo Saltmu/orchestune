@@ -1,3 +1,4 @@
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -6,12 +7,16 @@ from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig, recover_run_state
 from orchestune.github import IssueRecord, PrRecord
 
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
 
 def test_recover_run_state_no_missing():
     # 欠損がない場合は modified が False であること
     run_state = RunState(active_worktrees={})
     in_progress = []
-    config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
+    config = DispatcherConfig(
+        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+    )
 
     modified = recover_run_state(run_state, in_progress, config)
     assert not modified
@@ -41,7 +46,9 @@ footprint:
         created_at="2026-07-10T12:00:00Z",
     )
     in_progress = [issue]
-    config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
+    config = DispatcherConfig(
+        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+    )
 
     # PRは存在しない
     mock_list_prs.return_value = []
@@ -58,7 +65,9 @@ footprint:
     active = run_state.active_worktrees["101"]
     assert active.issue_number == 101
     assert active.branch == "claude/issue-101-task-a"
-    assert active.worktree_path == "worktrees/claude-issue-101-task-a"
+    assert active.worktree_path == str(
+        tmp_path / "worktrees" / "claude-issue-101-task-a"
+    )
     assert active.declared_footprint == ("src/foo.py",)
     assert active.pid is None
     assert active.external_id is None
@@ -85,7 +94,9 @@ footprint: []
         created_at="2026-07-10T12:00:00Z",
     )
     in_progress = [issue]
-    config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
+    config = DispatcherConfig(
+        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+    )
 
     # PRのモック
     mock_pr = PrRecord(
@@ -118,7 +129,9 @@ footprint: []
 @patch("subprocess.run")
 def test_recover_run_state_physical_worktree_mismatch(mock_subproc):
     # run_state にはあるが、物理 worktree がなく、PRもない場合は削除されること
-    config = DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees")
+    config = DispatcherConfig(
+        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+    )
 
     # PRもPIDもないアクティブ worktree
     active_no_pr = ActiveWorktree(
