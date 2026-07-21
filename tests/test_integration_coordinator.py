@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -411,3 +413,38 @@ class TestProcessPendingNotNeededReviews:
 
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
+
+    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    def test_base_exception_mid_loop_preserves_full_pending_state(
+        self, mock_labels, tmp_path
+    ):
+        """#226: BaseException（割り込み・強制終了）でループが中断した場合、
+        状態ファイルを切り詰めず、未処理エントリを含む全pendingエントリを温存する
+        こと（次サイクルで全件を再処理できるようにするため）。
+
+        #205修正のtry/finally保存は、通常のExceptionは内側で捕捉済みのため
+        BaseException時にしか発火せず、その際に未処理エントリを取りこぼした
+        still_pendingを書き込んでいた（同種の恒久リーク）。
+        """
+        path = tmp_path / "state.json"
+        first = PendingNotNeededReview(
+            issue_number=100, subtask_id="first", dispatched_at=1.0
+        )
+        second = PendingNotNeededReview(
+            issue_number=200, subtask_id="second", dispatched_at=1.0
+        )
+        self._state_with(first, second, path=path)
+
+        def labels_side_effect(issue_number):
+            if issue_number == 200:
+                raise KeyboardInterrupt()
+            return ("status:not-needed",)
+
+        mock_labels.side_effect = labels_side_effect
+
+        with pytest.raises(KeyboardInterrupt):
+            process_pending_not_needed_reviews(path)
+
+        # 中断時は状態ファイルを書き換えないため、元の全pendingエントリが温存される。
+        remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
+        assert remaining == {100, 200}
