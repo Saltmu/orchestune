@@ -315,3 +315,114 @@ class TestApplyTaskLaunches:
             tasks_by_issue={2: bad_task},
         )
         assert bad_task not in promotable
+
+
+class TestApplyTaskLaunchesRunStatePersistence:
+    """#225レビュー対応: 起動ループ中の中間save_run_state呼び出しがconfig.window_seconds/
+    open_prsを反映していないと、launch_historyの誤刈り込みやcompleted_worktreesの
+    保護漏れ（重複起動誤判定）がクラッシュ時に再現してしまう。"""
+
+    def _launch_plan(self, tmp_path):
+        from orchestune.dispatch_launch import TaskLaunchPlan
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = _task(1, subtask_id="task-1")
+        plans = [TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        return plans, dispatch_target
+
+    def test_preserves_launch_history_within_configured_window(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch_state import load_run_state, save_run_state
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        run_state_path = tmp_path / "run_state.json"
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            window_seconds=172800,  # 48時間
+        )
+
+        now = 5_000_000.0
+        launch_36h_ago = now - 129600.0  # デフォルト24時間窓の外、48時間窓の中
+        save_run_state(
+            RunState(launch_history=[launch_36h_ago]),
+            run_state_path,
+            now=now,
+            launch_window_seconds=config.window_seconds,
+        )
+        run_state = load_run_state(run_state_path)
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.github.add_label"),
+            patch("orchestune.github.remove_label"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, now, config)
+
+        # 起動ループ内の中間saveでも、48時間の設定ウィンドウが尊重され、
+        # デフォルト24時間で誤って刈り込まれていないこと。
+        persisted = load_run_state(run_state_path)
+        assert launch_36h_ago in persisted.launch_history
+
+    def test_protects_open_pr_completed_worktree_via_open_prs(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch_state import load_run_state
+        from orchestune.github import PrRecord
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        run_state_path = tmp_path / "run_state.json"
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+
+        now = 5_000_000.0  # 30日以上前のcompleted_atは通常なら刈り込まれる
+        old_completed = CompletedWorktree(
+            issue_number=99,
+            subtask_id="old-task",
+            branch="claude/issue-99-old-task",
+            started_at=100.0,
+            completed_at=100.0,
+            commit_sha="abc123",
+        )
+        run_state = RunState(active_worktrees={}, completed_worktrees=[old_completed])
+        open_prs = [
+            PrRecord(
+                number=1,
+                head_ref="claude/issue-99-old-task",
+                changed_files=(),
+                closes_issue_numbers=(99,),
+            )
+        ]
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.github.add_label"),
+            patch("orchestune.github.remove_label"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, now, config, open_prs=open_prs)
+
+        # open PRに紐づく重複判定用の完了履歴が、中間saveの30日retentionで
+        # 消えてしまわないこと（open_prsが正しく伝播していること）。
+        persisted = load_run_state(run_state_path)
+        assert any(cw.issue_number == 99 for cw in persisted.completed_worktrees)
