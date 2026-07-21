@@ -59,10 +59,12 @@ class PrRecord:
     number: int
     head_ref: str
     changed_files: tuple[str, ...]
+    created_at: str = ""
     closes_issue_numbers: tuple[int, ...] = ()
     review_decision: str = ""
     is_ci_passing: bool = True
     state: str = "OPEN"
+    closed_at: str = ""
 
 
 def _run(args: list[str], input_text: str | None = None) -> str:
@@ -402,9 +404,11 @@ def is_branch_merged_into(head: str, base: str) -> bool:
 def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される
-    GitHub側の正規のIssue参照一覧）も併せて取得する。#210: 完了シグナルが
-    PRのclose/mergeで消えないよう、呼び出し側が`all`を指定できる。
-    パフォーマンス向上のため、一括で取得する。"""
+    GitHub側の正規のIssue参照一覧）も併せて取得する。
+    パフォーマンス向上のため、一括で取得する。
+    #210: 完了シグナルがPRのclose/mergeで消えないよう、呼び出し側が
+    `open`/`closed`/`merged`/`all`を指定できる。
+    """
     if state not in {"open", "closed", "merged", "all"}:
         raise ValueError(f"Unsupported PR state: {state}")
     stdout = _run(
@@ -417,7 +421,7 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
             "--limit",
             str(limit),
             "--json",
-            "number,headRefName,state,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
+            "number,headRefName,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
         ]
     )
     raw_prs = json.loads(stdout)
@@ -438,12 +442,14 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
                 number=number,
                 head_ref=raw["headRefName"],
                 changed_files=tuple(f["path"] for f in files),
+                created_at=raw.get("createdAt") or "",
+                closed_at=raw.get("closedAt") or "",
                 closes_issue_numbers=tuple(
                     sorted(ref["number"] for ref in closing_refs)
                 ),
                 review_decision=raw.get("reviewDecision") or "",
                 is_ci_passing=is_ci_passing,
-                state=raw.get("state") or "OPEN",
+                state=(raw.get("state") or "OPEN").upper(),
             )
         )
     return prs

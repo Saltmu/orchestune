@@ -1008,6 +1008,7 @@ class TestRecoveredActiveTask:
         with (
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[pr]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[pr]),
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
@@ -1079,6 +1080,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
@@ -1222,6 +1224,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatcher.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
@@ -1260,6 +1265,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing as "completed".
+            patch("orchestune.dispatcher.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
@@ -1308,6 +1316,9 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatcher.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatcher.github.add_comment") as mock_add_comment,
@@ -1359,6 +1370,7 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label"),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
@@ -1683,6 +1695,9 @@ class TestRunDispatchCycleBlockedPromotion:
             patch("orchestune.dispatcher.github.list_issues_by_label") as mock_list,
             patch("orchestune.dispatcher.github.list_remote_branches", return_value=[]),
             patch("orchestune.dispatcher.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing as "completed".
+            patch("orchestune.dispatcher.github.list_prs", return_value=[]),
             patch("orchestune.dispatcher.github.add_label") as mock_add_label,
             patch("orchestune.dispatcher.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
@@ -2225,6 +2240,9 @@ class TestBranchStacking:
             ) as mock_launch,
             # タスクAの完了判定とGC処理のためのモック
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            # Completion now also consults the all-state PR list to rule out
+            # an abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={
