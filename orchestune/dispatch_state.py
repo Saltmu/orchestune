@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -91,7 +93,104 @@ def load_run_state(path: str | Path) -> RunState:
     )
 
 
-def save_run_state(state: RunState, path: str | Path) -> None:
+def prune_run_state(
+    state: RunState,
+    now: float | None = None,
+    launch_window_seconds: float = 86400.0,
+    completed_retention_seconds: float = 30 * 86400.0,
+    open_prs: Sequence[Any] | None = None,
+    max_completed_worktrees: int = 500,
+) -> RunState:
+    """#214: 長期運用による run_state.json の単調肥大化を防止するための有界刈り込み処理。
+
+    保持ポリシー:
+    - `launch_history`: `launch_window_seconds`（デフォルト24時間 / 設定の `window_seconds`）以内の起動タイムスタンプのみ保持。
+    - `completed_worktrees`: 直近30日間（デフォルト 2592000秒）以内の完了履歴のみ保持。
+      ただし、現在 open 状態にある PR (`open_prs`) の重複判定に必要な `last_completed` (commit_sha) を保護するため、
+      open PR に紐づく Issue / ブランチの最新 1 件の `CompletedWorktree` は経過時間に関わらず保護する。
+      さらに、全完了履歴の件数は `max_completed_worktrees` 件を超えないよう有界に保持する。
+    """
+    import time
+
+    current_time = time.time() if now is None else now
+    min_launch_time = current_time - launch_window_seconds
+    min_completed_time = current_time - completed_retention_seconds
+
+    pruned_launch_history = [t for t in state.launch_history if t >= min_launch_time]
+
+    open_pr_issues: set[int] = set()
+    open_pr_branches: set[str] = set()
+    if open_prs:
+        for pr in open_prs:
+            closes = getattr(pr, "closes_issue_numbers", ())
+            if closes:
+                open_pr_issues.update(closes)
+            head_ref = getattr(pr, "head_ref", None)
+            if head_ref:
+                open_pr_branches.add(head_ref)
+
+    protected_latest: dict[int | str, CompletedWorktree] = {}
+    if open_prs:
+        for cw in state.completed_worktrees:
+            is_open_target = (
+                cw.issue_number in open_pr_issues or cw.branch in open_pr_branches
+            )
+            if is_open_target:
+                key = cw.issue_number
+                existing = protected_latest.get(key)
+                if existing is None or cw.completed_at >= existing.completed_at:
+                    protected_latest[key] = cw
+
+    protected_ids = set(id(cw) for cw in protected_latest.values())
+
+    protected_cw = [cw for cw in state.completed_worktrees if id(cw) in protected_ids]
+    unprotected_cw = [
+        cw
+        for cw in state.completed_worktrees
+        if cw.completed_at >= min_completed_time and id(cw) not in protected_ids
+    ]
+
+    if len(protected_cw) >= max_completed_worktrees:
+        protected_selected = sorted(
+            protected_cw, key=lambda x: x.completed_at, reverse=True
+        )[:max_completed_worktrees]
+        unprotected_selected = []
+    else:
+        protected_selected = protected_cw
+        remaining_capacity = max_completed_worktrees - len(protected_selected)
+        unprotected_selected = sorted(
+            unprotected_cw, key=lambda x: x.completed_at, reverse=True
+        )[:remaining_capacity]
+
+    pruned_completed = sorted(
+        protected_selected + unprotected_selected, key=lambda x: x.completed_at
+    )
+
+    return RunState(
+        active_worktrees=state.active_worktrees,
+        launch_history=pruned_launch_history,
+        completed_worktrees=pruned_completed,
+        last_reconciled_at=state.last_reconciled_at,
+    )
+
+
+def save_run_state(
+    state: RunState,
+    path: str | Path,
+    now: float | None = None,
+    launch_window_seconds: float = 86400.0,
+    completed_retention_seconds: float = 30 * 86400.0,
+    open_prs: Sequence[Any] | None = None,
+    max_completed_worktrees: int = 500,
+) -> None:
+    state = prune_run_state(
+        state,
+        now=now,
+        launch_window_seconds=launch_window_seconds,
+        completed_retention_seconds=completed_retention_seconds,
+        open_prs=open_prs,
+        max_completed_worktrees=max_completed_worktrees,
+    )
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {

@@ -293,6 +293,8 @@ def _apply_external_lock_sync(
         github.add_label(task.issue_number, "status:external-lock")
     for task in lock_result.to_unlock:
         github.remove_label(task.issue_number, "status:external-lock")
+        # #197 / #214: ロック解除時、Taskの現在のラベル状態に基づき status:queued を冪等に再付与・同期する。
+        # 既に Task オブジェクトが status:queued を持つ場合でも、GitHub上の実ラベル状態を確実に同期するための明示的処理。
         if (
             "status:queued" in task.status_labels
             and "status:done" not in task.status_labels
@@ -441,7 +443,11 @@ def _self_heal_run_state(
         return
     in_progress_issues = github.list_issues_by_label("status:in-progress")
     if recover_run_state(run_state, in_progress_issues, config):
-        save_run_state(run_state, config.run_state_path)
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+        )
 
 
 def _build_cycle_context(
@@ -577,7 +583,13 @@ def _finalize_launch(
         config,
     )
     ctx.run_state.last_reconciled_at = now
-    save_run_state(ctx.run_state, config.run_state_path)
+    save_run_state(
+        ctx.run_state,
+        config.run_state_path,
+        now=now,
+        launch_window_seconds=config.window_seconds,
+        open_prs=ctx.prs,
+    )
     return selected
 
 

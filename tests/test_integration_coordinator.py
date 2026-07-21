@@ -49,7 +49,7 @@ class TestBuildReviewRoutinePrompt:
         assert "#181" in prompt
         assert "#315" in prompt
 
-    def test_instructs_pr_comment_and_forbids_merge(self):
+    def test_instructs_pr_comment_and_forbids_merge_for_parent_issue(self):
         prompt = build_review_routine_prompt(
             temp_branch="integration/temp-main",
             base_branch="origin/main",
@@ -60,6 +60,22 @@ class TestBuildReviewRoutinePrompt:
         assert "gh pr comment 315" in prompt
         assert "gh pr merge" in prompt
         assert "絶対に実行しないでください" in prompt
+        assert (
+            "本PRは統合システムのパイプラインによって自動マージ・管理されます" in prompt
+        )
+
+    def test_instructs_pr_comment_and_forbids_merge_for_main_integration(self):
+        prompt = build_review_routine_prompt(
+            temp_branch="integration/temp-main",
+            base_branch="origin/main",
+            pr_number=315,
+            parent_issue_number=None,
+            merged_subtask_ids=["task-1"],
+        )
+        assert "gh pr comment 315" in prompt
+        assert "gh pr merge" in prompt
+        assert "絶対に実行しないでください" in prompt
+        assert "最終的なマージ判断は人間が行います" in prompt
 
     def test_does_not_carry_prior_findings(self):
         # 再レビュー時のバイアス回避: プロンプトは過去の指摘を含めない設計。
