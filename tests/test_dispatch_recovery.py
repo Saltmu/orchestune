@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_recovery import (
@@ -9,6 +11,8 @@ from orchestune.dispatch_recovery import (
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import IssueRecord, PrRecord
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _issue_with_footprint(
@@ -90,7 +94,8 @@ class TestDecideMissingActiveWorktrees:
                 run_state,
                 [issue],
                 DispatcherConfig(
-                    run_state_path="dummy.json", worktree_root="worktrees"
+                    run_state_path=tmp_path / "run_state.json",
+                    worktree_root=tmp_path / "worktrees",
                 ),
             )
         assert result == []
@@ -102,7 +107,8 @@ class TestDecideMissingActiveWorktrees:
             101, subtask_id="task-a", footprint=["src/foo.py"]
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
 
         with patch(
@@ -129,7 +135,8 @@ class TestDecideMissingActiveWorktrees:
             created_at="2020-01-01T00:00:00+00:00",
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
 
         with patch(
@@ -154,7 +161,8 @@ class TestDecideMissingActiveWorktrees:
             closes_issue_numbers=(101,),
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
 
         with patch(
@@ -180,8 +188,8 @@ class TestDecideMissingActiveWorktrees:
             201, subtask_id="task-b", parent={"number": 200}
         )
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
         )
 
