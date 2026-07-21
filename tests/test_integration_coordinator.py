@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -411,3 +413,77 @@ class TestProcessPendingNotNeededReviews:
 
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
+
+    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    def test_base_exception_mid_loop_preserves_full_pending_state(
+        self, mock_labels, tmp_path
+    ):
+        """#226: BaseException（割り込み・強制終了）でループが中断した場合、
+        状態ファイルを切り詰めず、未処理エントリを含む全pendingエントリを温存する
+        こと（次サイクルで全件を再処理できるようにするため）。
+
+        #205修正のtry/finally保存は、通常のExceptionは内側で捕捉済みのため
+        BaseException時にしか発火せず、その際に未処理エントリを取りこぼした
+        still_pendingを書き込んでいた（同種の恒久リーク）。
+        """
+        path = tmp_path / "state.json"
+        first = PendingNotNeededReview(
+            issue_number=100, subtask_id="first", dispatched_at=1.0
+        )
+        second = PendingNotNeededReview(
+            issue_number=200, subtask_id="second", dispatched_at=1.0
+        )
+        self._state_with(first, second, path=path)
+
+        def labels_side_effect(issue_number):
+            if issue_number == 200:
+                raise KeyboardInterrupt()
+            return ("status:not-needed",)
+
+        mock_labels.side_effect = labels_side_effect
+
+        with pytest.raises(KeyboardInterrupt):
+            process_pending_not_needed_reviews(path)
+
+        # 中断時でも、まだ消費していないエントリ（未処理・要再試行）は温存される。
+        remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
+        assert remaining == {100, 200}
+
+    @patch("orchestune.integration_coordinator.github.get_issue_state")
+    @patch("orchestune.integration_coordinator.github.close_issue")
+    @patch("orchestune.integration_coordinator.github.remove_label")
+    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    def test_base_exception_after_consuming_entry_drops_only_consumed(
+        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+    ):
+        """#226/PR#227レビュー: 割り込み前に passed で正常消費（クローズ＋ラベル削除）
+        済みのエントリは、中断時の台帳保存でも除外され、後続の未処理エントリのみが
+        残ること。消費済みエントリを台帳へ復帰させると、次サイクルでは完了ラベルが
+        既に無いため永久pending化する（#205と同種のリーク）ため、これを防ぐ。
+        """
+        path = tmp_path / "state.json"
+        consumed = PendingNotNeededReview(
+            issue_number=100, subtask_id="consumed", dispatched_at=1.0
+        )
+        interrupted = PendingNotNeededReview(
+            issue_number=200, subtask_id="interrupted", dispatched_at=1.0
+        )
+        self._state_with(consumed, interrupted, path=path)
+        mock_state.return_value = "OPEN"
+
+        def labels_side_effect(issue_number):
+            if issue_number == 100:
+                return (NOT_NEEDED_VERIFIED_LABEL,)
+            raise KeyboardInterrupt()
+
+        mock_labels.side_effect = labels_side_effect
+
+        with pytest.raises(KeyboardInterrupt):
+            process_pending_not_needed_reviews(path)
+
+        # #100 はクローズ＋passedラベル削除まで成功済み（消費済み）なので台帳から除外し、
+        # 割り込みで未処理の #200 のみを残す。
+        mock_close.assert_called_once()
+        mock_remove.assert_called_once_with(100, NOT_NEEDED_VERIFIED_LABEL)
+        remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
+        assert remaining == {200}
