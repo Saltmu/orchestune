@@ -444,6 +444,9 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=True,
             ),
+            # Completion now also consults the all-state PR list to rule out
+            # an abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={"action": "completion_skipped_dirty_worktree"},
@@ -503,6 +506,9 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
+            # Completion now also consults the all-state PR list to rule out
+            # an abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
             patch("orchestune.dispatch_cycle._promote_blocked_tasks", return_value=[]),
             patch(
                 "orchestune.dispatch_cycle._handle_blocked_recompute_recovery",

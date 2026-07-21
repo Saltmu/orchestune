@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from orchestune import github
@@ -507,40 +508,72 @@ def _collect_zombies_and_timeouts(
     return events
 
 
-def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
-    """#215: `external_id`が設定されている（ローカルpid以外でディスパッチされた）
-    active worktreeは、設定されたdispatch_targetの`is_complete`に完了判定を委譲する。
-    それ以外（従来通りのローカルsubprocess起動）は`is_process_alive`ベースのまま。"""
-    if active.external_id is not None:
-        handle = DispatchHandle(
-            pid=active.pid,
-            external_id=active.external_id,
-            external_url=active.external_url,
-            branch_name=active.branch,
-            issue_number=active.issue_number,
-        )
-        assert config.dispatch_target is not None
-        return config.dispatch_target.completion_status(handle) == "completed"
-    # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
-    # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
-    if active.started_at is None:
-        return False
-    return not is_process_alive(active.pid)
-
-
-def _cloud_worktree_completion_status(
-    active: ActiveWorktree, config: DispatcherConfig
-) -> str:
-    """Return the tri-state lifecycle result for an externally dispatched task."""
-    handle = DispatchHandle(
+def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
+    return DispatchHandle(
         pid=active.pid,
         external_id=active.external_id,
         external_url=active.external_url,
         branch_name=active.branch,
         issue_number=active.issue_number,
+        started_at=active.started_at,
     )
+
+
+def _parse_github_timestamp(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _is_stale_closed_pr_for_active(pr: github.PrRecord, active: ActiveWorktree) -> bool:
+    if pr.state != "CLOSED" or active.started_at is None:
+        return False
+    closed_at = _parse_github_timestamp(pr.closed_at)
+    return closed_at is not None and closed_at < active.started_at
+
+
+def _local_pr_completion_status(active: ActiveWorktree) -> str:
+    handle = _active_dispatch_handle(active)
+    # `ctx.prs` is typically populated from open PRs for lock/CI scans.  Abandoned
+    # detection must also see closed-unmerged PRs, so query all PR states here.
+    try:
+        candidate_prs = github.list_prs(state="all")
+    except Exception:
+        return "unknown"
+    matching_prs = [
+        pr
+        for pr in candidate_prs
+        if (
+            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+            or (
+                handle.issue_number is not None
+                and handle.issue_number in pr.closes_issue_numbers
+            )
+        )
+        and not _is_stale_closed_pr_for_active(pr, active)
+    ]
+    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
+        return "completed"
+    if any(pr.state == "CLOSED" for pr in matching_prs):
+        return "abandoned"
+    return "pending"
+
+
+def _cloud_worktree_completion_status(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> str:
     assert config.dispatch_target is not None
-    return config.dispatch_target.completion_status(handle)
+    handle = _active_dispatch_handle(active)
+    try:
+        status = config.dispatch_target.completion_status(handle)
+    except Exception:
+        return "unknown"
+    if isinstance(status, str):
+        return status
+    return "completed" if config.dispatch_target.is_complete(handle) else "pending"
 
 
 def _finalize_abandoned_cloud_worktree(
@@ -566,6 +599,24 @@ def _finalize_abandoned_cloud_worktree(
         )
     event["action"] = "abandoned_pr_requeued"
     return event
+
+
+def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    """#215: `external_id`が設定されている（ローカルpid以外でディスパッチされた）
+    active worktreeは、設定されたdispatch_targetの`is_complete`に完了判定を委譲する。
+    それ以外（従来通りのローカルsubprocess起動）は`is_process_alive`ベースのまま。"""
+    if active.external_id is not None:
+        assert config.dispatch_target is not None
+        handle = _active_dispatch_handle(active)
+        status = config.dispatch_target.completion_status(handle)
+        if isinstance(status, str):
+            return status == "completed"
+        return config.dispatch_target.is_complete(handle)
+    # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
+    # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
+    if active.started_at is None:
+        return False
+    return not is_process_alive(active.pid)
 
 
 def _rule_not_needed(
@@ -644,6 +695,37 @@ def _rule_stale_entry(
     return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
 
 
+def _abandoned_worktree_outcome(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> ActiveWorktreeRuleOutcome:
+    completion_event = _finalize_abandoned_cloud_worktree(
+        active, active_task, ctx.config
+    )
+    if completion_event["action"] == "abandoned_pr_requeued" and ctx.config.apply:
+        del ctx.run_state.active_worktrees[key]
+    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
+
+
+def _find_recovery_pr(
+    active: ActiveWorktree,
+) -> github.PrRecord | None:
+    """Find a current task PR across all states; None means retry next cycle."""
+    try:
+        all_prs = github.list_prs(state="all")
+    except Exception:
+        return None
+    matching_prs = [
+        pr for pr in all_prs if active.issue_number in pr.closes_issue_numbers
+    ]
+    return next(
+        (pr for pr in matching_prs if pr.state.upper() in {"OPEN", "MERGED"}),
+        matching_prs[0] if matching_prs else None,
+    )
+
+
 def _rule_completed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
@@ -652,12 +734,11 @@ def _rule_completed(
         # #198: 自己修復したローカルTaskはPIDを復元できないため、PID消失を
         # 完了シグナルにできない。後続サイクルで当該IssueをcloseするPRを検出
         # した場合だけ、そのリモートブランチを検証して完了判定へ進める。
-        recovery_pr = next(
-            (pr for pr in ctx.prs if active.issue_number in pr.closes_issue_numbers),
-            None,
-        )
+        recovery_pr = _find_recovery_pr(active)
         if recovery_pr is None:
             return None
+        if recovery_pr.state.upper() == "CLOSED":
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
         completion_active = replace(
             active,
             branch=recovery_pr.head_ref,
@@ -667,22 +748,17 @@ def _rule_completed(
     elif active.external_id is not None:
         completion_status = _cloud_worktree_completion_status(active, ctx.config)
         if completion_status == "abandoned":
-            completion_event = _finalize_abandoned_cloud_worktree(
-                active, active_task, ctx.config
-            )
-            if (
-                completion_event["action"] == "abandoned_pr_requeued"
-                and ctx.config.apply
-            ):
-                del ctx.run_state.active_worktrees[key]
-            return ActiveWorktreeRuleOutcome(
-                completion_event=completion_event,
-                terminal=True,
-            )
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
         if completion_status != "completed":
             return None
-    elif not _is_worktree_complete(active, ctx.config):
-        return None
+    else:
+        if not _is_worktree_complete(active, ctx.config):
+            return None
+        local_pr_status = _local_pr_completion_status(active)
+        if local_pr_status == "abandoned":
+            return _abandoned_worktree_outcome(ctx, key, active, active_task)
+        if local_pr_status == "unknown":
+            return None
 
     completion_event = _finalize_completed_worktree(
         completion_active, active_task, ctx.config

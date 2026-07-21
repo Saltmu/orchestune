@@ -19,6 +19,7 @@ import urllib.request
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -99,6 +100,7 @@ class DispatchHandle:
     external_url: str | None = None
     branch_name: str | None = None
     issue_number: int | None = None
+    started_at: float | None = None
 
 
 class DispatchTarget(ABC):
@@ -121,6 +123,22 @@ class DispatchTarget(ABC):
         return "completed" if self.is_complete(handle) else "pending"
 
 
+def _parse_github_timestamp(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _is_stale_closed_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool:
+    if pr.state != "CLOSED" or handle.started_at is None:
+        return False
+    closed_at = _parse_github_timestamp(pr.closed_at)
+    return closed_at is not None and closed_at < handle.started_at
+
+
 def _task_pr_completion_status(
     handle: DispatchHandle,
 ) -> Literal["pending", "completed", "abandoned"]:
@@ -131,11 +149,14 @@ def _task_pr_completion_status(
     matching_prs = [
         pr
         for pr in prs
-        if (handle.branch_name is not None and pr.head_ref == handle.branch_name)
-        or (
-            handle.issue_number is not None
-            and handle.issue_number in pr.closes_issue_numbers
+        if (
+            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+            or (
+                handle.issue_number is not None
+                and handle.issue_number in pr.closes_issue_numbers
+            )
         )
+        and not _is_stale_closed_pr_for_handle(pr, handle)
     ]
     if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
         return "completed"
@@ -305,16 +326,17 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         assert last_error is not None
         raise last_error
 
+    def completion_status(
+        self, handle: DispatchHandle
+    ) -> Literal["pending", "completed", "abandoned"]:
+        """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
+        return _task_pr_completion_status(handle)
+
     def is_complete(self, handle: DispatchHandle) -> bool:
         """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
         ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
         （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
         return self.completion_status(handle) == "completed"
-
-    def completion_status(
-        self, handle: DispatchHandle
-    ) -> Literal["pending", "completed", "abandoned"]:
-        return _task_pr_completion_status(handle)
 
 
 class CodexCloudDispatchTarget(DispatchTarget):
@@ -376,13 +398,13 @@ class CodexCloudDispatchTarget(DispatchTarget):
             branch_name=branch_name,
         )
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
-        return self.completion_status(handle) == "completed"
-
     def completion_status(
         self, handle: DispatchHandle
     ) -> Literal["pending", "completed", "abandoned"]:
         return _task_pr_completion_status(handle)
+
+    def is_complete(self, handle: DispatchHandle) -> bool:
+        return self.completion_status(handle) == "completed"
 
 
 def build_dispatch_target(
