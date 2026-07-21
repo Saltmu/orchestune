@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_escalation import (
@@ -9,6 +11,8 @@ from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):
@@ -52,7 +56,10 @@ def _ctx(**overrides):
         subtask_branch_map={},
         prs=[],
         pr_by_branch={},
-        config=DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+        config=DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        ),
     )
     defaults.update(overrides)
     return CycleContext(**defaults)

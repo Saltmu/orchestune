@@ -1,6 +1,7 @@
 import argparse
 import json
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
@@ -33,6 +34,8 @@ from orchestune.dispatcher import (
 )
 from orchestune.forge import ForgeAuthError
 from orchestune.github import IssueRecord, PrRecord
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 @pytest.fixture(autouse=True)
@@ -3612,8 +3615,8 @@ class TestRunSemanticIntegrator:
 
     def test_enables_semantic_review_for_cloud_routine_target(self):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
         )
         mock_instance = MagicMock()
@@ -3637,8 +3640,8 @@ class TestRunSemanticIntegrator:
 
     def test_disables_semantic_review_when_flag_off(self):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
         )
         mock_instance = MagicMock()
@@ -3655,8 +3658,8 @@ class TestRunSemanticIntegrator:
 
     def test_disables_semantic_review_for_non_cloud_routine_target(self, tmp_path):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
         )
         mock_instance = MagicMock()
@@ -3673,7 +3676,8 @@ class TestRunSemanticIntegrator:
 
     def test_returns_none_and_warns_on_failure(self, capsys):
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         with patch(
             "orchestune.integrator.Integrator", side_effect=RuntimeError("boom")
@@ -3688,7 +3692,8 @@ class TestRunSemanticIntegrator:
 
     def test_returns_retryable_failure_when_report_has_failed_tasks(self):
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "failure", "failed": ["task-1"]}
@@ -3717,7 +3722,8 @@ class TestRunSemanticIntegrator:
         伴わないため、ホワイトリスト方式（success/no_done_tasks以外は失敗）で
         判定されなければならない。"""
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": error_status, "error": "boom"}
@@ -3732,7 +3738,8 @@ class TestRunSemanticIntegrator:
     @pytest.mark.parametrize("success_status", ["success", "no_done_tasks"])
     def test_returns_success_for_whitelisted_statuses(self, success_status):
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": success_status}
@@ -3745,7 +3752,8 @@ class TestRunSemanticIntegrator:
 
     def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         result = _run_semantic_integrator(
             config,
@@ -3765,8 +3773,8 @@ class TestProcessParentCompletion:
 
     def test_returns_report_on_success(self):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
             apply=True,
         )
@@ -3786,8 +3794,8 @@ class TestProcessParentCompletion:
 
     def test_returns_none_and_warns_on_failure(self, capsys):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
             apply=True,
         )
@@ -3805,8 +3813,8 @@ class TestProcessParentCompletion:
 
     def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
             apply=True,
         )

@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,8 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import IssueRecord
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):
@@ -61,7 +64,10 @@ def _ctx(**overrides):
         subtask_branch_map={},
         prs=[],
         pr_by_branch={},
-        config=DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+        config=DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        ),
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
@@ -225,8 +231,8 @@ class TestFetchIssues:
 
     def test_uses_list_sub_issues_when_parent_issue_number_is_set(self):
         config = DispatcherConfig(
-            run_state_path="dummy.json",
-            worktree_root="worktrees",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
         )
         with (
@@ -246,7 +252,8 @@ class TestFetchIssues:
 
     def test_uses_list_issues_by_label_when_parent_issue_number_is_none(self):
         config = DispatcherConfig(
-            run_state_path="dummy.json", worktree_root="worktrees"
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
         )
         with (
             patch(
@@ -272,7 +279,9 @@ class TestSelfHealRunState:
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
         config = DispatcherConfig(
-            run_state_path=run_state_path, worktree_root="worktrees", apply=True
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
         )
         run_state = RunState(active_worktrees={})
         with patch(
@@ -284,7 +293,7 @@ class TestSelfHealRunState:
     def test_noop_when_not_apply(self, tmp_path):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
-            worktree_root="worktrees",
+            worktree_root=tmp_path / "worktrees",
             apply=False,
         )
         run_state = RunState(active_worktrees={})
@@ -299,7 +308,7 @@ class TestSelfHealRunState:
     ):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
-            worktree_root="worktrees",
+            worktree_root=tmp_path / "worktrees",
             apply=True,
             parent_issue_number=100,
         )
@@ -742,7 +751,9 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
-            run_state_path=run_state_path, worktree_root="worktrees", apply=True
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
         )
 
         # 競合先タスクのTask定義
@@ -832,7 +843,9 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
-            run_state_path=run_state_path, worktree_root="worktrees", apply=True
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
         )
 
         # アクティブワークツリーは空（競合なし）
