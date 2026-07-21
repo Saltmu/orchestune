@@ -1,4 +1,6 @@
 import subprocess
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_gc import (
@@ -26,6 +28,8 @@ from orchestune.dispatch_targets import (
 from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import PrRecord
 
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
 
 def _ctx(**overrides):
     defaults = dict(
@@ -38,7 +42,10 @@ def _ctx(**overrides):
         subtask_branch_map={},
         prs=[],
         pr_by_branch={},
-        config=DispatcherConfig(run_state_path="dummy.json", worktree_root="worktrees"),
+        config=DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        ),
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
