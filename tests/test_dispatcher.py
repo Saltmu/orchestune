@@ -696,7 +696,13 @@ class TestRunDispatchCycleFootprintRecompute:
         )
 
         def _launch_stub(
-            selected, _task_to_base_branch, _candidate_tasks, run_state, _now, config
+            selected,
+            _task_to_base_branch,
+            _candidate_tasks,
+            run_state,
+            _now,
+            config,
+            open_prs=None,
         ):
             save_run_state(run_state, config.run_state_path)
             return selected
@@ -782,7 +788,13 @@ class TestRunDispatchCycleFootprintRecompute:
         )
 
         def _launch_stub(
-            selected, _task_to_base_branch, _candidate_tasks, run_state, _now, config
+            selected,
+            _task_to_base_branch,
+            _candidate_tasks,
+            run_state,
+            _now,
+            config,
+            open_prs=None,
         ):
             save_run_state(run_state, config.run_state_path)
             return selected
