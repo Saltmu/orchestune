@@ -428,7 +428,6 @@ class ZombieOrTimeoutReclaim:
     reason: str
     is_timeout: bool
     process_alive: bool
-    worktree_exists: bool
 
 
 def _decide_zombie_or_timeout_reclaims(
@@ -471,7 +470,6 @@ def _decide_zombie_or_timeout_reclaims(
                 reason="process disappeared" if is_zombie else "timeout exceeded",
                 is_timeout=is_timeout,
                 process_alive=process_alive,
-                worktree_exists=os.path.exists(active.worktree_path),
             )
         )
 
@@ -486,6 +484,13 @@ def _apply_zombie_or_timeout_reclaim(
     """decide層が判定した回収対象に基づき、WIPバックアップ・プロセスkill・
     worktree撤去・githubラベル/コメント更新・run_state更新を行う。
 
+    worktreeの存在確認は、decide時点のスナップショットを信用せず、副作用を
+    実行する直前にこの関数内で再評価する。全回収対象の判定（decide）を先に
+    まとめて行ってから1件ずつapplyする都合上、decideからこの関数の実行までの
+    間にworktreeの状態（削除・再作成）が変化し得るため、古いスナップショットを
+    そのまま使うとバックアップ・削除・orphan worktree残存に関する安全策を
+    迂回しかねない。
+
     WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
     消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
     （run_stateは変更せず、次サイクルでの再試行に委ねる）。
@@ -494,7 +499,9 @@ def _apply_zombie_or_timeout_reclaim(
     reason = reclaim.reason
 
     if config.apply:
-        if reclaim.worktree_exists:
+        worktree_exists = os.path.exists(active.worktree_path)
+
+        if worktree_exists:
             backup_error = backup_wip_commit(
                 active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
             )
@@ -513,14 +520,14 @@ def _apply_zombie_or_timeout_reclaim(
             except Exception:
                 pass
 
-        if reclaim.worktree_exists:
+        if worktree_exists:
             remove_worktree(active.worktree_path)
 
         github.remove_label(active.issue_number, "status:in-progress")
         github.add_label(active.issue_number, "status:queued")
         worktree_note = (
             "作業ブランチにWIPコミットを退避した上で、"
-            if reclaim.worktree_exists
+            if worktree_exists
             else "物理worktreeが見つからなかったため、"
         )
         github.add_comment(
