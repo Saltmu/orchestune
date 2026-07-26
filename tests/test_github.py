@@ -1,3 +1,4 @@
+import json
 import subprocess
 from io import StringIO
 from unittest.mock import patch
@@ -791,6 +792,116 @@ class TestListOpenPrs:
             prs = list_open_prs()
 
         assert prs[0].closes_issue_numbers == ()
+
+    def test_list_prs_paginates_files_when_100_or_more(self):
+        """100件以上のchanged filesを返すPRに対し、GraphQL APIで全件取得する。"""
+        files = [{"path": f"file{i}.py"} for i in range(1, 101)]
+        list_payload = (
+            "["
+            f'{{"number": 10, "headRefName": "feat/large", "files": {json.dumps(files)}, "closingIssuesReferences": []}}'
+            "]"
+        )
+        graphql_payload = (
+            '{"data": {"repository": {"pullRequest": {"files": {'
+            '"pageInfo": {"hasNextPage": false, "endCursor": null}, '
+            f'"nodes": {[{"path": f"file{i}.py"} for i in range(1, 102)]}'
+            "}}}}}".replace("'", '"')
+        )
+
+        def mock_run_side_effect(args, **kwargs):
+            if args[0] == "gh" and args[1] == "pr" and args[2] == "list":
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=list_payload, stderr=""
+                )
+            if args[0] == "gh" and args[1] == "api" and args[2] == "graphql":
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=graphql_payload, stderr=""
+                )
+            raise ValueError(f"Unexpected command: {args}")
+
+        with patch(
+            "orchestune.github.subprocess.run", side_effect=mock_run_side_effect
+        ):
+            prs = list_open_prs(paginate_files=True)
+
+        assert len(prs) == 1
+        assert len(prs[0].changed_files) == 101
+
+    def test_list_prs_skips_pagination_when_paginate_files_false(self):
+        """paginate_files=False (デフォルト) の場合、100件以上のchanged filesがあってもGraphQLページネーションを実行しない。"""
+        files = [{"path": f"file{i}.py"} for i in range(1, 101)]
+        list_payload = (
+            "["
+            f'{{"number": 10, "headRefName": "feat/large", "files": {json.dumps(files)}, "closingIssuesReferences": []}}'
+            "]"
+        )
+
+        def mock_run_side_effect(args, **kwargs):
+            if args[0] == "gh" and args[1] == "pr" and args[2] == "list":
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=list_payload, stderr=""
+                )
+            raise ValueError(f"Unexpected command: {args}")
+
+        with patch(
+            "orchestune.github.subprocess.run", side_effect=mock_run_side_effect
+        ):
+            prs = list_open_prs()
+
+        assert len(prs) == 1
+        assert len(prs[0].changed_files) == 100
+        assert prs[0].is_files_truncated is False
+
+    def test_list_prs_skips_pagination_for_non_open_state(self):
+        """state != 'open' の場合、paginate_files=TrueでもGraphQLページネーションを実行しない。"""
+        files = [{"path": f"file{i}.py"} for i in range(1, 101)]
+        list_payload = (
+            "["
+            f'{{"number": 10, "headRefName": "feat/large", "files": {json.dumps(files)}, "closingIssuesReferences": []}}'
+            "]"
+        )
+
+        def mock_run_side_effect(args, **kwargs):
+            if args[0] == "gh" and args[1] == "pr" and args[2] == "list":
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=list_payload, stderr=""
+                )
+            raise ValueError(f"Unexpected command: {args}")
+
+        with patch(
+            "orchestune.github.subprocess.run", side_effect=mock_run_side_effect
+        ):
+            prs = list_prs(state="closed", paginate_files=True)
+
+        assert len(prs) == 1
+        assert len(prs[0].changed_files) == 100
+        assert prs[0].is_files_truncated is False
+
+    def test_list_prs_sets_is_files_truncated_true_on_graphql_failure(self):
+        """100件のchanged filesを持つPR的GraphQL全件取得が失敗した場合、is_files_truncated=Trueとする。"""
+        files = [{"path": f"file{i}.py"} for i in range(1, 101)]
+        list_payload = (
+            "["
+            f'{{"number": 10, "headRefName": "feat/large", "files": {json.dumps(files)}, "closingIssuesReferences": []}}'
+            "]"
+        )
+
+        def mock_run_side_effect(args, **kwargs):
+            if args[0] == "gh" and args[1] == "pr" and args[2] == "list":
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout=list_payload, stderr=""
+                )
+            if args[0] == "gh" and args[1] == "api" and args[2] == "graphql":
+                raise subprocess.CalledProcessError(1, args, stderr="GraphQL error")
+            raise ValueError(f"Unexpected command: {args}")
+
+        with patch(
+            "orchestune.github.subprocess.run", side_effect=mock_run_side_effect
+        ):
+            prs = list_open_prs(paginate_files=True)
+
+        assert len(prs) == 1
+        assert prs[0].is_files_truncated is True
 
     def test_calls_gh_with_limit_arg(self):
         with patch("orchestune.github.subprocess.run") as mock_run:
