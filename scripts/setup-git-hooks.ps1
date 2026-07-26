@@ -11,6 +11,8 @@ if (-not (Test-Path $HooksDir)) {
     New-Item -ItemType Directory -Path $HooksDir -Force | Out-Null
 }
 
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
 # Create pre-commit hook (using single-quoted here-string to avoid PowerShell variable/command expansion)
 $PreCommitHook = Join-Path $HooksDir "pre-commit"
 $PreCommitContent = @'
@@ -38,7 +40,7 @@ if [ "${#bad_files[@]}" -gt 0 ]; then
 fi
 '@
 
-[System.IO.File]::WriteAllText($PreCommitHook, $PreCommitContent.Replace("`r`n", "`n"), [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($PreCommitHook, $PreCommitContent.Replace("`r`n", "`n"), $Utf8NoBom)
 
 # Create pre-push hook
 $PrePushHook = Join-Path $HooksDir "pre-push"
@@ -53,7 +55,7 @@ elif [ -f ./scripts/local-ci.sh ]; then
 fi
 '@
 
-[System.IO.File]::WriteAllText($PrePushHook, $PrePushContent.Replace("`r`n", "`n"), [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($PrePushHook, $PrePushContent.Replace("`r`n", "`n"), $Utf8NoBom)
 
 Write-Host "Git pre-commit hook installed successfully at $PreCommitHook."
 Write-Host "Git pre-push hook installed successfully at $PrePushHook."
