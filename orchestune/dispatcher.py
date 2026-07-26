@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
@@ -216,6 +217,58 @@ def _decide_semantic_review_enabled() -> bool:
     return os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0"
 
 
+def _run_best_effort_phase(
+    *,
+    phase_name: str,
+    report_label: str,
+    work: Callable[[], dict],
+    auth_error: ForgeAuthError | None,
+    auth_error_message: str,
+    failure_message: str,
+    evaluate_report: Callable[[dict], tuple[PhaseStatus, bool]] | None = None,
+) -> PhaseResult:
+    """#232: main()から呼ばれるベストエフォート後処理フェーズの共通実行部。
+
+    `_poll_pending_not_needed_reviews`・`_run_semantic_integrator`・
+    `_process_parent_completion`に重複していたtry/exceptボイラープレート
+    （`ForgeAuthError`ならFATAL_FAILURE、その他例外ならRETRYABLE_FAILURE）を
+    集約する。失敗してもここでは例外を投げず、`PhaseResult`として返すだけで
+    main()の続行を妨げない。
+    """
+    try:
+        if auth_error is not None:
+            raise auth_error
+
+        report = work()
+        print(f"{report_label}:", file=sys.stderr)
+        print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr)
+
+        if evaluate_report is not None:
+            status, retryable = evaluate_report(report)
+        else:
+            status, retryable = PhaseStatus.SUCCESS, False
+
+        return PhaseResult(
+            phase_name=phase_name, status=status, report=report, retryable=retryable
+        )
+    except ForgeAuthError as e:
+        print(f"Error: {auth_error_message}: {e}", file=sys.stderr)
+        return PhaseResult(
+            phase_name=phase_name,
+            status=PhaseStatus.FATAL_FAILURE,
+            error_message=str(e),
+            retryable=False,
+        )
+    except Exception as e:
+        print(f"Warning: {failure_message}: {e}", file=sys.stderr)
+        return PhaseResult(
+            phase_name=phase_name,
+            status=PhaseStatus.RETRYABLE_FAILURE,
+            error_message=str(e),
+            retryable=True,
+        )
+
+
 def _poll_pending_not_needed_reviews(
     args: argparse.Namespace, auth_error: ForgeAuthError | None = None
 ) -> PhaseResult:
@@ -223,49 +276,22 @@ def _poll_pending_not_needed_reviews(
 
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
     """
-    try:
-        if auth_error is not None:
-            raise auth_error
 
+    def work() -> dict:
         from orchestune.integration_coordinator import (
             process_pending_not_needed_reviews,
         )
 
-        not_needed_review_report = process_pending_not_needed_reviews(
-            args.not_needed_review_state_path
-        )
-        print("Pending Not-Needed Review Report:", file=sys.stderr)
-        print(
-            json.dumps(not_needed_review_report, ensure_ascii=False, indent=2),
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="poll_pending_not_needed_reviews",
-            status=PhaseStatus.SUCCESS,
-            report=not_needed_review_report,
-        )
-    except ForgeAuthError as re:
-        print(
-            f"Error: authentication failed while polling reviews: {re}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="poll_pending_not_needed_reviews",
-            status=PhaseStatus.FATAL_FAILURE,
-            error_message=str(re),
-            retryable=False,
-        )
-    except Exception as re:
-        print(
-            f"Warning: failed to process pending not-needed reviews: {re}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="poll_pending_not_needed_reviews",
-            status=PhaseStatus.RETRYABLE_FAILURE,
-            error_message=str(re),
-            retryable=True,
-        )
+        return process_pending_not_needed_reviews(args.not_needed_review_state_path)
+
+    return _run_best_effort_phase(
+        phase_name="poll_pending_not_needed_reviews",
+        report_label="Pending Not-Needed Review Report",
+        work=work,
+        auth_error=auth_error,
+        auth_error_message="authentication failed while polling reviews",
+        failure_message="failed to process pending not-needed reviews",
+    )
 
 
 # Integratorパイプラインが成功として扱う唯一のステータス群（#207: これ以外は
@@ -287,10 +313,8 @@ def _run_semantic_integrator(
     Python側では一切行わない。ベストエフォート処理: 失敗しても警告を出すだけで
     main()は続行する。
     """
-    try:
-        if auth_error is not None:
-            raise auth_error
 
+    def work() -> dict:
         from orchestune.integrator import Integrator, IntegratorConfig
 
         integrator_config = IntegratorConfig(
@@ -308,44 +332,22 @@ def _run_semantic_integrator(
             )
         else:
             integrator_config.enable_semantic_review = False
-        integrator_run_report = Integrator(integrator_config).run()
-        print("Integrator Report:", file=sys.stderr)
-        print(
-            json.dumps(integrator_run_report, ensure_ascii=False, indent=2),
-            file=sys.stderr,
-        )
+        return Integrator(integrator_config).run()
 
-        status = PhaseStatus.SUCCESS
-        retryable = False
-        if integrator_run_report.get("status") not in _INTEGRATOR_SUCCESS_STATUSES:
-            status = PhaseStatus.RETRYABLE_FAILURE
-            retryable = True
+    def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:
+        if report.get("status") not in _INTEGRATOR_SUCCESS_STATUSES:
+            return PhaseStatus.RETRYABLE_FAILURE, True
+        return PhaseStatus.SUCCESS, False
 
-        return PhaseResult(
-            phase_name="run_semantic_integrator",
-            status=status,
-            report=integrator_run_report,
-            retryable=retryable,
-        )
-    except ForgeAuthError as ie:
-        print(
-            f"Error: authentication failed while running Integrator: {ie}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="run_semantic_integrator",
-            status=PhaseStatus.FATAL_FAILURE,
-            error_message=str(ie),
-            retryable=False,
-        )
-    except Exception as ie:
-        print(f"Warning: Integrator failed to run: {ie}", file=sys.stderr)
-        return PhaseResult(
-            phase_name="run_semantic_integrator",
-            status=PhaseStatus.RETRYABLE_FAILURE,
-            error_message=str(ie),
-            retryable=True,
-        )
+    return _run_best_effort_phase(
+        phase_name="run_semantic_integrator",
+        report_label="Integrator Report",
+        work=work,
+        auth_error=auth_error,
+        auth_error_message="authentication failed while running Integrator",
+        failure_message="Integrator failed to run",
+        evaluate_report=evaluate_report,
+    )
 
 
 def _process_parent_completion(
@@ -355,39 +357,20 @@ def _process_parent_completion(
     マージ検知→親Issueクローズを行う。ベストエフォート処理: 失敗しても警告を
     出すだけでmain()は続行する。
     """
-    try:
-        if auth_error is not None:
-            raise auth_error
 
+    def work() -> dict:
         from orchestune.parent_completion import process_parent_completion
 
-        report = process_parent_completion(config.parent_issue_number, config.apply)
-        print("Parent Completion Report:", file=sys.stderr)
-        print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr)
-        return PhaseResult(
-            phase_name="process_parent_completion",
-            status=PhaseStatus.SUCCESS,
-            report=report,
-        )
-    except ForgeAuthError as pe:
-        print(
-            f"Error: authentication failed while processing parent completion: {pe}",
-            file=sys.stderr,
-        )
-        return PhaseResult(
-            phase_name="process_parent_completion",
-            status=PhaseStatus.FATAL_FAILURE,
-            error_message=str(pe),
-            retryable=False,
-        )
-    except Exception as pe:
-        print(f"Warning: failed to process parent completion: {pe}", file=sys.stderr)
-        return PhaseResult(
-            phase_name="process_parent_completion",
-            status=PhaseStatus.RETRYABLE_FAILURE,
-            error_message=str(pe),
-            retryable=True,
-        )
+        return process_parent_completion(config.parent_issue_number, config.apply)
+
+    return _run_best_effort_phase(
+        phase_name="process_parent_completion",
+        report_label="Parent Completion Report",
+        work=work,
+        auth_error=auth_error,
+        auth_error_message="authentication failed while processing parent completion",
+        failure_message="failed to process parent completion",
+    )
 
 
 def load_config_file(cwd: Path | None = None) -> dict[str, Any]:
