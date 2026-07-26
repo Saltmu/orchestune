@@ -37,6 +37,11 @@ def _get_stack_eligible_tasks(
         if not task.subtask_id or not task.depends_on:
             continue
 
+        # GitHub native blocked_by のうちの一部がマップ未存在で task.depends_on から欠落している場合は
+        # 未解決の blocker が存在するため fail closed (スタッキング対象外) とする
+        if issue.blocked_by and len(task.depends_on) < len(issue.blocked_by):
+            continue
+
         all_resolved_or_stackable = True
         stackable_deps = []
         for dep in task.depends_on:
