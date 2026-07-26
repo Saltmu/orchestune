@@ -96,11 +96,9 @@ def create_worktree_and_launch(
         )
 
     if apply:
+        worktree_created = False
         try:
-            # 1. 無効なworktreeの整理
-            subprocess.run(["git", "worktree", "prune"], capture_output=True, text=True)
-
-            # 2. すでにディレクトリが存在する場合のクリーンアップ
+            # 1. すでにディレクトリが存在する場合のクリーンアップ
             if worktree_path.exists():
                 # #213: 未コミットの変更が残ったまま削除すると、前回のエージェント
                 # 作業が黙って消失する。削除前にWIPコミットとして退避を試みる。
@@ -131,9 +129,17 @@ def create_worktree_and_launch(
                         external_url=None,
                     )
                 try:
-                    shutil.rmtree(worktree_path)
+                    subprocess.run(
+                        ["git", "worktree", "remove", "--force", str(worktree_path)],
+                        capture_output=True,
+                    )
+                    if worktree_path.exists():
+                        shutil.rmtree(worktree_path)
                 except Exception:
                     pass
+
+            # 2. 無効なworktreeの整理
+            subprocess.run(["git", "worktree", "prune"], capture_output=True, text=True)
 
             worktree_root.mkdir(parents=True, exist_ok=True)
 
@@ -162,6 +168,8 @@ def create_worktree_and_launch(
             # 取得すると、prune/backup/add中に作成された無関係なPRまで
             # 新sessionの成果物として誤認する窓が広がる。
             dispatch_started_at = time.time()
+            worktree_created = True
+
             handle = dispatch_target.launch(task, branch_name, worktree_path)
             pid = handle.pid
             external_id = handle.external_id
@@ -173,6 +181,18 @@ def create_worktree_and_launch(
         # #260レビュー対応: 汎用RuntimeErrorではなく専用型のみ捕捉し、
         # このチェック以外の実装バグまで握り潰さないようにする。
         except (subprocess.CalledProcessError, OSError, BranchReachabilityError) as e:
+            if worktree_created:
+                # launch失敗時の補償処理: 作成したworktreeをGit管理および物理ディスクから回収
+                try:
+                    subprocess.run(
+                        ["git", "worktree", "remove", "--force", str(worktree_path)],
+                        capture_output=True,
+                    )
+                    if worktree_path.exists():
+                        shutil.rmtree(worktree_path)
+                    subprocess.run(["git", "worktree", "prune"], capture_output=True)
+                except Exception:
+                    pass
             error_details = ""
             if isinstance(e, subprocess.CalledProcessError):
                 error_details = f" (stderr: {e.stderr.strip() if e.stderr else ''})"
