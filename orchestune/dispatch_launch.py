@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -257,6 +258,11 @@ def _apply_task_launches(
     for plan in plans:
         task = plan.task
         assert config.dispatch_target is not None
+        # #262レビュー対応: サイクル共通の`now`は各タスクの実起動（cloud routine
+        # fire等）より必ず前の時刻になるため、PR完了判定のstale境界に使うと
+        # GitHub側のcreated_at（秒精度）との丸め差で正規PRを誤ってstale判定
+        # しうる。タスクごとの実起動直前の時刻を`started_at`として記録する。
+        task_started_at = time.time()
         launch = create_worktree_and_launch(
             task,
             plan.branch_name,
@@ -298,7 +304,7 @@ def _apply_task_launches(
             branch=plan.branch_name,
             worktree_path=launch.worktree_path,
             pid=launch.pid,
-            started_at=now,
+            started_at=task_started_at,
             declared_footprint=task.footprint,
             external_id=launch.external_id,
             external_url=launch.external_url,

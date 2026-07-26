@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import shutil
@@ -140,11 +141,19 @@ def _is_stale_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool
     `created_at`を取得・解釈できないPRも現世代の証拠とはみなさない（fail
     closed）。`started_at`を持たないhandle（復元経路等）は従来通り除外しない。
     CLOSED PRの`closed_at < started_at`によるstale判定（#210）は、
-    `closed_at >= created_at`であるため`created_at`判定に包含される。"""
+    `closed_at >= created_at`であるため`created_at`判定に包含される。
+
+    #262レビュー対応: GitHubの`created_at`は秒精度で切り捨てられる一方、
+    `handle.started_at`は小数秒を含む（各task起動直前に`time.time()`で
+    取得）。直接比較すると、実際にはsession開始「後」に作成された正規PRでも
+    `created_at < started_at`が真になり誤ってstale扱いされうる
+    （例: created_at=X.000, started_at=X.900）。比較はGitHub側の精度に
+    合わせて`started_at`を秒単位に切り捨ててから行い、同じ秒に作成された
+    PRはstaleとしない。"""
     if handle.started_at is None:
         return False
     created_at = _parse_github_timestamp(pr.created_at)
-    return created_at is None or created_at < handle.started_at
+    return created_at is None or created_at < math.floor(handle.started_at)
 
 
 def _task_pr_completion_status(
