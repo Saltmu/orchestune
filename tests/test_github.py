@@ -765,7 +765,9 @@ class TestBranchChangedFiles:
         assert "origin/orphan" in stderr.getvalue()
         assert "fatal: no merge base" in stderr.getvalue()
 
-    def test_logs_warning_when_git_diff_cannot_run(self):
+    def test_returns_none_when_git_diff_cannot_run(self):
+        """#245: git実行障害（OSError）は「変更なし」ではなく「差分不明」。
+        呼び出し側がfail closedに判定できるようNoneを返す。"""
         stderr = StringIO()
         with (
             patch("orchestune.github.subprocess.run") as mock_run,
@@ -774,9 +776,29 @@ class TestBranchChangedFiles:
             mock_run.side_effect = OSError("git binary missing")
             files = branch_changed_files("origin/feat/x")
 
-        assert files == []
+        assert files is None
         assert "Warning: unable to inspect changed files" in stderr.getvalue()
         assert "git binary missing" in stderr.getvalue()
+
+    def test_returns_none_when_ref_is_missing(self):
+        """#245 Reproducer: ref欠落等のno merge base以外のgit diff失敗（rc 128）を
+        空footprintに潰すと、外部ロック同期が非衝突と誤解釈して既存lockを
+        解除してしまう。差分不明としてNoneを返す。"""
+        stderr = StringIO()
+        with (
+            patch("orchestune.github.subprocess.run") as mock_run,
+            patch("sys.stderr", stderr),
+        ):
+            mock_run.side_effect = subprocess.CalledProcessError(
+                128,
+                ["git", "diff", "--name-only", "origin/main...origin/feat/x"],
+                stderr="fatal: bad revision 'origin/feat/x'\n",
+            )
+            files = branch_changed_files("origin/feat/x")
+
+        assert files is None
+        assert "Warning: failed to diff changed files" in stderr.getvalue()
+        assert "fatal: bad revision" in stderr.getvalue()
 
 
 class TestGetIssueLabels:
