@@ -68,6 +68,9 @@ orchestune setup
 > [!NOTE]
 > When `--dispatch-target` is not explicitly specified, `cloud-routine` from this section is automatically selected in a GitHub Actions environment (`GITHUB_ACTIONS=true`). If you run the dispatcher on GitHub Actions, set up the environment variables (Actions Secrets) below beforehand.
 
+> [!IMPORTANT]
+> Before firing a routine, the dispatcher now pushes the task branch (including any stacked/parent base content) to `origin` and verifies it landed, so that the cloud session starts from the correct base instead of the repository's default branch. This means the git credential the dispatcher process runs with (e.g. the checkout token in your workflow) needs **push access** (`contents: write`) to the repository — the default `permissions: contents: read` used by many CI workflows (including this repository's own `ci.yml`) is not sufficient on its own. If the push fails due to insufficient permission, the affected task is left as `status:blocked` with the underlying git error attached as a comment on its issue.
+
 `--dispatch-target cloud-routine` is the target for **Claude Code Cloud Routine**.
 
 1. **Create a New Routine**:
