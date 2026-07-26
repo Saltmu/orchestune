@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -16,8 +17,37 @@ _IGNORED_FOOTPRINT_PATTERNS = (
 )
 
 
+def normalize_footprint_path(path: str) -> str:
+    """Normalize a footprint path into a canonical repository-relative POSIX path.
+
+    - Converts Windows backslashes '\\' to POSIX forward slashes '/'
+    - Strips Windows drive letters (e.g. 'C:') and leading slashes '/'
+    - Resolves redundant './', duplicate slashes '//', and relative parent references '..'
+    - Raises ValueError if the path resolves to empty, root ('.'), or escapes the repository root (starts with '..')
+    """
+    if not isinstance(path, str):
+        path = str(path)
+
+    clean_path = path.replace("\\", "/")
+    clean_path = re.sub(r"^[a-zA-Z]:", "", clean_path)
+    clean_path = clean_path.lstrip("/")
+
+    normalized = posixpath.normpath(clean_path)
+
+    if normalized in ("", "."):
+        raise ValueError(
+            f"Invalid footprint path: '{path}' resolves to empty or root path"
+        )
+
+    if normalized == ".." or normalized.startswith("../"):
+        raise ValueError(f"Invalid footprint path: '{path}' escapes repository root")
+
+    return normalized.lstrip("/")
+
+
 def is_ignored_footprint(path: str) -> bool:
-    return any(pattern.search(path) for pattern in _IGNORED_FOOTPRINT_PATTERNS)
+    normalized = normalize_footprint_path(path)
+    return any(pattern.search(normalized) for pattern in _IGNORED_FOOTPRINT_PATTERNS)
 
 
 class DagCycleError(ValueError):
@@ -40,6 +70,10 @@ class SubTask:
     verification_plan: tuple[str, ...] = ()
     shared_contract: str | None = None
     writes_shared_contract: bool = False
+
+    def __post_init__(self) -> None:
+        normalized = tuple(normalize_footprint_path(p) for p in self.footprint)
+        object.__setattr__(self, "footprint", normalized)
 
     def touch_set(self) -> frozenset[str]:
         footprint = frozenset(
