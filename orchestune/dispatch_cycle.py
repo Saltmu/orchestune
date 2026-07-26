@@ -505,7 +505,7 @@ def _build_cycle_context(
         if task.subtask_id
     }
 
-    prs = github.list_open_prs()
+    prs = github.list_open_prs(paginate_files=True)
 
     done_subtask_ids = {
         task.subtask_id
