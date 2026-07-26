@@ -86,6 +86,69 @@ class TestCreateWorktreeAndLaunch:
         assert result.launched is True
         assert result.pid == 4242
 
+    def test_dispatch_started_at_is_captured_immediately_before_dispatch_launch(
+        self, tmp_path
+    ):
+        """#262レビュー対応 Reproducer: `dispatch_started_at`はworktreeの
+        prune/backup/add完了後、`dispatch_target.launch()`呼び出し直前の
+        時刻でなければならない。より早い時刻（例: 関数冒頭）を使うと、
+        worktree準備中に作成された無関係な既存PRを新sessionの成果物と
+        誤認する窓が生まれる。"""
+        task = _task(1)
+        fake_target = MagicMock()
+        fake_target.launch.return_value = DispatchHandle(
+            branch_name="claude/issue-1-task-1"
+        )
+        dispatch_boundary_time = 12345.0
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_worktree.time.time",
+                return_value=dispatch_boundary_time,
+            ),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            result = create_worktree_and_launch(
+                task,
+                branch_name="claude/issue-1-task-1",
+                worktree_root=tmp_path / "worktrees",
+                dispatch_target=fake_target,
+                apply=True,
+            )
+        assert result.launched is True
+        assert result.dispatch_started_at == dispatch_boundary_time
+
+    def test_dispatch_started_at_is_none_when_launch_never_reached(self, tmp_path):
+        """worktree準備自体が失敗しdispatch_target.launch()に到達しなかった
+        場合、dispatch_started_atはNoneのままとなる。"""
+        task = _task(1)
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_run.side_effect = subprocess.CalledProcessError(
+                returncode=128,
+                cmd="git worktree add",
+                stderr="fatal: branch 'claude/issue-1-task-1' already exists",
+            )
+            result = create_worktree_and_launch(
+                task,
+                branch_name="claude/issue-1-task-1",
+                worktree_root=tmp_path / "worktrees",
+                dispatch_target=dispatch_target,
+                apply=True,
+            )
+        assert result.launched is False
+        assert result.dispatch_started_at is None
+        mock_popen.assert_not_called()
+
     def test_rejects_invalid_branch_name(self, tmp_path):
         task = _task(1)
         dispatch_target = LocalProcessDispatchTarget(
