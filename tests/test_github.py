@@ -690,6 +690,49 @@ class TestListOpenPrs:
             )
         ]
 
+    def test_records_base_ref_and_head_repository_identity(self):
+        """#243: 外部fork・別baseの同名branch PRを識別できるよう、
+        base refとhead repositoryのidentityを取得・保持する。"""
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "integration/temp-parent-issue-100", '
+            '"baseRefName": "parent/issue-100", "isCrossRepository": false, '
+            '"files": []},'
+            '{"number": 6, "headRefName": "integration/temp-parent-issue-100", '
+            '"baseRefName": "main", "isCrossRepository": true, '
+            '"files": []}'
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+            called_args = mock_run.call_args.args[0]
+
+        json_fields = called_args[called_args.index("--json") + 1]
+        assert "baseRefName" in json_fields
+        assert "isCrossRepository" in json_fields
+        assert prs[0].base_ref == "parent/issue-100"
+        assert prs[0].is_cross_repository is False
+        assert prs[1].base_ref == "main"
+        assert prs[1].is_cross_repository is True
+
+    def test_missing_identity_fields_default_to_unknown(self):
+        """#243: identityフィールドが取得できないPRは「不明」として保持し、
+        呼び出し側がfail closedに判定できるようにする。"""
+        list_payload = '[{"number": 5, "headRefName": "feat/x", "files": []}]'
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].base_ref == ""
+        assert prs[0].is_cross_repository is None
+
     def test_closes_issue_numbers_defaults_to_empty_tuple(self):
         list_payload = '[{"number": 5, "headRefName": "feat/x", "files": []}]'
 

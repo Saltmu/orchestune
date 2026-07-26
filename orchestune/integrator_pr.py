@@ -10,6 +10,17 @@ from orchestune.dispatcher import Task
 CI_OUTPUT_COMMENT_TAIL_CHARS = 4000
 
 
+def _is_reusable_integration_pr(pr: github.PrRecord, head: str, base: str) -> bool:
+    """#243: head名だけの照合では、外部fork・別baseの同名branch PRを正規統合PRと
+    誤認し、parent modeでは未検証のPRを自動マージし得る。upstream repository上の
+    正規head（`is_cross_repository is False`）かつ指定base向けのPRだけを再利用し、
+    identityを確認できないPR（`base_ref`空・`is_cross_repository`不明）は
+    fail closedで再利用しない。"""
+    return (
+        pr.head_ref == head and pr.base_ref == base and pr.is_cross_repository is False
+    )
+
+
 def ensure_integration_pr(
     temp_branch: str, base_branch: str, merged_tasks: list[str]
 ) -> int | None:
@@ -19,11 +30,14 @@ def ensure_integration_pr(
     （差分無し等）Integrator全体は失敗させず、警告ログのみ出して`None`を返す。
     """
     try:
-        existing = [pr for pr in github.list_open_prs() if pr.head_ref == temp_branch]
+        base = base_branch.removeprefix("origin/")
+        existing = [
+            pr
+            for pr in github.list_open_prs()
+            if _is_reusable_integration_pr(pr, temp_branch, base)
+        ]
         if existing:
             return existing[0].number
-
-        base = base_branch.removeprefix("origin/")
         if base.startswith("parent/"):
             merge_note = (
                 "このPRはOrchestune Integratorが自動的にマージし、"
@@ -57,7 +71,11 @@ def ensure_parent_final_pr(
     """
     try:
         head = f"parent/issue-{parent_issue_number}"
-        existing = [pr for pr in github.list_open_prs() if pr.head_ref == head]
+        existing = [
+            pr
+            for pr in github.list_open_prs()
+            if _is_reusable_integration_pr(pr, head, base_branch)
+        ]
         if existing:
             return existing[0].number
 
