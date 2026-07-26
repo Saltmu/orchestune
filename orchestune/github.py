@@ -56,6 +56,10 @@ class IssueRecord:
 
 @dataclass(frozen=True)
 class PrRecord:
+    """#243: `base_ref`/`is_cross_repository`は統合PR再利用時のidentity照合に使う。
+    `is_cross_repository=None`は「取得できず不明」を意味し、呼び出し側は
+    fail closed（正規PRとして扱わない）に判定する。"""
+
     number: int
     head_ref: str
     changed_files: tuple[str, ...]
@@ -65,6 +69,8 @@ class PrRecord:
     is_ci_passing: bool = True
     state: str = "OPEN"
     closed_at: str = ""
+    base_ref: str = ""
+    is_cross_repository: bool | None = None
 
 
 def _run(args: list[str], input_text: str | None = None) -> str:
@@ -421,7 +427,7 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
             "--limit",
             str(limit),
             "--json",
-            "number,headRefName,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
+            "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
         ]
     )
     raw_prs = json.loads(stdout)
@@ -437,6 +443,9 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
             and check.get("conclusion") in ("SUCCESS", "NEUTRAL", "SKIPPED")
             for check in rollup
         )
+        # #243: boolとして取得できない場合は「不明」(None)のまま保持し、
+        # 統合PR再利用側でfail closedに判定させる。
+        raw_is_cross = raw.get("isCrossRepository")
         prs.append(
             PrRecord(
                 number=number,
@@ -450,6 +459,10 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
                 review_decision=raw.get("reviewDecision") or "",
                 is_ci_passing=is_ci_passing,
                 state=(raw.get("state") or "OPEN").upper(),
+                base_ref=raw.get("baseRefName") or "",
+                is_cross_repository=(
+                    raw_is_cross if isinstance(raw_is_cross, bool) else None
+                ),
             )
         )
     return prs
