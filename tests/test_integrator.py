@@ -950,7 +950,7 @@ class TestAutoMergeChildIntegration:
     @patch("orchestune.integrator.github.add_comment")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_branch_merged_into",
+        "orchestune.integrator.github.is_current_branch_tip_merged_into",
         return_value=False,
     )
     def test_fetch_failure_is_handled_like_merge_failure(
@@ -1279,7 +1279,7 @@ class TestAutoMergeChildIntegration:
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_branch_merged_into",
+        "orchestune.integrator.github.is_current_branch_tip_merged_into",
         return_value=False,
     )
     def test_fetch_failure_for_reused_branch_with_old_pr_fails_closed(
@@ -1324,7 +1324,7 @@ class TestAutoMergeChildIntegration:
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_branch_merged_into",
+        "orchestune.integrator.github.is_current_branch_tip_merged_into",
         return_value=True,
     )
     def test_fetch_failure_is_skipped_when_matching_pr_is_merged(
@@ -1361,7 +1361,7 @@ class TestAutoMergeChildIntegration:
     @patch("orchestune.integrator.subprocess.run")
     @patch("orchestune.integrator.github.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_branch_merged_into",
+        "orchestune.integrator.github.is_current_branch_tip_merged_into",
         side_effect=RuntimeError("GitHub API unavailable"),
     )
     def test_fetch_failure_fails_closed_when_merged_lookup_fails(

@@ -385,12 +385,41 @@ def list_remote_branches() -> list[str]:
 
 
 def is_branch_merged_into(head: str, base: str) -> bool:
+    """Return whether GitHub records a merged PR for the exact head/base pair.
+
+    This lookup remains valid after GitHub deletes the merged PR's head branch,
+    which is required by the parent-completion lifecycle.
+    """
+    _validate_ref_name(head)
+    _validate_ref_name(base)
+    stdout = _run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--head",
+            head,
+            "--base",
+            base,
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+    )
+    return bool(json.loads(stdout))
+
+
+def is_current_branch_tip_merged_into(head: str, base: str) -> bool:
     """Return whether the current remote ``head`` tip is contained in ``base``.
 
     Looking up historical pull requests by branch name is insufficient because a
     branch can be recreated with new commits. Resolve its current GitHub SHA and
     compare that immutable commit to the base so callers fail closed when the
-    current tip cannot be fetched or proven merged.
+    current tip cannot be fetched or proven merged. This stricter check is for
+    the integrator's fetch-failure path, where branch names may be reused.
     """
     _validate_ref_name(head)
     _validate_ref_name(base)

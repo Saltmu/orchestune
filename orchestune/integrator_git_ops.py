@@ -260,7 +260,7 @@ class IntegrationMerger:
                     # branch削除/API障害を含む不確実なケースはfail closedにする。
                     base_branch_name = base_branch.removeprefix("origin/")
                     try:
-                        already_merged = github.is_branch_merged_into(
+                        already_merged = github.is_current_branch_tip_merged_into(
                             branch_name, base_branch_name
                         )
                     except Exception as lookup_error:
