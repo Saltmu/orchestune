@@ -172,6 +172,75 @@ class TestScanExternalLocks:
         assert result.to_lock == []
         assert [t.issue_number for t in result.to_unlock] == [1]
 
+    def test_not_needed_task_is_never_locked(self):
+        """#261 Codexレビュー指摘(P2): status:not-neededタスクはstatus:done同様、
+        既に対応不要と判定済みで再ディスパッチされないため、通常の重複判定でも
+        lockの対象外とすべき。"""
+        not_needed_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:not-needed",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        prs = [
+            PrRecord(number=99, head_ref="feat/other", changed_files=("src/shared.py",))
+        ]
+        result = scan_external_locks(
+            [not_needed_task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert result.to_unlock == []
+
+    def test_not_needed_task_with_external_lock_label_is_unlocked(self):
+        not_needed_locked_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:not-needed", "status:external-lock"),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        prs = [
+            PrRecord(number=99, head_ref="feat/other", changed_files=("src/shared.py",))
+        ]
+        result = scan_external_locks(
+            [not_needed_locked_task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert [t.issue_number for t in result.to_unlock] == [1]
+
+    def test_not_needed_task_is_excluded_from_fail_closed_locking(self):
+        """#261 Codexレビュー指摘(P2) Reproducer: 差分取得不能なブランチが
+        1件でもある場合のfail-closed判定(#245)は、status:doneのみを除外して
+        いたため、既に解決済みのstatus:not-neededタスクにも
+        status:external-lockが付与されうる状態だった。"""
+        not_needed_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:not-needed",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        result = scan_external_locks(
+            [not_needed_task],
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+
     def test_does_not_lock_on_hotspot_file_overlap_only(self):
         """#209: poetry.lock等のホットスポットファイルだけが重複していても、
         実質的な直列化(外部ロック)を引き起こさない。"""
