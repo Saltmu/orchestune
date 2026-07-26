@@ -113,6 +113,51 @@ class TestScanExternalLocks:
         )
         assert [t.issue_number for t in result.to_lock] == [1]
 
+    def test_locks_task_overlapping_101st_changed_file(self):
+        """#250: 101件目のchanged fileだけがtask footprintと重なる場合でもロックする。"""
+        changed_files = tuple(f"file{i}.py" for i in range(1, 102))
+        queued = [_task(1, footprint=("file101.py",))]
+        prs = [PrRecord(number=99, head_ref="feat/large", changed_files=changed_files)]
+        result = scan_external_locks(
+            queued, remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_locks_task_when_pr_files_truncated(self):
+        """#250: changed filesが完全取得できずtruncated状態のPRが存在する場合、fail closedで外部ロック判定する。"""
+        queued = [_task(1, footprint=("completely_unrelated.py",))]
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/truncated",
+                changed_files=("file1.py",),
+                is_files_truncated=True,
+            )
+        ]
+        result = scan_external_locks(
+            queued, remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_ignores_truncated_pr_for_hotspot_or_empty_footprint_task(self):
+        """#250: truncated状態のPRが存在しても、taskのfootprintが空またはhotspotのみの場合は外部ロックしない。"""
+        queued = [
+            _task(1, footprint=("poetry.lock",)),
+            _task(2, footprint=()),
+        ]
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/truncated",
+                changed_files=("file1.py",),
+                is_files_truncated=True,
+            )
+        ]
+        result = scan_external_locks(
+            queued, remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+
     def test_unlocks_previously_locked_task_with_no_more_overlap(self):
         locked_task = Task(
             issue_number=1,

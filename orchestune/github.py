@@ -72,6 +72,7 @@ class PrRecord:
     closed_at: str = ""
     base_ref: str = ""
     is_cross_repository: bool | None = None
+    is_files_truncated: bool = False
 
 
 def _run(args: list[str], input_text: str | None = None) -> str:
@@ -448,13 +449,75 @@ def is_current_branch_tip_merged_into(head: str, base: str) -> bool:
     return status in {"ahead", "identical"}
 
 
-def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
+_PR_FILES_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      files(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { path }
+      }
+    }
+  }
+}
+"""
+
+
+def _fetch_all_pr_files(pr_number: int) -> tuple[tuple[str, ...], bool]:
+    """#250: gh pr list --json files は first: 100 固定でページングされないため、
+    100件以上のファイル変更があるPRについては GraphQL API で完全取得する。
+    取得に失敗した場合は (既知のファイルパス..., True) を返し、呼び出し側に
+    is_files_truncated=True を通知する。
+    """
+    paths: list[str] = []
+    after: str | None = None
+    try:
+        while True:
+            args = [
+                "gh",
+                "api",
+                "graphql",
+                "-F",
+                "owner={owner}",
+                "-F",
+                "name={repo}",
+                "-F",
+                f"number={pr_number}",
+                "-f",
+                f"query={_PR_FILES_QUERY}",
+            ]
+            if after is not None:
+                args.extend(["-F", f"after={after}"])
+            stdout = _run(args)
+            data = json.loads(stdout)["data"]["repository"]["pullRequest"]["files"]
+            for node in data.get("nodes", []):
+                paths.append(node["path"])
+            page_info = data.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            after = page_info.get("endCursor")
+    except Exception as exc:
+        print(
+            f"Warning: failed to paginate changed files for PR #{pr_number}: {exc}",
+            file=sys.stderr,
+        )
+        return tuple(paths), True
+
+    return tuple(paths), False
+
+
+def list_prs(
+    state: str = "open", limit: int = 1000, paginate_files: bool = False
+) -> list[PrRecord]:
     """#239: ブランチ名がAIセッションの指示通りにならない場合でも自己PRと
     判定できるよう、`closingIssuesReferences`（`Closes #N`等から解決される
     GitHub側の正規のIssue参照一覧）も併せて取得する。
     パフォーマンス向上のため、一括で取得する。
     #210: 完了シグナルがPRのclose/mergeで消えないよう、呼び出し側が
     `open`/`closed`/`merged`/`all`を指定できる。
+    #250: 外部ロック判定等のため全件のchanged filesが必要な呼び出し元(paginate_files=True)
+    に対してのみ、100件以上のPRでGraphQL APIで全件取得し、完全取得できない場合は
+    is_files_truncated=Trueを設定する。
     """
     if state not in {"open", "closed", "merged", "all"}:
         raise ValueError(f"Unsupported PR state: {state}")
@@ -478,6 +541,21 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
         files = raw.get("files", [])
         closing_refs = raw.get("closingIssuesReferences", [])
 
+        is_truncated = False
+        # #250: GraphQL ページネーションは外部ロック判定など changed files 全件を必要とする
+        # 明示的呼び出し (paginate_files=True かつ state=="open") のみに限定する。
+        # 完了検知やリカバリ等の他呼び出し元での不要な GraphQL API 呼び出し・レイテンシ増大を防ぐ。
+        if paginate_files and state == "open" and len(files) >= 100:
+            all_files, is_truncated = _fetch_all_pr_files(number)
+            if not is_truncated:
+                changed_files = all_files
+            else:
+                changed_files = (
+                    all_files if all_files else tuple(f["path"] for f in files)
+                )
+        else:
+            changed_files = tuple(f["path"] for f in files)
+
         rollup = _status_check_contexts(raw.get("statusCheckRollup"))
         is_ci_passing = bool(rollup) and all(
             check.get("status") == "COMPLETED"
@@ -491,7 +569,7 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
             PrRecord(
                 number=number,
                 head_ref=raw["headRefName"],
-                changed_files=tuple(f["path"] for f in files),
+                changed_files=changed_files,
                 created_at=raw.get("createdAt") or "",
                 closed_at=raw.get("closedAt") or "",
                 closes_issue_numbers=tuple(
@@ -504,14 +582,15 @@ def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
                 is_cross_repository=(
                     raw_is_cross if isinstance(raw_is_cross, bool) else None
                 ),
+                is_files_truncated=is_truncated,
             )
         )
     return prs
 
 
-def list_open_prs(limit: int = 1000) -> list[PrRecord]:
+def list_open_prs(limit: int = 1000, paginate_files: bool = False) -> list[PrRecord]:
     """Return open PRs, preserving the existing compatibility API."""
-    return list_prs(state="open", limit=limit)
+    return list_prs(state="open", limit=limit, paginate_files=paginate_files)
 
 
 def _status_check_contexts(rollup: object) -> list[dict[str, object]]:
