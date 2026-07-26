@@ -28,6 +28,16 @@ def _is_git_repo_empty(cwd: Path) -> bool:
 
 
 def _initialize_empty_repo(cwd: Path) -> None:
+    res_staged = subprocess.run(
+        ["git", "ls-files", "--stage"],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if res_staged.stdout.strip():
+        raise RuntimeError("Staged files already exist in index before initial commit.")
+
     print(
         "Detected an empty Git repository. Initializing with initial commit...",
         file=sys.stderr,
