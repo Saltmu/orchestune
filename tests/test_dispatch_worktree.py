@@ -405,6 +405,97 @@ class TestCreateWorktreeAndLaunch:
         mock_popen.assert_not_called()
         assert marker.exists()  # 未コミット作業が残ったworktreeは削除されていない
 
+    def test_retry_after_launch_failure_with_real_git_repo(self, tmp_path, monkeypatch):
+        """#248: launchが失敗した後に同じtask/branchで再試行した際、Git metadataが原因で
+        worktree再作成が失敗しないことを実際のGitリポジトリで検証する。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repo_dir,
+            check=True,
+        )
+        (repo_dir / "README.md").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"], cwd=repo_dir, check=True
+        )
+
+        monkeypatch.chdir(repo_dir)
+
+        task = _task(248)
+        branch_name = "claude/issue-248-task-248"
+        worktree_root = tmp_path / "worktrees"
+
+        failing_target = MagicMock()
+        failing_target.launch.side_effect = OSError("launch failed")
+
+        # 1回目の実行（launch失敗）
+        res1 = create_worktree_and_launch(
+            task,
+            branch_name=branch_name,
+            worktree_root=worktree_root,
+            dispatch_target=failing_target,
+            apply=True,
+        )
+        assert res1.launched is False
+        assert "launch failed" in res1.error_message
+
+        # 2回目の実行（正常なDispatchTargetでの再試行）
+        success_target = MagicMock()
+        success_target.launch.return_value = DispatchHandle(
+            external_id="session_248",
+            external_url="https://example.com",
+            branch_name=branch_name,
+        )
+
+        res2 = create_worktree_and_launch(
+            task,
+            branch_name=branch_name,
+            worktree_root=worktree_root,
+            dispatch_target=success_target,
+            apply=True,
+        )
+
+        assert res2.launched is True
+        assert res2.error_message is None
+
+    def test_launch_failure_removes_created_worktree(self, tmp_path):
+        """#248: git worktree add 成功後に launch() が失敗した場合、補償処理として
+        作成済み worktree が Git 管理および物理パスから解除・削除されることを検証する。"""
+        task = _task(248)
+        failing_target = MagicMock()
+        failing_target.launch.side_effect = OSError("launch failed")
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            result = create_worktree_and_launch(
+                task,
+                branch_name="claude/issue-248-task-248",
+                worktree_root=tmp_path / "worktrees",
+                dispatch_target=failing_target,
+                apply=True,
+            )
+
+        assert result.launched is False
+        assert "launch failed" in result.error_message
+
+        # git worktree remove --force が補償処理として呼ばれたことを確認
+        remove_calls = [
+            call for call in mock_run.call_args_list if "remove" in call.args[0]
+        ]
+        assert len(remove_calls) >= 1
+        assert "--force" in remove_calls[0].args[0]
+
 
 class TestBranchExists:
     @patch("orchestune.dispatch_worktree.subprocess.run")
