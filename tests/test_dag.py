@@ -782,9 +782,16 @@ class TestNormalizeFootprintPath:
         assert normalize_footprint_path("./src//core.py") == "src/core.py"
         assert normalize_footprint_path("src\\core.py") == "src/core.py"
         assert normalize_footprint_path("src/foo/../core.py") == "src/core.py"
-        assert normalize_footprint_path("/src/core.py") == "src/core.py"
-        assert normalize_footprint_path("C:\\src\\core.py") == "src/core.py"
-        assert normalize_footprint_path("C:/src/core.py") == "src/core.py"
+
+    def test_raises_for_absolute_and_drive_qualified_paths(self):
+        with pytest.raises(ValueError, match="absolute path"):
+            normalize_footprint_path("/src/core.py")
+
+        with pytest.raises(ValueError, match="drive-qualified"):
+            normalize_footprint_path("C:\\src\\core.py")
+
+        with pytest.raises(ValueError, match="drive-qualified"):
+            normalize_footprint_path("C:/src/core.py")
 
     def test_raises_for_escaping_repository_root(self):
         with pytest.raises(ValueError, match="escapes repository root"):
@@ -799,9 +806,6 @@ class TestNormalizeFootprintPath:
 
         with pytest.raises(ValueError, match="resolves to empty or root"):
             normalize_footprint_path(".")
-
-        with pytest.raises(ValueError, match="resolves to empty or root"):
-            normalize_footprint_path("/")
 
 
 def test_subtask_post_init_normalizes_footprint():
