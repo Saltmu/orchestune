@@ -4,6 +4,7 @@ import contextlib
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,12 @@ class LaunchResult:
     external_id: str | None = None
     external_url: str | None = None
     validation_error: bool = False
+    # #262レビュー対応: worktreeのprune/backup/addにかかる時間を含めず、
+    # 実際にdispatch_target.launch()を呼び出す直前の時刻。呼び出し元が
+    # PR完了判定のstale境界（started_at）としてこれを使うことで、
+    # worktree準備中に作成された無関係な既存PRを新sessionの成果物と
+    # 誤認する窓を最小化する。launchが行われなかった場合はNone。
+    dispatch_started_at: float | None = None
 
 
 def _branch_exists(branch_name: str) -> bool:
@@ -64,6 +71,7 @@ def create_worktree_and_launch(
     external_url: str | None = None
     launched = False
     error_message: str | None = None
+    dispatch_started_at: float | None = None
 
     try:
         _validate_ref_name(branch_name)
@@ -149,6 +157,11 @@ def create_worktree_and_launch(
                 text=True,
                 check=True,
             )
+            # #262レビュー対応: worktreeのprune/backup/add完了後、実際の
+            # dispatch_target.launch()呼び出し直前に取得する。ここより前に
+            # 取得すると、prune/backup/add中に作成された無関係なPRまで
+            # 新sessionの成果物として誤認する窓が広がる。
+            dispatch_started_at = time.time()
             handle = dispatch_target.launch(task, branch_name, worktree_path)
             pid = handle.pid
             external_id = handle.external_id
@@ -173,6 +186,7 @@ def create_worktree_and_launch(
         error_message=error_message,
         external_id=external_id,
         external_url=external_url,
+        dispatch_started_at=dispatch_started_at,
     )
 
 

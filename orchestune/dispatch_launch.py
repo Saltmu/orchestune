@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -258,11 +257,6 @@ def _apply_task_launches(
     for plan in plans:
         task = plan.task
         assert config.dispatch_target is not None
-        # #262レビュー対応: サイクル共通の`now`は各タスクの実起動（cloud routine
-        # fire等）より必ず前の時刻になるため、PR完了判定のstale境界に使うと
-        # GitHub側のcreated_at（秒精度）との丸め差で正規PRを誤ってstale判定
-        # しうる。タスクごとの実起動直前の時刻を`started_at`として記録する。
-        task_started_at = time.time()
         launch = create_worktree_and_launch(
             task,
             plan.branch_name,
@@ -299,12 +293,17 @@ def _apply_task_launches(
         # まだstatus:queuedのまま」という、次回サイクルの冒頭でラベルを見て
         # 機械的に検出・破棄できる非対称にしかならない（逆順だと「GitHub側は
         # 確定・run_state側は空」という検出不能な非対称になってしまう）。
+        # #262レビュー対応: サイクル共通の`now`やworktree準備（prune/backup/add）
+        # 開始前の時刻を`started_at`に使うと、実際の起動（cloud routine fire等）
+        # より前の時刻になり、その間に作成された無関係な既存PRを新sessionの
+        # 成果物と誤認しうる。`create_worktree_and_launch`が
+        # dispatch_target.launch()呼び出し直前に取得した時刻を使う。
         run_state.active_worktrees[str(task.issue_number)] = ActiveWorktree(
             issue_number=task.issue_number,
             branch=plan.branch_name,
             worktree_path=launch.worktree_path,
             pid=launch.pid,
-            started_at=task_started_at,
+            started_at=launch.dispatch_started_at or now,
             declared_footprint=task.footprint,
             external_id=launch.external_id,
             external_url=launch.external_url,

@@ -1921,6 +1921,7 @@ class TestBranchStacking:
                 error_message=None,
                 external_id=None,
                 external_url=None,
+                dispatch_started_at=1_700_000_000.0,
             )
 
             report = run_dispatch_cycle(config)
@@ -1995,6 +1996,7 @@ class TestBranchStacking:
                 error_message=None,
                 external_id=None,
                 external_url=None,
+                dispatch_started_at=1_700_000_000.0,
             )
 
             run_dispatch_cycle(config)
@@ -2272,6 +2274,7 @@ class TestBranchStacking:
                 error_message=None,
                 external_id=None,
                 external_url=None,
+                dispatch_started_at=1_700_000_000.0,
             )
 
             report = run_dispatch_cycle(config)
