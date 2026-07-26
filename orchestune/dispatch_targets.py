@@ -169,12 +169,22 @@ def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str
     return ["true"]
 
 
+class BranchReachabilityError(RuntimeError):
+    """#244レビュー対応: `_push_branch_and_verify`の到達性検証失敗専用の例外。
+
+    `create_worktree_and_launch`側で汎用`RuntimeError`を捕捉すると、
+    このチェック以外の実装バグまで通常の起動失敗として握り潰してしまうため、
+    この専用型だけを捕捉させる。
+    """
+
+
 def _push_branch_and_verify(branch_name: str, worktree_path: Path) -> None:
     """#244: stacked/parent base付きで作成されたローカルtask branchを、リモート
     セッションがその内容ごとcheckoutできるようoriginへpushし、到達性を検証する。
 
     push後に`git ls-remote`でリモートbranchのSHAをローカルHEADと照合し、
-    確認できない場合は例外を送出する（呼び出し側はfireせずfail closed）。
+    確認できない場合は`BranchReachabilityError`を送出する
+    （呼び出し側はfireせずfail closed）。
     """
     subprocess.run(
         ["git", "push", "--set-upstream", "origin", branch_name],
@@ -199,7 +209,7 @@ def _push_branch_and_verify(branch_name: str, worktree_path: Path) -> None:
     ).stdout.strip()
     remote_sha = ls_remote_output.split()[0] if ls_remote_output else ""
     if not remote_sha or remote_sha != local_sha:
-        raise RuntimeError(
+        raise BranchReachabilityError(
             f"リモートブランチ '{branch_name}' の到達性を検証できませんでした "
             f"(local={local_sha or '不明'}, remote={remote_sha or '不在'})。"
             "baseの変更を含まないセッション起動を防ぐため、fireを中止します。"

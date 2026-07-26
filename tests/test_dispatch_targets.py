@@ -9,6 +9,7 @@ from orchestune.dispatch_targets import (
     AGY_CLI_LOCAL_CMD_TEMPLATE,
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
     CODEX_CLI_LOCAL_CMD_TEMPLATE,
+    BranchReachabilityError,
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
     DispatchHandle,
@@ -269,7 +270,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             patch("orchestune.dispatch_targets.subprocess.run", side_effect=fake_run),
             patch("orchestune.dispatch_targets.urllib.request.urlopen") as mock_urlopen,
         ):
-            with pytest.raises(RuntimeError, match="到達性を検証できません"):
+            with pytest.raises(BranchReachabilityError, match="到達性を検証できません"):
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
         mock_urlopen.assert_not_called()
