@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import subprocess
 import time
@@ -21,6 +22,8 @@ from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.github import resolve_local_or_remote_branch
+
+logger = logging.getLogger(__name__)
 
 
 def notify_recompute(
@@ -276,9 +279,17 @@ def _decide_rebase_needed(
     """`parent_branch`が`child_branch`の祖先でない（＝リベースが必要）かを、
     読み取り専用の`git merge-base --is-ancestor`で判定する。"""
 
-    resolved_parent = resolve_local_or_remote_branch(
-        worktree_path, parent_branch, prefer_remote=parent_branch.startswith("parent/")
-    )
+    try:
+        resolved_parent = resolve_local_or_remote_branch(
+            worktree_path,
+            parent_branch,
+            prefer_remote=parent_branch.startswith("parent/"),
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to resolve branch '{parent_branch}' in {worktree_path}: {e}"
+        )
+        return False
 
     try:
         res = subprocess.run(
@@ -294,8 +305,17 @@ def _decide_rebase_needed(
             capture_output=True,
             text=True,
         )
-        return res.returncode != 0
-    except OSError:
+        if res.returncode == 0:
+            return False
+        elif res.returncode == 1:
+            return True
+        else:
+            logger.warning(
+                f"git merge-base failed with returncode {res.returncode}: {res.stderr.strip()}"
+            )
+            return False
+    except OSError as e:
+        logger.warning(f"git merge-base failed with OSError: {e}")
         return False
 
 
