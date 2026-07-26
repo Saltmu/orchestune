@@ -1282,9 +1282,12 @@ class TestAutoMergeChildIntegration:
         "orchestune.integrator.github.is_branch_merged_into",
         return_value=False,
     )
-    def test_fetch_failure_without_merged_pr_is_not_treated_as_success(
+    def test_fetch_failure_for_reused_branch_with_old_pr_fails_closed(
         self, mock_is_merged, mock_list_prs, mock_run, mock_list
     ):
+        # The branch name was used by an older merged PR, but its recreated
+        # current tip is not contained in base. The SHA-aware GitHub helper
+        # therefore returns False and the historical PR must not cause a skip.
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
 

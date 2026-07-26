@@ -254,9 +254,10 @@ class IntegrationMerger:
                         capture_output=True,
                     )
                 except subprocess.CalledProcessError as e:
-                    # ブランチ削除済みの正常系は、同じhead/baseのPRがGitHub上で
-                    # 実際にmergedと確認できた場合に限って統合済みとして扱う。
-                    # 確認APIの障害を含む不確実なケースはfail closedにする。
+                    # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
+                    # 場合だけ統合済みとして扱う。同名branchの過去PRだけでは、
+                    # branch再利用後の新commitを見落とすため根拠にしない。
+                    # branch削除/API障害を含む不確実なケースはfail closedにする。
                     base_branch_name = base_branch.removeprefix("origin/")
                     try:
                         already_merged = github.is_branch_merged_into(
@@ -274,7 +275,8 @@ class IntegrationMerger:
                     if already_merged:
                         print(
                             f"[Integrator] Branch {branch_name} could not be fetched, "
-                            f"but its PR into {base_branch_name} is merged. "
+                            "but its current remote tip is contained in "
+                            f"{base_branch_name}. "
                             "Skipping integration merge."
                         )
                         merged_tasks.append(task.subtask_id)
