@@ -5,6 +5,7 @@ import pytest
 
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import (
+    BranchReachabilityError,
     DispatchHandle,
     LocalProcessDispatchTarget,
     default_dry_run_command_builder,
@@ -222,6 +223,34 @@ class TestCreateWorktreeAndLaunch:
         assert result.pid is None
         assert result.external_id == "session_1"
         assert result.external_url == "https://claude.ai/code/session_1"
+
+    def test_branch_reachability_error_from_dispatch_target_fails_launch(
+        self, tmp_path
+    ):
+        """#244/#260: cloud-routine起動前のリモートブランチ到達性検証失敗
+        （BranchReachabilityError）は、通常の起動失敗としてstatus:blocked経路に
+        乗せる。汎用RuntimeErrorは捕捉対象に含めない（#260レビュー対応）。"""
+        task = _task(1)
+        fake_target = MagicMock()
+        fake_target.launch.side_effect = BranchReachabilityError(
+            "リモートブランチ 'claude/issue-1-task-1' の到達性を検証できませんでした"
+        )
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            result = create_worktree_and_launch(
+                task,
+                branch_name="claude/issue-1-task-1",
+                worktree_root=tmp_path / "worktrees",
+                dispatch_target=fake_target,
+                apply=True,
+            )
+        assert result.launched is False
+        assert "到達性を検証できませんでした" in result.error_message
 
     @patch("orchestune.dispatch_worktree._branch_exists", return_value=True)
     def test_apply_reuses_existing_branch_without_overwriting(
