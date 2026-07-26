@@ -23,6 +23,11 @@ poetry add --group dev git+https://github.com/Saltmu/orchestune.git
 
 これにより、導入先プロジェクトのディレクトリから、統一された `orchestune` コマンド、および個別の `orchestune-dag` / `orchestune-dispatch` コマンドを実行できるようになります。
 
+#### Windows環境での動作サポート
+OrchestuneはWindows NT/10/11環境をネイティブサポートしています:
+- **排他ロック**: POSIX環境では `fcntl`、Windows環境では `msvcrt` を用いたクロスプラットフォームな排他ロック (`file_lock`) を提供します。
+- **ローカルCI & Git hooks**: PowerShellから `.\scripts\setup-git-hooks.ps1` および `.\scripts\local-ci.ps1` を使用できます。
+
 ---
 
 ## 2. エージェントへのスキル定義の登録

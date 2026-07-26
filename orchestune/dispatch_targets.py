@@ -271,7 +271,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
                 issue_number=task.issue_number,
                 subtask_id=task.subtask_id or "",
                 branch_name=branch_name,
-                worktree_path=str(worktree_path),
+                worktree_path=str(worktree_path).replace("\\", "\\\\"),
             )
             cmd = shlex.split(formatted_cmd)
         else:
