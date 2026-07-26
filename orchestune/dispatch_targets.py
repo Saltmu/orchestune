@@ -132,11 +132,19 @@ def _parse_github_timestamp(value: str) -> float | None:
         return None
 
 
-def _is_stale_closed_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool:
-    if pr.state != "CLOSED" or handle.started_at is None:
+def _is_stale_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool:
+    """#246: session開始（`handle.started_at`）より前に作成されたPRは、状態
+    （OPEN/MERGED/CLOSED）に関係なく現在のsessionの成果物ではない。同名branchの
+    古いMERGED PR等で再キュー後の新sessionが即completed扱いされないよう除外する。
+
+    `created_at`を取得・解釈できないPRも現世代の証拠とはみなさない（fail
+    closed）。`started_at`を持たないhandle（復元経路等）は従来通り除外しない。
+    CLOSED PRの`closed_at < started_at`によるstale判定（#210）は、
+    `closed_at >= created_at`であるため`created_at`判定に包含される。"""
+    if handle.started_at is None:
         return False
-    closed_at = _parse_github_timestamp(pr.closed_at)
-    return closed_at is not None and closed_at < handle.started_at
+    created_at = _parse_github_timestamp(pr.created_at)
+    return created_at is None or created_at < handle.started_at
 
 
 def _task_pr_completion_status(
@@ -156,7 +164,7 @@ def _task_pr_completion_status(
                 and handle.issue_number in pr.closes_issue_numbers
             )
         )
-        and not _is_stale_closed_pr_for_handle(pr, handle)
+        and not _is_stale_pr_for_handle(pr, handle)
     ]
     if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
         return "completed"
