@@ -37,6 +37,7 @@ from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )
+from orchestune.dispatch_worktree import file_lock
 from orchestune.not_needed_review_state import (
     NotNeededReviewState,
     PendingNotNeededReview,
@@ -194,17 +195,19 @@ def record_pending_not_needed_review(
 ) -> None:
     """#282: `dispatch_not_needed_review`直後に呼び、後続サイクルでの
     ポーリング対象として記録する。"""
-    state = load_not_needed_review_state(state_path)
-    state.pending.append(
-        PendingNotNeededReview(
-            issue_number=issue_number,
-            subtask_id=subtask_id,
-            dispatched_at=time.time(),
-            session_external_id=session_handle.external_id,
-            session_external_url=session_handle.external_url,
+    lock_path = Path(state_path).with_suffix(".lock")
+    with file_lock(lock_path):
+        state = load_not_needed_review_state(state_path)
+        state.pending.append(
+            PendingNotNeededReview(
+                issue_number=issue_number,
+                subtask_id=subtask_id,
+                dispatched_at=time.time(),
+                session_external_id=session_handle.external_id,
+                session_external_url=session_handle.external_url,
+            )
         )
-    )
-    save_not_needed_review_state(state, state_path)
+        save_not_needed_review_state(state, state_path)
 
 
 def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
@@ -231,58 +234,64 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
       これにより「未処理エントリの取りこぼし」と「消費済みエントリの台帳復帰による
       永久pending化」の両方（いずれも#205と同種のリーク）を防ぐ。
     """
-    state = load_not_needed_review_state(state_path)
-    if not state.pending:
-        return {"closed": [], "reopened": [], "still_pending": 0}
+    lock_path = Path(state_path).with_suffix(".lock")
+    with file_lock(lock_path):
+        state = load_not_needed_review_state(state_path)
+        if not state.pending:
+            return {"closed": [], "reopened": [], "still_pending": 0}
 
-    closed_summary: list[int] = []
-    reopened_summary: list[int] = []
-    # #226/PR#227: クローズ＋ラベル削除（またはreopenのラベル削除）まで成功し、
-    # 完了シグナルを消費し終えたエントリのissue_number。台帳から確実に除外する対象。
-    consumed: set[int] = set()
+        closed_summary: list[int] = []
+        reopened_summary: list[int] = []
+        # #226/PR#227: クローズ＋ラベル削除（またはreopenのラベル削除）まで成功し、
+        # 完了シグナルを消費し終えたエントリのissue_number。台帳から確実に除外する対象。
+        consumed: set[int] = set()
 
-    try:
-        for entry in state.pending:
-            try:
-                labels = github.get_issue_labels(entry.issue_number)
-            except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
-                print(
-                    f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
-                    file=sys.stderr,
-                )
-                continue
+        try:
+            for entry in state.pending:
+                try:
+                    labels = github.get_issue_labels(entry.issue_number)
+                except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
+                    print(
+                        f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
 
-            try:
-                if NOT_NEEDED_VERIFIED_LABEL in labels:
-                    _close_verified_issue(entry.issue_number)
-                    github.remove_label(entry.issue_number, NOT_NEEDED_VERIFIED_LABEL)
-                    consumed.add(entry.issue_number)
-                    closed_summary.append(entry.issue_number)
-                elif NOT_NEEDED_REJECTED_LABEL in labels:
-                    github.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
-                    consumed.add(entry.issue_number)
-                    reopened_summary.append(entry.issue_number)
-                # どちらのラベルも無ければ消費しない（pendingのまま次サイクルで再確認）。
-            except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
-                print(
-                    f"Warning: failed to finalize not-needed review for issue "
-                    f"{entry.issue_number}: {exc}",
-                    file=sys.stderr,
-                )
-                # 消費していないためpendingのまま残し、次サイクルで再試行する。
-    finally:
-        # #226/PR#227: 保存する台帳は「元のpending − 消費済み」で構成する。
-        # 消費済み（closed/reopened）エントリのみを除外し、要再試行・処理中・未処理の
-        # エントリはすべて温存する。still_pendingを積み上げて保存する方式だと、
-        # BaseException（割り込み・強制終了）でループが中断した際に未処理の後続エントリを
-        # 取りこぼす。逆に「一切保存しない」方式だと、割り込み前に完了シグナルを消費済みの
-        # 先行エントリまで台帳へ復帰させてしまい、次サイクルで完了ラベルが無いため永久に
-        # pending化する（いずれも#205と同種のリーク）。消費済みだけを除外することで、
-        # 正常完了時も割り込み時も一貫して安全な台帳を残す。
-        remaining = [e for e in state.pending if e.issue_number not in consumed]
-        save_not_needed_review_state(
-            NotNeededReviewState(pending=remaining), state_path
-        )
+                try:
+                    if NOT_NEEDED_VERIFIED_LABEL in labels:
+                        _close_verified_issue(entry.issue_number)
+                        github.remove_label(
+                            entry.issue_number, NOT_NEEDED_VERIFIED_LABEL
+                        )
+                        consumed.add(entry.issue_number)
+                        closed_summary.append(entry.issue_number)
+                    elif NOT_NEEDED_REJECTED_LABEL in labels:
+                        github.remove_label(
+                            entry.issue_number, NOT_NEEDED_REJECTED_LABEL
+                        )
+                        consumed.add(entry.issue_number)
+                        reopened_summary.append(entry.issue_number)
+                    # どちらのラベルも無ければ消費しない（pendingのまま次サイクルで再確認）。
+                except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
+                    print(
+                        f"Warning: failed to finalize not-needed review for issue "
+                        f"{entry.issue_number}: {exc}",
+                        file=sys.stderr,
+                    )
+                    # 消費していないためpendingのまま残し、次サイクルで再試行する。
+        finally:
+            # #226/PR#227: 保存する台帳は「元のpending − 消費済み」で構成する。
+            # 消費済み（closed/reopened）エントリのみを除外し、要再試行・処理中・未処理の
+            # エントリはすべて温存する。still_pendingを積み上げて保存する方式だと、
+            # BaseException（割り込み・強制終了）でループが中断した際に未処理の後続エントリを
+            # 取りこぼす。逆に「一切保存しない」方式だと、割り込み前に完了シグナルを消費済みの
+            # 先行エントリまで台帳へ復帰させてしまい、次サイクルで完了ラベルが無いため永久に
+            # pending化する（いずれも#205と同種のリーク）。消費済みだけを除外することで、
+            # 正常完了時も割り込み時も一貫して安全な台帳を残す。
+            remaining = [e for e in state.pending if e.issue_number not in consumed]
+            save_not_needed_review_state(
+                NotNeededReviewState(pending=remaining), state_path
+            )
 
     return {
         "closed": closed_summary,

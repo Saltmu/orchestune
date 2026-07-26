@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from orchestune.json_state import read_json_with_recovery, write_json_atomic
 
 
 @dataclass
@@ -51,10 +52,9 @@ class RunState:
 
 
 def load_run_state(path: str | Path) -> RunState:
-    path = Path(path)
-    if not path.exists():
+    data = read_json_with_recovery(path, label="run_state.json")
+    if data is None:
         return RunState(active_worktrees={}, launch_history=[])
-    data = json.loads(path.read_text(encoding="utf-8"))
     active_worktrees = {
         key: ActiveWorktree(
             issue_number=value["issue_number"],
@@ -191,8 +191,6 @@ def save_run_state(
         open_prs=open_prs,
         max_completed_worktrees=max_completed_worktrees,
     )
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "active_worktrees": {
             key: dataclasses.asdict(value)
@@ -204,4 +202,4 @@ def save_run_state(
         ],
         "last_reconciled_at": state.last_reconciled_at,
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(path, data)
