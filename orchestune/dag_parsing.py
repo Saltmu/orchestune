@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from orchestune.dag_models import SubTask
+from orchestune.dag_models import SubTask, normalize_footprint_path
 
 _RISK_PATH_PATTERNS = (
     re.compile(r"(^|/)data/sources/"),
@@ -27,7 +27,7 @@ def detect_risk_from_values(
     description: str,
     explicit: bool = False,
 ) -> tuple[bool, tuple[str, ...]]:
-    footprint = tuple(footprint)
+    footprint = tuple(normalize_footprint_path(path) for path in footprint)
     symbols = tuple(symbols)
     reasons: list[str] = []
 
@@ -59,7 +59,9 @@ def extract_frontmatter(text: str) -> dict[str, Any]:
 
 
 def _parse_subtask(raw: dict[str, Any]) -> SubTask:
-    footprint = tuple(str(item) for item in raw.get("footprint", []) or [])
+    footprint = tuple(
+        normalize_footprint_path(str(item)) for item in raw.get("footprint", []) or []
+    )
     symbols = tuple(str(item) for item in raw.get("symbols", []) or [])
     depends_on = tuple(str(item) for item in raw.get("depends_on", []) or [])
     description = str(raw.get("description", ""))

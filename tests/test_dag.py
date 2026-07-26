@@ -11,6 +11,7 @@ from orchestune.dag import (
     build_dag,
     build_dag_from_plan,
     build_similarity_edges,
+    normalize_footprint_path,
     parse_decomposition_plan,
     recompute_dag_for_footprint_change,
 )
@@ -772,3 +773,82 @@ def test_cli_validation_cycle_failure(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Error:" in captured.err
+
+
+class TestNormalizeFootprintPath:
+    def test_normalizes_relative_posix_paths(self):
+        assert normalize_footprint_path("src/core.py") == "src/core.py"
+        assert normalize_footprint_path("./src/core.py") == "src/core.py"
+        assert normalize_footprint_path("./src//core.py") == "src/core.py"
+        assert normalize_footprint_path("src\\core.py") == "src/core.py"
+        assert normalize_footprint_path("src/foo/../core.py") == "src/core.py"
+
+    def test_raises_for_absolute_and_drive_qualified_paths(self):
+        with pytest.raises(ValueError, match="absolute path"):
+            normalize_footprint_path("/src/core.py")
+
+        with pytest.raises(ValueError, match="drive-qualified"):
+            normalize_footprint_path("C:\\src\\core.py")
+
+        with pytest.raises(ValueError, match="drive-qualified"):
+            normalize_footprint_path("C:/src/core.py")
+
+    def test_raises_for_escaping_repository_root(self):
+        with pytest.raises(ValueError, match="escapes repository root"):
+            normalize_footprint_path("../core.py")
+
+        with pytest.raises(ValueError, match="escapes repository root"):
+            normalize_footprint_path("src/../../core.py")
+
+    def test_raises_for_empty_or_root_path(self):
+        with pytest.raises(ValueError, match="resolves to empty or root"):
+            normalize_footprint_path("")
+
+        with pytest.raises(ValueError, match="resolves to empty or root"):
+            normalize_footprint_path(".")
+
+
+def test_subtask_post_init_normalizes_footprint():
+    subtask = SubTask(
+        id="task-1",
+        description="Test subtask",
+        footprint=("./src/core.py", "src\\utils.py"),
+        symbols=(),
+        depends_on=(),
+        risk=False,
+        risk_reasons=(),
+    )
+    assert subtask.footprint == ("src/core.py", "src/utils.py")
+    assert subtask.touch_set() == frozenset({"src/core.py", "src/utils.py"})
+
+
+def test_dag_conflict_edge_generated_for_unnormalized_equivalent_paths(tmp_path):
+    plan_content = """\
+    ---
+    subtasks:
+      - id: task-a
+        description: "Task A"
+        footprint:
+          - ./src/core.py
+        depends_on: []
+      - id: task-b
+        description: "Task B"
+        footprint:
+          - src/core.py
+        depends_on: []
+    ---
+    """
+    plan_path = _write_plan(tmp_path, plan_content)
+    subtasks = parse_decomposition_plan(plan_path)
+
+    res = build_dag(subtasks)
+
+    # Footprints should be normalized to src/core.py
+    assert res.subtasks["task-a"].footprint == ("src/core.py",)
+    assert res.subtasks["task-b"].footprint == ("src/core.py",)
+
+    # A similarity edge must exist between task-a and task-b due to shared normalized footprint
+    assert len(res.edges) == 1
+    edge = res.edges[0]
+    assert edge.reason == "similarity"
+    assert {edge.source, edge.target} == {"task-a", "task-b"}
