@@ -15,7 +15,7 @@ except ImportError:
 
 from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_targets import DispatchTarget
+from orchestune.dispatch_targets import BranchReachabilityError, DispatchTarget
 from orchestune.github import _validate_ref_name
 
 
@@ -154,10 +154,12 @@ def create_worktree_and_launch(
             external_id = handle.external_id
             external_url = handle.external_url
             launched = True
-        # #244: RuntimeErrorは、cloud-routine起動前のリモートブランチ到達性
-        # 検証（_push_branch_and_verify）の失敗。fireは行われていないため、
+        # #244: BranchReachabilityErrorは、cloud-routine起動前のリモートブランチ
+        # 到達性検証（_push_branch_and_verify）の失敗。fireは行われていないため、
         # 通常の起動失敗として扱い、status:blocked化の既存経路へ乗せる。
-        except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
+        # #260レビュー対応: 汎用RuntimeErrorではなく専用型のみ捕捉し、
+        # このチェック以外の実装バグまで握り潰さないようにする。
+        except (subprocess.CalledProcessError, OSError, BranchReachabilityError) as e:
             error_details = ""
             if isinstance(e, subprocess.CalledProcessError):
                 error_details = f" (stderr: {e.stderr.strip() if e.stderr else ''})"

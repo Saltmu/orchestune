@@ -5,6 +5,7 @@ import pytest
 
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import (
+    BranchReachabilityError,
     DispatchHandle,
     LocalProcessDispatchTarget,
     default_dry_run_command_builder,
@@ -160,12 +161,15 @@ class TestCreateWorktreeAndLaunch:
         assert result.external_id == "session_1"
         assert result.external_url == "https://claude.ai/code/session_1"
 
-    def test_runtime_error_from_dispatch_target_fails_launch(self, tmp_path):
-        """#244: cloud-routine起動前のリモートブランチ到達性検証失敗
-        （RuntimeError）は、通常の起動失敗としてstatus:blocked経路に乗せる。"""
+    def test_branch_reachability_error_from_dispatch_target_fails_launch(
+        self, tmp_path
+    ):
+        """#244/#260: cloud-routine起動前のリモートブランチ到達性検証失敗
+        （BranchReachabilityError）は、通常の起動失敗としてstatus:blocked経路に
+        乗せる。汎用RuntimeErrorは捕捉対象に含めない（#260レビュー対応）。"""
         task = _task(1)
         fake_target = MagicMock()
-        fake_target.launch.side_effect = RuntimeError(
+        fake_target.launch.side_effect = BranchReachabilityError(
             "リモートブランチ 'claude/issue-1-task-1' の到達性を検証できませんでした"
         )
         with (
