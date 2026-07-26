@@ -13,6 +13,18 @@ class TestNotNeededReviewStateRoundTrip:
         state = load_not_needed_review_state(tmp_path / "does-not-exist.json")
         assert state.pending == []
 
+    def test_load_corrupted_file_falls_back_to_empty_state_and_quarantines(
+        self, tmp_path
+    ):
+        path = tmp_path / "not_needed_review_state.json"
+        path.write_text("{broken json", encoding="utf-8")
+
+        state = load_not_needed_review_state(path)
+
+        assert state.pending == []
+        assert not path.exists()
+        assert list(tmp_path.glob("not_needed_review_state.json.corrupt.*"))
+
     def test_save_then_load_round_trips(self, tmp_path):
         path = tmp_path / "not_needed_review_state.json"
         state = NotNeededReviewState(

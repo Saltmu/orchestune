@@ -11,9 +11,10 @@ Python側が決定論的にクローズを実行する。
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from orchestune.json_state import read_json_with_recovery, write_json_atomic
 
 
 @dataclass
@@ -31,10 +32,9 @@ class NotNeededReviewState:
 
 
 def load_not_needed_review_state(path: str | Path) -> NotNeededReviewState:
-    path = Path(path)
-    if not path.exists():
+    data = read_json_with_recovery(path, label="not_needed_review_state.json")
+    if data is None:
         return NotNeededReviewState()
-    data = json.loads(path.read_text(encoding="utf-8"))
     pending = [
         PendingNotNeededReview(
             issue_number=entry["issue_number"],
@@ -49,8 +49,6 @@ def load_not_needed_review_state(path: str | Path) -> NotNeededReviewState:
 
 
 def save_not_needed_review_state(state: NotNeededReviewState, path: str | Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "pending": [
             {
@@ -63,4 +61,4 @@ def save_not_needed_review_state(state: NotNeededReviewState, path: str | Path) 
             for entry in state.pending
         ]
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(path, data)
