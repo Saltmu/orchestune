@@ -296,13 +296,17 @@ def _decide_external_lock_sync(
         if _strip_remote_prefix(b) not in pr_head_refs
         and _strip_remote_prefix(b) not in active_branches
     ]
-    remote_branch_footprints = [
-        (
-            _strip_remote_prefix(branch),
-            tuple(github.branch_changed_files(branch)),
+    # #245: 差分取得不能(None)はtupleへ潰さずそのまま渡し、
+    # scan_external_locks側でfail closed（lock維持・新規lock）に判定させる。
+    remote_branch_footprints: list[tuple[str, tuple[str, ...] | None]] = []
+    for branch in bare_branches:
+        changed_files = github.branch_changed_files(branch)
+        remote_branch_footprints.append(
+            (
+                _strip_remote_prefix(branch),
+                tuple(changed_files) if changed_files is not None else None,
+            )
         )
-        for branch in bare_branches
-    ]
 
     all_tasks = list(tasks_by_issue.values())
     return scan_external_locks(

@@ -173,6 +173,32 @@ class TestDecideExternalLockSync:
         assert result.to_lock == []
         assert result.to_unlock == []
 
+    def test_diff_failure_keeps_existing_lock_and_locks_queued_tasks(self):
+        """#245: 差分取得不能（branch_changed_files=None）はfail closed。
+        既存のexternal-lockは解除されず、footprintを持つqueued taskはlockされる。"""
+        run_state = RunState(active_worktrees={})
+        locked_task = _task(
+            issue_number=1,
+            footprint=("src/foo.py",),
+            status_labels=("status:external-lock",),
+        )
+        queued_task = _task(issue_number=2, footprint=("src/bar.py",))
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches",
+                return_value=["origin/feat/x"],
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.branch_changed_files",
+                return_value=None,
+            ),
+        ):
+            result = _decide_external_lock_sync(
+                {1: locked_task, 2: queued_task}, [], run_state
+            )
+        assert result.to_unlock == []
+        assert [t.issue_number for t in result.to_lock] == [2]
+
 
 class TestApplyExternalLockSync:
     def test_unlocking_blocked_task_does_not_requeue_it(self):

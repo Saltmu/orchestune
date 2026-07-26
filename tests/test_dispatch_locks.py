@@ -172,6 +172,75 @@ class TestScanExternalLocks:
         assert result.to_lock == []
         assert [t.issue_number for t in result.to_unlock] == [1]
 
+    def test_not_needed_task_is_never_locked(self):
+        """#261 Codexレビュー指摘(P2): status:not-neededタスクはstatus:done同様、
+        既に対応不要と判定済みで再ディスパッチされないため、通常の重複判定でも
+        lockの対象外とすべき。"""
+        not_needed_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:not-needed",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        prs = [
+            PrRecord(number=99, head_ref="feat/other", changed_files=("src/shared.py",))
+        ]
+        result = scan_external_locks(
+            [not_needed_task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert result.to_unlock == []
+
+    def test_not_needed_task_with_external_lock_label_is_unlocked(self):
+        not_needed_locked_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:not-needed", "status:external-lock"),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        prs = [
+            PrRecord(number=99, head_ref="feat/other", changed_files=("src/shared.py",))
+        ]
+        result = scan_external_locks(
+            [not_needed_locked_task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert [t.issue_number for t in result.to_unlock] == [1]
+
+    def test_not_needed_task_is_excluded_from_fail_closed_locking(self):
+        """#261 Codexレビュー指摘(P2) Reproducer: 差分取得不能なブランチが
+        1件でもある場合のfail-closed判定(#245)は、status:doneのみを除外して
+        いたため、既に解決済みのstatus:not-neededタスクにも
+        status:external-lockが付与されうる状態だった。"""
+        not_needed_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:not-needed",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        result = scan_external_locks(
+            [not_needed_task],
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+
     def test_does_not_lock_on_hotspot_file_overlap_only(self):
         """#209: poetry.lock等のホットスポットファイルだけが重複していても、
         実質的な直列化(外部ロック)を引き起こさない。"""
@@ -220,6 +289,141 @@ class TestScanExternalLocks:
         )
         assert result.to_lock == []
         assert [t.issue_number for t in result.to_unlock] == [1]
+
+
+class TestScanExternalLocksWithUnknownFootprint:
+    """#245: 差分取得不能（footprint不明）なブランチが1件でもある場合は
+    fail closedとし、既存lockを維持し、新規taskも競合なしと判定しない。"""
+
+    def _locked_task(self, footprint=("src/foo.py",)):
+        return Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=footprint,
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:external-lock",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+    def test_keeps_existing_lock_when_branch_footprint_is_unknown(self):
+        """Reproducer: 従来は不明footprintが空集合に潰され、lockが解除されていた。"""
+        result = scan_external_locks(
+            [self._locked_task()],
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_unlock == []
+        assert result.to_lock == []
+
+    def test_keeps_existing_lock_when_remote_branches_is_a_single_use_iterator(self):
+        """#261 Reproducer: `remote_branches`にgenerator等の単回走査イテレータが
+        渡されると、2回走査する実装ではhas_unknown_branch_footprint判定が常に
+        Falseとなり、fail-closed判定が無効化されて既存lockが解除されうる。"""
+
+        def remote_branches_gen():
+            yield ("feat/x", None)
+
+        result = scan_external_locks(
+            [self._locked_task()],
+            remote_branches=remote_branches_gen(),
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_unlock == []
+        assert result.to_lock == []
+
+    def test_locks_queued_task_when_remote_branches_is_a_single_use_iterator(self):
+        def remote_branches_gen():
+            yield ("feat/x", None)
+
+        queued = [_task(1, footprint=("src/foo.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=remote_branches_gen(),
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_locks_queued_task_when_branch_footprint_is_unknown(self):
+        queued = [_task(1, footprint=("src/foo.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_does_not_lock_task_with_empty_footprint(self):
+        """footprint未宣言のtaskはどのブランチとも衝突し得ないため対象外。"""
+        queued = [_task(1, footprint=())]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+
+    def test_does_not_lock_task_with_hotspot_only_footprint(self):
+        queued = [_task(1, footprint=("poetry.lock",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+
+    def test_unknown_footprint_of_active_branch_is_ignored(self):
+        """dispatcher自身が管理するアクティブブランチの差分不明は対象外。"""
+        queued = [_task(1, footprint=("src/foo.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("claude/issue-5-x", None)],
+            prs=[],
+            active_branches=["claude/issue-5-x"],
+        )
+        assert result.to_lock == []
+
+    def test_done_task_with_lock_is_still_unlocked_despite_unknown(self):
+        done_locked_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/foo.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:done", "status:external-lock"),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        result = scan_external_locks(
+            [done_locked_task],
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_unlock] == [1]
+
+    def test_known_footprints_still_behave_normally_alongside_unknown(self):
+        """不明ブランチがあっても、既知footprintとの重複判定は通常通り機能する。"""
+        queued = [
+            _task(1, footprint=("src/foo.py",)),
+            _task(2, footprint=()),
+        ]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/known", ("src/other.py",)), ("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
 
 
 class TestCheckFootprintDeviation:

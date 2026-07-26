@@ -484,10 +484,23 @@ def _status_check_contexts(rollup: object) -> list[dict[str, object]]:
     return []
 
 
-def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
-    """#232: `base`と共通の祖先を持たない(orphanな)ブランチとの3点diffは
-    `fatal: no merge base`でexit 128になる。dispatch-cycle全体をクラッシュ
-    させないよう、footprint差分なし（ロック対象外）として扱う。"""
+def branch_changed_files(branch: str, base: str = "origin/main") -> list[str] | None:
+    """`base`に対する`branch`の変更ファイル一覧を返す。
+
+    #245: 「変更なし」と「差分取得不能」を戻り値の型で区別する。差分を取得
+    できなかった場合は`None`を返し、呼び出し側（外部ロック同期）がfail closed
+    （既存lock維持・新規taskを競合なしと判定しない）に振る舞えるようにする。
+    失敗タイプ別の方針:
+
+    - 不正なref名(ValueError): `[]`。バリデーション上diff自体を永遠に実行
+      できず、`None`を返すとそのブランチが存在する限りディスパッチが恒久的に
+      凍結されるため、従来通りロック対象外として扱う。
+    - no merge base(#232): `[]`。`base`と共通の祖先を持たない(orphanな)
+      ブランチとの3点diffは`fatal: no merge base`でexit 128になるが、
+      共有履歴がなくfootprint比較対象として意味を持たないため差分なしと扱う。
+    - その他のgit失敗(ref欠落・repository異常等のCalledProcessError): `None`。
+    - git実行障害(OSError): `None`。
+    """
     try:
         _validate_ref_name(branch)
         _validate_ref_name(base)
@@ -505,14 +518,16 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str]:
             f"{base!r}: {detail}",
             file=sys.stderr,
         )
-        return []
+        if "no merge base" in detail:
+            return []
+        return None
     except OSError as exc:
         print(
             f"Warning: unable to inspect changed files for {branch!r} against "
             f"{base!r}: {exc}",
             file=sys.stderr,
         )
-        return []
+        return None
     return [line.strip() for line in stdout.splitlines() if line.strip()]
 
 
