@@ -117,3 +117,28 @@ class TestEmptyRepoInit:
             text=True,
         )
         assert "refs/heads/main" in res_remote.stdout
+
+    def test_empty_repo_initialization_fails_with_pre_staged_files(
+        self, tmp_path, capsys
+    ):
+        import subprocess
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+
+        # 事前にステージされたファイルを作成
+        secret_file = local_dir / "secret.txt"
+        secret_file.write_text("sensitive content")
+        subprocess.run(["git", "add", "secret.txt"], cwd=str(local_dir), check=True)
+
+        forge = _fake_forge(
+            result=BootstrapResult(created_labels=(), existing_labels=())
+        )
+
+        exit_code = run_bootstrap(forge=forge, cwd=local_dir)
+
+        # 事前ステージされたファイルがある場合は失敗（1）することを期待する
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "staged" in captured.err.lower()
