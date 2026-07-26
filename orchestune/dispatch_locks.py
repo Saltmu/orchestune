@@ -71,7 +71,13 @@ def scan_external_locks(
     to_unlock: list[Task] = []
     for task in queued_tasks:
         currently_locked = "status:external-lock" in task.status_labels
-        if "status:done" in task.status_labels:
+        # #261 Codexレビュー指摘: status:doneと同様、status:not-neededも
+        # 既に解決済み（対応不要と判定済み）で再ディスパッチされないため、
+        # fail-closed判定を含む通常のlock対象から除外する。
+        if (
+            "status:done" in task.status_labels
+            or "status:not-needed" in task.status_labels
+        ):
             if currently_locked:
                 to_unlock.append(task)
             continue
