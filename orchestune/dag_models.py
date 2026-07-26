@@ -21,16 +21,21 @@ def normalize_footprint_path(path: str) -> str:
     """Normalize a footprint path into a canonical repository-relative POSIX path.
 
     - Converts Windows backslashes '\\' to POSIX forward slashes '/'
-    - Strips Windows drive letters (e.g. 'C:') and leading slashes '/'
+    - Rejects absolute paths (starting with '/') and drive-qualified paths (e.g. 'C:')
     - Resolves redundant './', duplicate slashes '//', and relative parent references '..'
-    - Raises ValueError if the path resolves to empty, root ('.'), or escapes the repository root (starts with '..')
+    - Raises ValueError if the path is absolute/drive-qualified, resolves to empty/root ('.'), or escapes the repository root
     """
     if not isinstance(path, str):
         path = str(path)
 
     clean_path = path.replace("\\", "/")
-    clean_path = re.sub(r"^[a-zA-Z]:", "", clean_path)
-    clean_path = clean_path.lstrip("/")
+
+    if re.match(r"^[a-zA-Z]:", clean_path):
+        raise ValueError(
+            f"Invalid footprint path: '{path}' is a drive-qualified absolute path"
+        )
+    if clean_path.startswith("/"):
+        raise ValueError(f"Invalid footprint path: '{path}' is an absolute path")
 
     normalized = posixpath.normpath(clean_path)
 
@@ -42,7 +47,7 @@ def normalize_footprint_path(path: str) -> str:
     if normalized == ".." or normalized.startswith("../"):
         raise ValueError(f"Invalid footprint path: '{path}' escapes repository root")
 
-    return normalized.lstrip("/")
+    return normalized
 
 
 def is_ignored_footprint(path: str) -> bool:
