@@ -250,6 +250,36 @@ class TestScanExternalLocksWithUnknownFootprint:
         assert result.to_unlock == []
         assert result.to_lock == []
 
+    def test_keeps_existing_lock_when_remote_branches_is_a_single_use_iterator(self):
+        """#261 Reproducer: `remote_branches`にgenerator等の単回走査イテレータが
+        渡されると、2回走査する実装ではhas_unknown_branch_footprint判定が常に
+        Falseとなり、fail-closed判定が無効化されて既存lockが解除されうる。"""
+
+        def remote_branches_gen():
+            yield ("feat/x", None)
+
+        result = scan_external_locks(
+            [self._locked_task()],
+            remote_branches=remote_branches_gen(),
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_unlock == []
+        assert result.to_lock == []
+
+    def test_locks_queued_task_when_remote_branches_is_a_single_use_iterator(self):
+        def remote_branches_gen():
+            yield ("feat/x", None)
+
+        queued = [_task(1, footprint=("src/foo.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=remote_branches_gen(),
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
     def test_locks_queued_task_when_branch_footprint_is_unknown(self):
         queued = [_task(1, footprint=("src/foo.py",))]
         result = scan_external_locks(

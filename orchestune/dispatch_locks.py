@@ -52,16 +52,20 @@ def scan_external_locks(
     footprintが空またはhotspotのみのタスクは、どのブランチとも衝突し得ない
     ため従来通り対象外。"""
     active_set = set(active_branches)
-    branch_footprints = [
-        set(changed_files)
-        for branch, changed_files in remote_branches
-        if branch not in active_set and changed_files is not None
-    ]
-    has_unknown_branch_footprint = any(
-        changed_files is None
-        for branch, changed_files in remote_branches
-        if branch not in active_set
-    )
+    # #261レビュー対応: `remote_branches`はIterable契約のため、generator等の
+    # 単回走査イテレータが渡されると2回目のループで要素が既に消費されており
+    # `has_unknown_branch_footprint`が常にFalseになる（fail-closed判定の無効化）。
+    # 先に具体化し、1回の走査で両方を構築する。
+    remote_branch_list = list(remote_branches)
+    branch_footprints: list[set[str]] = []
+    has_unknown_branch_footprint = False
+    for branch, changed_files in remote_branch_list:
+        if branch in active_set:
+            continue
+        if changed_files is None:
+            has_unknown_branch_footprint = True
+        else:
+            branch_footprints.append(set(changed_files))
 
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
