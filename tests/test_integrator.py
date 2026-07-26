@@ -284,8 +284,16 @@ class TestIntegrator:
         )
 
         with patch("orchestune.integrator.github.list_open_prs") as mock_open_prs:
+            # #243: identityを検証できたPR（upstream上の正規head・指定base向け）
+            # だけが再利用対象になる。
             mock_open_prs.return_value = [
-                PrRecord(number=777, head_ref="integration/temp-main", changed_files=())
+                PrRecord(
+                    number=777,
+                    head_ref="integration/temp-main",
+                    changed_files=(),
+                    base_ref="main",
+                    is_cross_repository=False,
+                )
             ]
             config = IntegratorConfig(apply=True)
             integrator = Integrator(config)
