@@ -1842,11 +1842,9 @@ class TestDispatcherLocking:
         lock_path = Path(config.run_state_path).with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-        import fcntl
+        from orchestune.dispatch_worktree import file_lock
 
-        with open(lock_path, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
+        with file_lock(lock_path):
             with pytest.raises(RuntimeError) as exc_info:
                 with (
                     patch(

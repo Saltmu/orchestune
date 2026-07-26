@@ -14,6 +14,11 @@ try:
 except ImportError:
     fcntl = None  # type: ignore[assignment]
 
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
+
 from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import BranchReachabilityError, DispatchTarget
@@ -217,17 +222,24 @@ def create_worktree_and_launch(
 
 @contextlib.contextmanager
 def file_lock(lock_path: Path) -> Iterator[None]:
-    if fcntl is None:
+    if fcntl is None and msvcrt is None:
         raise RuntimeError(
-            "fcntl is not supported on this platform. File locking is required."
+            "Neither fcntl nor msvcrt is supported on this platform. File locking is required."
         )
 
     lock_fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        if fcntl is not None:
+            lock_fd = open(lock_path, "w")
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+        elif msvcrt is not None:
+            lock_fd = open(lock_path, "a+")
+            lock_fd.write(" ")
+            lock_fd.flush()
+            lock_fd.seek(0)
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+    except (BlockingIOError, PermissionError):
         if lock_fd:
             lock_fd.close()
         raise RuntimeError(
@@ -249,8 +261,15 @@ def file_lock(lock_path: Path) -> Iterator[None]:
         yield
     finally:
         if lock_fd:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except Exception:
-                pass
+            if fcntl is not None:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            elif msvcrt is not None:
+                try:
+                    lock_fd.seek(0)
+                    msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
             lock_fd.close()
