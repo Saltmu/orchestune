@@ -15,6 +15,40 @@ class TestRunState:
         assert state.active_worktrees == {}
         assert state.launch_history == []
 
+    def test_load_corrupted_file_falls_back_to_empty_state_and_quarantines(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        path.write_text("{broken json", encoding="utf-8")
+
+        state = load_run_state(path)
+
+        assert state.active_worktrees == {}
+        assert state.launch_history == []
+        assert state.completed_worktrees == []
+        # 破損ファイルは元の場所から退避され、パスは"未存在"扱いになる
+        # (自己修復パス`_self_heal_run_state`がGitHubから復元できるように)。
+        assert not path.exists()
+        assert list(tmp_path.glob("run_state.json.corrupt.*"))
+
+    def test_save_after_corrupted_load_overwrites_cleanly(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text("{broken json", encoding="utf-8")
+        state = load_run_state(path)
+
+        state.active_worktrees["1"] = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-x",
+            worktree_path="worktrees/claude-issue-1-x",
+            pid=1,
+            started_at=1.0,
+            declared_footprint=(),
+        )
+        save_run_state(state, path)
+
+        reloaded = load_run_state(path)
+        assert reloaded.active_worktrees["1"].branch == "claude/issue-1-x"
+
     def test_save_and_load_roundtrip(self, tmp_path):
         path = tmp_path / "run_state.json"
         now = 1700000000.0
