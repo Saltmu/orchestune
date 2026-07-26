@@ -21,6 +21,7 @@ from orchestune.github import (
     get_issue_state,
     get_label_actor,
     is_branch_merged_into,
+    is_current_branch_tip_merged_into,
     list_issues_by_label,
     list_open_prs,
     list_prs,
@@ -484,6 +485,40 @@ class TestListRemoteBranches:
 
 
 class TestIsBranchMergedInto:
+    def test_returns_true_when_exact_head_base_pr_was_merged(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='[{"number":264}]', stderr=""
+            )
+
+            assert is_branch_merged_into("parent/issue-100", "main") is True
+
+        assert mock_run.call_args.args[0] == [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--head",
+            "parent/issue-100",
+            "--base",
+            "main",
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+
+    def test_returns_false_when_exact_head_base_pr_was_not_merged(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+
+            assert is_branch_merged_into("parent/issue-100", "main") is False
+
+
+class TestIsCurrentBranchTipMergedInto:
     def test_returns_true_when_current_remote_tip_is_in_base(self):
         with patch("orchestune.github.subprocess.run") as mock_run:
             mock_run.side_effect = [
@@ -495,7 +530,7 @@ class TestIsBranchMergedInto:
                 ),
             ]
 
-            result = is_branch_merged_into("claude/issue-1-task-1", "main")
+            result = is_current_branch_tip_merged_into("claude/issue-1-task-1", "main")
 
         assert result is True
         assert mock_run.call_args_list[0].args[0] == [
@@ -525,13 +560,16 @@ class TestIsBranchMergedInto:
                 ),
             ]
 
-            assert is_branch_merged_into("claude/issue-1-task-1", "main") is False
+            assert (
+                is_current_branch_tip_merged_into("claude/issue-1-task-1", "main")
+                is False
+            )
 
     @pytest.mark.parametrize("head,base", [("--evil", "main"), ("feat/x", "bad..base")])
     def test_rejects_invalid_refs(self, head, base):
         with patch("orchestune.github.subprocess.run") as mock_run:
             with pytest.raises(ValueError):
-                is_branch_merged_into(head, base)
+                is_current_branch_tip_merged_into(head, base)
             mock_run.assert_not_called()
 
 
