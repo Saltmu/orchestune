@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -16,8 +17,42 @@ _IGNORED_FOOTPRINT_PATTERNS = (
 )
 
 
+def normalize_footprint_path(path: str) -> str:
+    """Normalize a footprint path into a canonical repository-relative POSIX path.
+
+    - Converts Windows backslashes '\\' to POSIX forward slashes '/'
+    - Rejects absolute paths (starting with '/') and drive-qualified paths (e.g. 'C:')
+    - Resolves redundant './', duplicate slashes '//', and relative parent references '..'
+    - Raises ValueError if the path is absolute/drive-qualified, resolves to empty/root ('.'), or escapes the repository root
+    """
+    if not isinstance(path, str):
+        path = str(path)
+
+    clean_path = path.replace("\\", "/")
+
+    if re.match(r"^[a-zA-Z]:", clean_path):
+        raise ValueError(
+            f"Invalid footprint path: '{path}' is a drive-qualified absolute path"
+        )
+    if clean_path.startswith("/"):
+        raise ValueError(f"Invalid footprint path: '{path}' is an absolute path")
+
+    normalized = posixpath.normpath(clean_path)
+
+    if normalized in ("", "."):
+        raise ValueError(
+            f"Invalid footprint path: '{path}' resolves to empty or root path"
+        )
+
+    if normalized == ".." or normalized.startswith("../"):
+        raise ValueError(f"Invalid footprint path: '{path}' escapes repository root")
+
+    return normalized
+
+
 def is_ignored_footprint(path: str) -> bool:
-    return any(pattern.search(path) for pattern in _IGNORED_FOOTPRINT_PATTERNS)
+    normalized = normalize_footprint_path(path)
+    return any(pattern.search(normalized) for pattern in _IGNORED_FOOTPRINT_PATTERNS)
 
 
 class DagCycleError(ValueError):
@@ -40,6 +75,10 @@ class SubTask:
     verification_plan: tuple[str, ...] = ()
     shared_contract: str | None = None
     writes_shared_contract: bool = False
+
+    def __post_init__(self) -> None:
+        normalized = tuple(normalize_footprint_path(p) for p in self.footprint)
+        object.__setattr__(self, "footprint", normalized)
 
     def touch_set(self) -> frozenset[str]:
         footprint = frozenset(
