@@ -1,6 +1,48 @@
 from unittest.mock import patch
 
 
+def test_create_skill_link_copies_on_windows_privilege_error(tmp_path):
+    from orchestune.setup_skills import _create_skill_link
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_text("skill contents", encoding="utf-8")
+    destination = tmp_path / "destination"
+
+    privilege_error = OSError("symlink privilege is not available")
+    privilege_error.winerror = 1314
+
+    with (
+        patch("orchestune.setup_skills.sys.platform", "win32"),
+        patch("pathlib.Path.symlink_to", side_effect=privilege_error),
+    ):
+        result = _create_skill_link(source, destination)
+
+    assert result == "copied"
+    assert not destination.is_symlink()
+    assert (destination / "SKILL.md").read_text(encoding="utf-8") == "skill contents"
+
+
+def test_create_skill_link_does_not_hide_other_errors(tmp_path):
+    import pytest
+
+    from orchestune.setup_skills import _create_skill_link
+
+    source = tmp_path / "source"
+    source.mkdir()
+    destination = tmp_path / "destination"
+
+    other_error = OSError("unexpected error")
+    other_error.winerror = 5
+
+    with (
+        patch("orchestune.setup_skills.sys.platform", "win32"),
+        patch("pathlib.Path.symlink_to", side_effect=other_error),
+        pytest.raises(OSError, match="unexpected error"),
+    ):
+        _create_skill_link(source, destination)
+
+
 def test_setup_skills_creates_links(tmp_path):
     from orchestune.setup_skills import setup_skills
 
@@ -28,13 +70,11 @@ def test_setup_skills_creates_links(tmp_path):
     codex_target = mock_home / ".codex" / "skills" / "orchestune"
     gemini_target = mock_home / ".gemini" / "config" / "skills" / "orchestune"
 
-    assert claude_target.is_symlink()
-    assert codex_target.is_symlink()
-    assert gemini_target.is_symlink()
-
-    assert claude_target.resolve() == skills_dir / "orchestune"
-    assert codex_target.resolve() == skills_dir / "orchestune"
-    assert gemini_target.resolve() == skills_dir / "orchestune"
+    for target in (claude_target, codex_target, gemini_target):
+        assert target.is_dir()
+        assert (target / "SKILL.md").is_file()
+        if target.is_symlink():
+            assert target.resolve() == skills_dir / "orchestune"
 
 
 def test_setup_skills_skips_when_no_parent(tmp_path):
@@ -188,9 +228,9 @@ def test_setup_skills_dynamic_discovery(tmp_path):
     ):
         setup_skills()
 
-    # 検出されたスキルのみリンクされていることを検証
-    assert (mock_home / ".claude" / "skills" / "orchestune").is_symlink()
-    assert (mock_home / ".claude" / "skills" / "skill-a").is_symlink()
-    assert (mock_home / ".claude" / "skills" / "skill-b").is_symlink()
+    # 検出されたスキルのみリンクまたはコピーされていることを検証
+    assert (mock_home / ".claude" / "skills" / "orchestune" / "SKILL.md").is_file()
+    assert (mock_home / ".claude" / "skills" / "skill-a" / "SKILL.md").is_file()
+    assert (mock_home / ".claude" / "skills" / "skill-b" / "SKILL.md").is_file()
     assert not (mock_home / ".claude" / "skills" / "local-ci-developer").exists()
     assert not (mock_home / ".claude" / "skills" / "ignored-folder").exists()

@@ -1,7 +1,21 @@
+import shutil
 import sys
 from pathlib import Path
 
 SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer"}
+
+
+def _create_skill_link(src_skill: Path, dest_skill: Path) -> str:
+    """Create a skill link, falling back to a copy on unprivileged Windows."""
+    try:
+        dest_skill.symlink_to(src_skill, target_is_directory=True)
+        return "linked"
+    except OSError as e:
+        if sys.platform != "win32" or getattr(e, "winerror", None) != 1314:
+            raise
+
+    shutil.copytree(src_skill, dest_skill)
+    return "copied"
 
 
 def get_skills_source_dir() -> Path:
@@ -104,11 +118,17 @@ def setup_skills() -> None:
                     continue
 
             try:
-                dest_skill.symlink_to(src_skill, target_is_directory=True)
-                print(f"  Successfully linked '{skill_name}' to {dest_skill}")
+                setup_method = _create_skill_link(src_skill, dest_skill)
+                if setup_method == "copied":
+                    print(
+                        f"  Successfully copied '{skill_name}' to {dest_skill} "
+                        "(symlink privilege is not available)"
+                    )
+                else:
+                    print(f"  Successfully linked '{skill_name}' to {dest_skill}")
             except Exception as e:
                 print(
-                    f"  Error: Failed to create symlink for '{skill_name}': {e}",
+                    f"  Error: Failed to set up '{skill_name}': {e}",
                     file=sys.stderr,
                 )
 
