@@ -20,6 +20,7 @@ from orchestune.dag_models import (
     DagResult,
     FootprintConflict,
     SubTask,
+    normalize_footprint_path,
 )
 from orchestune.dag_models import (
     is_ignored_footprint as _is_ignored_footprint,
@@ -60,6 +61,7 @@ __all__ = [
     "build_similarity_edges",
     "find_unowned_shared_contract_hotspots",
     "main",
+    "normalize_footprint_path",
     "parse_decomposition_plan",
     "recompute_dag_for_footprint_change",
 ]
