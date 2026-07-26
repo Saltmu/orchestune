@@ -287,7 +287,8 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             )
             assert target.completion_status(handle) == "pending"
 
-    def test_existing_pr_closed_after_launch_is_abandoned(self):
+    def test_pr_created_and_closed_after_launch_is_abandoned(self):
+        """#246: session開始後に作成されたPRがCLOSEされた場合のみabandoned。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
             "orchestune.dispatch_targets.github.list_prs",
@@ -296,7 +297,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     number=1,
                     head_ref="claude/issue-1-task-a",
                     changed_files=(),
-                    created_at="2026-01-01T00:00:00Z",
+                    created_at="2029-01-01T00:00:00Z",
                     closed_at="2030-01-01T00:00:00Z",
                     state="CLOSED",
                 )
@@ -308,6 +309,169 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 started_at=1_800_000_000.0,
             )
             assert target.completion_status(handle) == "abandoned"
+
+    def test_pr_created_in_same_second_as_started_at_is_not_stale(self):
+        """#246レビュー(#262 P1) Reproducer: GitHubのcreated_atは秒精度で
+        切り捨てられるため、`started_at`が小数秒を含む場合、実際にはsession
+        開始「後」に作成された正規PRでも`created_at < started_at`が真になり
+        誤ってstale扱いされうる（例: created_at=X.000, started_at=X.900）。
+        比較はGitHubの精度に合わせて秒単位に揃え、同じ秒に作成されたPRは
+        staleとしない。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    created_at="2026-01-01T00:00:00Z",
+                    state="OPEN",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=1_767_225_600.9,
+            )
+            assert target.completion_status(handle) == "completed"
+
+    def test_pr_created_one_full_second_before_started_at_is_still_stale(self):
+        """秒単位に精度を揃えても、実際に1秒以上前に作成された古いPRの
+        stale判定は維持される。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    created_at="2025-12-31T23:59:59Z",
+                    state="OPEN",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=1_767_225_600.9,
+            )
+            assert target.completion_status(handle) == "pending"
+
+    def test_merged_pr_created_before_launch_is_ignored_as_stale(self):
+        """#246 Reproducer: 同名branchの古いMERGED PR（session開始前に作成）が
+        あると、再キューした新sessionが次サイクルで即completed扱いされていた。
+        起動前のPRは状態に関係なく現sessionの成果物ではないため除外する。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    created_at="2026-01-01T00:00:00Z",
+                    closed_at="2026-01-02T00:00:00Z",
+                    state="MERGED",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=1_800_000_000.0,
+            )
+            assert target.completion_status(handle) == "pending"
+
+    def test_merged_pr_created_after_launch_is_completed(self):
+        """#246/#210: session開始後に作成・マージされたPRは完了シグナルのまま。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    created_at="2029-01-01T00:00:00Z",
+                    closed_at="2029-01-02T00:00:00Z",
+                    state="MERGED",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=1_800_000_000.0,
+            )
+            assert target.completion_status(handle) == "completed"
+
+    def test_open_pr_created_before_launch_is_ignored_as_stale(self):
+        """#246: session開始前から存在するOPEN PRも現sessionの成果物ではない。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    created_at="2026-01-01T00:00:00Z",
+                    state="OPEN",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=1_800_000_000.0,
+            )
+            assert target.completion_status(handle) == "pending"
+
+    def test_pr_without_created_at_is_ignored_when_started_at_known(self):
+        """#246: created_atを解釈できないPRは現世代の証拠にならない（fail closed）。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    state="MERGED",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=1_800_000_000.0,
+            )
+            assert target.completion_status(handle) == "pending"
+
+    def test_pr_counts_when_handle_has_no_started_at(self):
+        """started_atを持たないhandle（復元経路）では従来通りPRを完了扱いする。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch(
+            "orchestune.dispatch_targets.github.list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    created_at="2026-01-01T00:00:00Z",
+                    state="MERGED",
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                started_at=None,
+            )
+            assert target.completion_status(handle) == "completed"
 
     def test_is_complete_false_without_branch_name(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
