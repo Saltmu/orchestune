@@ -589,3 +589,47 @@ depends_on:
 
         assert eligible_tasks == []
         assert base_branches == {}
+
+    def test_fails_closed_when_native_blocker_missing_from_mapping(self):
+        """Codex Review 指摘: blocked_by に複数Issue (例: 1, 3) が含まれるが、
+        一部のIssue (3) が cycle context / mapping に含まれず省略されている場合、
+        既知のblocker (1) が CI 通過していても fail closed となりスタッキング対象外となることを検証する。"""
+        issue2 = IssueRecord(
+            number=2,
+            title="Task 2",
+            body="subtask_id: task-2",
+            labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            blocked_by=(1, 3),
+        )
+
+        task1 = _task(1, subtask_id="dep-1")
+        task2 = Task(
+            issue_number=2,
+            subtask_id="task-2",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            depends_on=("dep-1",),
+            yaml_error=False,
+        )
+
+        tasks_by_issue = {1: task1, 2: task2}
+        done_subtask_ids = set()
+        ci_passed_pr_subtask_ids = {"dep-1"}
+        subtask_branch_map = {"dep-1": "claude/issue-1-dep-1"}
+
+        eligible_tasks, base_branches = _get_stack_eligible_tasks(
+            blocked_issues=[issue2],
+            tasks_by_issue=tasks_by_issue,
+            done_subtask_ids=done_subtask_ids,
+            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+            subtask_branch_map=subtask_branch_map,
+        )
+
+        assert eligible_tasks == []
+        assert base_branches == {}
