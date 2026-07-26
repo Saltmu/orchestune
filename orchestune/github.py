@@ -6,6 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
@@ -384,7 +385,11 @@ def list_remote_branches() -> list[str]:
 
 
 def is_branch_merged_into(head: str, base: str) -> bool:
-    """Return whether GitHub records a merged PR for the exact head/base pair."""
+    """Return whether GitHub records a merged PR for the exact head/base pair.
+
+    This lookup remains valid after GitHub deletes the merged PR's head branch,
+    which is required by the parent-completion lifecycle.
+    """
     _validate_ref_name(head)
     _validate_ref_name(base)
     stdout = _run(
@@ -405,6 +410,42 @@ def is_branch_merged_into(head: str, base: str) -> bool:
         ]
     )
     return bool(json.loads(stdout))
+
+
+def is_current_branch_tip_merged_into(head: str, base: str) -> bool:
+    """Return whether the current remote ``head`` tip is contained in ``base``.
+
+    Looking up historical pull requests by branch name is insufficient because a
+    branch can be recreated with new commits. Resolve its current GitHub SHA and
+    compare that immutable commit to the base so callers fail closed when the
+    current tip cannot be fetched or proven merged. This stricter check is for
+    the integrator's fetch-failure path, where branch names may be reused.
+    """
+    _validate_ref_name(head)
+    _validate_ref_name(base)
+    encoded_head = quote(head, safe="")
+    tip_sha = _run(
+        [
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/branches/{encoded_head}",
+            "--jq",
+            ".commit.sha",
+        ]
+    ).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", tip_sha):
+        raise ValueError(f"GitHub returned an invalid branch tip SHA: {tip_sha!r}")
+
+    status = _run(
+        [
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/compare/{tip_sha}...{base}",
+            "--jq",
+            ".status",
+        ]
+    ).strip()
+    return status in {"ahead", "identical"}
 
 
 def list_prs(state: str = "open", limit: int = 1000) -> list[PrRecord]:
