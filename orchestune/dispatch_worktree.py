@@ -154,7 +154,10 @@ def create_worktree_and_launch(
             external_id = handle.external_id
             external_url = handle.external_url
             launched = True
-        except (subprocess.CalledProcessError, OSError) as e:
+        # #244: RuntimeErrorは、cloud-routine起動前のリモートブランチ到達性
+        # 検証（_push_branch_and_verify）の失敗。fireは行われていないため、
+        # 通常の起動失敗として扱い、status:blocked化の既存経路へ乗せる。
+        except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
             error_details = ""
             if isinstance(e, subprocess.CalledProcessError):
                 error_details = f" (stderr: {e.stderr.strip() if e.stderr else ''})"

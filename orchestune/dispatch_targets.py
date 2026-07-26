@@ -169,6 +169,43 @@ def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str
     return ["true"]
 
 
+def _push_branch_and_verify(branch_name: str, worktree_path: Path) -> None:
+    """#244: stacked/parent base付きで作成されたローカルtask branchを、リモート
+    セッションがその内容ごとcheckoutできるようoriginへpushし、到達性を検証する。
+
+    push後に`git ls-remote`でリモートbranchのSHAをローカルHEADと照合し、
+    確認できない場合は例外を送出する（呼び出し側はfireせずfail closed）。
+    """
+    subprocess.run(
+        ["git", "push", "--set-upstream", "origin", branch_name],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    local_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    ls_remote_output = subprocess.run(
+        ["git", "ls-remote", "origin", f"refs/heads/{branch_name}"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    remote_sha = ls_remote_output.split()[0] if ls_remote_output else ""
+    if not remote_sha or remote_sha != local_sha:
+        raise RuntimeError(
+            f"リモートブランチ '{branch_name}' の到達性を検証できませんでした "
+            f"(local={local_sha or '不明'}, remote={remote_sha or '不在'})。"
+            "baseの変更を含まないセッション起動を防ぐため、fireを中止します。"
+        )
+
+
 def _is_pid_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -263,6 +300,13 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             f"（サブタスク: {task.subtask_id or '不明'}）を"
             "標準開発ワークフローに従って実装してください。\n"
             f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
+            # #244: stacked/parent baseの変更はpush済みbranchにしか含まれない。
+            # default branch基点で同名branchを新規作成すると成果物からbaseの
+            # 変更が欠落するため、必ずorigin上のbranchを起点にさせる。
+            f"作業ブランチ `{branch_name}` は、依存先・親ブランチ（base）の内容を"
+            "含む状態でoriginへpush済みです。ブランチを新規作成せず、必ず"
+            f"originから `{branch_name}` をfetchしてcheckoutし、その内容を"
+            "起点に作業してください。\n"
             f"想定footprint: {footprint}\n"
             f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
         )
@@ -286,6 +330,8 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
     def launch(
         self, task: Task, branch_name: str, worktree_path: Path
     ) -> DispatchHandle:
+        # #244: fireより先にpush・到達性検証を行い、確認できなければfireしない。
+        _push_branch_and_verify(branch_name, worktree_path)
         payload = self._fire(self._build_text(task, branch_name))
         return DispatchHandle(
             external_id=payload.get("claude_code_session_id"),
