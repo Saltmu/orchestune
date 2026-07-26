@@ -6,11 +6,12 @@ from orchestune.dispatch_launch import (
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
     _decide_yaml_error_tasks,
+    _get_stack_eligible_tasks,
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import CompletedWorktree, RunState
 from orchestune.dispatcher import DispatcherConfig
-from orchestune.github import PrRecord
+from orchestune.github import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -486,3 +487,105 @@ class TestApplyTaskLaunchesRunStatePersistence:
         # 消えてしまわないこと（open_prsが正しく伝播していること）。
         persisted = load_run_state(run_state_path)
         assert any(cw.issue_number == 99 for cw in persisted.completed_worktrees)
+
+
+class TestGetStackEligibleTasks:
+    def test_uses_context_tasks_by_issue_over_raw_yaml_depends_on(self):
+        """Issue #252: _get_stack_eligible_tasks が parse_task_from_issue で raw YAML を
+        再パースせず、tasks_by_issue の context 済み Task（GitHub native blocked_by が反映されたもの）
+        を優先して採用することを検証する。"""
+        raw_body = """```yaml
+subtask_id: task-2
+depends_on:
+  - yaml-dep
+```"""
+        issue2 = IssueRecord(
+            number=2,
+            title="Task 2",
+            body=raw_body,
+            labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            blocked_by=(1,),
+        )
+
+        task1 = _task(1, subtask_id="gh-native-dep")
+        task2 = Task(
+            issue_number=2,
+            subtask_id="task-2",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            depends_on=("gh-native-dep",),
+            yaml_error=False,
+        )
+
+        tasks_by_issue = {1: task1, 2: task2}
+        done_subtask_ids = set()
+        ci_passed_pr_subtask_ids = {"gh-native-dep"}
+        subtask_branch_map = {"gh-native-dep": "claude/issue-1-gh-native-dep"}
+
+        eligible_tasks, base_branches = _get_stack_eligible_tasks(
+            blocked_issues=[issue2],
+            tasks_by_issue=tasks_by_issue,
+            done_subtask_ids=done_subtask_ids,
+            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+            subtask_branch_map=subtask_branch_map,
+        )
+
+        assert eligible_tasks == [task2]
+        assert base_branches == {2: "claude/issue-1-gh-native-dep"}
+
+    def test_respects_unpassed_native_blocked_by_even_if_yaml_dep_passed(self):
+        """GitHub blocked_byの依存先がCI未通過の場合、YAMLの依存先がCI通過していても
+        スタッキング対象外となることを検証する。"""
+        raw_body = """```yaml
+subtask_id: task-2
+depends_on:
+  - yaml-passed-dep
+```"""
+        issue2 = IssueRecord(
+            number=2,
+            title="Task 2",
+            body=raw_body,
+            labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            blocked_by=(1,),
+        )
+
+        task1 = _task(1, subtask_id="gh-unpassed-dep")
+        task2 = Task(
+            issue_number=2,
+            subtask_id="task-2",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            depends_on=("gh-unpassed-dep",),
+            yaml_error=False,
+        )
+
+        tasks_by_issue = {1: task1, 2: task2}
+        done_subtask_ids = set()
+        ci_passed_pr_subtask_ids = {"yaml-passed-dep"}
+        subtask_branch_map = {
+            "yaml-passed-dep": "claude/issue-0-yaml",
+            "gh-unpassed-dep": "claude/issue-1-gh",
+        }
+
+        eligible_tasks, base_branches = _get_stack_eligible_tasks(
+            blocked_issues=[issue2],
+            tasks_by_issue=tasks_by_issue,
+            done_subtask_ids=done_subtask_ids,
+            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+            subtask_branch_map=subtask_branch_map,
+        )
+
+        assert eligible_tasks == []
+        assert base_branches == {}
