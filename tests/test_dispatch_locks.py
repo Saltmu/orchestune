@@ -222,6 +222,111 @@ class TestScanExternalLocks:
         assert [t.issue_number for t in result.to_unlock] == [1]
 
 
+class TestScanExternalLocksWithUnknownFootprint:
+    """#245: 差分取得不能（footprint不明）なブランチが1件でもある場合は
+    fail closedとし、既存lockを維持し、新規taskも競合なしと判定しない。"""
+
+    def _locked_task(self, footprint=("src/foo.py",)):
+        return Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=footprint,
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:external-lock",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+    def test_keeps_existing_lock_when_branch_footprint_is_unknown(self):
+        """Reproducer: 従来は不明footprintが空集合に潰され、lockが解除されていた。"""
+        result = scan_external_locks(
+            [self._locked_task()],
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_unlock == []
+        assert result.to_lock == []
+
+    def test_locks_queued_task_when_branch_footprint_is_unknown(self):
+        queued = [_task(1, footprint=("src/foo.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_does_not_lock_task_with_empty_footprint(self):
+        """footprint未宣言のtaskはどのブランチとも衝突し得ないため対象外。"""
+        queued = [_task(1, footprint=())]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+
+    def test_does_not_lock_task_with_hotspot_only_footprint(self):
+        queued = [_task(1, footprint=("poetry.lock",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+
+    def test_unknown_footprint_of_active_branch_is_ignored(self):
+        """dispatcher自身が管理するアクティブブランチの差分不明は対象外。"""
+        queued = [_task(1, footprint=("src/foo.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("claude/issue-5-x", None)],
+            prs=[],
+            active_branches=["claude/issue-5-x"],
+        )
+        assert result.to_lock == []
+
+    def test_done_task_with_lock_is_still_unlocked_despite_unknown(self):
+        done_locked_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/foo.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:done", "status:external-lock"),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        result = scan_external_locks(
+            [done_locked_task],
+            remote_branches=[("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_unlock] == [1]
+
+    def test_known_footprints_still_behave_normally_alongside_unknown(self):
+        """不明ブランチがあっても、既知footprintとの重複判定は通常通り機能する。"""
+        queued = [
+            _task(1, footprint=("src/foo.py",)),
+            _task(2, footprint=()),
+        ]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/known", ("src/other.py",)), ("feat/x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+
 class TestCheckFootprintDeviation:
     def test_returns_files_outside_declared_footprint(self):
         with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:

@@ -38,19 +38,30 @@ class ExternalLockScanResult:
 
 def scan_external_locks(
     queued_tasks: list[Task],
-    remote_branches: Iterable[tuple[str, tuple[str, ...]]],
+    remote_branches: Iterable[tuple[str, tuple[str, ...] | None]],
     prs: list[PrRecord],
     active_branches: Iterable[str],
 ) -> ExternalLockScanResult:
     """#239: ブランチ名がAIセッションの指示通りにならないケースに備え、
     タスクごとに「そのタスク自身のIssueをclosesするPR」を自己PRとして除外する
-    （どのPRが自己PRかはタスクごとに異なるため、タスク単位で判定する）。"""
+    （どのPRが自己PRかはタスクごとに異なるため、タスク単位で判定する）。
+
+    #245: `remote_branches`のfootprintが`None`（差分取得不能）のブランチが
+    1件でもある場合はfail closedとし、非hotspotなfootprintを持つ全タスクを
+    「衝突あり」として扱う（既存lockは維持し、未lockタスクはlockする）。
+    footprintが空またはhotspotのみのタスクは、どのブランチとも衝突し得ない
+    ため従来通り対象外。"""
     active_set = set(active_branches)
     branch_footprints = [
         set(changed_files)
         for branch, changed_files in remote_branches
-        if branch not in active_set
+        if branch not in active_set and changed_files is not None
     ]
+    has_unknown_branch_footprint = any(
+        changed_files is None
+        for branch, changed_files in remote_branches
+        if branch not in active_set
+    )
 
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
@@ -74,7 +85,7 @@ def scan_external_locks(
         overlaps = any(
             task_footprint & {path for path in footprint if not _is_hotspot(path)}
             for footprint in [*branch_footprints, *pr_footprints]
-        )
+        ) or (has_unknown_branch_footprint and bool(task_footprint))
         if overlaps and not currently_locked:
             to_lock.append(task)
         elif not overlaps and currently_locked:
