@@ -10,6 +10,7 @@ import contextlib
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,18 @@ def write_json_atomic(path: str | Path, data: Any) -> None:
     プロセス停止・ディスク枯渇・同時書き込みが途中で発生しても、読み取り側からは
     書き込み前の完全な旧内容か書き込み後の完全な新内容のいずれかしか観測されない
     （os.replace()は同一ファイルシステム上でアトミック）。
+
+    一時ファイル名は`tempfile.mkstemp`（内部でO_EXCLを使用）により、同一ディレクトリ
+    内で毎回一意なものを生成する。PIDのみに基づく命名だと、同一プロセス内で同じ
+    パスへ並行書き込みが発生した場合に一時ファイルが衝突し、一方の`os.replace()`後に
+    他方が`FileNotFoundError`になったり内容が競合したりし得るため。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.tmp.")
+    tmp_path = Path(tmp_name)
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False, indent=2))
             f.flush()
             os.fsync(f.fileno())
@@ -44,26 +51,27 @@ def read_json_with_recovery(path: str | Path, *, label: str) -> Any | None:
     別名へ退避（quarantine）した上でNoneを返す。呼び出し側はNoneをファイル未存在時
     と同様にデフォルト状態へのフォールバックとして扱うことで、既存の
     self-healing（GitHubからのreconciliation）に接続できる。
+
+    quarantine対象は`JSONDecodeError`/`UnicodeDecodeError`（＝ファイル内容そのものが
+    破損している場合）に限定する。一時的なI/O障害や権限エラーなどの`OSError`は
+    ファイル内容の破損を意味しないため、ここでは捕捉せずそのまま呼び出し元へ伝播
+    させる（正常な状態ファイルを誤って空状態として扱い、後続の保存で状態を失う
+    ことを防ぐため）。同様の理由で、quarantineへの退避自体（`os.replace`）が失敗した
+    場合もNoneへフォールバックせず例外を伝播させる。
     """
     path = Path(path)
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        raw = path.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         quarantine_path = path.with_name(f"{path.name}.corrupt.{int(time.time())}")
-        try:
-            os.replace(path, quarantine_path)
-            print(
-                f"Warning: {label} at '{path}' is corrupted ({exc}). "
-                f"Quarantined to '{quarantine_path}' for diagnostics; "
-                "falling back to default state.",
-                file=sys.stderr,
-            )
-        except OSError as move_exc:
-            print(
-                f"Warning: {label} at '{path}' is corrupted ({exc}) and could not "
-                f"be quarantined ({move_exc}); falling back to default state.",
-                file=sys.stderr,
-            )
+        os.replace(path, quarantine_path)
+        print(
+            f"Warning: {label} at '{path}' is corrupted ({exc}). "
+            f"Quarantined to '{quarantine_path}' for diagnostics; "
+            "falling back to default state.",
+            file=sys.stderr,
+        )
         return None
