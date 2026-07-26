@@ -38,25 +38,46 @@ class ExternalLockScanResult:
 
 def scan_external_locks(
     queued_tasks: list[Task],
-    remote_branches: Iterable[tuple[str, tuple[str, ...]]],
+    remote_branches: Iterable[tuple[str, tuple[str, ...] | None]],
     prs: list[PrRecord],
     active_branches: Iterable[str],
 ) -> ExternalLockScanResult:
     """#239: ブランチ名がAIセッションの指示通りにならないケースに備え、
     タスクごとに「そのタスク自身のIssueをclosesするPR」を自己PRとして除外する
-    （どのPRが自己PRかはタスクごとに異なるため、タスク単位で判定する）。"""
+    （どのPRが自己PRかはタスクごとに異なるため、タスク単位で判定する）。
+
+    #245: `remote_branches`のfootprintが`None`（差分取得不能）のブランチが
+    1件でもある場合はfail closedとし、非hotspotなfootprintを持つ全タスクを
+    「衝突あり」として扱う（既存lockは維持し、未lockタスクはlockする）。
+    footprintが空またはhotspotのみのタスクは、どのブランチとも衝突し得ない
+    ため従来通り対象外。"""
     active_set = set(active_branches)
-    branch_footprints = [
-        set(changed_files)
-        for branch, changed_files in remote_branches
-        if branch not in active_set
-    ]
+    # #261レビュー対応: `remote_branches`はIterable契約のため、generator等の
+    # 単回走査イテレータが渡されると2回目のループで要素が既に消費されており
+    # `has_unknown_branch_footprint`が常にFalseになる（fail-closed判定の無効化）。
+    # 先に具体化し、1回の走査で両方を構築する。
+    remote_branch_list = list(remote_branches)
+    branch_footprints: list[set[str]] = []
+    has_unknown_branch_footprint = False
+    for branch, changed_files in remote_branch_list:
+        if branch in active_set:
+            continue
+        if changed_files is None:
+            has_unknown_branch_footprint = True
+        else:
+            branch_footprints.append(set(changed_files))
 
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
     for task in queued_tasks:
         currently_locked = "status:external-lock" in task.status_labels
-        if "status:done" in task.status_labels:
+        # #261 Codexレビュー指摘: status:doneと同様、status:not-neededも
+        # 既に解決済み（対応不要と判定済み）で再ディスパッチされないため、
+        # fail-closed判定を含む通常のlock対象から除外する。
+        if (
+            "status:done" in task.status_labels
+            or "status:not-needed" in task.status_labels
+        ):
             if currently_locked:
                 to_unlock.append(task)
             continue
@@ -74,7 +95,7 @@ def scan_external_locks(
         overlaps = any(
             task_footprint & {path for path in footprint if not _is_hotspot(path)}
             for footprint in [*branch_footprints, *pr_footprints]
-        )
+        ) or (has_unknown_branch_footprint and bool(task_footprint))
         if overlaps and not currently_locked:
             to_lock.append(task)
         elif not overlaps and currently_locked:
