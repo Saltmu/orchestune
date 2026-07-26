@@ -68,6 +68,9 @@ orchestune setup
 > [!NOTE]
 > `--dispatch-target` を明示指定しない場合、GitHub Actions実行環境（`GITHUB_ACTIONS=true`）では本セクションの `cloud-routine` が自動的に選択されます。GitHub Actions上でディスパッチャーを動かす場合は、以下の手順で事前に環境変数（Actions Secrets）を設定しておいてください。
 
+> [!IMPORTANT]
+> ディスパッチャーはルーチンをfireする前に、task branch（stacked/parent baseの内容を含む）を`origin`へpushし、到達性を検証するようになりました。これはクラウドセッションがリポジトリのdefault branchではなく正しいbaseから作業を開始できるようにするためです。そのため、ディスパッチャープロセスが使用するgit資格情報（ワークフロー内のcheckoutトークン等）には、リポジトリへの**push権限**（`contents: write`）が必要です。多くのCIワークフロー（本リポジトリ自身の`ci.yml`を含む）が既定で使う`permissions: contents: read`だけでは不足します。権限不足でpushが失敗した場合、対象タスクは`status:blocked`のままとなり、Issueへのコメントとしてgitのエラー内容が添付されます。
+
 `--dispatch-target cloud-routine` は **Claude Code Cloud Routine** 用の実行先です。
 
 1. **ルーチンの新規作成**:
