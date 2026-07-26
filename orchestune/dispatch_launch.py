@@ -293,12 +293,17 @@ def _apply_task_launches(
         # まだstatus:queuedのまま」という、次回サイクルの冒頭でラベルを見て
         # 機械的に検出・破棄できる非対称にしかならない（逆順だと「GitHub側は
         # 確定・run_state側は空」という検出不能な非対称になってしまう）。
+        # #262レビュー対応: サイクル共通の`now`やworktree準備（prune/backup/add）
+        # 開始前の時刻を`started_at`に使うと、実際の起動（cloud routine fire等）
+        # より前の時刻になり、その間に作成された無関係な既存PRを新sessionの
+        # 成果物と誤認しうる。`create_worktree_and_launch`が
+        # dispatch_target.launch()呼び出し直前に取得した時刻を使う。
         run_state.active_worktrees[str(task.issue_number)] = ActiveWorktree(
             issue_number=task.issue_number,
             branch=plan.branch_name,
             worktree_path=launch.worktree_path,
             pid=launch.pid,
-            started_at=now,
+            started_at=launch.dispatch_started_at or now,
             declared_footprint=task.footprint,
             external_id=launch.external_id,
             external_url=launch.external_url,

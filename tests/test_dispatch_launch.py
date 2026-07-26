@@ -249,6 +249,56 @@ class TestApplyTaskLaunches:
         assert mock_add_comment.called
         assert mock_add_comment.call_args[0][0] == 2
 
+    def test_active_worktree_started_at_uses_dispatch_boundary_time_not_cycle_now(
+        self, tmp_path
+    ):
+        """#262レビュー対応 Reproducer: ActiveWorktree.started_atがサイクル共通の
+        `now`だと、各タスクの実起動（cloud routine fire等）は必ずそれより後の
+        時刻になる。GitHub側created_at（秒精度）との丸め差でPR完了判定が
+        誤ってstale扱いする境界ケースを避けるため、`create_worktree_and_launch`
+        がworktree準備（prune/backup/add）完了後・dispatch_target.launch()
+        呼び出し直前に取得した`dispatch_started_at`を使う（Codexレビュー指摘:
+        launch呼び出し前に取得すると、worktree準備中に作成された無関係な
+        既存PRまで新sessionの成果物と誤認する窓が生まれるため）。"""
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = _task(1, subtask_id="task-1")
+        plans = [TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+        cycle_now = 1_000.0
+        dispatch_boundary_time = 1_050.0
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch(
+                "orchestune.dispatch_worktree.time.time",
+                return_value=dispatch_boundary_time,
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, cycle_now, config)
+
+        active = run_state.active_worktrees["1"]
+        assert active.started_at == dispatch_boundary_time
+        assert active.started_at != cycle_now
+
     def test_invalid_subtask_id_with_resolved_dependency_is_not_requeued_on_next_cycle(
         self, tmp_path
     ):
