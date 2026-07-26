@@ -4,10 +4,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_gc import (
+    ZombieOrTimeoutReclaim,
+    _apply_zombie_or_timeout_reclaim,
     _collect_zombies_and_timeouts,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
     _decide_stale_active_entry,
+    _decide_zombie_or_timeout_reclaims,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     _rule_completed,
@@ -170,6 +173,395 @@ class TestCollectZombiesAndTimeouts:
         mock_remove_label.assert_not_called()
         mock_add_label.assert_not_called()
         mock_add_comment.assert_not_called()
+
+
+class TestDecideZombieOrTimeoutReclaims:
+    """#233: decide層は副作用（github/os.kill/subprocess呼び出し）を一切行わない。"""
+
+    def test_zombie_dead_process_with_dirty_worktree_is_reclaimed(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
+
+        with (
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+        ):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert len(reclaims) == 1
+        reclaim = reclaims[0]
+        assert reclaim.reason == "process disappeared"
+        assert reclaim.is_timeout is False
+        assert reclaim.process_alive is False
+        assert reclaim.worktree_exists is True
+
+    def test_dead_process_with_clean_worktree_is_not_a_zombie(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
+
+        with (
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+        ):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert reclaims == []
+
+    def test_timeout_exceeded_reclaims_with_reason_timeout(self):
+        active = _active(started_at=1_000.0, pid=111)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert len(reclaims) == 1
+        reclaim = reclaims[0]
+        assert reclaim.reason == "timeout exceeded"
+        assert reclaim.is_timeout is True
+        assert reclaim.process_alive is True
+
+    def test_unknown_start_time_is_not_timed_out(self):
+        active = _active(started_at=None, pid=111)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert reclaims == []
+
+    def test_held_worktree_path_is_excluded(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
+
+        with (
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+        ):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state,
+                {},
+                config,
+                {active.worktree_path},
+                now=2_000.0,
+            )
+
+        assert reclaims == []
+
+    def test_zombie_and_timeout_disabled_returns_empty_immediately(self):
+        active = _active()
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, zombie_gc=False, task_timeout_seconds=0)
+
+        with patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive:
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert reclaims == []
+        mock_is_alive.assert_not_called()
+
+    def test_subtask_id_resolved_from_tasks_by_issue(self):
+        active = _active(started_at=1_000.0, pid=111)
+        task = _task()
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+            reclaims_with_task = _decide_zombie_or_timeout_reclaims(
+                run_state, {active.issue_number: task}, config, None, now=2_000.0
+            )
+            reclaims_without_task = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert reclaims_with_task[0].subtask_id == task.subtask_id
+        assert reclaims_without_task[0].subtask_id == ""
+
+    def test_worktree_exists_field_reflects_filesystem(self, tmp_path):
+        existing = _active(worktree_path=str(tmp_path), pid=111, started_at=1_000.0)
+        missing = _active(
+            worktree_path=str(tmp_path / "missing"), pid=112, started_at=1_000.0
+        )
+        run_state = RunState(active_worktrees={"280": existing, "281": missing})
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        reclaims_by_key = {reclaim.key: reclaim for reclaim in reclaims}
+        assert reclaims_by_key["280"].worktree_exists is True
+        assert reclaims_by_key["281"].worktree_exists is False
+
+    def test_key_field_matches_active_worktrees_dict_key(self):
+        active = _active(started_at=1_000.0, pid=111)
+        run_state = RunState(active_worktrees={"custom-key": active})
+        config = DispatcherConfig(apply=True, task_timeout_seconds=60)
+
+        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {}, config, None, now=2_000.0
+            )
+
+        assert reclaims[0].key == "custom-key"
+
+
+class TestApplyZombieOrTimeoutReclaim:
+    """#233: apply層はdecide層の判定結果に基づき副作用のみを担う。"""
+
+    def _reclaim(self, active, **overrides):
+        defaults = dict(
+            key="280",
+            active=active,
+            subtask_id="task-a",
+            reason="process disappeared",
+            is_timeout=False,
+            process_alive=False,
+            worktree_exists=True,
+        )
+        defaults.update(overrides)
+        return ZombieOrTimeoutReclaim(**defaults)
+
+    def test_zombie_apply_removes_worktree_and_requeues(self):
+        active = _active()
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active)
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc.backup_wip_commit", return_value=None
+            ) as mock_backup,
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_backup.assert_called_once_with(
+            active.worktree_path, "WIP: backup by Orchestune GC (process disappeared)"
+        )
+        mock_kill.assert_not_called()
+        mock_remove_worktree.assert_called_once_with(active.worktree_path)
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        mock_add_comment.assert_called_once()
+        assert run_state.active_worktrees == {}
+        assert event == {
+            "issue_number": 280,
+            "subtask_id": "task-a",
+            "action": "gc_reclaimed",
+            "reason": "process disappeared",
+        }
+
+    def test_timeout_apply_kills_alive_process(self):
+        active = _active(pid=111)
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active, reason="timeout exceeded", is_timeout=True, process_alive=True
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc.github.remove_label"),
+            patch("orchestune.dispatch_gc.github.add_label"),
+            patch("orchestune.dispatch_gc.github.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_kill.assert_called_once_with(111, 9)
+
+    def test_timeout_apply_skips_kill_when_process_already_dead(self):
+        active = _active(pid=111)
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active, reason="timeout exceeded", is_timeout=True, process_alive=False
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc.github.remove_label"),
+            patch("orchestune.dispatch_gc.github.add_label"),
+            patch("orchestune.dispatch_gc.github.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_kill.assert_not_called()
+
+    def test_timeout_apply_skips_kill_when_pid_is_none(self):
+        active = _active(pid=None)
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active, reason="timeout exceeded", is_timeout=True, process_alive=True
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc.github.remove_label"),
+            patch("orchestune.dispatch_gc.github.add_label"),
+            patch("orchestune.dispatch_gc.github.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_kill.assert_not_called()
+
+    def test_kill_exception_is_swallowed(self):
+        active = _active(pid=111)
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active, reason="timeout exceeded", is_timeout=True, process_alive=True
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch_gc.os.kill", side_effect=Exception("boom")),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_remove_worktree.assert_called_once()
+        mock_remove_label.assert_called_once()
+        mock_add_label.assert_called_once()
+        mock_add_comment.assert_called_once()
+        assert run_state.active_worktrees == {}
+        assert event is not None
+
+    def test_missing_worktree_skips_backup_and_remove_but_still_requeues(self):
+        active = _active()
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active, worktree_exists=False)
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_backup.assert_not_called()
+        mock_remove_worktree.assert_not_called()
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        assert (
+            "物理worktreeが見つからなかったため" in mock_add_comment.call_args.args[1]
+        )
+        assert run_state.active_worktrees == {}
+        assert event is not None
+
+    def test_backup_failure_skips_reclaim_and_returns_none(self):
+        active = _active()
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active)
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc.backup_wip_commit",
+                return_value="git commit failed",
+            ),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        assert event is None
+        mock_add_comment.assert_called_once()
+        assert "git commit failed" in mock_add_comment.call_args.args[1]
+        mock_remove_label.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_kill.assert_not_called()
+        mock_remove_worktree.assert_not_called()
+        assert run_state.active_worktrees == {"280": active}
+
+    def test_dry_run_returns_event_without_side_effects(self):
+        active = _active()
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active)
+        config = DispatcherConfig(apply=False)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_backup.assert_not_called()
+        mock_kill.assert_not_called()
+        mock_remove_worktree.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_add_comment.assert_not_called()
+        assert run_state.active_worktrees == {"280": active}
+        assert event == {
+            "issue_number": 280,
+            "subtask_id": "task-a",
+            "action": "gc_reclaimed",
+            "reason": "process disappeared",
+        }
+
+    def test_event_shape_omits_worktree_path(self):
+        active = _active()
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active)
+        config = DispatcherConfig(apply=False)
+
+        event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        assert event is not None
+        assert set(event.keys()) == {
+            "issue_number",
+            "subtask_id",
+            "action",
+            "reason",
+        }
 
 
 class TestWorktreeHasUncommittedChanges:
