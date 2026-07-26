@@ -180,7 +180,9 @@ class DummyGitHub:
         num = int(issue_number)
         self.comments.setdefault(num, []).append(body)
 
-    def list_open_prs(self, limit: int = 1000) -> list[PrRecord]:
+    def list_open_prs(
+        self, limit: int = 1000, paginate_files: bool = False
+    ) -> list[PrRecord]:
         return list(self.prs.values())
 
     def list_remote_branches(self) -> list[str]:

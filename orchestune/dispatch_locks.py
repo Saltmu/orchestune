@@ -88,6 +88,15 @@ def scan_external_locks(
             if pr.head_ref not in active_set
             and task.issue_number not in pr.closes_issue_numbers
         ]
+        # #250: changed filesが完全取得できずtruncated状態のPRが存在する場合、
+        # 他タスクのfootprintとの重複可能性を排除できないためfail closedに判定する。
+        has_truncated_pr = any(
+            pr.is_files_truncated
+            for pr in prs
+            if pr.head_ref not in active_set
+            and task.issue_number not in pr.closes_issue_numbers
+        )
+
         # #209: poetry.lock等のホットスポットファイルだけの重複は、実質的な
         # 直列化(外部ロック)を引き起こさない(check_footprint_deviationと同じ
         # 除外パターンを適用する)。
@@ -95,7 +104,9 @@ def scan_external_locks(
         overlaps = any(
             task_footprint & {path for path in footprint if not _is_hotspot(path)}
             for footprint in [*branch_footprints, *pr_footprints]
-        ) or (has_unknown_branch_footprint and bool(task_footprint))
+        ) or (
+            (has_unknown_branch_footprint or has_truncated_pr) and bool(task_footprint)
+        )
         if overlaps and not currently_locked:
             to_lock.append(task)
         elif not overlaps and currently_locked:
