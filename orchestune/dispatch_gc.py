@@ -420,13 +420,25 @@ def _check_zombie_and_timeout(
     return is_zombie, is_timeout, process_alive
 
 
-def _collect_zombies_and_timeouts(
+@dataclass
+class ZombieOrTimeoutReclaim:
+    key: str
+    active: ActiveWorktree
+    subtask_id: str
+    reason: str
+    is_timeout: bool
+    process_alive: bool
+
+
+def _decide_zombie_or_timeout_reclaims(
     run_state: RunState,
     tasks_by_issue: dict[int, Task],
     config: DispatcherConfig,
-    held_worktree_paths: set[str] | None = None,
-) -> list[dict]:
-    """ゾンビプロセスおよびタイムアウトしたタスクをGC回収する。
+    held_worktree_paths: set[str] | None,
+    now: float,
+) -> list[ZombieOrTimeoutReclaim]:
+    """#233: ゾンビプロセス・タイムアウトの回収対象を、副作用なし
+    （worktree削除・githubラベル変更・os.kill・run_state変更を行わない）で判定する。
 
     同一サイクルの完了判定でdirty worktreeの人間確認待ちが選ばれた場合、
     その判定を優先し、該当worktreeは回収しない。
@@ -437,74 +449,119 @@ def _collect_zombies_and_timeouts(
 
     if not zombie_enabled and timeout_limit <= 0:
         return []
-    events = []
-    now = time.time()
-    for key, active in list(run_state.active_worktrees.items()):
+
+    reclaims: list[ZombieOrTimeoutReclaim] = []
+    for key, active in run_state.active_worktrees.items():
         if active.worktree_path in held_worktree_paths:
             continue
-
-        active_task = tasks_by_issue.get(active.issue_number)
 
         is_zombie, is_timeout, process_alive = _check_zombie_and_timeout(
             active, zombie_enabled, timeout_limit, now
         )
+        if not (is_zombie or is_timeout):
+            continue
 
-        if is_zombie or is_timeout:
-            reason = "process disappeared" if is_zombie else "timeout exceeded"
+        active_task = tasks_by_issue.get(active.issue_number)
+        reclaims.append(
+            ZombieOrTimeoutReclaim(
+                key=key,
+                active=active,
+                subtask_id=active_task.subtask_id if active_task else "",
+                reason="process disappeared" if is_zombie else "timeout exceeded",
+                is_timeout=is_timeout,
+                process_alive=process_alive,
+            )
+        )
 
-            if config.apply:
-                backup_success = True
-                worktree_exists = os.path.exists(active.worktree_path)
-                if worktree_exists:
-                    backup_error = backup_wip_commit(
-                        active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
-                    )
-                    if backup_error is not None:
-                        backup_success = False
-                        github.add_comment(
-                            active.issue_number,
-                            f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
-                            f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
-                            f"エラー詳細:\n```\n{backup_error}\n```",
-                        )
+    return reclaims
 
-                if not backup_success:
-                    continue
 
-                if is_timeout and active.pid and process_alive:
-                    try:
-                        os.kill(active.pid, 9)
-                    except Exception:
-                        pass
+def _apply_zombie_or_timeout_reclaim(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+) -> dict | None:
+    """decide層が判定した回収対象に基づき、WIPバックアップ・プロセスkill・
+    worktree撤去・githubラベル/コメント更新・run_state更新を行う。
 
-                if worktree_exists:
-                    remove_worktree(active.worktree_path)
+    worktreeの存在確認は、decide時点のスナップショットを信用せず、副作用を
+    実行する直前にこの関数内で再評価する。全回収対象の判定（decide）を先に
+    まとめて行ってから1件ずつapplyする都合上、decideからこの関数の実行までの
+    間にworktreeの状態（削除・再作成）が変化し得るため、古いスナップショットを
+    そのまま使うとバックアップ・削除・orphan worktree残存に関する安全策を
+    迂回しかねない。
 
-                github.remove_label(active.issue_number, "status:in-progress")
-                github.add_label(active.issue_number, "status:queued")
-                worktree_note = (
-                    "作業ブランチにWIPコミットを退避した上で、"
-                    if worktree_exists
-                    else "物理worktreeが見つからなかったため、"
-                )
+    WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
+    消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
+    （run_stateは変更せず、次サイクルでの再試行に委ねる）。
+    """
+    active = reclaim.active
+    reason = reclaim.reason
+
+    if config.apply:
+        worktree_exists = os.path.exists(active.worktree_path)
+
+        if worktree_exists:
+            backup_error = backup_wip_commit(
+                active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
+            )
+            if backup_error is not None:
                 github.add_comment(
                     active.issue_number,
-                    f"タスク実行が {reason} のため、GCにより{worktree_note}"
-                    "タスクを再キューイング（status:queued）しました。",
+                    f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
+                    f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
+                    f"エラー詳細:\n```\n{backup_error}\n```",
                 )
+                return None
 
-            if config.apply:
-                del run_state.active_worktrees[key]
+        if reclaim.is_timeout and active.pid and reclaim.process_alive:
+            try:
+                os.kill(active.pid, 9)
+            except Exception:
+                pass
 
-            events.append(
-                {
-                    "issue_number": active.issue_number,
-                    "subtask_id": active_task.subtask_id if active_task else "",
-                    "action": "gc_reclaimed",
-                    "reason": reason,
-                }
-            )
+        if worktree_exists:
+            remove_worktree(active.worktree_path)
 
+        github.remove_label(active.issue_number, "status:in-progress")
+        github.add_label(active.issue_number, "status:queued")
+        worktree_note = (
+            "作業ブランチにWIPコミットを退避した上で、"
+            if worktree_exists
+            else "物理worktreeが見つからなかったため、"
+        )
+        github.add_comment(
+            active.issue_number,
+            f"タスク実行が {reason} のため、GCにより{worktree_note}"
+            "タスクを再キューイング（status:queued）しました。",
+        )
+
+        del run_state.active_worktrees[reclaim.key]
+
+    return {
+        "issue_number": active.issue_number,
+        "subtask_id": reclaim.subtask_id,
+        "action": "gc_reclaimed",
+        "reason": reason,
+    }
+
+
+def _collect_zombies_and_timeouts(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    held_worktree_paths: set[str] | None = None,
+) -> list[dict]:
+    """#233: decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
+    now = time.time()
+    reclaims = _decide_zombie_or_timeout_reclaims(
+        run_state, tasks_by_issue, config, held_worktree_paths, now
+    )
+    events: list[dict] = []
+    for reclaim in reclaims:
+        event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+        if event is not None:
+            events.append(event)
     return events
 
 
