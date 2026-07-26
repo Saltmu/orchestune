@@ -33,7 +33,7 @@ def _get_stack_eligible_tasks(
     resolved_grand_deps = done_subtask_ids | (completed_subtask_ids or set())
 
     for issue in blocked_issues:
-        task = parse_task_from_issue(issue)
+        task = tasks_by_issue.get(issue.number) or parse_task_from_issue(issue)
         if not task.subtask_id or not task.depends_on:
             continue
 
