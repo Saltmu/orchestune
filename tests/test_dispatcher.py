@@ -24,6 +24,7 @@ from orchestune.dispatcher import (
     _is_worktree_complete,
     _poll_pending_not_needed_reviews,
     _process_parent_completion,
+    _run_best_effort_phase,
     _run_semantic_integrator,
     append_event_log,
     build_event_log_entry,
@@ -3564,6 +3565,80 @@ class TestDecideSemanticReviewEnabled:
     def test_enabled_when_env_var_is_nonzero(self, monkeypatch):
         monkeypatch.setenv("ORCHESTUNE_SEMANTIC_REVIEW", "1")
         assert _decide_semantic_review_enabled() is True
+
+
+class TestRunBestEffortPhase:
+    """#232: 3つのベストエフォート後処理フェーズが共有する実行部の契約を検証する。"""
+
+    def test_returns_success_with_report_when_work_succeeds(self):
+        result = _run_best_effort_phase(
+            phase_name="dummy_phase",
+            report_label="Dummy Report",
+            work=lambda: {"ok": True},
+            auth_error=None,
+            auth_error_message="authentication failed while doing dummy work",
+            failure_message="failed to do dummy work",
+        )
+
+        assert isinstance(result, PhaseResult)
+        assert result.phase_name == "dummy_phase"
+        assert result.status == PhaseStatus.SUCCESS
+        assert result.report == {"ok": True}
+        assert result.retryable is False
+
+    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+        result = _run_best_effort_phase(
+            phase_name="dummy_phase",
+            report_label="Dummy Report",
+            work=lambda: {"ok": True},
+            auth_error=ForgeAuthError("auth-failed"),
+            auth_error_message="authentication failed while doing dummy work",
+            failure_message="failed to do dummy work",
+        )
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.FATAL_FAILURE
+        assert result.retryable is False
+        assert result.error_message == "auth-failed"
+        err = capsys.readouterr().err
+        assert "authentication failed while doing dummy work" in err
+        assert "auth-failed" in err
+
+    def test_returns_retryable_failure_when_work_raises(self, capsys):
+        def _boom() -> dict:
+            raise RuntimeError("boom")
+
+        result = _run_best_effort_phase(
+            phase_name="dummy_phase",
+            report_label="Dummy Report",
+            work=_boom,
+            auth_error=None,
+            auth_error_message="authentication failed while doing dummy work",
+            failure_message="failed to do dummy work",
+        )
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert result.error_message == "boom"
+        err = capsys.readouterr().err
+        assert "failed to do dummy work" in err
+        assert "boom" in err
+
+    def test_evaluate_report_overrides_status(self):
+        result = _run_best_effort_phase(
+            phase_name="dummy_phase",
+            report_label="Dummy Report",
+            work=lambda: {"status": "not_whitelisted"},
+            auth_error=None,
+            auth_error_message="authentication failed while doing dummy work",
+            failure_message="failed to do dummy work",
+            evaluate_report=lambda report: (PhaseStatus.RETRYABLE_FAILURE, True),
+        )
+
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert result.report == {"status": "not_whitelisted"}
 
 
 class TestPollPendingNotNeededReviews:
