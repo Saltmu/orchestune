@@ -351,18 +351,56 @@ class TestDecideRebaseNeeded:
             mock_run.return_value.returncode = 1
             assert _decide_rebase_needed("main", "feature", "worktrees/w1") is True
 
-    def test_os_error_defaults_to_no_rebase(self):
+    def test_returncode_128_logs_warning_and_returns_false(self):
+        with (
+            patch("orchestune.dispatch_rebase.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                return_value="nonexistent-branch",
+            ),
+            patch("orchestune.dispatch_rebase.logger.warning") as mock_warn,
+        ):
+            mock_run.return_value.returncode = 128
+            mock_run.return_value.stderr = (
+                "fatal: Not a valid object name nonexistent-branch"
+            )
+            assert (
+                _decide_rebase_needed("nonexistent-branch", "feature", "worktrees/w1")
+                is False
+            )
+            mock_warn.assert_called_once()
+            assert "128" in mock_warn.call_args[0][0]
+
+    def test_missing_ref_resolution_failure_logs_warning_and_returns_false(self):
+        with (
+            patch(
+                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                side_effect=ValueError("Invalid ref name"),
+            ),
+            patch("orchestune.dispatch_rebase.logger.warning") as mock_warn,
+        ):
+            assert (
+                _decide_rebase_needed("invalid..ref", "feature", "worktrees/w1")
+                is False
+            )
+            mock_warn.assert_called_once()
+            assert "Failed to resolve branch" in mock_warn.call_args[0][0]
+
+    def test_os_error_logs_warning_and_returns_false(self):
         with (
             patch(
                 "orchestune.dispatch_rebase.subprocess.run",
-                side_effect=OSError("boom"),
+                side_effect=OSError("command not found"),
             ),
             patch(
                 "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
                 return_value="main",
             ),
+            patch("orchestune.dispatch_rebase.logger.warning") as mock_warn,
         ):
             assert _decide_rebase_needed("main", "feature", "worktrees/w1") is False
+            mock_warn.assert_called_once()
+            assert "OSError" in mock_warn.call_args[0][0]
 
 
 class TestTryAutoRebase:
