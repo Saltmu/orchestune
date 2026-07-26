@@ -484,36 +484,46 @@ class TestListRemoteBranches:
 
 
 class TestIsBranchMergedInto:
-    def test_returns_true_for_matching_merged_pr(self):
+    def test_returns_true_when_current_remote_tip_is_in_base(self):
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout='[{"number": 42}]', stderr=""
-            )
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=f"{'a' * 40}\n", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="ahead\n", stderr=""
+                ),
+            ]
 
             result = is_branch_merged_into("claude/issue-1-task-1", "main")
 
         assert result is True
-        assert mock_run.call_args.args[0] == [
+        assert mock_run.call_args_list[0].args[0] == [
             "gh",
-            "pr",
-            "list",
-            "--state",
-            "merged",
-            "--head",
-            "claude/issue-1-task-1",
-            "--base",
-            "main",
-            "--json",
-            "number",
-            "--limit",
-            "1",
+            "api",
+            "repos/{owner}/{repo}/branches/claude%2Fissue-1-task-1",
+            "--jq",
+            ".commit.sha",
+        ]
+        assert mock_run.call_args_list[1].args[0] == [
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/compare/{'a' * 40}...main",
+            "--jq",
+            ".status",
         ]
 
-    def test_returns_false_when_no_matching_merged_pr_exists(self):
+    @pytest.mark.parametrize("status", ["behind", "diverged"])
+    def test_returns_false_when_current_tip_is_not_in_base(self, status):
         with patch("orchestune.github.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="[]", stderr=""
-            )
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=f"{'b' * 40}\n", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=f"{status}\n", stderr=""
+                ),
+            ]
 
             assert is_branch_merged_into("claude/issue-1-task-1", "main") is False
 
