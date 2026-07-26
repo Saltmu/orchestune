@@ -195,6 +195,32 @@ def _filter_candidates_for_forced_serial(
     ]
 
 
+def _filter_deviation_blocked_candidates(
+    candidate_tasks: list[Task],
+    deviation_events: list[dict],
+    issue_number_by_subtask_id: dict[str, int],
+) -> list[Task]:
+    """同一サイクルのfootprint逸脱でブロックされた候補を除外する。"""
+    newly_blocked_recompute_issues = set()
+    for event in deviation_events:
+        if event.get("action") == "recomputed":
+            for conflict in event.get("conflicts", []):
+                blocked_id = conflict.get("blocked_subtask_id")
+                if blocked_id:
+                    issue_number = issue_number_by_subtask_id.get(blocked_id)
+                    if issue_number is not None:
+                        newly_blocked_recompute_issues.add(issue_number)
+
+    if not newly_blocked_recompute_issues:
+        return candidate_tasks
+
+    return [
+        task
+        for task in candidate_tasks
+        if task.issue_number not in newly_blocked_recompute_issues
+    ]
+
+
 def _decide_blocked_promotions(
     blocked_issues: list[IssueRecord],
     done_issues: list[IssueRecord],
@@ -746,23 +772,11 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
         )
 
-        # 同一サイクルでfootprint逸脱により新たにブロックされたタスクを除外する
-        newly_blocked_recompute_issues = set()
-        for event in deviation_events:
-            if event.get("action") == "recomputed":
-                for conflict in event.get("conflicts", []):
-                    blocked_id = conflict.get("blocked_subtask_id")
-                    if blocked_id:
-                        num = ctx.issue_number_by_subtask_id.get(blocked_id)
-                        if num is not None:
-                            newly_blocked_recompute_issues.add(num)
-
-        if newly_blocked_recompute_issues:
-            candidate_tasks = [
-                t
-                for t in candidate_tasks
-                if t.issue_number not in newly_blocked_recompute_issues
-            ]
+        candidate_tasks = _filter_deviation_blocked_candidates(
+            candidate_tasks,
+            deviation_events,
+            ctx.issue_number_by_subtask_id,
+        )
 
         quota_slots = quota_available(
             ctx.run_state,

@@ -8,6 +8,7 @@ from orchestune.dispatch_cycle import (
     _decide_blocked_promotions,
     _decide_external_lock_sync,
     _fetch_issues,
+    _filter_deviation_blocked_candidates,
     _finalize_launch,
     _group_by_status,
     _process_active_worktrees,
@@ -71,6 +72,51 @@ def _ctx(**overrides):
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
+
+
+class TestFilterDeviationBlockedCandidates:
+    def test_excludes_candidates_blocked_by_recomputed_deviation(self):
+        blocked = _task(issue_number=2, subtask_id="task-blocked")
+        retained = _task(issue_number=3, subtask_id="task-retained")
+        events = [
+            {
+                "action": "recomputed",
+                "conflicts": [
+                    {"blocked_subtask_id": "task-blocked"},
+                    {"blocked_subtask_id": "unknown-task"},
+                ],
+            }
+        ]
+
+        result = _filter_deviation_blocked_candidates(
+            [blocked, retained], events, {"task-blocked": 2}
+        )
+
+        assert result == [retained]
+
+    def test_ignores_non_recomputed_and_missing_blocked_ids(self):
+        candidates = [_task(issue_number=2, subtask_id="task-blocked")]
+        events = [
+            {
+                "action": "blocked-human-review",
+                "conflicts": [{"blocked_subtask_id": "task-blocked"}],
+            },
+            {"action": "recomputed", "conflicts": [{}]},
+            {"action": "recomputed"},
+        ]
+
+        result = _filter_deviation_blocked_candidates(
+            candidates, events, {"task-blocked": 2}
+        )
+
+        assert result is candidates
+
+    def test_returns_original_candidates_when_there_are_no_events(self):
+        candidates = [_task()]
+
+        result = _filter_deviation_blocked_candidates(candidates, [], {})
+
+        assert result is candidates
 
 
 class TestDecideBlockedPromotions:
