@@ -15,12 +15,15 @@ from orchestune.github import (
     add_comment,
     add_label,
     branch_changed_files,
+    branch_exists,
     close_issue,
     create_pull_request,
     get_actor_permission,
     get_issue_labels,
+    get_issue_last_reopened_at,
     get_issue_state,
     get_label_actor,
+    get_merged_pr_timestamp,
     is_branch_merged_into,
     is_current_branch_tip_merged_into,
     list_issues_by_label,
@@ -572,6 +575,97 @@ class TestIsCurrentBranchTipMergedInto:
             with pytest.raises(ValueError):
                 is_current_branch_tip_merged_into(head, base)
             mock_run.assert_not_called()
+
+
+class TestGetMergedPrTimestamp:
+    def test_returns_merged_at_timestamp(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='[{"mergedAt":"2026-07-26T10:00:00Z"}]',
+                stderr="",
+            )
+
+            result = get_merged_pr_timestamp("parent/issue-100", "main")
+
+        assert result == "2026-07-26T10:00:00Z"
+        assert mock_run.call_args.args[0] == [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--head",
+            "parent/issue-100",
+            "--base",
+            "main",
+            "--json",
+            "mergedAt",
+            "--limit",
+            "1",
+        ]
+
+    def test_returns_none_when_no_merged_pr(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+
+            assert get_merged_pr_timestamp("parent/issue-100", "main") is None
+
+
+class TestGetIssueLastReopenedAt:
+    def test_returns_latest_reopened_event_timestamp(self):
+        payload = (
+            '[[{"event":"closed","created_at":"2026-07-20T00:00:00Z"},'
+            '{"event":"reopened","created_at":"2026-07-21T00:00:00Z"},'
+            '{"event":"reopened","created_at":"2026-07-25T00:00:00Z"}]]'
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=payload, stderr=""
+            )
+
+            result = get_issue_last_reopened_at(100)
+
+        assert result == "2026-07-25T00:00:00Z"
+
+    def test_returns_none_when_never_reopened(self):
+        payload = '[[{"event":"closed","created_at":"2026-07-20T00:00:00Z"}]]'
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=payload, stderr=""
+            )
+
+            assert get_issue_last_reopened_at(100) is None
+
+
+class TestBranchExists:
+    def test_returns_true_when_branch_lookup_succeeds(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='{"name":"parent/issue-100"}', stderr=""
+            )
+
+            assert branch_exists("parent/issue-100") is True
+
+    def test_returns_false_on_404(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1, ["gh", "api"], stderr="gh: Branch not found (HTTP 404)"
+            )
+
+            assert branch_exists("parent/issue-100") is False
+
+    def test_propagates_non_404_failures(self):
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1, ["gh", "api"], stderr="gh: rate limit exceeded"
+            )
+
+            with pytest.raises(subprocess.CalledProcessError):
+                branch_exists("parent/issue-100")
 
 
 class TestListOpenPrs:
