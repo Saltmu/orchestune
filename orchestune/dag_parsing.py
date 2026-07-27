@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 import yaml
 
 from orchestune.dag_models import SubTask, normalize_footprint_path
+
+logger = logging.getLogger(__name__)
 
 _RISK_PATH_PATTERNS = (
     re.compile(r"(^|/)data/sources/"),
@@ -58,7 +61,38 @@ def extract_frontmatter(text: str) -> dict[str, Any]:
     return data
 
 
+def _parse_subtask_id(raw: dict[str, Any]) -> str:
+    """#272: `id`は分解計画で唯一の必須フィールド。欠落時は文脈の無いKeyErrorではなく、
+    どのサブタスクが不正かを示すValueErrorで失敗させる。"""
+    if "id" not in raw:
+        raise ValueError(f"サブタスクに必須フィールド 'id' がありません: {sorted(raw)}")
+    subtask_id = str(raw["id"]).strip()
+    if not subtask_id:
+        raise ValueError("サブタスクの 'id' が空です")
+    return subtask_id
+
+
+def _warn_on_degraded_fields(
+    subtask_id: str, description: str, footprint: tuple[str, ...]
+) -> None:
+    """#272: `description`/`footprint`はパーサー上は任意（既定値へフォールバック）だが、
+    欠落するとリスク検知・コンフリクト検知の入力が失われる。サイレントに劣化させず警告する。"""
+    missing = []
+    if not description:
+        missing.append("description")
+    if not footprint:
+        missing.append("footprint")
+    if missing:
+        logger.warning(
+            "サブタスク '%s' に %s がありません。既定値で続行しますが、"
+            "リスク検知・フットプリント競合検知の精度が低下します。",
+            subtask_id,
+            "/".join(missing),
+        )
+
+
 def _parse_subtask(raw: dict[str, Any]) -> SubTask:
+    subtask_id = _parse_subtask_id(raw)
     footprint = tuple(
         normalize_footprint_path(str(item)) for item in raw.get("footprint", []) or []
     )
@@ -83,6 +117,8 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     )
     writes_shared_contract = bool(raw.get("writes_shared_contract", False))
 
+    _warn_on_degraded_fields(subtask_id, description, footprint)
+
     risk, risk_reasons = detect_risk_from_values(
         footprint,
         symbols,
@@ -90,7 +126,7 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         explicit=bool(raw.get("risk", False)),
     )
     return SubTask(
-        id=str(raw["id"]),
+        id=subtask_id,
         description=description,
         footprint=footprint,
         symbols=symbols,
