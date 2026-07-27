@@ -158,39 +158,40 @@ class TestNotifyForceSerial:
 
 
 class TestWaitForProcessTerminate:
-    @patch("orchestune.dispatch_rebase.os.kill")
+    """#274レビュー対応(P1): is_process_alive経由でポーリングする(os.killは直接呼ばない)。"""
+
+    @patch("orchestune.dispatch_rebase.is_process_alive")
     @patch("orchestune.dispatch_rebase.time.sleep")
-    def test_wait_immediate_exit(self, mock_sleep, mock_kill):
-        # 最初の os.kill(pid, 0) で ProcessLookupError が発生すれば即座に終了する
-        mock_kill.side_effect = ProcessLookupError()
+    def test_wait_immediate_exit(self, mock_sleep, mock_is_alive):
+        mock_is_alive.return_value = False
 
         from orchestune.dispatch_rebase import _wait_for_process_terminate
 
         _wait_for_process_terminate(12345, timeout=1.0)
 
-        mock_kill.assert_called_once_with(12345, 0)
+        mock_is_alive.assert_called_once_with(12345)
         mock_sleep.assert_not_called()
 
-    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.is_process_alive")
     @patch("orchestune.dispatch_rebase.time.sleep")
-    def test_wait_exit_after_polling(self, mock_sleep, mock_kill):
-        # 1, 2回目は存在（例外なし）、3回目に ProcessLookupError で終了
-        mock_kill.side_effect = [None, None, ProcessLookupError()]
+    def test_wait_exit_after_polling(self, mock_sleep, mock_is_alive):
+        # 1, 2回目は生存、3回目に非生存で終了
+        mock_is_alive.side_effect = [True, True, False]
 
         from orchestune.dispatch_rebase import _wait_for_process_terminate
 
         _wait_for_process_terminate(12345, timeout=1.0)
 
-        assert mock_kill.call_count == 3
-        mock_kill.assert_has_calls([call(12345, 0), call(12345, 0), call(12345, 0)])
+        assert mock_is_alive.call_count == 3
+        mock_is_alive.assert_has_calls([call(12345), call(12345), call(12345)])
         assert mock_sleep.call_count == 2
         mock_sleep.assert_has_calls([call(0.1), call(0.1)])
 
-    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.is_process_alive")
     @patch("orchestune.dispatch_rebase.time.sleep")
-    def test_wait_timeout(self, mock_sleep, mock_kill):
+    def test_wait_timeout(self, mock_sleep, mock_is_alive):
         # ずっとプロセスが存在している場合、タイムアウト時間経過で抜ける
-        mock_kill.return_value = None
+        mock_is_alive.return_value = True
 
         from orchestune.dispatch_rebase import _wait_for_process_terminate
 
@@ -199,34 +200,7 @@ class TestWaitForProcessTerminate:
             mock_time.side_effect = [0.0, 0.0, 0.05, 0.11]
             _wait_for_process_terminate(12345, timeout=0.1)
 
-        assert mock_kill.call_count >= 1
-
-    @patch("orchestune.dispatch_rebase.os.kill")
-    @patch("orchestune.dispatch_rebase.time.sleep")
-    def test_wait_permission_error_then_exit(self, mock_sleep, mock_kill):
-        # 1回目は PermissionError (プロセスは存在している)
-        # 2回目に ProcessLookupError で終了
-        mock_kill.side_effect = [PermissionError(), ProcessLookupError()]
-
-        from orchestune.dispatch_rebase import _wait_for_process_terminate
-
-        _wait_for_process_terminate(12345, timeout=1.0)
-
-        assert mock_kill.call_count == 2
-        mock_sleep.assert_called_once_with(0.1)
-
-    @patch("orchestune.dispatch_rebase.os.kill")
-    @patch("orchestune.dispatch_rebase.time.sleep")
-    def test_wait_os_error(self, mock_sleep, mock_kill):
-        # 1回目に一般的な OSError が発生した場合は即座に終了
-        mock_kill.side_effect = OSError()
-
-        from orchestune.dispatch_rebase import _wait_for_process_terminate
-
-        _wait_for_process_terminate(12345, timeout=1.0)
-
-        mock_kill.assert_called_once_with(12345, 0)
-        mock_sleep.assert_not_called()
+        assert mock_is_alive.call_count >= 1
 
 
 class TestDecideFootprintDeviationOutcome:

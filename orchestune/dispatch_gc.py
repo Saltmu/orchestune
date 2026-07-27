@@ -17,25 +17,7 @@ from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.dispatch_targets import DispatchHandle
-
-
-def is_process_alive(pid: int | None) -> bool:
-    """#193: 記録済みpidのプロセス生存確認によるタスク完了判定。
-
-    シグナル送信権限がない場合（別ユーザー所有のPID再利用等）は、
-    安全側に倒し「生存している」とみなす。
-    """
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+from orchestune.process_utils import is_process_alive  # noqa: F401 (再エクスポート)
 
 
 def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:

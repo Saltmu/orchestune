@@ -23,6 +23,11 @@ poetry add --group dev git+https://github.com/Saltmu/orchestune.git
 
 This makes the core `orchestune` command, as well as `orchestune-dag` and `orchestune-dispatch`, executable directly from that project's directory.
 
+#### Windows Environment Support
+Orchestune natively supports Windows NT/10/11 environments:
+- **File Locking**: Cross-platform lock (`file_lock`) uses `msvcrt` on Windows and `fcntl` on POSIX.
+- **Development & Local CI**: When developing Orchestune itself inside a cloned repository, PowerShell scripts `.\scripts\setup-git-hooks.ps1` and `.\scripts\local-ci.ps1` are available for local CI and Git hook setup (see [CONTRIBUTING.md](../../CONTRIBUTING.md)).
+
 ---
 
 ## 2. Registering Skills with AI Assistants

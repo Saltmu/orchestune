@@ -22,6 +22,7 @@ from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.github import resolve_local_or_remote_branch
+from orchestune.process_utils import is_process_alive
 
 logger = logging.getLogger(__name__)
 
@@ -238,13 +239,7 @@ def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
     """指定されたPIDのプロセスが終了するまで待機する。"""
     start = time.time()
     while time.time() - start < timeout:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        except PermissionError:
-            pass
-        except OSError:
+        if not is_process_alive(pid):
             return
         time.sleep(0.1)
 

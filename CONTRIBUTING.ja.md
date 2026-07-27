@@ -12,11 +12,16 @@ Python 3.12以上、Poetry、GitHub CLI（`gh auth status`）、[gitleaks](https
 poetry install
 ```
 
-続けて、以下を実行してGit hooksをローカルにインストールしてください。これにより `git push` の直前に `./scripts/local-ci.sh`（gitleaksスキャンを含む）が自動実行され、失敗時はpushがブロックされます。
+続けて、以下を実行してGit hooksをローカルにインストールしてください。これにより `git push` の直前にローカルCIスクリプト（gitleaksスキャンを含む）が自動実行され、失敗時はpushがブロックされます。
 
-```bash
-./scripts/setup-git-hooks.sh
-```
+* **POSIX (Linux / macOS)**:
+  ```bash
+  ./scripts/setup-git-hooks.sh
+  ```
+* **Windows (PowerShell)**:
+  ```powershell
+  .\scripts\setup-git-hooks.ps1
+  ```
 
 ## テストの実行
 
@@ -28,9 +33,14 @@ poetry run pytest
 ## ローカルCIスクリプト
 
 コミットまたはプッシュする前に、ローカルCIスクリプトを実行してフォーマット、型チェック、およびテストを確認します。
-```bash
-./scripts/local-ci.sh
-```
+* **POSIX (Linux / macOS)**:
+  ```bash
+  ./scripts/local-ci.sh
+  ```
+* **Windows (PowerShell)**:
+  ```powershell
+  .\scripts\local-ci.ps1
+  ```
 このスクリプトは以下のチェックを実行します。
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
