@@ -227,27 +227,36 @@ def file_lock(lock_path: Path) -> Iterator[None]:
             "Neither fcntl nor msvcrt is supported on this platform. File locking is required."
         )
 
-    lock_fd = None
+    # #274レビュー対応(P2): mkdir/openの失敗(ディスクフルやACLによる
+    # PermissionError等)を、ロック競合(flock/lockingのPermissionError・
+    # BlockingIOError)と同じ「他インスタンス実行中」扱いにしてしまうと、
+    # 本当の設定・環境エラーが握り潰されてしまう。ロック取得(mkdir/open)と
+    # ロック競合判定(flock/locking)を別のtry/exceptに分離し、後者でのみ
+    # RuntimeErrorへ変換する。
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = open(lock_path, "w" if fcntl is not None else "a+")
+
     try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
         if fcntl is not None:
-            lock_fd = open(lock_path, "w")
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
-        elif msvcrt is not None:
-            lock_fd = open(lock_path, "a+")
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            except BlockingIOError:
+                raise RuntimeError(
+                    f"Another instance is already running (locked on {lock_path})"
+                ) from None
+        else:
+            assert msvcrt is not None
             lock_fd.write(" ")
             lock_fd.flush()
             lock_fd.seek(0)
-            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-    except (BlockingIOError, PermissionError):
-        if lock_fd:
-            lock_fd.close()
-        raise RuntimeError(
-            f"Another instance is already running (locked on {lock_path})"
-        ) from None
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            except PermissionError:
+                raise RuntimeError(
+                    f"Another instance is already running (locked on {lock_path})"
+                ) from None
     except Exception:
-        if lock_fd:
-            lock_fd.close()
+        lock_fd.close()
         raise
 
     # #227: ロック取得成功後のbody実行は別のtry/finallyに分離する。
@@ -260,16 +269,16 @@ def file_lock(lock_path: Path) -> Iterator[None]:
     try:
         yield
     finally:
-        if lock_fd:
-            if fcntl is not None:
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-            elif msvcrt is not None:
-                try:
-                    lock_fd.seek(0)
-                    msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
-                except Exception:
-                    pass
-            lock_fd.close()
+        if fcntl is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        else:
+            assert msvcrt is not None
+            try:
+                lock_fd.seek(0)
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+        lock_fd.close()

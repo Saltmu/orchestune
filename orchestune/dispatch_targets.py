@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from orchestune import github
+from orchestune.process_utils import is_process_alive
 
 if TYPE_CHECKING:
     from orchestune.dispatcher import Task
@@ -234,17 +235,7 @@ def _push_branch_and_verify(branch_name: str, worktree_path: Path) -> None:
 
 
 def _is_pid_alive(pid: int | None) -> bool:
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return is_process_alive(pid)
 
 
 class LocalProcessDispatchTarget(DispatchTarget):
