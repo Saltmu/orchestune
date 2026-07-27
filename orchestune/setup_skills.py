@@ -44,10 +44,17 @@ def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
     """Link (or copy) a single skill into place. Returns True on success/already-ok."""
     if dest_skill.exists() or dest_skill.is_symlink():
         if not dest_skill.is_symlink():
+            if dest_skill.is_dir() and (dest_skill / "SKILL.md").is_file():
+                print(
+                    f"  Skipped '{skill_name}' (already present as a copy at {dest_skill})"
+                )
+                return True
             print(
-                f"  Skipped '{skill_name}' (a directory/file already exists at {dest_skill})"
+                f"  Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
+                "and does not look like a valid skill installation.",
+                file=sys.stderr,
             )
-            return True
+            return False
 
         try:
             link_target = dest_skill.readlink()

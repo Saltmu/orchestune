@@ -104,7 +104,8 @@ def test_setup_skills_skips_when_no_parent(tmp_path):
     assert not (mock_home / ".gemini").exists()
 
 
-def test_setup_skills_already_exists(tmp_path, capsys):
+def test_setup_skills_already_exists_as_valid_copy(tmp_path, capsys):
+    """占有先が有効なskillのコピー(SKILL.md有り)であれば成功として扱う。"""
     from orchestune.setup_skills import setup_skills
 
     mock_home = tmp_path / "home"
@@ -118,20 +119,55 @@ def test_setup_skills_already_exists(tmp_path, capsys):
     (skills_dir / "orchestune").mkdir()
     (skills_dir / "orchestune" / "SKILL.md").touch()
 
-    # すでにターゲットが存在している状態を作る
+    # すでにターゲットが有効なコピーとして存在している状態を作る
+    # (Windowsでのsymlink権限不足によるcopyフォールバック後の再実行を想定)
     claude_dir = mock_home / ".claude" / "skills"
     claude_dir.mkdir(parents=True)
-    existing_link = claude_dir / "orchestune"
-    existing_link.mkdir()
+    existing_copy = claude_dir / "orchestune"
+    existing_copy.mkdir()
+    (existing_copy / "SKILL.md").touch()
 
     with (
         patch("pathlib.Path.home", return_value=mock_home),
         patch("pathlib.Path.cwd", return_value=mock_source),
     ):
-        setup_skills()
+        exit_code = setup_skills()
 
     captured = capsys.readouterr()
-    assert "Skipped" in captured.out or "already exists" in captured.out
+    assert "Skipped" in captured.out
+    assert exit_code == 0
+
+
+def test_setup_skills_occupied_by_unrelated_path_counts_as_failure(tmp_path, capsys):
+    """占有先が無関係なfile/directory(SKILL.mdなし)であれば失敗として扱う。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+
+    # すでにターゲットが無関係なディレクトリ(SKILL.mdなし)として存在している
+    claude_dir = mock_home / ".claude" / "skills"
+    claude_dir.mkdir(parents=True)
+    unrelated_dir = claude_dir / "orchestune"
+    unrelated_dir.mkdir()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills()
+
+    captured = capsys.readouterr()
+    assert "occupied by an unrelated" in captured.err
+    assert exit_code == 1
 
 
 def test_get_skills_source_dir_fallback_parent(tmp_path):
