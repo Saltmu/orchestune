@@ -15,7 +15,6 @@ from orchestune.dispatch_gc import (
     _finalize_not_needed_worktree,
     _rule_completed,
     backup_wip_commit,
-    is_process_alive,
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
     worktree_has_new_commits,
@@ -81,26 +80,6 @@ def _task(**overrides):
     )
     defaults.update(overrides)
     return Task(**defaults)
-
-
-class TestIsProcessAlive:
-    """#193: pidのプロセス生存確認による完了判定。"""
-
-    def test_none_pid_is_not_alive(self):
-        assert is_process_alive(None) is False
-
-    def test_alive_pid_returns_true(self):
-        with patch("orchestune.dispatch_gc.os.kill") as mock_kill:
-            mock_kill.return_value = None
-            assert is_process_alive(12345) is True
-
-    def test_missing_pid_returns_false(self):
-        with patch("orchestune.dispatch_gc.os.kill", side_effect=ProcessLookupError):
-            assert is_process_alive(12345) is False
-
-    def test_permission_error_is_treated_as_alive(self):
-        with patch("orchestune.dispatch_gc.os.kill", side_effect=PermissionError):
-            assert is_process_alive(1) is True
 
 
 class TestCollectZombiesAndTimeouts:

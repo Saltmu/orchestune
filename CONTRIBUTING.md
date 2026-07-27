@@ -12,11 +12,16 @@ Ensure you have Python 3.12+, Poetry, the GitHub CLI (`gh auth status`), and [gi
 poetry install
 ```
 
-Then install the local Git hooks so `./scripts/local-ci.sh` (including the gitleaks scan) runs automatically before every `git push` and blocks it on failure:
+Then install the local Git hooks so the local CI script (including the gitleaks scan) runs automatically before every `git push` and blocks it on failure:
 
-```bash
-./scripts/setup-git-hooks.sh
-```
+* **POSIX (Linux / macOS)**:
+  ```bash
+  ./scripts/setup-git-hooks.sh
+  ```
+* **Windows (PowerShell)**:
+  ```powershell
+  .\scripts\setup-git-hooks.ps1
+  ```
 
 ## Running Tests
 
@@ -28,9 +33,14 @@ poetry run pytest
 ## Local CI Script
 
 Before committing or pushing your changes, run the local CI script to verify formatting, types, and tests:
-```bash
-./scripts/local-ci.sh
-```
+* **POSIX (Linux / macOS)**:
+  ```bash
+  ./scripts/local-ci.sh
+  ```
+* **Windows (PowerShell)**:
+  ```powershell
+  .\scripts\local-ci.ps1
+  ```
 This runs:
 1. **Ruff Format & Lint Check**: `ruff format` and `ruff check`
 2. **Mypy Type Check**: Type hint validation

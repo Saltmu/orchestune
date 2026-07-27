@@ -550,12 +550,110 @@ class TestFileLock:
                     executed = True
             assert not executed
 
-    def test_file_lock_raises_error_when_fcntl_is_none(self, tmp_path):
-        """fcntlがNone（非Linux環境）の場合、RuntimeErrorを発生させて終了する。"""
+    def test_file_lock_raises_error_when_fcntl_and_msvcrt_are_none(self, tmp_path):
+        """fcntlおよびmsvcrtの両方がNoneの場合、RuntimeErrorを発生させて終了する。"""
         lock_path = tmp_path / "test.lock"
-        with patch("orchestune.dispatch_worktree.fcntl", None):
+        with (
+            patch("orchestune.dispatch_worktree.fcntl", None),
+            patch("orchestune.dispatch_worktree.msvcrt", None),
+        ):
             executed = False
-            with pytest.raises(RuntimeError, match="fcntl is not supported"):
+            with pytest.raises(
+                RuntimeError, match="Neither fcntl nor msvcrt is supported"
+            ):
                 with file_lock(lock_path):
                     executed = True
             assert not executed
+
+    def test_file_lock_supports_msvcrt_when_fcntl_is_none(self, tmp_path):
+        """fcntlがNoneでmsvcrtが存在する場合（Windows環境）、msvcrt経由でロック・競合検出・解放を行える。"""
+        lock_path = tmp_path / "test.lock"
+        mock_msvcrt = MagicMock()
+        with (
+            patch("orchestune.dispatch_worktree.fcntl", None),
+            patch("orchestune.dispatch_worktree.msvcrt", mock_msvcrt),
+        ):
+            executed = False
+            with file_lock(lock_path):
+                executed = True
+            assert executed
+            assert mock_msvcrt.locking.call_count == 2
+            # 第一引数fileno, 第二引数mode (NBLCK then UNLCK), 第三引数bytes (1)
+            first_call = mock_msvcrt.locking.call_args_list[0]
+            second_call = mock_msvcrt.locking.call_args_list[1]
+            assert first_call[0][1] == mock_msvcrt.LK_NBLCK
+            assert second_call[0][1] == mock_msvcrt.LK_UNLCK
+
+    def test_file_lock_msvcrt_conflict_raises_runtime_error(self, tmp_path):
+        """msvcrt使用時にPermissionError（ロック競合）が発生した場合、RuntimeErrorに変換される。"""
+        lock_path = tmp_path / "test.lock"
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.locking.side_effect = PermissionError("Permission denied")
+        with (
+            patch("orchestune.dispatch_worktree.fcntl", None),
+            patch("orchestune.dispatch_worktree.msvcrt", mock_msvcrt),
+        ):
+            executed = False
+            with pytest.raises(
+                RuntimeError, match="Another instance is already running"
+            ):
+                with file_lock(lock_path):
+                    executed = True
+            assert not executed
+
+    def test_file_lock_fcntl_conflict_raises_runtime_error(self, tmp_path):
+        """#274レビュー対応(P2): fcntl使用時にBlockingIOError（ロック競合）が
+        発生した場合、RuntimeErrorに変換される。"""
+        lock_path = tmp_path / "test.lock"
+        mock_fcntl = MagicMock()
+        mock_fcntl.LOCK_EX = 1
+        mock_fcntl.LOCK_NB = 2
+        mock_fcntl.LOCK_UN = 3
+        mock_fcntl.flock.side_effect = BlockingIOError(
+            "Resource temporarily unavailable"
+        )
+        with patch("orchestune.dispatch_worktree.fcntl", mock_fcntl):
+            executed = False
+            with pytest.raises(
+                RuntimeError, match="Another instance is already running"
+            ):
+                with file_lock(lock_path):
+                    executed = True
+            assert not executed
+
+    def test_file_lock_open_permission_error_propagates_unchanged(self, tmp_path):
+        """#274レビュー対応(P2): open()自体がPermissionError（ACLや読み取り専用
+        マウント等、ロック競合とは無関係の失敗）を送出した場合、
+        「Another instance is already running」に化けさせず、そのまま伝播させる。"""
+        lock_path = tmp_path / "test.lock"
+        with (
+            patch(
+                "orchestune.dispatch_worktree.open",
+                side_effect=PermissionError("Permission denied"),
+                create=True,
+            ),
+            pytest.raises(PermissionError, match="Permission denied"),
+        ):
+            with file_lock(lock_path):
+                pass
+
+    def test_file_lock_msvcrt_open_permission_error_propagates_unchanged(
+        self, tmp_path
+    ):
+        """#274レビュー対応(P2): msvcrt経路でもopen()自体のPermissionErrorは
+        ロック競合と誤認されず、そのまま伝播する。"""
+        lock_path = tmp_path / "test.lock"
+        mock_msvcrt = MagicMock()
+        with (
+            patch("orchestune.dispatch_worktree.fcntl", None),
+            patch("orchestune.dispatch_worktree.msvcrt", mock_msvcrt),
+            patch(
+                "orchestune.dispatch_worktree.open",
+                side_effect=PermissionError("Permission denied"),
+                create=True,
+            ),
+            pytest.raises(PermissionError, match="Permission denied"),
+        ):
+            with file_lock(lock_path):
+                pass
+        mock_msvcrt.locking.assert_not_called()
