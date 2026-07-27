@@ -559,6 +559,15 @@ def _determine_candidate_tasks(
         ctx.tasks_by_issue[issue.number]
         for issue in issues.queued
         if issue.number not in newly_locked
+        # #254レビュー対応(#275 Codex P1): handle_merge_failureがadd(queued)
+        # 成功後にremove(done)で失敗すると、Issueがstatus:done/
+        # status:queuedを同時に持つ中断状態のまま残りうる。これを通常の
+        # 起動候補として扱うと、Integratorの通常のdoneタスク処理（再merge
+        # 試行等）と、新たに起動されるエージェントセッションが同じbranchへ
+        # 同時に作用しうる。dual-statusのタスクはstatus:doneの除去が
+        # 完了する（_reconcile_dual_status_tasksが対応する）まで起動候補
+        # から除外する。
+        and "status:done" not in ctx.tasks_by_issue[issue.number].status_labels
     ]
 
     # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、
@@ -668,6 +677,43 @@ def _collect_active_conflict_subtask_ids(
     return active_conflict_subtask_ids
 
 
+def _decide_dual_status_reconciliation(
+    tasks_by_issue: dict[int, Task],
+) -> list[Task]:
+    """#254レビュー対応(#275 Codex P1): `handle_merge_failure`がadd(queued)
+    成功後にremove(done)で失敗すると、Issueが`status:done`/`status:queued`
+    を同時に持つ中断状態のまま残りうる。この関数はそうしたdual-status
+    タスクを副作用なしで検出する（`_determine_candidate_tasks`が起動候補
+    から既に除外しているため、これは中断していた遷移を完了させるための
+    自己修復であり、安全性そのものはこの関数の実行有無に依存しない）。"""
+    return [
+        task
+        for task in tasks_by_issue.values()
+        if "status:done" in task.status_labels and "status:queued" in task.status_labels
+    ]
+
+
+def _apply_dual_status_reconciliation(
+    tasks: list[Task], config: DispatcherConfig
+) -> list[dict]:
+    events: list[dict] = []
+    for task in tasks:
+        if config.apply:
+            github.remove_label(task.issue_number, "status:done")
+        events.append(
+            {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
+        )
+    return events
+
+
+def _reconcile_dual_status_tasks(
+    tasks_by_issue: dict[int, Task], config: DispatcherConfig
+) -> list[dict]:
+    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
+    dual_status_tasks = _decide_dual_status_reconciliation(tasks_by_issue)
+    return _apply_dual_status_reconciliation(dual_status_tasks, config)
+
+
 def _handle_blocked_recompute_recovery(
     issues: IssuesByStatus,
     run_state: RunState,
@@ -771,6 +817,10 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         lock_result = _sync_external_locks(
             ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
         )
+
+        # #254レビュー対応(#275): status:done/status:queuedを同時に持つ
+        # 中断状態のIssueについて、中断していたstatus:doneの除去を完了させる。
+        _reconcile_dual_status_tasks(ctx.tasks_by_issue, config)
 
         candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
             ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
