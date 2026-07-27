@@ -63,10 +63,22 @@ def extract_frontmatter(text: str) -> dict[str, Any]:
 
 def _parse_subtask_id(raw: dict[str, Any]) -> str:
     """#272: `id`は分解計画で唯一の必須フィールド。欠落時は文脈の無いKeyErrorではなく、
-    どのサブタスクが不正かを示すValueErrorで失敗させる。"""
+    どのサブタスクが不正かを示すValueErrorで失敗させる。
+
+    #279レビュー対応: `str()`による暗黙の強制変換は、YAMLのnull・数値・リスト
+    （`id:` / `id: 123` / `id: []`）をそれぞれ`"None"`/`"123"`/`"[]"`という
+    Issueタイトル・ブランチ名の識別子へ黙って昇格させてしまう。文書上の契約どおり
+    文字列であることを検証し、非文字列は引用符での明示を促して拒否する。
+    """
     if "id" not in raw:
         raise ValueError(f"サブタスクに必須フィールド 'id' がありません: {sorted(raw)}")
-    subtask_id = str(raw["id"]).strip()
+    raw_id = raw["id"]
+    if not isinstance(raw_id, str):
+        raise ValueError(
+            f"サブタスクの 'id' は文字列である必要があります: {raw_id!r} "
+            f"({type(raw_id).__name__})。引用符で囲んで文字列として指定してください"
+        )
+    subtask_id = raw_id.strip()
     if not subtask_id:
         raise ValueError("サブタスクの 'id' が空です")
     return subtask_id
