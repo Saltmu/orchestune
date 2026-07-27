@@ -4,14 +4,18 @@ from unittest.mock import patch
 
 from orchestune.dispatch_cycle import (
     CycleContext,
+    IssuesByStatus,
     _apply_external_lock_sync,
     _decide_blocked_promotions,
+    _decide_dual_status_reconciliation,
     _decide_external_lock_sync,
+    _determine_candidate_tasks,
     _fetch_issues,
     _filter_deviation_blocked_candidates,
     _finalize_launch,
     _group_by_status,
     _process_active_worktrees,
+    _reconcile_dual_status_tasks,
     _self_heal_run_state,
     run_dispatch_cycle,
 )
@@ -72,6 +76,128 @@ def _ctx(**overrides):
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
+
+
+def _issue(number, labels=(), state="OPEN"):
+    return IssueRecord(
+        number=number,
+        title=f"Issue {number}",
+        body="",
+        labels=labels,
+        created_at="2026-01-01T00:00:00+00:00",
+        state=state,
+    )
+
+
+class TestDetermineCandidateTasksExcludesDualStatus:
+    """#254レビュー対応(#275 Codex P1): add(status:queued)成功後に
+    remove(status:done)が失敗した中断状態のIssueを、dispatcherが誤って
+    起動候補に含めないことを検証する。"""
+
+    def test_excludes_queued_candidate_that_still_has_status_done(self):
+        dual_status_task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            status_labels=("status:done", "status:queued"),
+        )
+        normal_task = _task(
+            issue_number=2,
+            subtask_id="task-b",
+            status_labels=("status:queued",),
+        )
+        issues = IssuesByStatus(
+            queued=[
+                _issue(1, labels=("status:done", "status:queued")),
+                _issue(2, labels=("status:queued",)),
+            ],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+        ctx = _ctx(tasks_by_issue={1: dual_status_task, 2: normal_task})
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
+
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="write",
+            ),
+        ):
+            candidate_tasks, _ = _determine_candidate_tasks(
+                ctx,
+                issues,
+                lock_result,
+                completed_subtask_ids=set(),
+                any_forced_serial=False,
+            )
+
+        assert [t.issue_number for t in candidate_tasks] == [2]
+
+
+class TestDualStatusReconciliation:
+    def test_detects_tasks_with_both_done_and_queued(self):
+        dual_status_task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            status_labels=("status:done", "status:queued"),
+        )
+        queued_only_task = _task(
+            issue_number=2,
+            subtask_id="task-b",
+            status_labels=("status:queued",),
+        )
+        done_only_task = _task(
+            issue_number=3,
+            subtask_id="task-c",
+            status_labels=("status:done",),
+        )
+
+        result = _decide_dual_status_reconciliation(
+            {1: dual_status_task, 2: queued_only_task, 3: done_only_task}
+        )
+
+        assert [t.issue_number for t in result] == [1]
+
+    def test_apply_removes_status_done_for_dual_status_tasks(self):
+        dual_status_task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            status_labels=("status:done", "status:queued"),
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+
+        with patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove:
+            events = _reconcile_dual_status_tasks({1: dual_status_task}, config)
+
+        mock_remove.assert_called_once_with(1, "status:done")
+        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+
+    def test_dry_run_does_not_call_github(self):
+        dual_status_task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            status_labels=("status:done", "status:queued"),
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=False,
+        )
+
+        with patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove:
+            _reconcile_dual_status_tasks({1: dual_status_task}, config)
+
+        mock_remove.assert_not_called()
 
 
 class TestFilterDeviationBlockedCandidates:
