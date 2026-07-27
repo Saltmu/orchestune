@@ -882,6 +882,43 @@ class TestSubtaskFieldContract:
         with pytest.raises(ValueError, match="id"):
             parse_decomposition_plan(path)
 
+    @pytest.mark.parametrize(
+        ("literal", "label"),
+        [
+            ("", "null"),
+            ("null", "null"),
+            ("[]", "空リスト"),
+            ("123", "整数"),
+            ("2026-01-01", "日付"),
+            ("true", "真偽値"),
+        ],
+    )
+    def test_non_string_id_raises_value_error(self, tmp_path, literal, label):
+        """#279レビュー対応: `str()`での暗黙の強制変換は、`None`や`[]`を
+        `"None"`/`"[]"`というIssue・ブランチ識別子へ黙って昇格させてしまう。
+        文書上の契約（文字列）どおり、非文字列は明示的に拒否する。"""
+        plan = f"""\
+        ---
+        subtasks:
+          - id: {literal}
+            footprint: ["src/foo.py"]
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        with pytest.raises(ValueError, match="id"):
+            parse_decomposition_plan(path)
+
+    def test_numeric_looking_id_is_accepted_when_quoted(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: "123"
+            footprint: ["src/foo.py"]
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        assert parse_decomposition_plan(path)[0].id == "123"
+
     def test_missing_optional_fields_fall_back_to_defaults(self, tmp_path):
         plan = """\
         ---

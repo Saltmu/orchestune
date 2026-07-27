@@ -10,6 +10,7 @@ import re
 
 import pytest
 
+from orchestune.dag_contracts import _SHARED_CONTRACT_PATTERNS
 from orchestune.dag_parsing import _parse_subtask
 from orchestune.dispatcher import _build_arg_parser
 
@@ -72,6 +73,20 @@ def _integration_section(lang: str) -> str:
     match = re.search(r"^## 4\..*?(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
     assert match, f"{lang}のUsageに統合節（## 4.）が見つかりません"
     return match.group(0)
+
+
+def _schema_bullet_block(lang: str, field: str) -> str:
+    """スキーマ節の1フィールド分の記述（箇条書き本体＋そのインデント配下）を返す。"""
+    lines = _read_usage(lang).splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith(f"* **`{field}`**")
+    )
+    block = [lines[start]]
+    for line in lines[start + 1 :]:
+        if line.startswith("* ") or line.startswith("#"):
+            break
+        block.append(line)
+    return "\n".join(block)
 
 
 def _supported_plan_fields() -> set[str]:
@@ -159,3 +174,34 @@ class TestDocsIntegrationConsistency:
             "最新の main にリベース" if lang == "ja" else "rebases any downstream"
         )
         assert stale_claim not in section
+
+
+class TestDocsSharedContractConsistency:
+    """#279レビュー対応: `writes_shared_contract` の要否は、`orchestune-dag` が
+    自動検出できるカテゴリに依存する。カテゴリ一覧が実装と文書で乖離しないよう検証する。"""
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_auto_detected_categories_are_documented(self, lang):
+        text = _read_usage(lang)
+        missing = [
+            category
+            for category, _ in _SHARED_CONTRACT_PATTERNS
+            if category not in text
+        ]
+        assert (
+            not missing
+        ), f"{lang}のUsageに未記載の共有拡張ポイントカテゴリがあります: {missing}"
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_flag_is_documented_as_required_outside_the_heuristic(self, lang):
+        """カテゴリに一致しないパスでは明示指定が必要である旨が記載されていること。"""
+        block = _schema_bullet_block(lang, "writes_shared_contract")
+        marker = "必要です" if lang == "ja" else "must set"
+        assert marker in block
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_tag_alone_is_not_documented_as_sufficient(self, lang):
+        """タグの一致だけでは警告されない（書き込み者同士のみ比較される）こと。"""
+        block = _schema_bullet_block(lang, "shared_contract")
+        marker = "書き込む" if lang == "ja" else "write"
+        assert marker in block

@@ -48,7 +48,7 @@ This plan outlines the steps required to build...
 ### Frontmatter Schema
 Each subtask item supports the following fields:
 
-* **`id`** (string, required): A unique identifier for the subtask. Used for branch names and issue titles.
+* **`id`** (string, required): A unique identifier for the subtask. Used for branch names and issue titles. It must be a string: YAML numbers, booleans, dates, nulls, and lists (e.g. `id: 123`, `id:`, `id: []`) are rejected with an error. Quote the value (`id: "123"`) if you need a numeric-looking ID.
 * **`description`** (string, optional, defaults to `""`): A short description of what the task does. Used as input for risk detection.
 * **`footprint`** (list of paths, optional, defaults to `[]`): Relative file paths (from the repository root) that this subtask is expected to create, modify, or delete.
 * **`symbols`** (list of strings, optional, defaults to `[]`): Function or class names that this subtask will define or modify.
@@ -59,8 +59,14 @@ Each subtask item supports the following fields:
 * **`proposed_changes`** (list of strings, optional, defaults to `[]`): Items copied into the "Proposed Changes" section of the created issue.
 * **`verification_plan`** (list of strings, optional, defaults to `[]`): Steps copied into the "Verification Plan" section of the created issue.
 * **`risk`** (boolean, optional, defaults to `false`): Setting `true` explicitly flags the subtask as risky regardless of automatic detection (adding `explicit` to its risk reasons). Setting `false` does not disable automatic path/keyword based detection.
-* **`shared_contract`** (string, optional, no default): A tag identifying a shared extension point such as a registry or CLI wiring. `orchestune-dag` warns when subtasks sharing the tag are not ordered relative to each other.
-* **`writes_shared_contract`** (boolean, optional, defaults to `false`): Explicitly declares that this subtask writes to the `shared_contract` file. Usually unnecessary, since footprint matches are auto-detected.
+* **`shared_contract`** (string, optional, no default): A tag identifying a shared extension point such as a registry or CLI wiring. Sharing the tag alone does not produce a warning: `orchestune-dag` only compares subtasks judged to actually **write** to the shared file, and pure consumers (subtasks that merely `depends_on` the contract and only read/import it) are excluded. A warning is emitted when two writers are not ordered relative to each other (neither is reachable from the other in the DAG).
+* **`writes_shared_contract`** (boolean, optional, defaults to `false`): Declares that this subtask writes to the `shared_contract` file. Writer status is first auto-detected by matching `footprint` paths against these filename categories:
+    * `registry`: filenames containing `registry` / `registration` / `registrar` (e.g. `src/format_registry.py`)
+    * `cli-wiring`: `cli.*` / `__main__.*` / `main.*`
+    * `public-api`: `__init__.py` / `index.ts` / `index.js` / `index.tsx` / `index.jsx`
+    * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
+
+    Auto-detection does not apply to custom filenames outside those categories (e.g. `src/db/connection.py`, `src/custom_hook.py`), so for those you **must set `writes_shared_contract: true`**. Omitting it makes both subtasks count as consumers even when they share the same `shared_contract` tag, and no warning is emitted at all.
 
 > [!NOTE]
 > `id` is the only required field. Parsing fails with an error if `id` is missing or blank.
