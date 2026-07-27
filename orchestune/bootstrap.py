@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from orchestune.forge import REQUIRED_LABELS, Forge, ForgeAuthError, GitHubForge
+from orchestune.forge import REQUIRED_LABELS, Forge, ForgeError, GitHubForge
 
 
 def _is_git_repo_empty(cwd: Path) -> bool:
@@ -113,11 +113,10 @@ def run_bootstrap(forge: Forge | None = None, cwd: Path = Path(".")) -> int:
 
     try:
         forge.check_auth()
-    except ForgeAuthError as e:
+        result = forge.ensure_labels(REQUIRED_LABELS)
+    except ForgeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-
-    result = forge.ensure_labels(REQUIRED_LABELS)
     print(f"Labels created: {len(result.created_labels)}")
     for name in result.created_labels:
         print(f"  + {name}")
