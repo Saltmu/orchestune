@@ -31,11 +31,14 @@ def _is_current_parent_branch_merged(
 
     - まず`get_merged_pr_timestamp`でhistorical記録の有無と`mergedAt`を得る。
       記録が無ければ未マージ。
-    - #276レビュー対応(P1): 記録があっても、親Issueの直近の再open時刻より
-      前にマージされたものであれば、再open後にまだ何もマージされていない
+    - #276レビュー対応(P1): 記録があっても、親Issueの直近の再open時刻以前に
+      マージされたものであれば、再open後にまだ何もマージされていない
       ことを意味するため信頼しない（Falseを返す）。「現在の子Issue状態」
       「現在のbranch tip内容」だけを見る判定では、再open直後（新しい
       子Issue/commitがまだ無い状態）で即座に再closeしてしまう窓を防げない。
+      GitHubの`mergedAt`/イベント`created_at`は秒精度のため、同一秒に
+      記録されるケース（境界判別不能）も「reopen後にマージされた証拠が
+      ない」としてfail closedに扱う（`<=`で比較する）。
     - 上記を通過した記録があれば、現在のbranch tip SHAを
       `is_current_branch_tip_merged_into`で再検証する。
       - 現在のtipがmainへ含まれない（再open後の新commit・branch再作成）:
@@ -54,7 +57,12 @@ def _is_current_parent_branch_merged(
         return False
 
     reopened_at = github.get_issue_last_reopened_at(parent_issue_number)
-    if reopened_at is not None and merged_at < reopened_at:
+    # #276レビュー対応: GitHubのmergedAt/イベントcreated_atは秒精度のため、
+    # 最終マージによるcloseとその直後のreopenが同一秒に記録されうる。
+    # 要件は「mergeが直近のreopenより後に発生したこと」の確認であり、
+    # 同値（境界が判別できない）はreopen後にマージされた証拠にならない
+    # ため、`<=`でfail closedにする。
+    if reopened_at is not None and merged_at <= reopened_at:
         return False
 
     try:

@@ -603,8 +603,28 @@ class TestGetMergedPrTimestamp:
             "--json",
             "mergedAt",
             "--limit",
-            "1",
+            "1000",
         ]
+
+    def test_returns_max_merged_at_when_multiple_merged_prs_exist(self):
+        """#276レビュー対応 Reproducer: gh pr listはmergedAt順を保証しない
+        ため、複数のmerged PR記録がある場合は最大（最新）のmergedAtを
+        選ばなければならない。並び順がバラバラでも正しく最大値を選ぶ。"""
+        payload = (
+            "["
+            '{"mergedAt":"2026-07-20T10:00:00Z"},'
+            '{"mergedAt":"2026-07-27T10:00:00Z"},'
+            '{"mergedAt":"2026-07-15T10:00:00Z"}'
+            "]"
+        )
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=payload, stderr=""
+            )
+
+            result = get_merged_pr_timestamp("parent/issue-100", "main")
+
+        assert result == "2026-07-27T10:00:00Z"
 
     def test_returns_none_when_no_merged_pr(self):
         with patch("orchestune.github.subprocess.run") as mock_run:

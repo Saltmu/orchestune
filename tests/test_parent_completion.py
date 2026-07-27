@@ -305,6 +305,39 @@ class TestProcessParentCompletion:
         mock_close.assert_called_once_with(100, "completed", comment=ANY)
         assert res == {"status": "parent_closed", "parent_issue_number": 100}
 
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
+    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
+    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.parent_completion.github.close_issue")
+    def test_does_not_close_when_merged_at_equals_reopened_at(
+        self,
+        mock_close,
+        mock_ensure_pr,
+        mock_list_sub_issues,
+        mock_merged_at,
+        mock_reopened_at,
+        mock_tip,
+    ):
+        """#276 P1 Reproducer(境界): GitHubのタイムスタンプは秒精度のため、
+        最終マージによるcloseとその直後のreopenが同一秒に記録されうる。
+        同値は「reopen後にマージされた」証拠にならないため、fail closed
+        でcloseを見送らなければならない。"""
+        mock_list_sub_issues.return_value = [_issue(101, "CLOSED")]
+        mock_merged_at.return_value = "2026-07-27T00:00:00Z"
+        mock_reopened_at.return_value = "2026-07-27T00:00:00Z"
+
+        res = process_parent_completion(100, apply=True)
+
+        mock_tip.assert_not_called()
+        mock_close.assert_not_called()
+        mock_ensure_pr.assert_called_once_with(100)
+        assert res == {
+            "status": "final_pr_ready",
+            "pr_number": mock_ensure_pr.return_value,
+        }
+
     @patch("orchestune.parent_completion.github.branch_exists")
     @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
     @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
