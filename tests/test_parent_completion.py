@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import ANY, patch
 
 from orchestune.github import IssueRecord
@@ -26,28 +27,61 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=False)
         assert res == {"status": "skipped"}
 
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
     @patch("orchestune.parent_completion.github.is_branch_merged_into")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
     @patch("orchestune.parent_completion.github.get_issue_state")
     @patch("orchestune.parent_completion.github.close_issue")
-    def test_closes_parent_issue_when_final_pr_merged_and_still_open(
-        self, mock_close, mock_get_state, mock_merged
+    def test_closes_parent_issue_when_branch_still_exists_and_tip_verified(
+        self, mock_close, mock_get_state, mock_list_sub_issues, mock_merged, mock_tip
     ):
+        """branchが削除されずに残っており、現在のtipがmainへ含まれることを
+        直接検証できる場合にcloseする（通常のクリーンな最終マージ後）。"""
+        mock_list_sub_issues.return_value = [_issue(101, "CLOSED")]
         mock_merged.return_value = True
+        mock_tip.return_value = True
         mock_get_state.return_value = "OPEN"
 
         res = process_parent_completion(100, apply=True)
 
         mock_merged.assert_called_once_with("parent/issue-100", "main")
+        mock_tip.assert_called_once_with("parent/issue-100", "main")
         mock_close.assert_called_once_with(100, "completed", comment=ANY)
         assert res == {"status": "parent_closed", "parent_issue_number": 100}
 
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
     @patch("orchestune.parent_completion.github.is_branch_merged_into")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.parent_completion.github.get_issue_state")
+    @patch("orchestune.parent_completion.github.close_issue")
+    def test_closes_parent_issue_when_branch_deleted_after_merge(
+        self, mock_close, mock_get_state, mock_list_sub_issues, mock_merged, mock_tip
+    ):
+        """branchが最終マージ後にクリーンアップ（削除）された正規のケースでは、
+        現在tip検証が404で失敗してもhistorical merged PR記録を信頼してcloseする。"""
+        mock_list_sub_issues.return_value = [_issue(101, "CLOSED")]
+        mock_merged.return_value = True
+        mock_tip.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr="gh: Branch not found (HTTP 404)"
+        )
+        mock_get_state.return_value = "OPEN"
+
+        res = process_parent_completion(100, apply=True)
+
+        mock_close.assert_called_once_with(100, "completed", comment=ANY)
+        assert res == {"status": "parent_closed", "parent_issue_number": 100}
+
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
+    @patch("orchestune.parent_completion.github.is_branch_merged_into")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
     @patch("orchestune.parent_completion.github.get_issue_state")
     @patch("orchestune.parent_completion.github.close_issue")
     def test_does_not_double_close_already_closed_parent(
-        self, mock_close, mock_get_state, mock_merged
+        self, mock_close, mock_get_state, mock_list_sub_issues, mock_merged, mock_tip
     ):
+        mock_list_sub_issues.return_value = [_issue(101, "CLOSED")]
         mock_merged.return_value = True
+        mock_tip.return_value = True
         mock_get_state.return_value = "CLOSED"
 
         res = process_parent_completion(100, apply=True)
@@ -103,3 +137,67 @@ class TestProcessParentCompletion:
 
         mock_ensure_pr.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": []}
+
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
+    @patch("orchestune.parent_completion.github.is_branch_merged_into")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.parent_completion.github.close_issue")
+    def test_does_not_close_when_open_child_exists_despite_historical_merged_pr(
+        self, mock_close, mock_list_sub_issues, mock_merged, mock_tip
+    ):
+        """Reproducer: 親Issueを再openし新しい子Issueを追加した場合、過去に
+        同head/baseのmerged PRが存在していても即再closeしてはならない。"""
+        mock_list_sub_issues.return_value = [
+            _issue(101, "CLOSED"),
+            _issue(102, "OPEN"),
+        ]
+        mock_merged.return_value = True
+
+        res = process_parent_completion(100, apply=True)
+
+        mock_tip.assert_not_called()
+        mock_close.assert_not_called()
+        assert res == {"status": "waiting_on_children", "open_children": [102]}
+
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
+    @patch("orchestune.parent_completion.github.is_branch_merged_into")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.parent_completion.github.close_issue")
+    def test_does_not_close_when_branch_has_new_unmerged_commit(
+        self, mock_close, mock_ensure_pr, mock_list_sub_issues, mock_merged, mock_tip
+    ):
+        """Reproducer: 親Issueを再open後、子Issueを追加せずparent branchへ
+        直接新commitを積んだ場合でも、過去のmerged PR記録だけでcloseせず、
+        現在のtip SHA検証で未マージと判定する。"""
+        mock_list_sub_issues.return_value = [_issue(101, "CLOSED")]
+        mock_merged.return_value = True
+        mock_tip.return_value = False
+
+        res = process_parent_completion(100, apply=True)
+
+        mock_close.assert_not_called()
+        mock_ensure_pr.assert_called_once_with(100)
+        assert res == {
+            "status": "final_pr_ready",
+            "pr_number": mock_ensure_pr.return_value,
+        }
+
+    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
+    @patch("orchestune.parent_completion.github.is_branch_merged_into")
+    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.parent_completion.github.close_issue")
+    def test_does_not_close_when_tip_verification_fails_for_unknown_reason(
+        self, mock_close, mock_list_sub_issues, mock_merged, mock_tip
+    ):
+        """404以外の理由でtip検証自体が失敗した場合はfail closedとし、
+        マージ未確認のまま次cycleへ持ち越す。"""
+        mock_list_sub_issues.return_value = [_issue(101, "CLOSED")]
+        mock_merged.return_value = True
+        mock_tip.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr="gh: rate limit exceeded"
+        )
+
+        process_parent_completion(100, apply=True)
+
+        mock_close.assert_not_called()
