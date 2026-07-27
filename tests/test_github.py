@@ -710,6 +710,100 @@ class TestListOpenPrs:
 
         assert prs[0].is_ci_passing is False
 
+    def test_legacy_status_context_success_counts_as_passing(self):
+        """#256 Reproducer: statusCheckRollupはCheckRunとlegacy StatusContext
+        のunionだが、全要素へCheckRun用のstatus/conclusionだけを適用すると
+        StatusContextは常にfailing扱いになる。SUCCESSなStatusContextは
+        passingとして扱わなければならない。"""
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", '
+            '"statusCheckRollup": [{"__typename": "StatusContext", "state": "SUCCESS"}]}'
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is True
+
+    @pytest.mark.parametrize("state", ["PENDING", "ERROR", "FAILURE"])
+    def test_legacy_status_context_non_success_states_are_not_passing(self, state):
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", '
+            f'"statusCheckRollup": [{{"__typename": "StatusContext", "state": "{state}"}}]}}'
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is False
+
+    def test_mixed_check_run_and_status_context_all_passing(self):
+        """CheckRunとStatusContextが混在するrollupで、両方passingならTrue。"""
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", "statusCheckRollup": ['
+            '{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},'
+            '{"__typename": "StatusContext", "state": "SUCCESS"}'
+            "]}"
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is True
+
+    def test_mixed_check_run_and_status_context_one_failing(self):
+        """混在rollupで、片方でもfailingならis_ci_passingはFalseのまま。"""
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", "statusCheckRollup": ['
+            '{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},'
+            '{"__typename": "StatusContext", "state": "PENDING"}'
+            "]}"
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is False
+
+    def test_status_context_without_typename_is_detected_by_field_shape(self):
+        """__typenameが欠落していても、statusやconclusionを持たずstateのみ
+        持つ要素はStatusContextとしてshapeで判定できる（gh CLIバージョン差異
+        への耐性）。"""
+        list_payload = (
+            "["
+            '{"number": 5, "headRefName": "feat/x", '
+            '"statusCheckRollup": [{"state": "SUCCESS"}]}'
+            "]"
+        )
+
+        with patch("orchestune.github.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=list_payload, stderr=""
+            )
+            prs = list_open_prs()
+
+        assert prs[0].is_ci_passing is True
+
     def test_includes_closing_issue_references(self):
         """#239: ブランチ名がAIセッションの指示通りにならない場合でも
         自己PR判定できるよう、PRが閉じるIssue番号一覧も取得する。"""
