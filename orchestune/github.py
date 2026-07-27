@@ -558,9 +558,7 @@ def list_prs(
 
         rollup = _status_check_contexts(raw.get("statusCheckRollup"))
         is_ci_passing = bool(rollup) and all(
-            check.get("status") == "COMPLETED"
-            and check.get("conclusion") in ("SUCCESS", "NEUTRAL", "SKIPPED")
-            for check in rollup
+            _is_check_passing(check) for check in rollup
         )
         # #243: boolとして取得できない場合は「不明」(None)のまま保持し、
         # 統合PR再利用側でfail closedに判定させる。
@@ -591,6 +589,32 @@ def list_prs(
 def list_open_prs(limit: int = 1000, paginate_files: bool = False) -> list[PrRecord]:
     """Return open PRs, preserving the existing compatibility API."""
     return list_prs(state="open", limit=limit, paginate_files=paginate_files)
+
+
+def _is_check_passing(check: dict[str, object]) -> bool:
+    """#256: `statusCheckRollup`はCheckRunとlegacy StatusContextのunionだが、
+    各要素はそれぞれ異なるschemaを持つ（CheckRun: `status`/`conclusion`、
+    StatusContext: `state`）。両方を区別せずCheckRun用のfieldだけを見ると、
+    StatusContextは常に`status`が存在せず`COMPLETED`と一致しないため、
+    成功していてもCI失敗扱いになってしまう。
+
+    `__typename`があればそれを優先し、無い場合はfield shape
+    （`state`のみ持ち`status`/`conclusion`を持たない）で判定する
+    （gh CLIバージョン差異への耐性）。"""
+    typename = check.get("__typename")
+    is_status_context = typename == "StatusContext" or (
+        typename is None
+        and "state" in check
+        and "status" not in check
+        and "conclusion" not in check
+    )
+    if is_status_context:
+        return check.get("state") == "SUCCESS"
+    return check.get("status") == "COMPLETED" and check.get("conclusion") in (
+        "SUCCESS",
+        "NEUTRAL",
+        "SKIPPED",
+    )
 
 
 def _status_check_contexts(rollup: object) -> list[dict[str, object]]:
