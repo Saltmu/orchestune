@@ -418,6 +418,11 @@ def get_merged_pr_timestamp(head: str, base: str) -> str | None:
     該当PRが無ければNoneを返す。`is_branch_merged_into`同様、branch削除後も
     historical記録として有効。呼び出し側（parent-completionの再open判定）が
     「このマージは直近の再openより前だったか」を時刻比較で判定するために使う。
+
+    #276レビュー対応: `parent_branch`はbranch削除後の再作成により、同じ
+    head/baseで複数回mergeされたPR記録が積み重なりうる。`gh pr list`は
+    `mergedAt`順を保証しないため、`--limit 1`の先頭を無条件に信頼せず、
+    取得した全件から最大の`mergedAt`（＝最も新しいmerge）を明示的に選ぶ。
     """
     _validate_ref_name(head)
     _validate_ref_name(base)
@@ -435,14 +440,14 @@ def get_merged_pr_timestamp(head: str, base: str) -> str | None:
             "--json",
             "mergedAt",
             "--limit",
-            "1",
+            "1000",
         ]
     )
     results = json.loads(stdout)
-    if not results:
+    timestamps = [r.get("mergedAt") for r in results if r.get("mergedAt")]
+    if not timestamps:
         return None
-    merged_at = results[0].get("mergedAt")
-    return str(merged_at) if merged_at else None
+    return str(max(timestamps))
 
 
 def get_issue_last_reopened_at(issue_number: int | str) -> str | None:
