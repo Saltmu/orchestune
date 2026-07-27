@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.bootstrap import main, run_bootstrap
-from orchestune.forge import BootstrapResult, ForgeAuthError
+from orchestune.forge import BootstrapResult, ForgeAuthError, ForgeError
 
 
 def _fake_forge(*, auth_error: ForgeAuthError | None = None, result=None):
@@ -37,6 +37,20 @@ class TestRunBootstrap:
         captured = capsys.readouterr()
         assert "Labels created: 1" in captured.out
         assert "Labels already present: 2" in captured.out
+
+    def test_returns_1_and_prints_error_when_label_listing_may_be_truncated(
+        self, capsys
+    ):
+        forge = MagicMock()
+        forge.ensure_labels.side_effect = ForgeError(
+            "既存ラベル一覧の取得件数が上限に達しました。取得が打ち切られた可能性があります。"
+        )
+
+        exit_code = run_bootstrap(forge=forge)
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "打ち切" in captured.err
 
     def test_uses_github_forge_by_default(self):
         with patch("orchestune.bootstrap.GitHubForge") as mock_forge_cls:

@@ -9,8 +9,18 @@ from dataclasses import dataclass
 from orchestune.github import _validate_label
 
 
-class ForgeAuthError(RuntimeError):
+class ForgeError(RuntimeError):
+    """フォージ操作(gh CLI呼び出し等)が失敗した場合に送出する。"""
+
+
+class ForgeAuthError(ForgeError):
     """フォージCLI(gh等)が未インストール、または未認証の場合に送出する。"""
+
+
+# gh label listの1回のAPI呼び出しで取得する上限件数。実在するrepositoryの
+# label数を十分に上回る値とし、これに達した場合は取得が打ち切られた
+# (truncateされた)可能性があるとみなして明示的に失敗させる。
+_LABEL_LIST_LIMIT = 1000
 
 
 @dataclass(frozen=True)
@@ -88,12 +98,26 @@ class GitHubForge(Forge):
 
     def _list_existing_label_names(self) -> set[str]:
         result = subprocess.run(
-            ["gh", "label", "list", "--json", "name", "--limit", "100"],
+            [
+                "gh",
+                "label",
+                "list",
+                "--json",
+                "name",
+                "--limit",
+                str(_LABEL_LIST_LIMIT),
+            ],
             capture_output=True,
             text=True,
             check=True,
         )
         raw = json.loads(result.stdout)
+        if len(raw) >= _LABEL_LIST_LIMIT:
+            raise ForgeError(
+                f"既存ラベル一覧の取得件数が上限({_LABEL_LIST_LIMIT}件)に達しました。"
+                "取得が打ち切られた(truncateされた)可能性があるため、"
+                "誤って重複ラベルを作成しないようbootstrapを中断します。"
+            )
         return {entry["name"] for entry in raw}
 
 

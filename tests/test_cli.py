@@ -53,6 +53,34 @@ def test_cli_delegates_to_status():
         assert sys.argv == ["orchestune", "--watch"]
 
 
+def test_cli_setup_exits_0_on_success():
+    from orchestune.cli import main
+
+    test_args = ["orchestune", "setup"]
+    with (
+        patch("sys.argv", test_args),
+        patch("orchestune.setup_skills.setup_skills", return_value=0),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+
+
+def test_cli_setup_exits_1_when_setup_skills_fails():
+    from orchestune.cli import main
+
+    test_args = ["orchestune", "setup"]
+    with (
+        patch("sys.argv", test_args),
+        patch("orchestune.setup_skills.setup_skills", return_value=1),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 1
+
+
 def test_cli_no_args_exits(capsys):
     from orchestune.cli import main
 

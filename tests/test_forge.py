@@ -1,3 +1,4 @@
+import json
 import subprocess
 from dataclasses import FrozenInstanceError
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from orchestune.forge import (
     REQUIRED_LABELS,
     BootstrapResult,
     ForgeAuthError,
+    ForgeError,
     GitHubForge,
     LabelSpec,
 )
@@ -171,6 +173,63 @@ class TestGitHubForgeEnsureLabels:
         assert create_calls == []
         assert result.created_labels == ()
         assert set(result.existing_labels) == {label.name for label in labels}
+
+    def test_detects_required_label_beyond_first_100(self):
+        # 100件を超えるlabelsが存在し、必須labelが101件目(一覧の末尾)にある
+        # ケースでも既存として検出され、誤って再作成されないことを確認する。
+        existing = [{"name": f"other-label-{i}"} for i in range(99)]
+        existing.append({"name": "status:queued"})
+        existing.append({"name": "status:blocked"})
+        with patch("orchestune.forge.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout=json.dumps(existing),
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+            ]
+            result = GitHubForge().ensure_labels(self._labels())
+
+        list_call = [
+            call for call in mock_run.call_args_list if "list" in call.args[0]
+        ][0]
+        argv = list_call.args[0]
+        limit_index = argv.index("--limit") + 1
+        assert int(argv[limit_index]) > 100
+
+        create_calls = [
+            call for call in mock_run.call_args_list if "create" in call.args[0]
+        ]
+        assert {call.args[0][3] for call in create_calls} == {"priority:high"}
+        assert "status:queued" in result.existing_labels
+
+    def test_raises_forge_error_when_label_list_may_be_truncated(self):
+        from orchestune.forge import _LABEL_LIST_LIMIT
+
+        existing = [{"name": f"label-{i}"} for i in range(_LABEL_LIST_LIMIT)]
+        with (
+            patch("orchestune.forge.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(existing),
+                stderr="",
+            )
+            with pytest.raises(ForgeError, match="打ち切"):
+                GitHubForge().ensure_labels(self._labels())
+
+        create_calls = [
+            call for call in mock_run.call_args_list if "create" in call.args[0]
+        ]
+        assert create_calls == []
 
 
 class TestRequiredLabels:

@@ -30,7 +30,7 @@ def main() -> None:
     elif cmd == "setup":
         from orchestune.setup_skills import setup_skills
 
-        setup_skills()
+        sys.exit(setup_skills())
     elif cmd == "bootstrap":
         from orchestune.bootstrap import main as bootstrap_main
 
