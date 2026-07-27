@@ -107,8 +107,18 @@ def handle_merge_failure(
             file=sys.stderr,
         )
     if apply:
-        github.remove_label(task.issue_number, "status:done")
+        # #254: remove→addの順だと、removeが成功した直後にaddが一時障害で
+        # 例外を送出した場合、Issueがどのprimary status(`status:done`/
+        # `status:queued`)にも属さなくなり、dispatcher/Integrator両方の
+        # 検索対象から恒久的に脱落する。add→removeの順にすることで、
+        # 途中で例外が起きても必ずどちらか一方のラベルが残る:
+        # - addが失敗: status:doneが残り、次cycleのIntegratorが
+        #   同じ done タスクとして再検出し、この関数を再試行する。
+        # - addは成功しremoveが失敗: status:queued/status:doneが
+        #   一時的に両方付いた状態になるが、Issueが検索対象から
+        #   消えることはなく、次cycleでremoveが再試行される。
         github.add_label(task.issue_number, "status:queued")
+        github.remove_label(task.issue_number, "status:done")
         comment_body = (
             f"仮マージCIでエラーが検出されたため、マージを取り消し差し戻しました。\n"
             f"理由: {reason}\n"
