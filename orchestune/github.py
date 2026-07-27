@@ -413,6 +413,79 @@ def is_branch_merged_into(head: str, base: str) -> bool:
     return bool(json.loads(stdout))
 
 
+def get_merged_pr_timestamp(head: str, base: str) -> str | None:
+    """#255/#276: 指定head/baseの直近のmerged PRの`mergedAt`（ISO8601）を返す。
+    該当PRが無ければNoneを返す。`is_branch_merged_into`同様、branch削除後も
+    historical記録として有効。呼び出し側（parent-completionの再open判定）が
+    「このマージは直近の再openより前だったか」を時刻比較で判定するために使う。
+    """
+    _validate_ref_name(head)
+    _validate_ref_name(base)
+    stdout = _run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--head",
+            head,
+            "--base",
+            base,
+            "--json",
+            "mergedAt",
+            "--limit",
+            "1",
+        ]
+    )
+    results = json.loads(stdout)
+    if not results:
+        return None
+    merged_at = results[0].get("mergedAt")
+    return str(merged_at) if merged_at else None
+
+
+def get_issue_last_reopened_at(issue_number: int | str) -> str | None:
+    """#276: 指定Issueの直近の`reopened`イベント時刻（ISO8601）を返す。
+    一度もreopenされていなければNoneを返す。`get_label_actor`と同じ
+    events API（ページネーション込み）を使う。"""
+    number = _validate_issue_number(issue_number)
+    stdout = _run(
+        [
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/issues/{number}/events",
+            "--paginate",
+            "--slurp",
+        ]
+    )
+    pages = json.loads(stdout)
+    events = [event for page in pages for event in page]
+    reopened_at = [
+        event.get("created_at") for event in events if event.get("event") == "reopened"
+    ]
+    return str(reopened_at[-1]) if reopened_at else None
+
+
+def branch_exists(branch: str) -> bool:
+    """#276: 指定branchが現在GitHub上に存在するかどうかを返す。
+
+    404（存在しない）と判定できた場合のみFalseを返す。それ以外の失敗
+    （権限・レート制限等）はそのまま例外として送出し、呼び出し側が
+    「真に存在しないと確認できた場合」だけを安全なフォールバック判定に
+    使い、それ以外の不確実な失敗はfail closedに扱えるようにする。"""
+    _validate_ref_name(branch)
+    encoded_branch = quote(branch, safe="")
+    try:
+        _run(["gh", "api", f"repos/{{owner}}/{{repo}}/branches/{encoded_branch}"])
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or "").lower()
+        if "404" in detail or "not found" in detail:
+            return False
+        raise
+    return True
+
+
 def is_current_branch_tip_merged_into(head: str, base: str) -> bool:
     """Return whether the current remote ``head`` tip is contained in ``base``.
 
