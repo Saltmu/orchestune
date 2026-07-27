@@ -40,12 +40,105 @@ def get_skills_source_dir() -> Path:
     )
 
 
-def setup_skills() -> None:
+def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
+    """Link (or copy) a single skill into place. Returns True on success/already-ok."""
+    if dest_skill.exists() or dest_skill.is_symlink():
+        if not dest_skill.is_symlink():
+            print(
+                f"  Skipped '{skill_name}' (a directory/file already exists at {dest_skill})"
+            )
+            return True
+
+        try:
+            link_target = dest_skill.readlink()
+            if link_target.resolve() == src_skill.resolve():
+                print(
+                    f"  Skipped '{skill_name}' (already correctly linked to {src_skill})"
+                )
+                return True
+            print(
+                f"  Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})"
+            )
+            dest_skill.unlink()
+        except Exception as e:
+            print(
+                f"  Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite."
+            )
+            try:
+                dest_skill.unlink()
+            except Exception as unlink_e:
+                print(
+                    f"  Error: Failed to remove stale link {dest_skill}: {unlink_e}",
+                    file=sys.stderr,
+                )
+                return False
+
+    try:
+        setup_method = _create_skill_link(src_skill, dest_skill)
+        if setup_method == "copied":
+            print(
+                f"  Successfully copied '{skill_name}' to {dest_skill} "
+                "(symlink privilege is not available)"
+            )
+        else:
+            print(f"  Successfully linked '{skill_name}' to {dest_skill}")
+        return True
+    except Exception as e:
+        print(f"  Error: Failed to set up '{skill_name}': {e}", file=sys.stderr)
+        return False
+
+
+def _setup_for_assistant(
+    assistant_name: str,
+    base_dir: Path,
+    target_dir: Path,
+    skills_dir: Path,
+    skills_to_link: list[str],
+) -> tuple[int, int] | None:
+    """Set up all skills for one assistant. Returns (success, failure) counts, or
+    None if the assistant's base directory was not found (not applicable)."""
+    if not base_dir.is_dir():
+        print(f"Skipping {assistant_name} (base directory {base_dir} not found).")
+        return None
+
+    print(f"Setting up skills for {assistant_name}...")
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"  Warning: Could not create directory {target_dir}: {e}")
+        return (0, max(len(skills_to_link), 1))
+
+    success_count = 0
+    failure_count = 0
+    for skill_name in skills_to_link:
+        src_skill = skills_dir / skill_name
+        if not src_skill.is_dir():
+            print(
+                f"  Warning: Skill source '{skill_name}' not found in {skills_dir}, skipping."
+            )
+            continue
+
+        dest_skill = target_dir / skill_name
+        if _link_one_skill(src_skill, dest_skill, skill_name):
+            success_count += 1
+        else:
+            failure_count += 1
+
+    return (success_count, failure_count)
+
+
+def setup_skills() -> int:
+    """Set up skill links for detected AI assistants.
+
+    Returns an exit code: 0 on full success (or nothing to do), 1 if any
+    required skill link could not be created/verified.
+    """
     try:
         skills_dir = get_skills_source_dir()
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     home = Path.home()
 
@@ -66,76 +159,42 @@ def setup_skills() -> None:
             )
         ]
     )
-    setup_any = False
+
+    assistants_detected = False
+    success_count = 0
+    failure_count = 0
 
     for assistant_name, (base_dir, target_dir) in targets.items():
-        if not base_dir.is_dir():
-            print(f"Skipping {assistant_name} (base directory {base_dir} not found).")
+        result = _setup_for_assistant(
+            assistant_name, base_dir, target_dir, skills_dir, skills_to_link
+        )
+        if result is None:
             continue
+        assistants_detected = True
+        assistant_success, assistant_failure = result
+        success_count += assistant_success
+        failure_count += assistant_failure
 
-        print(f"Setting up skills for {assistant_name}...")
-        setup_any = True
-
-        try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            print(f"  Warning: Could not create directory {target_dir}: {e}")
-            continue
-
-        for skill_name in skills_to_link:
-            src_skill = skills_dir / skill_name
-            if not src_skill.is_dir():
-                print(
-                    f"  Warning: Skill source '{skill_name}' not found in {skills_dir}, skipping."
-                )
-                continue
-
-            dest_skill = target_dir / skill_name
-
-            if dest_skill.exists() or dest_skill.is_symlink():
-                if dest_skill.is_symlink():
-                    try:
-                        link_target = dest_skill.readlink()
-                        if link_target.resolve() == src_skill.resolve():
-                            print(
-                                f"  Skipped '{skill_name}' (already correctly linked to {src_skill})"
-                            )
-                            continue
-                        else:
-                            print(
-                                f"  Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})"
-                            )
-                            dest_skill.unlink()
-                    except Exception as e:
-                        print(
-                            f"  Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite."
-                        )
-                        dest_skill.unlink()
-                else:
-                    print(
-                        f"  Skipped '{skill_name}' (a directory/file already exists at {dest_skill})"
-                    )
-                    continue
-
-            try:
-                setup_method = _create_skill_link(src_skill, dest_skill)
-                if setup_method == "copied":
-                    print(
-                        f"  Successfully copied '{skill_name}' to {dest_skill} "
-                        "(symlink privilege is not available)"
-                    )
-                else:
-                    print(f"  Successfully linked '{skill_name}' to {dest_skill}")
-            except Exception as e:
-                print(
-                    f"  Error: Failed to set up '{skill_name}': {e}",
-                    file=sys.stderr,
-                )
-
-    if not setup_any:
+    if not assistants_detected:
         print(
             "\nNo supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory."
         )
         print("Please ensure at least one assistant is installed before running setup.")
-    else:
-        print("\nSetup completed.")
+        return 0
+
+    if failure_count > 0 and success_count == 0:
+        print(
+            f"\nSetup failed: all {failure_count} skill link(s) could not be created or verified.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if failure_count > 0:
+        print(
+            f"\nSetup completed with {failure_count} failure(s) "
+            f"({success_count} succeeded, {failure_count} failed)."
+        )
+        return 1
+
+    print("\nSetup completed.")
+    return 0
