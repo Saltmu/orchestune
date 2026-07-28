@@ -364,6 +364,18 @@ DI の注入経路が半分しか存在しません。
 `DispatcherConfig` / `IntegratorConfig` に `forge` フィールドを追加し、
 config が流れていない 4 モジュールには明示的な `forge` 引数を追加します。
 
+**`forge` フィールドには必ずデフォルトを持たせること。** 両 config の構築箇所は
+**208 箇所**（`orchestune/dispatcher.py` + テスト 12 ファイル）あり、必須引数にすると
+1 つの Issue で 208 箇所すべてを書き換えることになり、`main` へ直接マージする
+運用と両立しません。既存の `dispatch_target` と同じイディオムを使います:
+
+```python
+forge: Forge | None = None   # __post_init__ で None なら GitHubForge() を生成
+```
+
+これにより既存の 208 箇所は**無変更のまま**動作し、テストは
+`DispatcherConfig(forge=fake_forge)` で差し替えられるようになります。
+
 **期待効果**: テストが `mock.patch` ではなく `fake_forge` の注入で書けるように
 なります。`patch("orchestune.github...")` 102 箇所の解消が最終目標です。
 
@@ -414,17 +426,57 @@ Issue は orchestune の流儀に従い、**footprint が互いに素になる�
 （リポジトリルート・`.gitignore` 対象の作業ファイル）に置いており、
 `orchestune-dag` による検証を通過しています（Warnings なし）。
 
-### Wave 構成（17 Issue / 7 wave / 最大幅 4）
+### 実施方式: 手作業 / Issue ごとに `main` へ直接マージ
 
-| Wave | 並列可能な subtask |
-| --- | --- |
-| 1 | `arch-guard` / `test-fixtures` |
-| 2 | `domain-models` / `git-adapter` / `split-test-dispatcher` |
-| 3 | `rewire-dispatch-imports` / `rewire-integrator-imports` / `forge-records` |
-| 4 | `dismantle-facade` / `forge-protocol` |
-| 5 | `adapter-migrate-integrator` / `adapter-migrate-dispatch-core` / `adapter-migrate-dispatch-aux` / `adapter-migrate-entrypoints` |
-| 6 | `forge-cleanup` |
-| 7 | `split-large-tests` / `package-boundary` |
+ディスパッチャー（`orchestune-dispatch`）と Integrator の二層ブランチモデル
+（`parent/issue-{N}`）は**使用しません**。各 Issue につき 1 ブランチ・1 PR を作成し、
+それぞれ `main` へ直接マージします。親 Issue #280 は純粋なトラッキング Issue です。
+
+この方式では **17 回の中間状態がすべて `main` に載る**ため、以下が要件になります。
+
+1. **各 Issue 単独で `main` がグリーンかつリリース可能であること。**
+   `./scripts/local-ci.sh`（ruff format / ruff check / mypy / pytest 93%+ / gitleaks）を
+   各 PR で通す。CI は `main` への PR で自動実行されます。
+2. **後方互換シムは「便宜」ではなく「必須」。**
+   `dispatch_scoring.Task` の再エクスポート、`github.py` の git 関数再エクスポート、
+   `github.py` の Forge 委譲シムは、Issue と Issue の間で `main` を動作させるための
+   ものです。**`forge-cleanup` (#295) まで削除してはいけません。**
+   再エクスポートは必ず同一オブジェクトへの別名とし、型を再定義しないこと
+   （`isinstance` 判定が壊れるため）。
+3. **`arch-guard` (#281) の `xfail` は対応 Issue が `main` に入るまで維持する。**
+   `strict=True` にすると、解消前の `main` で CI が落ちます。
+
+### 実施順序（Issue 番号順がそのまま妥当なトポロジカル順）
+
+**#281 → #297 を番号順に進めれば依存関係を満たします。** 手作業では並列実行の
+意味が薄いため、Wave ではなく直列順で示します。
+
+| # | Issue | subtask | 依存 |
+| --- | --- | --- | --- |
+| 1 | #281 | `arch-guard` | — |
+| 2 | #282 | `test-fixtures` | — |
+| 3 | #283 | `domain-models` | #281 |
+| 4 | #284 | `git-adapter` | #281 |
+| 5 | #285 | `split-test-dispatcher` | #282 |
+| 6 | #286 | `rewire-dispatch-imports` | #283 |
+| 7 | #287 | `rewire-integrator-imports` | #283 |
+| 8 | #288 | `forge-records` | #283, #284 |
+| 9 | #289 | `dismantle-facade` | #285, #286, #287 |
+| 10 | #290 | `forge-protocol` | #288 |
+| 11 | #291 | `adapter-migrate-integrator` | #287, #290 |
+| 12 | #292 | `adapter-migrate-dispatch-core` | #289, #290 |
+| 13 | #293 | `adapter-migrate-dispatch-aux` | #286, #289, #290 |
+| 14 | #294 | `adapter-migrate-entrypoints` | #289, #290 |
+| 15 | #295 | `forge-cleanup` | #291〜#294 |
+| 16 | #296 | `split-large-tests` | #295 |
+| 17 | #297 | `package-boundary` | #295 |
+
+`#291`〜`#294` は相互に独立、`#296` と `#297` も相互に独立なので、この 2 グループ内は
+任意の順序で構いません。それ以外は上表の順序に従ってください。
+
+PR 本文に `Closes #<番号>` を記載すればマージ時に Issue が自動クローズされます。
+`status:*` ラベルはディスパッチャー向けの機構なので、手作業運用では
+維持しなくても問題ありません（Issue のクローズ状態が実質的な進捗になります）。
 
 ### 分割にあたっての要点
 
@@ -472,13 +524,23 @@ Issue は orchestune の流儀に従い、**footprint が互いに素になる�
 
 | # | 論点 | 決定 |
 | --- | --- | --- |
-| 1 | フェーズ全体の方針と実施順序 | 承認済み。フェーズ 0 の安全網を最初に入れる |
+| 1 | フェーズ全体の方針と実施順序 | 承認済み。安全網（#281）を最初に入れる |
 | 2 | フェーズ 4 の案 A / 案 B | **案 B（`Forge` 抽象の全面採用）を採用** |
-| 3 | Issue 分割の粒度 | footprint が互いに素になる単位（17 subtask / 7 wave）。§5 参照 |
+| 3 | Issue 分割の粒度 | footprint が互いに素になる単位（17 subtask）。§5 参照 |
+| 4 | 実施方式 | **手作業。ディスパッチャー・Integrator は使用しない** |
+| 5 | マージ方式 | **Issue ごとに `main` へ直接マージ**（二層ブランチモデルは使わない） |
+
+### 起票済み Issue
+
+親 Issue #280（トラッキング）+ 子 Issue #281〜#297（Sub-issue として紐付け済み）。
+`decomposition_plan.md`（リポジトリルート・`.gitignore` 対象）に Issue 番号を
+書き戻してあります。
+
+GitHub ネイティブの `blocked_by` 依存は設定していません（起票に使用した
+GitHub MCP がこのフィールドをサポートしないため）。依存関係は各 Issue 本文の
+Footprint YAML の `depends_on` と冒頭の Issue 番号参照に記録されています。
 
 ### 次のアクション
 
-`decomposition_plan.md` を入力として `orchestune-dispatch` スキルを実行し、
-親 Issue（big rock）+ 子 Issue 17 件を起票する。`--parent-issue <N>` により
-子ブランチは `parent/issue-N` から切られ、人間のレビューゲートは最終 PR の
-1 回のみとなる。
+§5 の順序に従って #281 から着手する。各 Issue につき 1 ブランチ・1 PR を作成し、
+`./scripts/local-ci.sh` を通してから `main` へマージする。
