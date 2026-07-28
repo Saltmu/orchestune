@@ -24,7 +24,7 @@ Write-Host "[4/5] Running tests with coverage (pytest)..."
 # Note: On Windows subshell environments (e.g. agy CLI / ConPTY), pytest-xdist (-n auto) spawns multiple worker
 # processes that inherit pipe handles, which can cause pipe destruction crashes when workers exit.
 # We default to single-process execution (-n 0) for safe Windows execution. Override via PYTEST_ADDOPTS if needed.
-poetry run pytest -n 0 --cov=orchestune --cov-fail-under=75
+poetry run pytest -n 0 --cov=orchestune --cov-fail-under=90
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[5/5] Scanning for secrets and local paths (gitleaks)..."
