@@ -59,6 +59,7 @@ KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
         "dispatch_targets",
         "dispatch_worktree",
         "forge",
+        "git_cli",
         "github",
         "integrator",
         "integrator_git_ops",
@@ -148,7 +149,11 @@ def _cycle_members(graph: dict[str, set[str]]) -> set[str]:
             return
 
         active.append(module)
-        for dependency in graph[module]:
+        # 依存先の探索順は`str`のハッシュ順（プロセスごとに乱数化される
+        # PYTHONHASHSEEDに依存）に左右されないよう、決定的な順序で辿る。
+        # `graph[module]`は`set`のため、順序が変わるとどのメンバーを
+        # サイクルとして検出するかがDFSの経路次第で変化してしまう。
+        for dependency in sorted(graph[module]):
             visit(dependency)
         active.pop()
         visited.add(module)
