@@ -426,13 +426,26 @@ Issue は orchestune の流儀に従い、**footprint が互いに素になる�
 （リポジトリルート・`.gitignore` 対象の作業ファイル）に置いており、
 `orchestune-dag` による検証を通過しています（Warnings なし）。
 
-### 実施方式: 手作業 / Issue ごとに `main` へ直接マージ
+### 実施方式: 手作業 / Issue ごとに `main` へ直接マージ（**本 Epic 限定の特別運用**）
 
-ディスパッチャー（`orchestune-dispatch`）と Integrator の二層ブランチモデル
-（`parent/issue-{N}`）は**使用しません**。各 Issue につき 1 ブランチ・1 PR を作成し、
+> **これは Orchestune の標準手順ではありません。**
+> 通常は `--parent-issue <N>` によるディスパッチャーと Integrator の
+> **二層ブランチモデル**（子タスクは `parent/issue-{N}` へ CI 通過後に自動マージ、
+> 人間のレビューゲートは `parent/issue-{N}` → `main` の最終 PR 1 回のみ）を想定します。
+> 詳細は [Architecture 第3節](en/architecture.md#3-integration--auto-rebase) を参照。
+>
+> 本 Epic では、ディスパッチャーがまだ安定稼働しておらず、対象がディスパッチャー
+> 自身のコードでもあるため、例外的に手作業・Issue ごとの直接マージで進めます。
+> 他のタスクにこの方式を横展開しないでください。
+
+ディスパッチャー（`orchestune-dispatch`）と Integrator の二層ブランチモデルは
+**本 Epic では使用しません**。各 Issue につき 1 ブランチ・1 PR を作成し、
 それぞれ `main` へ直接マージします。親 Issue #280 は純粋なトラッキング Issue です。
 
 この方式では **17 回の中間状態がすべて `main` に載る**ため、以下が要件になります。
+（二層運用であれば中間状態は `parent/issue-{N}` に閉じ込められ、`main` は最終 PR まで
+影響を受けません。要件 1 の「リリース可能」の水準だけが本 Epic 固有に厳しくなります。
+要件 2・3 は二層運用でも同じく必要です — 子タスクの統合 PR でも CI は毎回走るためです。）
 
 1. **各 Issue 単独で `main` がグリーンかつリリース可能であること。**
    `./scripts/local-ci.sh`（ruff format / ruff check / mypy / pytest 93%+ / gitleaks）を
@@ -527,8 +540,8 @@ PR 本文に `Closes #<番号>` を記載すればマージ時に Issue が自�
 | 1 | フェーズ全体の方針と実施順序 | 承認済み。安全網（#281）を最初に入れる |
 | 2 | フェーズ 4 の案 A / 案 B | **案 B（`Forge` 抽象の全面採用）を採用** |
 | 3 | Issue 分割の粒度 | footprint が互いに素になる単位（17 subtask）。§5 参照 |
-| 4 | 実施方式 | **手作業。ディスパッチャー・Integrator は使用しない** |
-| 5 | マージ方式 | **Issue ごとに `main` へ直接マージ**（二層ブランチモデルは使わない） |
+| 4 | 実施方式 | **手作業。ディスパッチャー・Integrator は使用しない**（本 Epic 限定の例外） |
+| 5 | マージ方式 | **Issue ごとに `main` へ直接マージ**（本 Epic 限定の例外。標準は二層ブランチモデル） |
 
 ### 起票済み Issue
 
