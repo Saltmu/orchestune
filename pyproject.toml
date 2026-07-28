@@ -53,7 +53,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--cov=orchestune --cov-fail-under=75 --cov-report=term-missing"
+addopts = "--cov=orchestune --cov-fail-under=90 --cov-report=term-missing"
 markers = [
     "uses_real_file_lock: exercises the real fcntl-based Integrator worktree lock instead of the autouse no-op stub",
 ]
