@@ -1,4 +1,5 @@
 import json
+import logging
 import textwrap
 
 import pytest
@@ -852,3 +853,126 @@ def test_dag_conflict_edge_generated_for_unnormalized_equivalent_paths(tmp_path)
     edge = res.edges[0]
     assert edge.reason == "similarity"
     assert {edge.source, edge.target} == {"task-a", "task-b"}
+
+
+class TestSubtaskFieldContract:
+    """#272: 必須フィールドの欠落時挙動を、文書上の契約と一致させる。"""
+
+    def test_missing_id_raises_value_error(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - description: "idの無いサブタスク"
+            footprint: ["src/foo.py"]
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        with pytest.raises(ValueError, match="id"):
+            parse_decomposition_plan(path)
+
+    def test_blank_id_raises_value_error(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: "   "
+            footprint: ["src/foo.py"]
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        with pytest.raises(ValueError, match="id"):
+            parse_decomposition_plan(path)
+
+    @pytest.mark.parametrize(
+        ("literal", "label"),
+        [
+            ("", "null"),
+            ("null", "null"),
+            ("[]", "空リスト"),
+            ("123", "整数"),
+            ("2026-01-01", "日付"),
+            ("true", "真偽値"),
+        ],
+    )
+    def test_non_string_id_raises_value_error(self, tmp_path, literal, label):
+        """#279レビュー対応: `str()`での暗黙の強制変換は、`None`や`[]`を
+        `"None"`/`"[]"`というIssue・ブランチ識別子へ黙って昇格させてしまう。
+        文書上の契約（文字列）どおり、非文字列は明示的に拒否する。"""
+        plan = f"""\
+        ---
+        subtasks:
+          - id: {literal}
+            footprint: ["src/foo.py"]
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        with pytest.raises(ValueError, match="id"):
+            parse_decomposition_plan(path)
+
+    def test_numeric_looking_id_is_accepted_when_quoted(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: "123"
+            footprint: ["src/foo.py"]
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        assert parse_decomposition_plan(path)[0].id == "123"
+
+    def test_missing_optional_fields_fall_back_to_defaults(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        subtask = parse_decomposition_plan(path)[0]
+
+        assert subtask.description == ""
+        assert subtask.footprint == ()
+        assert subtask.depends_on == ()
+        assert subtask.symbols == ()
+        assert subtask.priority == "medium"
+        assert subtask.shared_contract is None
+        assert subtask.writes_shared_contract is False
+
+    def test_missing_description_and_footprint_are_warned(self, tmp_path, caplog):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        with caplog.at_level(logging.WARNING, logger="orchestune.dag_parsing"):
+            parse_decomposition_plan(path)
+
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "task-a" in messages
+        assert "description" in messages
+        assert "footprint" in messages
+
+    def test_complete_subtask_emits_no_warning(self, tmp_path, caplog):
+        path = _write_plan(tmp_path, BASIC_PLAN)
+        with caplog.at_level(logging.WARNING, logger="orchestune.dag_parsing"):
+            parse_decomposition_plan(path)
+
+        assert [r for r in caplog.records if r.name == "orchestune.dag_parsing"] == []
+
+    def test_parses_shared_contract_fields(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+            description: "共有契約を作る"
+            footprint: ["src/registry.py"]
+            shared_contract: plugin-registry
+            writes_shared_contract: true
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        subtask = parse_decomposition_plan(path)[0]
+
+        assert subtask.shared_contract == "plugin-registry"
+        assert subtask.writes_shared_contract is True
