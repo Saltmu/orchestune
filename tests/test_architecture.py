@@ -6,12 +6,49 @@ import ast
 from collections import defaultdict
 from pathlib import Path
 
-import pytest
-
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 PACKAGE_NAME = "orchestune"
 L4_MODULES = frozenset({"cli", "dispatcher", "dag", "monitor", "bootstrap"})
-ALLOWED_SUBPROCESS_COMMAND_MODULES = frozenset(
+KNOWN_CYCLE_MEMBERS = frozenset(
+    {
+        "dispatch_actor_verification",
+        "dispatch_config",
+        "dispatch_cycle",
+        "dispatch_escalation",
+        "dispatch_gc",
+        "dispatch_launch",
+        "dispatch_rebase",
+        "dispatch_recovery",
+        "dispatch_report",
+        "dispatch_rules",
+        "dispatch_targets",
+        "dispatch_worktree",
+        "dispatcher",
+        "integration_coordinator",
+        "integrator",
+        "integrator_git_ops",
+        "integrator_pr",
+        "integrator_tasks",
+    }
+)
+KNOWN_L4_DEPENDENTS = {
+    "bootstrap": frozenset({"cli"}),
+    "dag": frozenset({"cli", "dispatch_rebase", "integrator_tasks"}),
+    "dispatcher": frozenset(
+        {
+            "cli",
+            "dispatch_actor_verification",
+            "dispatch_recovery",
+            "dispatch_targets",
+            "integrator",
+            "integrator_git_ops",
+            "integrator_pr",
+            "integrator_tasks",
+        }
+    ),
+    "monitor": frozenset({"cli"}),
+}
+KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
     {
         "bootstrap",
         "dispatch_gc",
@@ -19,8 +56,8 @@ ALLOWED_SUBPROCESS_COMMAND_MODULES = frozenset(
         "dispatch_locks",
         "dispatch_rebase",
         "dispatch_recovery",
-        "dispatch_targets",
         "dispatch_worktree",
+        "forge",
         "github",
         "integrator",
         "integrator_git_ops",
@@ -169,18 +206,18 @@ def _subprocess_command_modules() -> set[str]:
     return command_modules
 
 
-@pytest.mark.xfail(
-    reason="循環を解消する dismantle-facade / forge-cleanup 完了までの安全網"
-)
-def test_package_import_graph_has_no_cycles() -> None:
-    assert _cycle_members(_import_graph()) == set()
+def test_package_import_graph_does_not_gain_cycles() -> None:
+    assert _cycle_members(_import_graph()) <= KNOWN_CYCLE_MEMBERS
 
 
-@pytest.mark.xfail(reason="L4 モジュールの依存逆転を完了するまでの安全網")
-def test_l4_modules_are_not_imported_by_other_package_modules() -> None:
-    assert _l4_dependents(_import_graph()) == {}
+def test_l4_modules_do_not_gain_new_dependents() -> None:
+    unexpected = {
+        module: dependents - KNOWN_L4_DEPENDENTS.get(module, frozenset())
+        for module, dependents in _l4_dependents(_import_graph()).items()
+        if dependents - KNOWN_L4_DEPENDENTS.get(module, frozenset())
+    }
+    assert unexpected == {}
 
 
-@pytest.mark.xfail(reason="git / gh 実行の Forge 境界への集約が完了するまでの安全網")
-def test_git_and_gh_subprocess_modules_are_allowlisted() -> None:
-    assert _subprocess_command_modules() == ALLOWED_SUBPROCESS_COMMAND_MODULES
+def test_git_and_gh_subprocess_modules_do_not_expand() -> None:
+    assert _subprocess_command_modules() <= KNOWN_SUBPROCESS_COMMAND_MODULES
