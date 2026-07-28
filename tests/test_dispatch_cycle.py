@@ -1,7 +1,13 @@
+import json
+import subprocess
 import tempfile
+import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
+from orchestune.dag import FootprintConflict
 from orchestune.dispatch_cycle import (
     CycleContext,
     IssuesByStatus,
@@ -21,11 +27,36 @@ from orchestune.dispatch_cycle import (
 )
 from orchestune.dispatch_locks import ExternalLockScanResult
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch_state import (
+    ActiveWorktree,
+    RunState,
+    load_run_state,
+    save_run_state,
+)
 from orchestune.dispatcher import DispatcherConfig
-from orchestune.github import IssueRecord
+from orchestune.github import IssueRecord, PrRecord
+from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
+
+@pytest.fixture(autouse=True)
+def _stub_label_actor_permission_by_default():
+    """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
+    `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
+    返すようスタブする。検証ロジック自体のテストは
+    tests/test_dispatch_actor_verification.py に集約する。"""
+    with (
+        patch(
+            "orchestune.dispatch_cycle.github.get_label_actor",
+            return_value="trusted-actor",
+        ),
+        patch(
+            "orchestune.dispatch_cycle.github.get_actor_permission",
+            return_value="write",
+        ),
+    ):
+        yield
 
 
 def _task(**overrides):
@@ -86,6 +117,38 @@ def _issue(number, labels=(), state="OPEN"):
         labels=labels,
         created_at="2026-01-01T00:00:00+00:00",
         state=state,
+    )
+
+
+def _full_issue(
+    number,
+    labels=("status:queued",),
+    footprint=("src/foo.py",),
+    symbols=("foo.Foo",),
+    subtask_id="task-a",
+    depends_on=(),
+    created_at="2026-01-01T00:00:00+00:00",
+    parent_number=181,
+):
+    """`_issue()`より詳細なFootprint YAMLブロックを持つIssueRecordを作る。
+
+    `run_dispatch_cycle`をエンドツーエンドで駆動する系のテスト（旧
+    `test_dispatcher.py`の`TestRunDispatchCycle*`群）が要求するフィールド
+    （footprint/symbols/subtask_id/depends_on/parent_number）を持つため、
+    より単純な`_issue()`とは別名にし、`tests/conftest.py`の`make_issue`に
+    委譲する薄いラッパーにしている。
+    """
+    parent = {"number": parent_number} if parent_number is not None else None
+    return make_issue(
+        number,
+        title="t",
+        labels=labels,
+        footprint=footprint,
+        symbols=symbols,
+        subtask_id=subtask_id,
+        depends_on=depends_on,
+        created_at=created_at,
+        parent=parent,
     )
 
 
@@ -1352,4 +1415,1670 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             run_dispatch_cycle(config)
 
         # remove_label が呼ばれない（fail-closed）ことを検証
+        mock_remove_label.assert_not_called()
+
+
+class TestRunDispatchCycle:
+    def test_dry_run_makes_no_write_calls(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _full_issue(1)
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_subproc_run.assert_not_called()
+        mock_popen.assert_not_called()
+        assert report.applied is False
+        assert len(report.selected) == 1
+        assert not (tmp_path / "run_state.json").exists()
+
+    def test_apply_launches_selected_task_and_persists_state(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        queued_issue = _full_issue(1)
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label"),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            mock_subproc_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            mock_popen.return_value.pid = 555
+            report = run_dispatch_cycle(config)
+
+        assert report.applied is True
+        assert len(report.selected) == 1
+        mock_add_label.assert_any_call(1, "status:in-progress")
+        assert (tmp_path / "run_state.json").exists()
+        persisted = json.loads((tmp_path / "run_state.json").read_text())
+        assert "1" in persisted["active_worktrees"]
+
+    def test_apply_updates_last_reconciled_at(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        before = time.time()
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label", return_value=[]
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+        ):
+            run_dispatch_cycle(config)
+        after = time.time()
+
+        loaded = load_run_state(config.run_state_path)
+        assert loaded.last_reconciled_at is not None
+        assert before <= loaded.last_reconciled_at <= after
+
+    def test_dry_run_does_not_update_last_reconciled_at(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label", return_value=[]
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+        ):
+            run_dispatch_cycle(config)
+
+        assert not config.run_state_path.exists()
+
+    def test_quota_exhausted_selects_nothing(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "9": ActiveWorktree(9, "b", "w", 1, 1_699_999_000.0, ()),
+                    "8": ActiveWorktree(8, "b2", "w2", 2, 1_699_999_000.0, ()),
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=5,
+            window_seconds=3600,
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _full_issue(1)
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
+        assert report.quota_slots_available == 0
+
+    def test_run_dispatch_cycle_filters_by_parent_issue_number(self, tmp_path):
+        """#156: parent_issue_number指定時は、github.list_sub_issuesによる
+        fast pathへ正しく配線され、その結果がそのまま使われることを確認する。
+        『親を問わず返された候補から正しい親だけに絞る』という判定自体は、
+        list_sub_issuesの実装（github.py）側の責務のためここでは検証しない。
+        """
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            parent_issue_number=100,
+            apply=False,
+        )
+        sub_issue_1 = _full_issue(
+            1,
+            labels=("status:queued",),
+            subtask_id="task-a",
+            parent_number=100,
+        )
+
+        with (
+            patch("orchestune.dispatch_cycle.github.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+        ):
+            mock_list.return_value = [sub_issue_1]
+            report = run_dispatch_cycle(config)
+
+        mock_list.assert_called_once_with(100)
+        assert [t.issue_number for t in report.selected] == [1]
+
+    def test_run_dispatch_cycle_resolves_depends_on_from_blocked_by(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+        )
+        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=(),
+        )
+        blocked_issue = IssueRecord(
+            number=blocked_issue.number,
+            title=blocked_issue.title,
+            body=blocked_issue.body,
+            labels=blocked_issue.labels,
+            created_at=blocked_issue.created_at,
+            blocked_by=(1,),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+
+            def _list(label, **_):
+                if label == "status:done":
+                    return [done_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        # BがAの完了により昇格したことを確認
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+
+class TestRunDispatchCycleBranchNormalization:
+    """#194: リモートブランチ名のorigin/プレフィックス正規化。"""
+
+    def test_does_not_self_lock_own_active_branch(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/shared.py",),
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _full_issue(2, footprint=("src/shared.py",))
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches",
+                return_value=["origin/claude/issue-1-task-a"],
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.branch_changed_files",
+                return_value=["src/shared.py"],
+            ),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.lock_changes["to_lock"] == []
+
+    def test_excludes_branch_with_open_pr_multisegment_headref(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        with (
+            patch(
+                "orchestune.dispatch_cycle.github.list_issues_by_label", return_value=[]
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches",
+                return_value=["origin/feature/foo"],
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.list_open_prs",
+                return_value=[
+                    PrRecord(
+                        number=1, head_ref="feature/foo", changed_files=("src/x.py",)
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.branch_changed_files"
+            ) as mock_branch_files,
+        ):
+            run_dispatch_cycle(config)
+
+        mock_branch_files.assert_not_called()
+
+    def test_unrelated_external_branch_still_locks_overlapping_task(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _full_issue(1, footprint=("src/shared.py",))
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches",
+                return_value=["origin/someone-elses-branch"],
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_cycle.github.branch_changed_files",
+                return_value=["src/shared.py"],
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert [t.issue_number for t in report.lock_changes["to_lock"]] == [1]
+
+
+class TestRunDispatchCycleFootprintRecompute:
+    """#192: footprint逸脱検知 → DAG再計算 → notify_recompute の配線。"""
+
+    def _config(self, tmp_path, run_state_path, **overrides):
+        defaults = dict(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            parent_issue_number=181,
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def test_significant_deviation_triggers_recompute_and_notify(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(tmp_path, run_state_path)
+        in_progress_issue = _full_issue(
+            1,
+            labels=("status:in-progress",),
+            footprint=("src/foo.py",),
+            symbols=("foo.Foo",),
+            subtask_id="task-a",
+        )
+        conflict = FootprintConflict(
+            subtask_id="task-a",
+            other_subtask_id="task-b",
+            similarity=0.5,
+            blocked_subtask_id="task-b",
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label"),
+            patch("orchestune.dispatch_targets.subprocess.Popen"),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=["src/unexpected.py"],
+            ) as mock_check_deviation,
+            patch(
+                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+            ) as mock_recompute,
+            patch(
+                "orchestune.dispatch_rebase.notify_recompute", return_value=["body"]
+            ) as mock_notify,
+        ):
+            mock_list.return_value = [in_progress_issue]
+            mock_recompute.return_value = (MagicMock(), [conflict])
+
+            report = run_dispatch_cycle(config)
+
+        mock_add_label.assert_not_called()
+        mock_check_deviation.assert_called_once()
+        mock_recompute.assert_called_once()
+        assert mock_recompute.call_args.args[1] == "task-a"
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["apply"] is True
+        assert len(report.deviation_events) == 1
+        event = report.deviation_events[0]
+        assert event["issue_number"] == 1
+        assert event["action"] == "recomputed"
+        assert event["deviated_files"] == ["src/unexpected.py"]
+
+        persisted = json.loads(run_state_path.read_text())
+        assert persisted["active_worktrees"]["1"]["recompute_count"] == 1
+
+    def test_dry_run_recompute_does_not_persist_or_call_github(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(tmp_path, run_state_path, apply=False)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        conflict = FootprintConflict(
+            subtask_id="task-a",
+            other_subtask_id="task-b",
+            similarity=0.5,
+            blocked_subtask_id="task-b",
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=["src/unexpected.py"],
+            ),
+            patch(
+                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+            ) as mock_recompute,
+            patch(
+                "orchestune.dispatch_rebase.notify_recompute", return_value=["dry body"]
+            ) as mock_notify,
+        ):
+            mock_list.return_value = [in_progress_issue]
+            mock_recompute.return_value = (MagicMock(), [conflict])
+
+            run_dispatch_cycle(config)
+
+        mock_add_label.assert_not_called()
+        mock_add_comment.assert_not_called()
+        assert mock_notify.call_args.kwargs["apply"] is False
+
+        persisted = json.loads(run_state_path.read_text())
+        assert persisted["active_worktrees"]["1"]["recompute_count"] == 0
+
+    def test_retry_limit_exceeded_triggers_forced_serialization(self, tmp_path):
+        """#200: リトライ上限超過時は再計算せず強制直列化にフォールバックする。"""
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                        recompute_count=2,
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(
+            tmp_path,
+            run_state_path,
+            max_recompute_retries=2,
+            max_concurrent=2,
+        )
+        in_progress_issue = _full_issue(
+            1,
+            labels=("status:in-progress",),
+            subtask_id="task-a",
+            footprint=("src/foo.py",),
+        )
+        other_queued_issue = _full_issue(
+            2,
+            labels=("status:queued",),
+            subtask_id="task-b",
+            footprint=("src/bar.py",),
+        )
+
+        def _launch_stub(
+            selected,
+            _task_to_base_branch,
+            _candidate_tasks,
+            run_state,
+            _now,
+            config,
+            open_prs=None,
+        ):
+            save_run_state(run_state, config.run_state_path)
+            return selected
+
+        with (
+            patch("orchestune.dispatch_cycle.github.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label"),
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle._launch_selected_tasks",
+                side_effect=_launch_stub,
+            ),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=["src/unexpected.py"],
+            ),
+            patch(
+                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+            ) as mock_recompute,
+        ):
+            mock_list.return_value = [other_queued_issue, in_progress_issue]
+
+            report = run_dispatch_cycle(config)
+
+        mock_recompute.assert_not_called()
+        mock_add_label.assert_any_call(1, "status:force-serial")
+        mock_add_comment.assert_called_once()
+        assert [task.issue_number for task in report.selected] == [2]
+        assert report.quota_slots_available == 1
+        assert report.deviation_events[0]["action"] == "forced_serial"
+
+        persisted = json.loads(run_state_path.read_text())
+        assert persisted["active_worktrees"]["1"]["forced_serial"] is True
+
+    def test_forced_serial_filters_out_only_conflicting_candidates(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                        forced_serial=True,
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(tmp_path, run_state_path, max_concurrent=3)
+        in_progress_issue = _full_issue(
+            1,
+            labels=("status:in-progress", "status:force-serial"),
+            subtask_id="task-a",
+            footprint=("src/foo.py",),
+        )
+        conflicting_issue = _full_issue(
+            2,
+            labels=("status:queued",),
+            subtask_id="task-b",
+            footprint=("src/foo.py",),
+        )
+        dependent_issue = _full_issue(
+            3,
+            labels=("status:queued",),
+            subtask_id="task-c",
+            footprint=("src/baz.py",),
+            depends_on=("task-a",),
+        )
+        independent_issue = _full_issue(
+            4,
+            labels=("status:queued",),
+            subtask_id="task-d",
+            footprint=("src/qux.py",),
+        )
+
+        def _launch_stub(
+            selected,
+            _task_to_base_branch,
+            _candidate_tasks,
+            run_state,
+            _now,
+            config,
+            open_prs=None,
+        ):
+            save_run_state(run_state, config.run_state_path)
+            return selected
+
+        with (
+            patch("orchestune.dispatch_cycle.github.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_cycle._launch_selected_tasks",
+                side_effect=_launch_stub,
+            ),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
+        ):
+            mock_list.return_value = [
+                conflicting_issue,
+                dependent_issue,
+                independent_issue,
+                in_progress_issue,
+            ]
+            report = run_dispatch_cycle(config)
+
+        assert report.quota_slots_available == 2
+        assert [task.issue_number for task in report.selected] == [4]
+
+    def test_already_forced_serial_does_not_recompute_again(self, tmp_path):
+        """一度強制直列化された後は、再度の再計算・通知でチャーンさせない。"""
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                        recompute_count=2,
+                        forced_serial=True,
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(tmp_path, run_state_path, max_recompute_retries=2)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=["src/unexpected.py"],
+            ),
+            patch(
+                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+            ) as mock_recompute,
+        ):
+            mock_list.return_value = [in_progress_issue]
+            report = run_dispatch_cycle(config)
+
+        mock_recompute.assert_not_called()
+        mock_add_comment.assert_not_called()
+        mock_add_label.assert_not_called()
+        assert report.selected == []
+        assert report.deviation_events[0]["action"] == "already_forced_serial"
+
+
+class TestRunDispatchCycleCompletion:
+    """#193: プロセス終了検知→worktree削除→クオータ解放→status:doneラベル遷移。"""
+
+    def _config(self, tmp_path, run_state_path, **overrides):
+        defaults = dict(
+            max_concurrent=1,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def _seed_active(self, tmp_path, run_state_path, **overrides):
+        defaults = dict(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+        )
+        defaults.update(overrides)
+        save_run_state(
+            RunState(
+                active_worktrees={"1": ActiveWorktree(**defaults)}, launch_history=[]
+            ),
+            run_state_path,
+        )
+
+    def test_completed_clean_worktree_is_removed_and_labeled_done(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
+        mock_remove_label.assert_any_call(1, "status:in-progress")
+        mock_add_label.assert_any_call(1, "status:done")
+        assert report.completion_events == [
+            {
+                "issue_number": 1,
+                "worktree_path": str(tmp_path / "w1"),
+                "action": "completed",
+                "subtask_id": "task-a",
+                "commit_sha": None,
+            }
+        ]
+
+        persisted = json.loads(run_state_path.read_text())
+        assert persisted["active_worktrees"] == {}
+        assert len(persisted["completed_worktrees"]) == 1
+        completed = persisted["completed_worktrees"][0]
+        assert completed["issue_number"] == 1
+        assert completed["subtask_id"] == "task-a"
+        assert completed["branch"] == "claude/issue-1-task-a"
+        assert completed["started_at"] == 1_699_999_000.0
+        assert completed["completed_at"] >= completed["started_at"]
+
+        events_lines = config.events_log_path.read_text(encoding="utf-8").splitlines()
+        assert len(events_lines) == 1
+        logged_entry = json.loads(events_lines[0])
+        assert logged_entry["completion_events"] == report.completion_events
+
+    def test_cloud_completion_uses_remote_branch_commits(self, tmp_path):
+        """#177: クラウド実行の結果は、起動時のローカルworktreeではなく
+        fetch済みのリモートブランチで検証する。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, external_id="session-1")
+        dispatch_target = MagicMock()
+        dispatch_target.completion_status.return_value = "completed"
+        config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label"),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=False,
+            ) as mock_local_commits,
+            patch(
+                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                return_value="remote-commit",
+            ) as mock_remote_commits,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed"
+        assert report.completion_events[0]["commit_sha"] == "remote-commit"
+        mock_local_commits.assert_not_called()
+        mock_remote_commits.assert_called_once_with(
+            config.worktree_root.parent,
+            "claude/issue-1-task-a",
+            "origin/main",
+        )
+        mock_add_label.assert_any_call(1, "status:done")
+
+    def test_cloud_completion_without_verified_sha_is_not_marked_done(self, tmp_path):
+        """#177: SHAを取得できなければ、完了ラベルへ遷移しない。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, external_id="session-1")
+        dispatch_target = MagicMock()
+        dispatch_target.completion_status.return_value = "completed"
+        config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label"),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                return_value=None,
+            ),
+            patch(
+                "orchestune.dispatch_gc.apply_human_review_escalation"
+            ) as mock_escalate,
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed_no_commits"
+        mock_escalate.assert_called_once()
+        assert all(
+            call.args != (1, "status:done") for call in mock_add_label.call_args_list
+        )
+
+    def test_dirty_worktree_completion_is_skipped(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatch_cycle.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_remove_worktree.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        assert (
+            report.completion_events[0]["action"] == "completion_skipped_dirty_worktree"
+        )
+
+        persisted = json.loads(run_state_path.read_text())
+        assert "1" in persisted["active_worktrees"]
+
+    def test_dry_run_completion_does_not_mutate_or_call_github(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path, apply=False)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing as "completed".
+            patch("orchestune.dispatch_cycle.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue] if label == "status:in-progress" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_remove_worktree.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        assert report.completion_events[0]["action"] == "completed"
+        assert not config.events_log_path.exists()
+
+        persisted = json.loads(run_state_path.read_text())
+        assert "1" in persisted["active_worktrees"]
+
+    def test_no_commits_completion_frees_quota_without_promoting_dependents(
+        self, tmp_path
+    ):
+        """#74: 空コミット完了はcompleted_subtask_idsに含めず依存先を昇格させないが、
+        run_state側のクオータは解放する(worktree・ラベルはdispatch_gc側で片付け済みのため)。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing.
+            patch("orchestune.dispatch_cycle.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [in_progress_issue]
+                if label == "status:in-progress"
+                else ([blocked_issue] if label == "status:blocked" else [])
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed_no_commits"
+        mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
+        mock_remove_label.assert_any_call(1, "status:in-progress")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        # #74の核心: 依存先(#2)は誤って昇格させない
+        assert report.promotion_events == []
+        assert all(
+            call.args != (2, "status:queued") for call in mock_add_label.call_args_list
+        )
+
+        persisted = json.loads(run_state_path.read_text())
+        assert "1" not in persisted["active_worktrees"]
+        assert persisted["completed_worktrees"] == []
+
+    def test_freed_quota_allows_new_task_to_launch_same_cycle(self, tmp_path):
+        """#193の核心: 完了検知でクオータが解放され、同一サイクル内で
+        新規タスクが選出・起動されることを検証する（恒久停止バグの回帰テスト）。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        queued_issue = _full_issue(2, footprint=("src/bar.py",), subtask_id="task-b")
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label"),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+
+            def _list(label, **_):
+                if label == "status:in-progress":
+                    return [in_progress_issue]
+                if label == "status:queued":
+                    return [queued_issue]
+                return []
+
+            mock_list.side_effect = _list
+            mock_subproc_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            mock_popen.return_value.pid = 999
+            report = run_dispatch_cycle(config)
+
+        assert [t.issue_number for t in report.selected] == [2]
+        mock_add_label.assert_any_call(2, "status:in-progress")
+
+        persisted = json.loads(run_state_path.read_text())
+        assert "1" not in persisted["active_worktrees"]
+        assert "2" in persisted["active_worktrees"]
+
+
+class TestRunDispatchCycleNotNeeded:
+    """#280: status:not-neededラベル検知による完全自動クローズ・依存解決。"""
+
+    def _config(self, tmp_path, run_state_path, **overrides):
+        defaults = dict(
+            max_concurrent=1,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def _seed_active(self, tmp_path, run_state_path, **overrides):
+        defaults = dict(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+        )
+        defaults.update(overrides)
+        save_run_state(
+            RunState(
+                active_worktrees={"1": ActiveWorktree(**defaults)}, launch_history=[]
+            ),
+            run_state_path,
+        )
+
+    def test_not_needed_label_closes_issue_regardless_of_pr_or_process_state(
+        self, tmp_path
+    ):
+        """セッションがコミット・PRを一切作らない対応不要ケースでも、
+        PID/PR存在に依存せずラベル検知だけで完了・クローズできることを検証する
+        （#250で観測された、永遠にstatus:in-progressのままスタックする問題の回帰テスト）。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path)
+        not_needed_issue = _full_issue(
+            1, labels=("status:not-needed",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.close_issue") as mock_close_issue,
+            # プロセスは生きたまま・PRも存在しない、という「対応不要」の典型状態
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [not_needed_issue] if label == "status:not-needed" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
+        mock_remove_label.assert_any_call(1, "status:in-progress")
+        mock_close_issue.assert_called_once()
+        assert mock_close_issue.call_args.args[0] == 1
+        assert mock_close_issue.call_args.args[1] == "not planned"
+        assert report.completion_events == [
+            {
+                "issue_number": 1,
+                "worktree_path": str(tmp_path / "w1"),
+                "action": "not_needed",
+                "subtask_id": "task-a",
+            }
+        ]
+
+        persisted = json.loads(run_state_path.read_text())
+        assert persisted["active_worktrees"] == {}
+
+    def test_dry_run_not_needed_does_not_call_github_or_mutate(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path)
+        config = self._config(tmp_path, run_state_path, apply=False)
+        not_needed_issue = _full_issue(
+            1, labels=("status:not-needed",), subtask_id="task-a"
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.close_issue") as mock_close_issue,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [not_needed_issue] if label == "status:not-needed" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_remove_worktree.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_close_issue.assert_not_called()
+        assert report.completion_events[0]["action"] == "not_needed"
+
+        persisted = json.loads(run_state_path.read_text())
+        assert "1" in persisted["active_worktrees"]
+
+    def test_blocked_task_promotes_when_dependency_is_not_needed(self, tmp_path):
+        """対応不要と判定された依存先も、status:done同様に依存解決済みとして
+        扱われ、後続のstatus:blockedタスクがstatus:queuedへ昇格すること。"""
+        run_state_path = tmp_path / "run_state.json"
+        config = self._config(tmp_path, run_state_path, max_concurrent=2)
+        not_needed_issue = _full_issue(
+            1, labels=("status:not-needed",), subtask_id="task-a"
+        )
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+
+            def _list(label, **_):
+                if label == "status:not-needed":
+                    return [not_needed_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+
+class TestRunDispatchCycleBlockedPromotion:
+    """#193: 依存解決によるstatus:blocked → status:queued昇格。"""
+
+    def _config(self, tmp_path, **overrides):
+        defaults = dict(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def test_promotes_blocked_task_when_dependency_already_done(self, tmp_path):
+        config = self._config(tmp_path)
+        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+
+            def _list(label, **_):
+                if label == "status:done":
+                    return [done_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+    def test_promotes_blocked_task_when_dependency_done_and_closed(self, tmp_path):
+        """#236: 完了Issueが通常のGitHub運用でCloseされていても、
+        status:done検索がstate="all"で呼ばれる限り依存解決できる。"""
+        config = self._config(tmp_path)
+        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+
+            def _list(label, state="open"):
+                # closedなIssueもstatus:done検索に含まれるのはstate="all"の
+                # 呼び出しのみ（実際のgh issue list --state open/allの挙動を模す）。
+                if label == "status:done" and state == "all":
+                    return [done_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+    def test_does_not_promote_when_dependency_unresolved(self, tmp_path):
+        config = self._config(tmp_path)
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [blocked_issue] if label == "status:blocked" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        assert report.promotion_events == []
+
+    def test_promotes_when_dependency_completes_in_same_cycle(self, tmp_path):
+        """依存先が同一サイクル内で完了検知された場合も即座に昇格させる。"""
+        run_state_path = tmp_path / "run_state.json"
+        save_run_state(
+            RunState(
+                active_worktrees={
+                    "1": ActiveWorktree(
+                        issue_number=1,
+                        branch="claude/issue-1-task-a",
+                        worktree_path=str(tmp_path / "w1"),
+                        pid=111,
+                        started_at=1_699_999_000.0,
+                        declared_footprint=("src/foo.py",),
+                    )
+                },
+                launch_history=[],
+            ),
+            run_state_path,
+        )
+        config = self._config(tmp_path, run_state_path=run_state_path)
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            # Completion now also consults the all-state PR list to rule out an
+            # abandoned (closed-unmerged) PR before finalizing as "completed".
+            patch("orchestune.dispatch_cycle.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+
+            def _list(label, **_):
+                if label == "status:in-progress":
+                    return [in_progress_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
+
+    def test_dry_run_promotion_does_not_call_github(self, tmp_path):
+        config = self._config(tmp_path, apply=False)
+        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+        ):
+
+            def _list(label, **_):
+                if label == "status:done":
+                    return [done_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+    def test_yaml_error_transitions_to_blocked(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-invalid\n"
+            "footprint:\n"
+            "  - [invalid-yaml-structure:\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=9,
+            title="t",
+            body=body,
+            labels=("status:queued",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue] if label == "status:queued" else []
+            )
+
+            report = run_dispatch_cycle(config)
+
+            assert report.selected == []
+            mock_remove_label.assert_any_call(9, "status:queued")
+            mock_add_label.assert_any_call(9, "status:blocked")
+            mock_add_comment.assert_called_once_with(9, ANY)
+
+    def test_worktree_launch_failure_transitions_to_blocked(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        issue = _full_issue(1)
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue] if label == "status:queued" else []
+            )
+            mock_run.side_effect = subprocess.CalledProcessError(
+                returncode=128,
+                cmd="git worktree add",
+            )
+            report = run_dispatch_cycle(config)
+
+            assert report.selected == []
+            mock_remove_label.assert_any_call(1, "status:queued")
+            mock_add_label.assert_any_call(1, "status:blocked")
+            mock_add_comment.assert_called_once_with(1, ANY)
+
+
+class TestRunDispatchCycleActorVerification:
+    """#119: status:queuedラベルを付与したactorの権限が不足している場合、
+    run_dispatch_cycle経由でも起動をスキップしエスカレーションすることを確認する。"""
+
+    def test_unauthorized_actor_skips_launch_and_escalates(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        queued_issue = _full_issue(1, subtask_id="task-1")
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_cycle.github.add_comment") as mock_add_comment,
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="mallory",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="read",
+            ),
+            patch("orchestune.dispatch_worktree.subprocess.run"),
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
+        mock_popen.assert_not_called()
+        mock_remove_label.assert_any_call(1, "status:queued")
+        mock_add_label.assert_any_call(1, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert "mallory" in mock_add_comment.call_args[0][1]
+
+    def test_dry_run_excludes_unauthorized_actor_without_writes(self, tmp_path):
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _full_issue(1, subtask_id="task-1")
+        with (
+            patch("orchestune.dispatch_cycle.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_cycle.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_cycle.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_cycle.github.remove_label") as mock_remove_label,
+            patch(
+                "orchestune.dispatch_cycle.github.get_label_actor",
+                return_value="mallory",
+            ),
+            patch(
+                "orchestune.dispatch_cycle.github.get_actor_permission",
+                return_value="none",
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        assert report.selected == []
+        mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
