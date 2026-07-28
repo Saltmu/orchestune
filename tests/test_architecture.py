@@ -29,6 +29,13 @@ KNOWN_CYCLE_MEMBERS = frozenset(
         "integrator_git_ops",
         "integrator_pr",
         "integrator_tasks",
+        # parent_completion -> integrator_pr -> dispatcher -> parent_completion
+        # (dispatcher._process_parent_completionの関数内import経由)は元々存在
+        # した循環だが、以前の`_cycle_members`実装（探索順序に依存し、一部の
+        # 循環メンバーを見逃す欠陥があった）では検出されていなかった。
+        # Tarjan's SCCへの置き換えにより正しく検出されるようになったため
+        # 追加する。
+        "parent_completion",
     }
 )
 KNOWN_L4_DEPENDENTS = {
@@ -59,6 +66,7 @@ KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
         "dispatch_targets",
         "dispatch_worktree",
         "forge",
+        "git_cli",
         "github",
         "integrator",
         "integrator_git_ops",
@@ -136,25 +144,49 @@ def _import_graph() -> dict[str, set[str]]:
 
 
 def _cycle_members(graph: dict[str, set[str]]) -> set[str]:
-    active: list[str] = []
-    visited: set[str] = set()
+    """非自明な強連結成分（要素数2以上、または自己ループ）に属するモジュール名を返す。
+
+    Tarjan's SCCアルゴリズムを使う。単純な「探索中スタック+visited集合」による
+    DFSは、あるノードが別の経路から先に`visited`化されてしまうと、そのノード
+    経由でしか辿り着けない別の循環を再探索せず見逃す（探索順序に依存して
+    検出結果が変わる）欠陥がある。Tarjan's SCCはノードの近傍を辿る順序に
+    依らず正しい強連結成分を求められるため、この欠陥がない。
+    """
+    index_counter = [0]
+    index: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    on_stack: dict[str, bool] = {}
+    stack: list[str] = []
     cycles: set[str] = set()
 
-    def visit(module: str) -> None:
-        if module in active:
-            cycles.update(active[active.index(module) :])
-            return
-        if module in visited:
-            return
+    def strongconnect(module: str) -> None:
+        index[module] = index_counter[0]
+        lowlink[module] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(module)
+        on_stack[module] = True
 
-        active.append(module)
         for dependency in graph[module]:
-            visit(dependency)
-        active.pop()
-        visited.add(module)
+            if dependency not in index:
+                strongconnect(dependency)
+                lowlink[module] = min(lowlink[module], lowlink[dependency])
+            elif on_stack.get(dependency):
+                lowlink[module] = min(lowlink[module], index[dependency])
+
+        if lowlink[module] == index[module]:
+            component: list[str] = []
+            while True:
+                member = stack.pop()
+                on_stack[member] = False
+                component.append(member)
+                if member == module:
+                    break
+            if len(component) > 1 or module in graph[module]:
+                cycles.update(component)
 
     for module in graph:
-        visit(module)
+        if module not in index:
+            strongconnect(module)
     return cycles
 
 
