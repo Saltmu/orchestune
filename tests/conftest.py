@@ -98,7 +98,11 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
         return
     with (
         patch(
-            "orchestune.dispatcher.file_lock",
+            "orchestune.dispatch_cycle.file_lock",
+            lambda _lock_path: contextlib.nullcontext(),
+        ),
+        patch(
+            "orchestune.integration_coordinator.file_lock",
             lambda _lock_path: contextlib.nullcontext(),
         ),
         patch(
