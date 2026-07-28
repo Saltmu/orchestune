@@ -1834,6 +1834,7 @@ class TestRunDispatchCycleBlockedPromotion:
 
 
 class TestDispatcherLocking:
+    @pytest.mark.uses_real_file_lock
     def test_run_dispatch_cycle_raises_runtime_error_if_locked(self, tmp_path):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
