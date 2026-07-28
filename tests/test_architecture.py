@@ -33,7 +33,7 @@ KNOWN_CYCLE_MEMBERS = frozenset(
 )
 KNOWN_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
-    "dag": frozenset({"cli", "dispatch_rebase", "integrator_tasks"}),
+    "dag": frozenset({"cli", "dispatch_cycle", "dispatch_rebase", "integrator_tasks"}),
     "dispatcher": frozenset(
         {
             "cli",
@@ -56,6 +56,7 @@ KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
         "dispatch_locks",
         "dispatch_rebase",
         "dispatch_recovery",
+        "dispatch_targets",
         "dispatch_worktree",
         "forge",
         "github",
