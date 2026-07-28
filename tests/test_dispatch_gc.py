@@ -1,8 +1,9 @@
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_gc import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -13,6 +14,7 @@ from orchestune.dispatch_gc import (
     _decide_zombie_or_timeout_reclaims,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
+    _is_worktree_complete,
     _rule_completed,
     backup_wip_commit,
     remote_branch_commit_sha_if_ahead,
@@ -22,13 +24,20 @@ from orchestune.dispatch_gc import (
 )
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch_state import (
+    ActiveWorktree,
+    RunState,
+    load_run_state,
+    save_run_state,
+)
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
+    CodexCloudDispatchTarget,
     DispatchHandle,
 )
 from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import PrRecord
+from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -80,6 +89,32 @@ def _task(**overrides):
     )
     defaults.update(overrides)
     return Task(**defaults)
+
+
+def _issue(
+    number,
+    labels=("status:queued",),
+    footprint=("src/foo.py",),
+    symbols=("foo.Foo",),
+    subtask_id="task-a",
+    depends_on=(),
+    created_at="2026-01-01T00:00:00+00:00",
+    parent_number=181,
+):
+    """`tests/conftest.py`の`make_issue`に、このファイルの旧テスト群が前提と
+    する`parent_number`（既定181）とtitleを合わせた薄いラッパー。"""
+    parent = {"number": parent_number} if parent_number is not None else None
+    return make_issue(
+        number,
+        title="t",
+        labels=labels,
+        footprint=footprint,
+        symbols=symbols,
+        subtask_id=subtask_id,
+        depends_on=depends_on,
+        created_at=created_at,
+        parent=parent,
+    )
 
 
 class TestCollectZombiesAndTimeouts:
@@ -1599,3 +1634,408 @@ class TestWorktreeHasNewCommitsIntegration:
         # 5. 検証: ローカルを優先して解決するため、HEAD (B) と ローカル parent (B) を比較し、新規コミットなし (False) となることを確認。
         # (もしリモート優先バグがあると、HEAD (B) と origin/parent (A) を比較して新規コミットあり (True) と判定されてしまう)
         assert worktree_has_new_commits(local_dir, "parent/issue-129") is False
+
+
+class TestIsWorktreeComplete:
+    """#239: external_id経由の完了判定に、issue_numberが正しく引き渡されること。"""
+
+    def test_passes_issue_number_to_dispatch_target_handle(self, tmp_path):
+        fake_target = MagicMock()
+        fake_target.completion_status.return_value = "completed"
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=fake_target,
+        )
+        active = ActiveWorktree(
+            issue_number=218,
+            branch="claude/issue-218-review-history-backend-api",
+            worktree_path=str(tmp_path / "w1"),
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="session_1",
+            external_url="https://claude.ai/code/session_1",
+        )
+
+        result = _is_worktree_complete(active, config)
+
+        assert result is True
+        handle = fake_target.completion_status.call_args.args[0]
+        assert handle.issue_number == 218
+        assert handle.branch_name == "claude/issue-218-review-history-backend-api"
+
+    def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123")
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=target,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=4242,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="codex-cloud:claude/issue-1-task-a",
+        )
+
+        with (
+            patch("orchestune.dispatch_targets.github.list_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive,
+        ):
+            assert _is_worktree_complete(active, config) is False
+
+        mock_is_alive.assert_not_called()
+
+    def test_recovered_local_active_worktree_waits_for_pid_reconciliation(
+        self, tmp_path
+    ):
+        config = DispatcherConfig(run_state_path=tmp_path / "run_state.json")
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "missing-worktree"),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        assert _is_worktree_complete(active, config) is False
+
+
+class TestGC:
+    def test_gc_reclaim_zombie(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=3600,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatch_gc.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_gc.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_gc.github.list_open_prs", return_value=[]),
+            # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+
+            def run_mock(args, **kwargs):
+                if "status" in args:
+                    return subprocess.CompletedProcess(
+                        args=args, returncode=0, stdout=" M src/foo.py\n"
+                    )
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
+
+            mock_run.side_effect = run_mock
+
+            run_dispatch_cycle(config)
+
+        git_calls = [call.args[0] for call in mock_run.call_args_list]
+        assert any("add" in cmd for cmd in git_calls)
+        assert any("commit" in cmd for cmd in git_calls)
+
+        mock_remove_wt.assert_called_once_with(str(wt_path))
+        mock_remove_label.assert_called_with(1, "status:in-progress")
+        mock_add_label.assert_called_with(1, "status:queued")
+        mock_add_comment.assert_called_once()
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" not in loaded.active_worktrees
+
+    def test_gc_reclaim_zombie_only(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=0,
+            zombie_gc=True,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatch_gc.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_gc.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_gc.github.list_open_prs", return_value=[]),
+            # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=""
+            )
+
+            run_dispatch_cycle(config)
+
+        mock_remove_wt.assert_called_once_with(str(wt_path))
+        mock_remove_label.assert_called_with(1, "status:in-progress")
+        mock_add_label.assert_called_with(1, "status:queued")
+        mock_add_comment.assert_called_once()
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" not in loaded.active_worktrees
+
+    def test_gc_reclaim_zombie_disabled(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=0,
+            zombie_gc=False,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatch_gc.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_gc.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_gc.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=""
+            )
+
+            run_dispatch_cycle(config)
+
+        mock_remove_wt.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_add_comment.assert_not_called()
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" in loaded.active_worktrees
+
+    def test_gc_reclaim_timeout(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=600,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        import time
+
+        old_time = time.time() - 1000
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=old_time,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatch_gc.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_gc.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_gc.github.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=""
+            )
+
+            run_dispatch_cycle(config)
+
+        mock_remove_wt.assert_called_once_with(str(wt_path))
+        mock_remove_label.assert_called_with(1, "status:in-progress")
+        mock_add_label.assert_called_with(1, "status:queued")
+        mock_add_comment.assert_called_once()
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" not in loaded.active_worktrees
+
+    def test_gc_reclaim_backup_failure_skips_deletion(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            task_timeout_seconds=3600,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        wt_path = tmp_path / "worktrees/claude-issue-1-task-1"
+        wt_path.mkdir(parents=True, exist_ok=True)
+
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-1",
+                    worktree_path=str(wt_path),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch("orchestune.dispatch_gc.github.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_gc.github.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.dispatch_gc.github.list_open_prs", return_value=[]),
+            # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch_rebase.check_footprint_deviation",
+                return_value=[],
+            ),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc.github.add_label") as mock_add_label,
+            patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
+            patch("orchestune.dispatch_gc.github.add_comment") as mock_add_comment,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a] if label == "status:in-progress" else []
+            )
+            mock_run.side_effect = subprocess.CalledProcessError(
+                returncode=1,
+                cmd="git commit",
+                stderr="fatal: unable to write new index file",
+            )
+
+            run_dispatch_cycle(config)
+
+        mock_remove_wt.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_add_comment.assert_called_once()
+        assert (
+            "WIPバックアップコミットの作成に失敗しました"
+            in mock_add_comment.call_args[0][1]
+        )
+
+        loaded = load_run_state(config.run_state_path)
+        assert "1" in loaded.active_worktrees
