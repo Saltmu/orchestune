@@ -4,8 +4,12 @@ from unittest.mock import patch
 import pytest
 
 import orchestune.dispatch_locks
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle import CycleReport, _sync_external_locks
 from orchestune.dispatch_locks import check_footprint_deviation, scan_external_locks
+from orchestune.dispatch_report import write_github_step_summary
 from orchestune.dispatch_scoring import Task
+from orchestune.dispatch_state import RunState
 from orchestune.github import PrRecord
 
 
@@ -576,3 +580,175 @@ class TestCheckFootprintDeviation:
                 declared_footprint=(),
             )
         assert deviated is None
+
+
+class TestSyncExternalLocks:
+    @patch("orchestune.dispatch_cycle.github.list_remote_branches")
+    @patch("orchestune.dispatch_cycle.github.remove_label")
+    @patch("orchestune.dispatch_cycle.github.add_label")
+    def test_sync_external_locks_unlocks_without_requeue_for_done_tasks(
+        self, mock_add_label, mock_remove_label, mock_list_branches
+    ):
+        mock_list_branches.return_value = []
+
+        done_task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=("src/shared.py",),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:done", "status:external-lock"),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+        run_state = RunState(active_worktrees={})
+        config = DispatcherConfig(apply=True)
+
+        res = _sync_external_locks(
+            tasks_by_issue={1: done_task},
+            prs=[],
+            run_state=run_state,
+            config=config,
+        )
+
+        assert res.to_lock == []
+        assert [t.issue_number for t in res.to_unlock] == [1]
+
+        mock_remove_label.assert_called_once_with(1, "status:external-lock")
+        assert mock_add_label.call_count == 0
+
+    def test_write_github_step_summary(self, tmp_path):
+        summary_file = tmp_path / "step_summary.md"
+
+        task_selected = Task(
+            issue_number=10,
+            subtask_id="task-launch-10",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="high",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        task_lock = Task(
+            issue_number=20,
+            subtask_id="task-lock-20",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+        cycle_report = CycleReport(
+            selected=[task_selected],
+            quota_slots_available=1,
+            lock_changes={
+                "to_lock": [task_lock],
+                "to_unlock": [],
+            },
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+
+        integrator_report = {
+            "status": "partial_success",
+            "merged": ["task-merged-1"],
+            "failed": ["task-failed-2"],
+            "failed_reasons": {
+                "task-failed-2": "CI verification failed\nDetailed error message here"
+            },
+        }
+
+        write_github_step_summary(
+            cycle_report=cycle_report,
+            integrator_report=integrator_report,
+            summary_path=str(summary_file),
+        )
+
+        assert summary_file.exists()
+        content = summary_file.read_text(encoding="utf-8")
+        assert "## 🤖 Orchestune Dispatch Summary" in content
+        assert "### 🔍 仮マージ検証（Integrator）結果" in content
+        assert "全体ステータス: **partial_success**" in content
+        assert "| `task-merged-1` | ✅ 成功 |" in content
+        assert "| `task-failed-2` | ❌ 失敗 | CI verification failed |" in content
+        assert "### 🚀 新規起動タスク" in content
+        assert "| `task-launch-10` | #10 | high |" in content
+        assert "### 🔒 外部ロック（External Lock）変更" in content
+        assert (
+            "| `task-lock-20` | #20 | 🔒 ロック付与 (`status:external-lock`) |"
+            in content
+        )
+
+    def test_write_github_step_summary_includes_integration_pr_link(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_REPOSITORY", "Saltmu/manuscriptune")
+        summary_file = tmp_path / "step_summary.md"
+
+        integrator_report = {
+            "status": "success",
+            "merged": ["task-merged-1"],
+            "failed": [],
+            "integration_pr_number": 315,
+        }
+
+        write_github_step_summary(
+            cycle_report=None,
+            integrator_report=integrator_report,
+            summary_path=str(summary_file),
+        )
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "統合PR #315" in content
+        assert "https://github.com/Saltmu/manuscriptune/pull/315" in content
+
+    def test_write_github_step_summary_without_repository_env_omits_link(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+        summary_file = tmp_path / "step_summary.md"
+
+        integrator_report = {
+            "status": "success",
+            "merged": ["task-merged-1"],
+            "failed": [],
+            "integration_pr_number": 315,
+        }
+
+        write_github_step_summary(
+            cycle_report=None,
+            integrator_report=integrator_report,
+            summary_path=str(summary_file),
+        )
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "統合PR #315" in content
+        assert "https://github.com/" not in content
+
+    def test_write_github_step_summary_no_pr_number_omits_pr_line(self, tmp_path):
+        summary_file = tmp_path / "step_summary.md"
+
+        integrator_report = {
+            "status": "success",
+            "merged": ["task-merged-1"],
+            "failed": [],
+            "integration_pr_number": None,
+        }
+
+        write_github_step_summary(
+            cycle_report=None,
+            integrator_report=integrator_report,
+            summary_path=str(summary_file),
+        )
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "統合PR" not in content
