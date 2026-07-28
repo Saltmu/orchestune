@@ -160,7 +160,7 @@ def _subprocess_command_modules() -> set[str]:
             command = node.args[0]
             if (
                 is_subprocess_call
-                and isinstance(command, (ast.List, ast.Tuple))
+                and isinstance(command, ast.List | ast.Tuple)
                 and command.elts
                 and isinstance(command.elts[0], ast.Constant)
                 and command.elts[0].value in _COMMANDS
