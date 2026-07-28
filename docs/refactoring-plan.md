@@ -290,7 +290,16 @@ P1 と P5 の根本原因を断ちます。**これが計画全体の要**です
 
 ### フェーズ 3: git アダプタの新設（リスク: 中）
 
-P2 / P3 に対応します。フェーズ 1・2 と独立して着手可能です。
+P2 / P3 に対応します。案 B 採用に伴い、`github.py` を gh 専任にする
+**フェーズ 4 の前提**でもあります。
+
+> **訂正**: 当初「フェーズ 1・2 と独立して着手可能」と記載しましたが、
+> footprint レベルでは衝突します。`orchestune-dag` による検証で、
+> `dispatch_recovery.py` / `dispatch_targets.py` の重複により
+> フェーズ 1 との間に暗黙エッジ（similarity 0.30）が自動挿入されました。
+> `dispatch_gc.py` / `dispatch_rebase.py` はフェーズ 2 とも衝突します。
+> 独立して着手できるのは 3-1・3-2（`git_cli.py` 新設と `github.py` からの分離）
+> までで、3-3 以降の展開はフェーズ 2 の後になります。
 
 | # | 作業 |
 | --- | --- |
@@ -309,27 +318,68 @@ P2 / P3 に対応します。フェーズ 1・2 と独立して着手可能で�
 
 ---
 
-### フェーズ 4: `forge.py` の方針決定（リスク: 低）
+### フェーズ 4: `Forge` 抽象の全面採用（リスク: 高）— **案 B 採用決定**
 
-P4 に対応。**実装前にユーザー判断が必要**です。以下 2 案:
+P4 に対応。2 案を提示した結果、**案 B（`Forge` 抽象を全面採用し、`github.py`
+の関数群も `Forge` プロトコル配下に移す）が採用**されました。GitLab 等への
+対応余地を残せる一方、21 モジュール + テスト 102 箇所の
+`patch("orchestune.github...")` に波及し、影響は本計画中で最大です。
 
-- **案 A（推奨）**: `Forge` 抽象を破棄し、`forge.py` を
-  `bootstrap_labels.py` へ改名して bootstrap 専用ユーティリティと明示する。
-  他の 21 モジュールの利用実態（モジュール関数直呼び）に合わせる。
-  差分小。GitHub 以外のフォージ対応予定が無いなら妥当。
-- **案 B**: `Forge` 抽象を本気で採用し、`github.py` の関数群も
-  `Forge` プロトコル配下に移す。GitLab 等への対応余地を残せるが、
-  21 モジュール + テスト 102 箇所の `patch("orchestune.github...")` に波及し、
-  影響は本計画中で最大。
+#### 呼び出し実態の実測（`github.*` 参照 122 箇所 / 20 モジュール / 28 シンボル）
 
-現時点で GitLab 等の対応要件がドキュメント・Issue に見当たらないため、
-**案 A を推奨**します。
+| 分類 | 参照数 | 移行先 |
+| --- | --- | --- |
+| ラベル・コメント変更（`remove_label` 21 / `add_label` 19 / `add_comment` 16） | **56 (46%)** | `IssueForge` |
+| その他 forge 操作（issue/PR の照会・作成・マージ） | 38 | `IssueForge` / `PullRequestForge` |
+| **DTO（`IssueRecord` 9 / `PrRecord` 8）** | **17** | **`models.py`（Forge 配下ではない）** |
+| git 実行（`resolve_local_or_remote_branch` ほか 5 関数） | 9 | `git_cli.py`（フェーズ 3） |
+| private バリデータ（`_validate_ref_name` / `_validate_label`） | 2 | `validation.py` |
+
+#### 設計上の決定
+
+1. **DTO を Forge 配下に置かない**: `IssueRecord` / `PrRecord` は操作ではなく
+   ドメインモデルです。`models.py` へ移すことで Forge を操作専任にできます。
+   併せて、現状 `forge.py` が `github.py` から `_validate_label` を輸入している
+   依存方向の逆流も解消します。
+2. **プロトコルを 3 分割する**: 28 シンボルを単一インタフェースにすると
+   神インタフェースになるため、`IssueForge` / `PullRequestForge` /
+   `RepoAdminForge` に分けます。
+3. **git は Forge に含めない**: git はローカル VCS 操作であり、フォージ
+   （GitHub/GitLab）の関心事ではありません。フェーズ 3 の `git_cli.py` として
+   別アダプタのままにします。
+4. **移行は委譲シム方式で段階化する**: プロトコル定義の時点で `github.py` の
+   モジュール関数を既定 Forge インスタンスへの委譲シムに変え、21 モジュールの
+   呼び出しを**無変更のまま**動かします。呼び出し側の移行はモジュール群ごとに
+   分割し、最後にシムを撤去します。
+
+#### 注入経路の問題
+
+DI の注入経路が半分しか存在しません。
+
+| 状態 | モジュール |
+| --- | --- |
+| `config` が流れている（フィールド追加のみで済む） | `dispatch_cycle`(13) / `integrator`(12) / `dispatch_gc`(10) / `dispatch_rebase`(5) |
+| **流れていない（引数追加が必要）** | **`integrator_pr`(github 8 呼) / `parent_completion`(7) / `integration_coordinator`(5) / `integrator_tasks`(3)** |
+
+`DispatcherConfig` / `IntegratorConfig` に `forge` フィールドを追加し、
+config が流れていない 4 モジュールには明示的な `forge` 引数を追加します。
+
+**期待効果**: テストが `mock.patch` ではなく `fake_forge` の注入で書けるように
+なります。`patch("orchestune.github...")` 102 箇所の解消が最終目標です。
 
 ---
 
 ### フェーズ 5: テスト構造の再編（リスク: 低・工数大）
 
-P6 に対応。プロダクション側の構造が固まってから実施します。
+P6 に対応。
+
+> **訂正**: 当初「プロダクション側の構造が固まってから実施」と記載し、
+> 順序図でもフェーズ 2 の後に置いていましたが、**5-1 と 5-2 はフェーズ 2 より
+> 前に実施する必要があります**。`dispatcher.py:17` の
+> `from orchestune import github  # noqa: F401` を削除できるのは、
+> 270 箇所の `patch("orchestune.dispatcher.github...")` を実体モジュールへ
+> 向け直した後だからです（フェーズ 2-2 の本文でも前提条件として言及して
+> いましたが、順序図と矛盾していました）。5-3・5-4 は従来どおり後段です。
 
 | # | 作業 |
 | --- | --- |
@@ -356,16 +406,47 @@ P6 に対応。プロダクション側の構造が固まってから実施し�
 
 ---
 
-## 5. 実施順序とフェーズ間の依存
+## 5. 実施順序と Issue 分割
 
-```
-0 (安全網)
- └─> 1 (ドメインモデル抽出)
-      └─> 2 (ファサード解体) ──┐
-                                ├─> 5 (テスト再編) ─> 6 (パッケージ境界)
-3 (git アダプタ) ───────────────┘
-4 (forge 方針) ── 独立（ユーザー判断待ち）
-```
+フェーズは「作業のまとまり」を説明する単位であり、**Issue の単位ではありません**。
+Issue は orchestune の流儀に従い、**footprint が互いに素になる単位**で切ります。
+上記フェーズを組み替えた 17 subtask の分解結果を `decomposition_plan.md`
+（リポジトリルート・`.gitignore` 対象の作業ファイル）に置いており、
+`orchestune-dag` による検証を通過しています（Warnings なし）。
+
+### Wave 構成（17 Issue / 7 wave / 最大幅 4）
+
+| Wave | 並列可能な subtask |
+| --- | --- |
+| 1 | `arch-guard` / `test-fixtures` |
+| 2 | `domain-models` / `git-adapter` / `split-test-dispatcher` |
+| 3 | `rewire-dispatch-imports` / `rewire-integrator-imports` / `forge-records` |
+| 4 | `dismantle-facade` / `forge-protocol` |
+| 5 | `adapter-migrate-integrator` / `adapter-migrate-dispatch-core` / `adapter-migrate-dispatch-aux` / `adapter-migrate-entrypoints` |
+| 6 | `forge-cleanup` |
+| 7 | `split-large-tests` / `package-boundary` |
+
+### 分割にあたっての要点
+
+- **`github.py` への手術は 3 回に分かれ、直列化が必須**です:
+  `git-adapter`（git 関数の分離）→ `forge-records`（DTO・バリデータの分離）
+  → `forge-protocol`（Forge クラス化）。
+- **git 移行と forge 移行はモジュール群ごとに 1 Issue へ統合**します。
+  両者は同じ IO 呼び出し箇所を書き換えるため、分離すると同じファイルを
+  2 度触ることになり、直列化と手戻りが発生します。
+- **`shared_contract` タグを 3 つ設定**しています。いずれも
+  「まだ存在しないため、どの subtask の footprint にも literal では現れない
+  共有拡張点」（architecture.md の Shared-Contract Gate が対象とするケース）です。
+
+  | `shared_contract` | writer | pure consumer |
+  | --- | --- | --- |
+  | `domain-models` | `domain-models`, `forge-records` | `rewire-dispatch-imports`, `rewire-integrator-imports` |
+  | `io-adapters` | `git-adapter`, `forge-records`, `forge-protocol`, `forge-cleanup` | `adapter-migrate-*` 4 件 |
+  | `test-fixtures` | `test-fixtures` | `split-test-dispatcher`, `split-large-tests` |
+
+- **`tests/conftest.py` は追加のみ**とします。当初案（17 ファイルの重複ヘルパを
+  一括削除）はほぼ全テストファイルを footprint に含むため、他の全 Issue と
+  衝突します。各ファイルの掃除はそのファイルを触る Issue に委ねます。
 
 フェーズ 0・1・2 が本計画の中核で、これだけで P1・P5・P7 の大部分が解消します。
 **工数対効果が最大なのはフェーズ 3**（テスト肥大の主因への対処）です。
@@ -387,9 +468,17 @@ P6 に対応。プロダクション側の構造が固まってから実施し�
 
 ---
 
-## 7. 承認をお願いしたい点
+## 7. 決定事項
 
-1. **フェーズ全体の方針**と実施順序（特にフェーズ 0 の安全網を先に入れること）
-2. **フェーズ 4 の案 A / 案 B の選択**（GitHub 以外のフォージ対応予定の有無）
-3. **フェーズ分割の粒度** — 各フェーズを個別 Issue + PR とするか、
-   0〜2 をまとめて 1 Issue とするか
+| # | 論点 | 決定 |
+| --- | --- | --- |
+| 1 | フェーズ全体の方針と実施順序 | 承認済み。フェーズ 0 の安全網を最初に入れる |
+| 2 | フェーズ 4 の案 A / 案 B | **案 B（`Forge` 抽象の全面採用）を採用** |
+| 3 | Issue 分割の粒度 | footprint が互いに素になる単位（17 subtask / 7 wave）。§5 参照 |
+
+### 次のアクション
+
+`decomposition_plan.md` を入力として `orchestune-dispatch` スキルを実行し、
+親 Issue（big rock）+ 子 Issue 17 件を起票する。`--parent-issue <N>` により
+子ブランチは `parent/issue-N` から切られ、人間のレビューゲートは最終 PR の
+1 回のみとなる。
