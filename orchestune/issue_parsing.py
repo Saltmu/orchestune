@@ -7,8 +7,7 @@ import sys
 
 import yaml
 
-from orchestune.github import IssueRecord
-from orchestune.models import Task
+from orchestune.models import IssueRecord, Task
 
 BASE_PRIORITY = {"low": 1.0, "medium": 2.0, "high": 3.0}
 

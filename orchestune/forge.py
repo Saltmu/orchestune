@@ -6,7 +6,7 @@ import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from orchestune.github import _validate_label
+from orchestune.validation import validate_label
 
 
 class ForgeError(RuntimeError):
@@ -65,7 +65,7 @@ class GitHubForge(Forge):
 
     def ensure_labels(self, labels: tuple[LabelSpec, ...]) -> BootstrapResult:
         for label in labels:
-            _validate_label(label.name)
+            validate_label(label.name)
 
         existing_names = self._list_existing_label_names()
 
