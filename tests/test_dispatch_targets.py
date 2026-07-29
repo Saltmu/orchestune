@@ -36,6 +36,21 @@ class _IsCompleteOnlyTarget(DispatchTarget):
         return self.complete
 
 
+class _LegacySignatureTarget(DispatchTarget):
+    """#315レビュー対応: `forge`引数追加前の旧シグネチャを実装したままの
+    dispatch_targetでも、`completion_status`がTypeErrorにせず動作し続ける
+    ことを示す回帰テスト用ダブル。"""
+
+    def __init__(self, complete: bool):
+        self.complete = complete
+
+    def launch(self, task: Task, branch_name: str, worktree_path):
+        return DispatchHandle(branch_name=branch_name)
+
+    def is_complete(self, handle: DispatchHandle) -> bool:  # type: ignore[override]
+        return self.complete
+
+
 class TestDispatchTargetContract:
     def test_default_completion_status_delegates_to_concrete_is_complete(self):
         assert (
@@ -44,6 +59,18 @@ class TestDispatchTargetContract:
         )
         assert (
             _IsCompleteOnlyTarget(False).completion_status(DispatchHandle())
+            == "pending"
+        )
+
+    def test_completion_status_tolerates_legacy_is_complete_signature(self):
+        """#315: `is_complete(self, handle)`（forge引数なし）を実装した
+        既存のdispatch_targetでも、TypeErrorにならず正しく動作すること。"""
+        assert (
+            _LegacySignatureTarget(True).completion_status(DispatchHandle())
+            == "completed"
+        )
+        assert (
+            _LegacySignatureTarget(False).completion_status(DispatchHandle())
             == "pending"
         )
 

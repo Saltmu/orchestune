@@ -122,8 +122,16 @@ class DispatchTarget(ABC):
     def completion_status(
         self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
-        """Return a lifecycle status; local targets only expose pending/completed."""
-        return "completed" if self.is_complete(handle, forge=forge) else "pending"
+        """Return a lifecycle status; local targets only expose pending/completed.
+
+        #315レビュー対応: `is_complete`の旧シグネチャ（`forge`引数なし）を実装した
+        サブクラスが残っていても、TypeErrorにせず引数無しで再試行して互換性を保つ。
+        """
+        try:
+            complete = self.is_complete(handle, forge=forge)
+        except TypeError:
+            complete = self.is_complete(handle)
+        return "completed" if complete else "pending"
 
 
 def _parse_github_timestamp(value: str) -> float | None:
