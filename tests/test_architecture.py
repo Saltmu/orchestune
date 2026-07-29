@@ -25,6 +25,7 @@ EXPECTED_SUBPROCESS_COMMAND_MODULES = {
 }
 _SUBPROCESS_CALLS = frozenset({"run", "Popen", "check_call", "check_output"})
 _COMMANDS = frozenset({"git", "gh"})
+_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _LAYER_ROW = re.compile(r"^\s*\|\s*\*\*L(\d)\*\*")
 _COMMAND_ROW = re.compile(r"^\s*\|\s*`(git|gh)`\s*\|")
 _BACKTICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
@@ -37,11 +38,13 @@ def _module_name(path: Path) -> str:
 
 
 def _package_modules() -> dict[str, Path]:
-    return {
-        _module_name(path): path
-        for path in PACKAGE_ROOT.rglob("*.py")
-        if path.name != "__init__.py" or path.parent == PACKAGE_ROOT
-    }
+    """Every `.py` under `orchestune/`, subpackage initialisers included.
+
+    A nested `__init__.py` can carry imports and package wiring of its own, so
+    leaving it out would hide cycles and upward dependencies introduced there —
+    and would quietly weaken the "the layer table covers every file" promise.
+    """
+    return {_module_name(path): path for path in PACKAGE_ROOT.rglob("*.py")}
 
 
 def _relative_import_name(current_module: str, node: ast.ImportFrom) -> str | None:
@@ -161,37 +164,102 @@ def _leading_command(node: ast.expr | None) -> str | None:
     return None
 
 
-def _command_bindings(tree: ast.AST) -> dict[str, str]:
-    """`args = ["gh", ...]` のように、コマンドリストを束縛した名前を集める。
+def _assigned_names(node: ast.AST) -> tuple[list[ast.expr], ast.expr | None]:
+    if isinstance(node, ast.Assign):
+        return list(node.targets), node.value
+    if isinstance(node, ast.AnnAssign | ast.AugAssign):
+        return [node.target], node.value
+    return [], None
 
-    `subprocess.run(args)` のように変数経由で起動された場合も検出するため。
-    束縛を追うのは「同一モジュール内でリテラルのリスト/タプルを代入した名前」
-    までで、動的に組み立てたコマンドまでは追跡しない（`_subprocess_command_modules`
-    のdocstringを参照）。
+
+def _nodes_in_scope(scope: ast.AST) -> list[ast.AST]:
+    """`scope` 直下のノードを、ネストしたスコープの中身を除いて位置順に返す。
+
+    ネストしたスコープを定義するノード自体は返す（呼び出し側がそこで再帰する）。
     """
-    bindings: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets: list[ast.expr] = list(node.targets)
-        elif isinstance(node, ast.AnnAssign | ast.AugAssign):
-            targets = [node.target]
-        else:
+    collected: list[ast.AST] = []
+
+    def visit(node: ast.AST, *, is_root: bool) -> None:
+        if not is_root:
+            collected.append(node)
+            if isinstance(node, _SCOPE_NODES):
+                return
+        for child in ast.iter_child_nodes(node):
+            visit(child, is_root=False)
+
+    visit(scope, is_root=True)
+    return sorted(
+        collected, key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0))
+    )
+
+
+def _subprocess_first_argument(
+    node: ast.Call, subprocess_names: set[str], call_names: set[str]
+) -> ast.expr | None:
+    """`subprocess.run(...)` 系の呼び出しなら、そのargvにあたる式を返す。
+
+    argvは第1位置引数だけでなく `subprocess.run(args=[...])` のキーワードでも
+    渡せるため、両方を見る。
+    """
+    is_subprocess_call = (
+        isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in subprocess_names
+        and node.func.attr in _SUBPROCESS_CALLS
+    ) or (isinstance(node.func, ast.Name) and node.func.id in call_names)
+    if not is_subprocess_call:
+        return None
+    if node.args:
+        return node.args[0]
+    for keyword in node.keywords:
+        if keyword.arg == "args":
+            return keyword.value
+    return None
+
+
+def _scan_scope(
+    scope: ast.AST,
+    bindings: dict[str, str],
+    subprocess_names: set[str],
+    call_names: set[str],
+    found: set[str],
+) -> None:
+    """1つのスコープを位置順に走査し、実行されたコマンド名を `found` へ集める。
+
+    名前の束縛はスコープごとに持ち、そのスコープ内で**その呼び出しより前に**
+    現れた代入だけを参照する。モジュール全体で1つのマップを共有すると、
+    `args` のようなありふれた名前を別々の関数が別のコマンドに使い回した際に、
+    最後の代入が全呼び出しへ適用されて誤判定になるため。
+    """
+    for node in _nodes_in_scope(scope):
+        if isinstance(node, _SCOPE_NODES):
+            _scan_scope(node, dict(bindings), subprocess_names, call_names, found)
             continue
-        command = _leading_command(node.value)
-        if command is None:
+        if isinstance(node, ast.Call):
+            argument = _subprocess_first_argument(node, subprocess_names, call_names)
+            command = _leading_command(argument)
+            if command is None and isinstance(argument, ast.Name):
+                command = bindings.get(argument.id)
+            if command is not None:
+                found.add(command)
             continue
+        targets, value = _assigned_names(node)
+        command = _leading_command(value)
         for target in targets:
             if isinstance(target, ast.Name):
-                bindings[target.id] = command
-    return bindings
+                if command is None:
+                    bindings.pop(target.id, None)
+                else:
+                    bindings[target.id] = command
 
 
 def _subprocess_command_modules() -> dict[str, set[str]]:
     """{コマンド: そのコマンドをsubprocess実行しているモジュール名}を返す。
 
     検出できるのは、コマンドリストがリテラルとして書かれている呼び出し
-    （直接渡す場合と、リテラルを代入した変数を渡す場合）です。実行時に組み立てた
-    リストや、他モジュールから受け取ったコマンドまでは追跡しません。
+    （直接渡す場合と、同じスコープでリテラルを代入した変数を渡す場合）です。
+    実行時に組み立てたリストや、他モジュールから受け取ったコマンドまでは
+    追跡しません。
     """
     command_modules: dict[str, set[str]] = defaultdict(set)
     for module, path in _package_modules().items():
@@ -212,24 +280,10 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
                     if alias.name in _SUBPROCESS_CALLS
                 )
 
-        bindings = _command_bindings(tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not node.args:
-                continue
-            is_subprocess_call = (
-                isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in subprocess_names
-                and node.func.attr in _SUBPROCESS_CALLS
-            ) or (isinstance(node.func, ast.Name) and node.func.id in call_names)
-            if not is_subprocess_call:
-                continue
-            argument = node.args[0]
-            command = _leading_command(argument)
-            if command is None and isinstance(argument, ast.Name):
-                command = bindings.get(argument.id)
-            if command is not None:
-                command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
+        found: set[str] = set()
+        _scan_scope(tree, {}, subprocess_names, call_names, found)
+        for command in found:
+            command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
     return dict(command_modules)
 
 

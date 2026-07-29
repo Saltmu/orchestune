@@ -14,7 +14,9 @@ invariants in `docs/en/architecture.md` (and `docs/ja/architecture.md`):
 
 Entrypoint modules are deliberately absent from `__all__`: re-exporting them
 here would make the package root itself an importer of L4 and break the
-"nothing imports an entrypoint" invariant that this file exists to declare.
+"nothing but `cli` imports an entrypoint" invariant that this file exists to
+declare. `cli` is the one permitted importer because it dispatches to the other
+four; `tests/test_architecture.py` encodes that as `ALLOWED_L4_DEPENDENTS`.
 """
 
 from orchestune.forge import (
