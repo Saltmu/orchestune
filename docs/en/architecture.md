@@ -216,10 +216,22 @@ table above cannot silently drift from the code:
    the CI script and to `poetry`. Those are one-off process launches rather
    than a client that callers need to fake, so they stay where they are used.
 
-   The guard reads the command out of the source, so it sees a literal list —
-   passed inline or through a variable bound to one. A command assembled at
-   runtime would escape it; write `git`/`gh` argv as a literal so the check can
-   do its job.
+   **Scope of the check.** The guard reads the command out of the source, so it
+   sees a literal list — passed inline, or through a variable that some
+   assignment in scope binds to one. It models Python's scoping rules well
+   enough to be trusted on ordinary code: it follows branches and loops, keeps
+   class bodies out of their methods, honours `global`/`nonlocal`, and reads the
+   `args=` keyword as well as the first positional argument. It does not
+   evaluate anything. A command assembled at runtime, read from configuration,
+   or handed in by another module escapes it entirely.
+
+   That boundary is deliberate. This invariant exists to catch the accident —
+   someone reaching for `subprocess` in an L2 module instead of `run_git` — not
+   to prevent a determined bypass. Anyone who wants to run `git` outside
+   `git_cli` can do so, and no static check in a test file will stop them; the
+   thing standing in their way is code review. So write `git`/`gh` argv as a
+   literal, and treat a failure here as "this belongs in L1", not as a puzzle
+   to route around.
 
 3. **No import cycles**, and no internal import hidden inside a function body
    (which would evade the cycle check). `cli` is exempt from the second rule
