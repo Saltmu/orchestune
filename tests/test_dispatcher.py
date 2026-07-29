@@ -58,11 +58,11 @@ def _stub_label_actor_permission_by_default():
     tests/test_dispatch_actor_verification.py に集約する。"""
     with (
         patch(
-            "orchestune.github.get_label_actor",
+            "orchestune.forge.GitHubForge.get_label_actor",
             return_value="trusted-actor",
         ),
         patch(
-            "orchestune.github.get_actor_permission",
+            "orchestune.forge.GitHubForge.get_actor_permission",
             return_value="write",
         ),
     ):
@@ -183,7 +183,7 @@ class TestRecoveredActiveTask:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
-                "orchestune.dispatch_recovery.subprocess.run",
+                "orchestune.git_cli.subprocess.run",
                 return_value=MagicMock(stdout=""),
             ),
             patch(
@@ -592,7 +592,7 @@ class TestPreventDuplicateSessions:
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch(
-                "orchestune.dispatch_launch.subprocess.run",
+                "orchestune.git_cli.subprocess.run",
                 side_effect=ls_remote_result,
             ) as mock_subprocess_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
@@ -612,6 +612,7 @@ class TestPreventDuplicateSessions:
                 "origin",
                 "refs/heads/claude/issue-1-human-authored",
             ],
+            cwd=None,
             capture_output=True,
             text=True,
             check=True,

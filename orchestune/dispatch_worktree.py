@@ -22,7 +22,7 @@ except ImportError:
 from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import BranchReachabilityError, DispatchTarget
-from orchestune.git_cli import resolve_local_or_remote_branch
+from orchestune.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.validation import validate_ref_name
 
 
@@ -47,16 +47,16 @@ class LaunchResult:
 
 def _branch_exists(branch_name: str) -> bool:
     """指定されたブランチがローカルまたはリモート追跡ブランチとして存在するか確認する。"""
-    res_local = subprocess.run(
-        ["git", "show-ref", "--verify", f"refs/heads/{branch_name}"],
-        capture_output=True,
+    res_local = run_git(
+        ["show-ref", "--verify", f"refs/heads/{branch_name}"], cwd=None, check=False
     )
     if res_local.returncode == 0:
         return True
 
-    res_remote = subprocess.run(
-        ["git", "show-ref", "--verify", f"refs/remotes/origin/{branch_name}"],
-        capture_output=True,
+    res_remote = run_git(
+        ["show-ref", "--verify", f"refs/remotes/origin/{branch_name}"],
+        cwd=None,
+        check=False,
     )
     if res_remote.returncode == 0:
         return True
@@ -135,9 +135,10 @@ def create_worktree_and_launch(
                         external_url=None,
                     )
                 try:
-                    subprocess.run(
-                        ["git", "worktree", "remove", "--force", str(worktree_path)],
-                        capture_output=True,
+                    run_git(
+                        ["worktree", "remove", "--force", str(worktree_path)],
+                        cwd=None,
+                        check=False,
                     )
                     if worktree_path.exists():
                         shutil.rmtree(worktree_path)
@@ -145,15 +146,15 @@ def create_worktree_and_launch(
                     pass
 
             # 2. 無効なworktreeの整理
-            subprocess.run(["git", "worktree", "prune"], capture_output=True, text=True)
+            run_git(["worktree", "prune"], cwd=None, check=False)
 
             worktree_root.mkdir(parents=True, exist_ok=True)
 
             # 3. ブランチがすでに存在する場合はそのまま利用し、存在しない場合は新規作成する
             if _branch_exists(branch_name):
-                cmd = ["git", "worktree", "add", str(worktree_path), branch_name]
+                cmd = ["worktree", "add", str(worktree_path), branch_name]
             else:
-                cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path)]
+                cmd = ["worktree", "add", "-b", branch_name, str(worktree_path)]
                 if base_branch:
                     base_branch = resolve_local_or_remote_branch(
                         ".",
@@ -161,12 +162,7 @@ def create_worktree_and_launch(
                         prefer_remote=base_branch.startswith("parent/"),
                     )
                     cmd.append(base_branch)
-            subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            run_git(cmd, cwd=None, check=True)
             # #262レビュー対応: worktreeのprune/backup/add完了後、実際の
             # dispatch_target.launch()呼び出し直前に取得する。ここより前に
             # 取得すると、prune/backup/add中に作成された無関係なPRまで
@@ -188,13 +184,14 @@ def create_worktree_and_launch(
             if worktree_created:
                 # launch失敗時の補償処理: 作成したworktreeをGit管理および物理ディスクから回収
                 try:
-                    subprocess.run(
-                        ["git", "worktree", "remove", "--force", str(worktree_path)],
-                        capture_output=True,
+                    run_git(
+                        ["worktree", "remove", "--force", str(worktree_path)],
+                        cwd=None,
+                        check=False,
                     )
                     if worktree_path.exists():
                         shutil.rmtree(worktree_path)
-                    subprocess.run(["git", "worktree", "prune"], capture_output=True)
+                    run_git(["worktree", "prune"], cwd=None, check=False)
                 except Exception:
                     pass
             error_details = ""

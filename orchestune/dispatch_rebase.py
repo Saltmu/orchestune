@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestune import dispatch_gc, github
+from orchestune import dispatch_gc
 from orchestune.dag_graph import recompute_dag_for_footprint_change
 from orchestune.dag_models import FootprintConflict, SubTask
 from orchestune.dispatch_config import DispatcherConfig
@@ -18,7 +18,8 @@ from orchestune.dispatch_locks import check_footprint_deviation
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.github import resolve_local_or_remote_branch
+from orchestune.forge import Forge, GitHubForge
+from orchestune.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.process_utils import is_process_alive
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ def notify_recompute(
     parent_issue_number: int | None,
     apply: bool,
     issue_number_by_subtask_id: dict[str, int],
+    forge: Forge | None = None,
 ) -> list[str]:
     detail = (
         "footprint逸脱によるDAG再計算が発生しました。\n\n"
@@ -52,16 +54,17 @@ def notify_recompute(
         )
 
     if apply:
+        forge = forge or GitHubForge()
         if subtask_issue is not None:
-            github.add_comment(subtask_issue, detail)
+            forge.add_comment(subtask_issue, detail)
         if other_issue is not None:
-            github.add_comment(other_issue, detail)
+            forge.add_comment(other_issue, detail)
         if parent_issue_number is not None:
-            github.add_comment(parent_issue_number, bodies[-1])
+            forge.add_comment(parent_issue_number, bodies[-1])
         if blocked_issue is not None:
-            github.remove_label(blocked_issue, "status:queued")
-            github.add_label(blocked_issue, "status:blocked")
-            github.add_label(blocked_issue, "status:blocked-recompute")
+            forge.remove_label(blocked_issue, "status:queued")
+            forge.add_label(blocked_issue, "status:blocked")
+            forge.add_label(blocked_issue, "status:blocked-recompute")
 
     return bodies
 
@@ -72,6 +75,7 @@ def notify_force_serial(
     parent_issue_number: int | None,
     retry_count: int,
     apply: bool,
+    forge: Forge | None = None,
 ) -> str:
     """#200: DAG再計算のリトライ上限超過を親Issueへ通知し、強制直列化を告知する。"""
     body = (
@@ -84,7 +88,8 @@ def notify_force_serial(
         "完了するまで一時停止します。\n"
     )
     if apply and parent_issue_number is not None:
-        github.add_comment(parent_issue_number, body)
+        forge = forge or GitHubForge()
+        forge.add_comment(parent_issue_number, body)
     return body
 
 
@@ -177,11 +182,12 @@ def _apply_footprint_deviation_outcome(
             config.parent_issue_number,
             decision.recompute_count,
             apply=config.apply,
+            forge=config.resolved_forge,
         )
         event["recompute_count"] = decision.recompute_count
         if config.apply:
             active.forced_serial = True
-            github.add_label(active.issue_number, "status:force-serial")
+            config.resolved_forge.add_label(active.issue_number, "status:force-serial")
         return event
 
     # decision.action == "recomputed"
@@ -192,6 +198,7 @@ def _apply_footprint_deviation_outcome(
             parent_issue_number=config.parent_issue_number,
             apply=config.apply,
             issue_number_by_subtask_id=issue_number_by_subtask_id,
+            forge=config.resolved_forge,
         )
 
     event["conflicts"] = [dataclasses.asdict(c) for c in decision.conflicts]
@@ -284,18 +291,10 @@ def _decide_rebase_needed(
         return False
 
     try:
-        res = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(worktree_path),
-                "merge-base",
-                "--is-ancestor",
-                resolved_parent,
-                child_branch,
-            ],
-            capture_output=True,
-            text=True,
+        res = run_git(
+            ["merge-base", "--is-ancestor", resolved_parent, child_branch],
+            cwd=worktree_path,
+            check=False,
         )
         if res.returncode == 0:
             return False
@@ -337,9 +336,11 @@ def _apply_auto_rebase(
         active.worktree_path, "WIP: backup by Orchestune auto-rebase"
     )
     if backup_error is not None:
-        github.remove_label(active.issue_number, "status:in-progress")
-        github.add_label(active.issue_number, "status:manual-merge-required")
-        github.add_comment(
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(
+            active.issue_number, "status:manual-merge-required"
+        )
+        config.resolved_forge.add_comment(
             active.issue_number,
             "自動リベース前のWIPバックアップコミットの作成に失敗しました。\n"
             f"未コミットの作業データが worktree（{active.worktree_path}）に残っている"
@@ -356,12 +357,7 @@ def _apply_auto_rebase(
     )
 
     try:
-        subprocess.run(
-            ["git", "-C", active.worktree_path, "rebase", resolved_parent],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        run_git(["rebase", resolved_parent], cwd=active.worktree_path, check=True)
 
         env = _get_ci_env(Path(config.worktree_root).resolve().parent)
         ci_res = subprocess.run(
@@ -390,16 +386,12 @@ def _apply_auto_rebase(
         active.base_branch = parent_branch
     except (subprocess.CalledProcessError, OSError) as e:
         try:
-            subprocess.run(
-                ["git", "-C", active.worktree_path, "rebase", "--abort"],
-                capture_output=True,
-                text=True,
-            )
+            run_git(["rebase", "--abort"], cwd=active.worktree_path, check=False)
         except Exception:
             pass
 
-        github.remove_label(active.issue_number, "status:in-progress")
-        github.add_label(
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(
             active.issue_number,
             "status:manual-merge-required",
         )
@@ -409,7 +401,7 @@ def _apply_auto_rebase(
         if cmd_args and "local-ci.sh" in cmd_args[0]:
             msg = "自動リベース後のローカルCI実行に失敗しました。手動で修正を行ってください。\n"
 
-        github.add_comment(
+        config.resolved_forge.add_comment(
             active.issue_number,
             f"{msg}対象の依存元ブランチ: {parent_branch}",
         )

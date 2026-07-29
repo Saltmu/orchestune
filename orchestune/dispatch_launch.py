@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orchestune import github
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
-from orchestune.github import IssueRecord, PrRecord
+from orchestune.git_cli import run_git
+from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatch_config import DispatcherConfig
@@ -131,11 +130,8 @@ def _decide_duplicate_candidates(
                 ls_remote_failed = False
                 try:
                     ref_name = f"refs/heads/{existing_pr.head_ref}"
-                    res = subprocess.run(
-                        ["git", "ls-remote", "origin", ref_name],
-                        capture_output=True,
-                        text=True,
-                        check=True,
+                    res = run_git(
+                        ["ls-remote", "origin", ref_name], cwd=None, check=True
                     )
                     output = res.stdout.strip()
                     if output:
@@ -201,11 +197,13 @@ def _decide_yaml_error_tasks(candidate_tasks: list[Task]) -> list[Task]:
     return [task for task in candidate_tasks if task.yaml_error]
 
 
-def _apply_yaml_error_blocking(yaml_error_tasks: list[Task]) -> None:
+def _apply_yaml_error_blocking(
+    yaml_error_tasks: list[Task], config: DispatcherConfig
+) -> None:
     for task in yaml_error_tasks:
-        github.remove_label(task.issue_number, "status:queued")
-        github.add_label(task.issue_number, "status:blocked")
-        github.add_comment(
+        config.resolved_forge.remove_label(task.issue_number, "status:queued")
+        config.resolved_forge.add_label(task.issue_number, "status:blocked")
+        config.resolved_forge.add_comment(
             task.issue_number,
             "YAMLのパースに失敗したため、タスクをブロックしました。フォーマットを確認してください。",
         )
@@ -273,20 +271,22 @@ def _apply_task_launches(
         )
         if not launch.launched:
             if "status:queued" in task.status_labels:
-                github.remove_label(task.issue_number, "status:queued")
+                config.resolved_forge.remove_label(task.issue_number, "status:queued")
             if "status:blocked" in task.status_labels:
-                github.remove_label(task.issue_number, "status:blocked")
+                config.resolved_forge.remove_label(task.issue_number, "status:blocked")
 
             if launch.validation_error:
-                github.add_label(task.issue_number, "status:blocked-human-review")
-                github.add_comment(
+                config.resolved_forge.add_label(
+                    task.issue_number, "status:blocked-human-review"
+                )
+                config.resolved_forge.add_comment(
                     task.issue_number,
                     f"ブランチ名またはsubtask_idが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
                     f"エラー内容:\n```\n{launch.error_message}\n```",
                 )
             else:
-                github.add_label(task.issue_number, "status:blocked")
-                github.add_comment(
+                config.resolved_forge.add_label(task.issue_number, "status:blocked")
+                config.resolved_forge.add_comment(
                     task.issue_number,
                     f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
                     f"エラー内容:\n```\n{launch.error_message}\n```",
@@ -325,10 +325,10 @@ def _apply_task_launches(
         )
 
         if "status:queued" in task.status_labels:
-            github.remove_label(task.issue_number, "status:queued")
+            config.resolved_forge.remove_label(task.issue_number, "status:queued")
         if "status:blocked" in task.status_labels:
-            github.remove_label(task.issue_number, "status:blocked")
-        github.add_label(task.issue_number, "status:in-progress")
+            config.resolved_forge.remove_label(task.issue_number, "status:blocked")
+        config.resolved_forge.add_label(task.issue_number, "status:in-progress")
         actually_selected.append(task)
 
     save_run_state(
@@ -352,7 +352,7 @@ def _launch_selected_tasks(
 ) -> list[Task]:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     yaml_error_tasks = _decide_yaml_error_tasks(candidate_tasks)
-    _apply_yaml_error_blocking(yaml_error_tasks)
+    _apply_yaml_error_blocking(yaml_error_tasks, config)
 
     plans = _decide_task_launch_plan(selected, task_to_base_branch, config)
     return _apply_task_launches(plans, run_state, now, config, open_prs=open_prs)

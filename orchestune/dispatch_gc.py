@@ -563,12 +563,18 @@ def _cloud_worktree_completion_status(
     assert config.dispatch_target is not None
     handle = _active_dispatch_handle(active)
     try:
-        status = config.dispatch_target.completion_status(handle)
+        status = config.dispatch_target.completion_status(
+            handle, forge=config.resolved_forge
+        )
     except Exception:
         return "unknown"
     if isinstance(status, str):
         return status
-    return "completed" if config.dispatch_target.is_complete(handle) else "pending"
+    return (
+        "completed"
+        if config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
+        else "pending"
+    )
 
 
 def _finalize_abandoned_cloud_worktree(
@@ -603,10 +609,12 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
     if active.external_id is not None:
         assert config.dispatch_target is not None
         handle = _active_dispatch_handle(active)
-        status = config.dispatch_target.completion_status(handle)
+        status = config.dispatch_target.completion_status(
+            handle, forge=config.resolved_forge
+        )
         if isinstance(status, str):
             return status == "completed"
-        return config.dispatch_target.is_complete(handle)
+        return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
     # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
     # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
     if active.started_at is None:

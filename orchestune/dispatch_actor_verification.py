@@ -6,9 +6,9 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orchestune import github
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_scoring import Task
+from orchestune.forge import Forge, GitHubForge
 
 if TYPE_CHECKING:
     from orchestune.dispatch_config import DispatcherConfig
@@ -26,18 +26,20 @@ class ActorVerificationDecision:
 
 def _decide_actor_verification(
     candidate_tasks: list[Task],
+    forge: Forge | None = None,
 ) -> list[ActorVerificationDecision]:
     """`status:queued`を付与したactorのリポジトリ権限を判定する（読み取りのみ）。
 
     #208: actorを特定できない・権限判定でエラーが発生したタスクは、サイクル全体を
     停止させず、安全側（未認可）として扱い次のタスクの判定を継続する。
     """
+    forge = forge or GitHubForge()
     decisions = []
     for task in candidate_tasks:
         actor = ""
         try:
-            actor = github.get_label_actor(task.issue_number, "status:queued")
-            permission = github.get_actor_permission(actor)
+            actor = forge.get_label_actor(task.issue_number, "status:queued")
+            permission = forge.get_actor_permission(actor)
         except Exception as exc:
             print(
                 f"Warning: actor検証に失敗しました (issue #{task.issue_number}, "

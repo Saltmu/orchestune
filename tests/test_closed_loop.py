@@ -183,6 +183,14 @@ class DummyGitHub:
     ) -> list[PrRecord]:
         return list(self.prs.values())
 
+    def list_prs(
+        self, state: str = "open", limit: int = 1000, paginate_files: bool = False
+    ) -> list[PrRecord]:
+        # #293: このダミー実装はclosed/mergedを追跡しないため、状態を問わず
+        # 常に既知のPR（open相当）を返す。テストシナリオ上はopenなPRしか
+        # 登場しないため、`state="all"`呼び出しでも十分。
+        return list(self.prs.values())
+
     def list_remote_branches(self) -> list[str]:
         # Use subprocess to list remote tracking branches in the test local repo
         res = subprocess.run(
@@ -229,7 +237,7 @@ class DummyAgentDispatchTarget(DispatchTarget):
         self.active_handles[handle.external_id] = handle
         return handle
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
+    def is_complete(self, handle: DispatchHandle, forge=None) -> bool:
         return handle.external_id in self.completed_ids
 
     def mark_complete(self, external_id: str):
@@ -375,6 +383,7 @@ def test_closed_loop_flow():
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
+        patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
             "orchestune.dispatch_cycle.list_remote_branches",
             dummy_github.list_remote_branches,
@@ -383,9 +392,12 @@ def test_closed_loop_flow():
             "orchestune.dispatch_cycle.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
-        patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),
         patch(
-            "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
+            "orchestune.forge.GitHubForge.get_label_actor", dummy_github.get_label_actor
+        ),
+        patch(
+            "orchestune.forge.GitHubForge.get_actor_permission",
+            dummy_github.get_actor_permission,
         ),
     ]
 
@@ -618,6 +630,7 @@ def test_closed_loop_dag_recomputation_serialization():
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
+        patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
             "orchestune.dispatch_cycle.list_remote_branches",
             dummy_github.list_remote_branches,
@@ -626,9 +639,12 @@ def test_closed_loop_dag_recomputation_serialization():
             "orchestune.dispatch_cycle.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
-        patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),
         patch(
-            "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
+            "orchestune.forge.GitHubForge.get_label_actor", dummy_github.get_label_actor
+        ),
+        patch(
+            "orchestune.forge.GitHubForge.get_actor_permission",
+            dummy_github.get_actor_permission,
         ),
     ]
 
