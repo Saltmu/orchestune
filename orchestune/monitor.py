@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from orchestune import github
 from orchestune.dispatch_state import load_run_state
+from orchestune.forge import Forge, GitHubForge
 from orchestune.process_utils import is_process_alive
 
 _CLEAR_SCREEN = "\x1b[2J\x1b[H"
@@ -94,6 +94,7 @@ def _fetch_labels_cached(
     cache: dict[int, tuple[float, tuple[str, ...]]],
     now: float,
     ttl: float = _LABEL_CACHE_TTL_SECONDS,
+    forge: Forge | None = None,
 ) -> tuple[str, ...] | None:
     """GitHub APIレート制限を避けるためTTLキャッシュ経由でラベルを取得する。
 
@@ -105,8 +106,9 @@ def _fetch_labels_cached(
     if cached is not None and now - cached[0] < ttl:
         return cached[1]
 
+    forge = forge or GitHubForge()
     try:
-        labels = github.get_issue_labels(issue_number)
+        labels = forge.get_issue_labels(issue_number)
     except Exception:
         return cached[1] if cached is not None else None
 
@@ -190,6 +192,7 @@ def build_status_snapshot(
     now: float,
     tail_lines: int = 3,
     label_cache: dict[int, tuple[float, tuple[str, ...]]] | None = None,
+    forge: Forge | None = None,
 ) -> StatusSnapshot:
     log_dir = Path(log_dir)
     run_state = load_run_state(run_state_path)
@@ -207,7 +210,9 @@ def build_status_snapshot(
         slug = active.branch.replace("/", "-")
         log_tail = _read_log_tail(log_dir / f"{slug}.log", tail_lines)
 
-        labels = _fetch_labels_cached(active.issue_number, label_cache, now)
+        labels = _fetch_labels_cached(
+            active.issue_number, label_cache, now, forge=forge
+        )
         state = _derive_monitor_state(labels, alive, active.external_id)
 
         worktrees.append(
