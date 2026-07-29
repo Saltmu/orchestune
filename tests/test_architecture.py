@@ -28,9 +28,6 @@ KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
         "forge",
         "git_cli",
         "github",
-        "integrator",
-        "integrator_git_ops",
-        "integrator_worktree",
     }
 )
 _SUBPROCESS_CALLS = frozenset({"run", "Popen", "check_call", "check_output"})

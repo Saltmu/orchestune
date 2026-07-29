@@ -7,8 +7,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestune import github
 from orchestune.dispatch_worktree import file_lock
+from orchestune.forge import Forge, GitHubForge
+from orchestune.git_cli import run_git
 from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
@@ -31,6 +32,7 @@ class IntegratorConfig:
     # 実行され、結果は統合PRへのコメントとして残るのみで、自動マージ等は一切行わない。
     enable_semantic_review: bool = True
     coordinator: IntegrationCoordinator | None = None
+    forge: Forge | None = None
 
     def __post_init__(self) -> None:
         if self.parent_issue_number is not None:
@@ -38,6 +40,8 @@ class IntegratorConfig:
             self.temp_branch = (
                 f"integration/temp-parent-issue-{self.parent_issue_number}"
             )
+        if self.forge is None:
+            self.forge = GitHubForge()
 
 
 @dataclass
@@ -64,6 +68,14 @@ class IntegrationContext:
     # 全体結果ステータス
     status: str = "success"
     error: str | None = None
+
+    @property
+    def forge(self) -> Forge:
+        """`IntegratorConfig.__post_init__`が常に既定値を設定するため、
+        `config.forge`自体は`Forge | None`型だがここでは非Noneであることが
+        保証される。呼び出し側での重複した`is not None`チェックを避ける。"""
+        assert self.config.forge is not None
+        return self.config.forge
 
 
 class IntegrationComponent(ABC):
@@ -94,16 +106,14 @@ class IntegrationPipeline(IntegrationComponent):
         finally:
             if ctx.temp_worktree_path:
                 try:
-                    subprocess.run(
+                    run_git(
                         [
-                            "git",
                             "worktree",
                             "remove",
                             "--force",
                             str(ctx.temp_worktree_path),
                         ],
-                        cwd=str(ctx.original_root),
-                        capture_output=True,
+                        cwd=ctx.original_root,
                         check=True,
                     )
                 except Exception:
@@ -145,6 +155,9 @@ class MultiIssueIntegrator(IntegrationComponent):
 
         for integrator in self.integrators:
             sub_ctx = copy.deepcopy(ctx)
+            # #313レビュー対応: 注入されたForge（可変な内部状態やlock/clientを
+            # 保持しうる）をdeepcopyで複製・破壊しないよう、元の参照を維持する。
+            sub_ctx.config.forge = ctx.config.forge
             parent_issue = getattr(integrator, "parent_issue", None)
             key = (
                 f"issue_{parent_issue}"
@@ -205,7 +218,7 @@ class SingleIssueIntegrator(IntegrationComponent):
 class PrepareTasksStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> dict:
         sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
-            ctx.config.parent_issue_number
+            ctx.config.parent_issue_number, forge=ctx.config.forge
         )
         self._warn_and_flag_unparsable_done_tasks(ctx)
 
@@ -230,7 +243,7 @@ class PrepareTasksStep(IntegrationComponent):
             )
             if ctx.config.apply:
                 try:
-                    github.add_comment(
+                    ctx.forge.add_comment(
                         task.issue_number,
                         "Integratorは、このIssueのFootprint YAMLブロックから"
                         "`subtask_id`を抽出できなかったため、統合対象から除外しました。\n"
@@ -266,7 +279,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                 remaining_tasks.append(task)
                 continue
             try:
-                github.close_issue(
+                ctx.forge.close_issue(
                     task.issue_number,
                     "completed",
                     comment=(
@@ -295,26 +308,20 @@ class SetupWorktreeStep(IntegrationComponent):
             return {"status": "success"}
 
         try:
-            subprocess.run(
-                ["git", "worktree", "prune"],
-                cwd=str(ctx.original_root),
-                capture_output=True,
-            )
+            run_git(["worktree", "prune"], cwd=ctx.original_root, check=False)
 
             worktree_manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
             worktree_manager.reclaim(worktree_manager.temp_path())
 
-            subprocess.run(
+            run_git(
                 [
-                    "git",
                     "worktree",
                     "add",
                     str(worktree_manager.temp_path()),
                     ctx.base_branch,
                 ],
-                cwd=str(ctx.original_root),
+                cwd=ctx.original_root,
                 check=True,
-                capture_output=True,
             )
             ctx.repository_root = worktree_manager.temp_path()
             ctx.config.repository_root = worktree_manager.temp_path()
@@ -333,6 +340,7 @@ class MergeAndTestStep(IntegrationComponent):
             repository_root=ctx.repository_root,
             original_root=ctx.original_root,
             ci_command=ctx.config.ci_command or ["./scripts/local-ci.sh"],
+            forge=ctx.config.forge,
         )
 
         try:
@@ -386,21 +394,19 @@ class PushTempBranchStep(IntegrationComponent):
             return {"status": ctx.status}
 
         try:
-            subprocess.run(
+            run_git(
                 [
-                    "git",
                     "push",
                     "--force",
                     "origin",
                     ctx.temp_branch,
                 ],
-                cwd=str(ctx.repository_root),
+                cwd=ctx.repository_root,
                 check=True,
-                capture_output=True,
             )
             return {"status": "success"}
         except subprocess.CalledProcessError as pe:
-            push_error = (pe.stderr or b"").decode(errors="replace")
+            push_error = pe.stderr or ""
             print(
                 f"Failed to push temp branch: {push_error}",
                 file=sys.stderr,
@@ -424,7 +430,10 @@ class EnsureIntegrationPrStep(IntegrationComponent):
 
         try:
             pr_number = ensure_integration_pr(
-                ctx.temp_branch, ctx.base_branch, ctx.merged_tasks
+                ctx.temp_branch,
+                ctx.base_branch,
+                ctx.merged_tasks,
+                forge=ctx.config.forge,
             )
             ctx.integration_pr_number = pr_number
             return {"status": "success", "integration_pr_number": pr_number}
@@ -497,7 +506,7 @@ def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
         if task is None or "integration:included" in task.status_labels:
             continue
         try:
-            github.add_label(task.issue_number, "integration:included")
+            ctx.forge.add_label(task.issue_number, "integration:included")
             newly_included.append(subtask_id)
         except Exception as e:
             print(
@@ -527,7 +536,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return {"status": ctx.status}
 
         try:
-            github.merge_pull_request(ctx.integration_pr_number)
+            ctx.forge.merge_pull_request(ctx.integration_pr_number)
         except Exception as e:
             print(
                 "Warning: Failed to auto-merge integration PR "
@@ -567,7 +576,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             if task is None:
                 continue
             try:
-                github.add_comment(
+                ctx.forge.add_comment(
                     task.issue_number,
                     (
                         "Integratorによる統合PR "
@@ -594,7 +603,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             if task is None:
                 continue
             try:
-                github.close_issue(
+                ctx.forge.close_issue(
                     task.issue_number,
                     "completed",
                     comment=(
