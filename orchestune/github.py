@@ -17,12 +17,10 @@ from orchestune.git_cli import (
     resolve_local_or_remote_branch,  # noqa: F401
 )
 from orchestune.models import IssueRecord, PrRecord
-from orchestune.validation import (
-    validate_issue_number as _validate_issue_number,
-    validate_label as _validate_label,
-    validate_ref_name as _validate_ref_name,
-    validate_username as _validate_username,
-)
+from orchestune.validation import validate_issue_number as _validate_issue_number
+from orchestune.validation import validate_label as _validate_label
+from orchestune.validation import validate_ref_name as _validate_ref_name
+from orchestune.validation import validate_username as _validate_username
 
 
 def _run(args: list[str], input_text: str | None = None) -> str:
