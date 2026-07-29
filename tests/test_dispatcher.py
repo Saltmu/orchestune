@@ -177,11 +177,11 @@ class TestRecoveredActiveTask:
         issue = _issue(1, labels=("status:in-progress",), subtask_id="task-a")
 
         with (
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_open_prs", return_value=[]),
-            patch("orchestune.github.list_remote_branches", return_value=[]),
-            patch("orchestune.github.add_label") as mock_add_label,
-            patch("orchestune.github.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
                 "orchestune.dispatch_recovery.subprocess.run",
                 return_value=MagicMock(stdout=""),
@@ -229,12 +229,12 @@ class TestRecoveredActiveTask:
         )
 
         with (
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_open_prs", return_value=[pr]),
-            patch("orchestune.dispatch_gc.github.list_prs", return_value=[pr]),
-            patch("orchestune.github.list_remote_branches", return_value=[]),
-            patch("orchestune.github.add_label") as mock_add_label,
-            patch("orchestune.github.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[pr]),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[pr]),
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -274,14 +274,16 @@ class TestDispatcherLocking:
             with pytest.raises(RuntimeError) as exc_info:
                 with (
                     patch(
-                        "orchestune.github.list_issues_by_label",
+                        "orchestune.forge.GitHubForge.list_issues_by_label",
                         return_value=[],
                     ),
                     patch(
-                        "orchestune.github.list_remote_branches",
+                        "orchestune.dispatch_cycle.list_remote_branches",
                         return_value=[],
                     ),
-                    patch("orchestune.github.list_open_prs", return_value=[]),
+                    patch(
+                        "orchestune.forge.GitHubForge.list_open_prs", return_value=[]
+                    ),
                 ):
                     run_dispatch_cycle(config)
             assert "Another instance is already running" in str(exc_info.value)
@@ -312,12 +314,12 @@ class TestLaunchOrderingCrashSafety:
 
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_remote_branches", return_value=[]),
-            patch("orchestune.github.list_open_prs", return_value=[]),
-            patch("orchestune.github.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch(
-                "orchestune.github.remove_label",
+                "orchestune.forge.GitHubForge.remove_label",
                 side_effect=remove_label_side_effect,
             ),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
@@ -383,11 +385,11 @@ class TestStaleActiveEntryReconciliation:
         queued_issue = _issue(1, labels=("status:queued",), subtask_id="task-1")
 
         with (
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_remote_branches", return_value=[]),
-            patch("orchestune.github.list_open_prs", return_value=[]),
-            patch("orchestune.github.add_label") as mock_add_label,
-            patch("orchestune.github.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -409,12 +411,12 @@ class TestStaleActiveEntryReconciliation:
 
 
 class TestPreventDuplicateSessions:
-    @patch("orchestune.github.list_issues_by_label")
-    @patch("orchestune.github.list_remote_branches", return_value=[])
-    @patch("orchestune.github.list_open_prs")
-    @patch("orchestune.github.remove_label")
-    @patch("orchestune.github.add_label")
-    @patch("orchestune.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
+    @patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[])
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
@@ -468,12 +470,12 @@ class TestPreventDuplicateSessions:
         mock_add_comment.assert_called_once()
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
-    @patch("orchestune.github.list_issues_by_label")
-    @patch("orchestune.github.list_remote_branches", return_value=[])
-    @patch("orchestune.github.list_open_prs")
-    @patch("orchestune.github.remove_label")
-    @patch("orchestune.github.add_label")
-    @patch("orchestune.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
+    @patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[])
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
     def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
@@ -571,10 +573,10 @@ class TestPreventDuplicateSessions:
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
         with (
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch(
-                "orchestune.github.list_open_prs",
+                "orchestune.forge.GitHubForge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=101,
@@ -586,9 +588,9 @@ class TestPreventDuplicateSessions:
                     )
                 ],
             ),
-            patch("orchestune.github.add_label") as mock_add_label,
-            patch("orchestune.github.remove_label") as mock_remove_label,
-            patch("orchestune.github.add_comment") as mock_add_comment,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch(
                 "orchestune.dispatch_launch.subprocess.run",
                 side_effect=ls_remote_result,
@@ -647,10 +649,10 @@ class TestPreventDuplicateSessions:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch(
-                "orchestune.github.list_open_prs",
+                "orchestune.forge.GitHubForge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=101,
@@ -662,9 +664,9 @@ class TestPreventDuplicateSessions:
                     )
                 ],
             ),
-            patch("orchestune.github.add_label") as mock_add_label,
-            patch("orchestune.github.remove_label") as mock_remove_label,
-            patch("orchestune.github.add_comment") as mock_add_comment,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch(
                 "orchestune.dispatch_worktree.subprocess.run",
                 side_effect=subprocess.CalledProcessError(
@@ -1500,9 +1502,9 @@ class TestDispatcherConfigLoading:
 
         # 2回起動済み（max_launches_per_window=2）のため新規起動がブロックされる
         with (
-            patch("orchestune.github.list_issues_by_label") as mock_list,
-            patch("orchestune.github.list_remote_branches", return_value=[]),
-            patch("orchestune.github.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [_issue(10, subtask_id="t10")] if label == "status:queued" else []
