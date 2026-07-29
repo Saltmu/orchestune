@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune import github
-from orchestune.dispatch_scoring import _FOOTPRINT_BLOCK_PATTERN
 from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 
 if TYPE_CHECKING:
-    from orchestune.dispatcher import DispatcherConfig
+    from orchestune.dispatch_config import DispatcherConfig
 
 
 def _extract_raw_subtask_id(issue: github.IssueRecord) -> str | None:
@@ -24,7 +24,7 @@ def _extract_raw_subtask_id(issue: github.IssueRecord) -> str | None:
     合成IDへフォールバックするが、依存解決用マップでは未検出issueを含めない）ため、
     フォールバックを持たない共通の抽出処理として切り出している。
     """
-    match = _FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if not match:
         return None
     try:
@@ -41,7 +41,7 @@ def _parse_subtask_info_from_issue(
     issue: github.IssueRecord,
 ) -> tuple[str, tuple[str, ...]]:
     """Issueの本文から subtask_id と declared_footprint を抽出する。"""
-    match = _FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     subtask_id = _extract_raw_subtask_id(issue)
     declared_footprint: tuple[str, ...] = ()
     if match:
