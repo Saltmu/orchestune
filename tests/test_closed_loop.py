@@ -9,9 +9,8 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_state import RunState, save_run_state
 from orchestune.dispatch_targets import DispatchHandle, DispatchTarget
-from orchestune.github import IssueRecord, PrRecord
 from orchestune.integrator import Integrator, IntegratorConfig
-from orchestune.models import Task
+from orchestune.models import IssueRecord, PrRecord, Task
 
 
 class DummyGitRepo:

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from orchestune.github import IssueRecord
 from orchestune.integrator_tasks import get_sorted_done_tasks
+from orchestune.models import IssueRecord
 
 
 def _done_issue(number: int, subtask_id: str) -> IssueRecord:

@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
+TESTS_ROOT = Path(__file__).parent
 PACKAGE_NAME = "orchestune"
 L4_MODULES = frozenset({"cli", "dispatcher", "dag", "monitor", "bootstrap"})
 ALLOWED_L4_DEPENDENTS = {
@@ -15,13 +16,10 @@ ALLOWED_L4_DEPENDENTS = {
     "dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
 }
-KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
-    {
-        "forge",
-        "git_cli",
-        "github",
-    }
-)
+EXPECTED_SUBPROCESS_COMMAND_MODULES = {
+    "gh": {"forge"},
+    "git": {"git_cli"},
+}
 _SUBPROCESS_CALLS = frozenset({"run", "Popen", "check_call", "check_output"})
 _COMMANDS = frozenset({"git", "gh"})
 
@@ -147,8 +145,8 @@ def _l4_dependents(graph: dict[str, set[str]]) -> dict[str, set[str]]:
     return dict(dependents)
 
 
-def _subprocess_command_modules() -> set[str]:
-    command_modules: set[str] = set()
+def _subprocess_command_modules() -> dict[str, set[str]]:
+    command_modules: dict[str, set[str]] = defaultdict(set)
     for module, path in _package_modules().items():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         subprocess_names = {"subprocess"}
@@ -184,8 +182,32 @@ def _subprocess_command_modules() -> set[str]:
                 and isinstance(command.elts[0], ast.Constant)
                 and command.elts[0].value in _COMMANDS
             ):
-                command_modules.add(module.removeprefix(f"{PACKAGE_NAME}."))
-    return command_modules
+                command_modules[str(command.elts[0].value)].add(
+                    module.removeprefix(f"{PACKAGE_NAME}.")
+                )
+    return dict(command_modules)
+
+
+def _stale_github_patch_targets() -> list[str]:
+    stale_targets: list[str] = []
+    for path in TESTS_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            is_patch_call = (
+                isinstance(node.func, ast.Name) and node.func.id == "patch"
+            ) or (isinstance(node.func, ast.Attribute) and node.func.attr == "patch")
+            if not is_patch_call:
+                continue
+            target = node.args[0]
+            if (
+                isinstance(target, ast.Constant)
+                and isinstance(target.value, str)
+                and target.value.startswith("orchestune.github")
+            ):
+                stale_targets.append(f"{path.name}:{node.lineno}:{target.value}")
+    return stale_targets
 
 
 def test_package_import_graph_does_not_gain_cycles() -> None:
@@ -241,5 +263,13 @@ def test_internal_imports_are_not_hidden_inside_functions() -> None:
     assert hidden_imports == []
 
 
-def test_git_and_gh_subprocess_modules_do_not_expand() -> None:
-    assert _subprocess_command_modules() <= KNOWN_SUBPROCESS_COMMAND_MODULES
+def test_git_and_gh_subprocess_modules_are_strictly_partitioned() -> None:
+    assert _subprocess_command_modules() == EXPECTED_SUBPROCESS_COMMAND_MODULES
+
+
+def test_github_compatibility_module_is_removed() -> None:
+    assert not (PACKAGE_ROOT / "github.py").exists()
+
+
+def test_tests_do_not_patch_removed_github_module() -> None:
+    assert _stale_github_patch_targets() == []

@@ -20,8 +20,8 @@ from orchestune.forge import (
     PullRequestForge,
     RepoAdminForge,
 )
-from orchestune.github import _validate_label
 from orchestune.models import IssueRecord
+from orchestune.validation import validate_label as _validate_label
 
 
 class TestGitHubForgeCheckAuth:

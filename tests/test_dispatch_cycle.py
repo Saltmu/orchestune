@@ -34,7 +34,7 @@ from orchestune.dispatch_state import (
     load_run_state,
     save_run_state,
 )
-from orchestune.github import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord
 from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -619,7 +619,7 @@ class TestFinalizeLaunch:
     def test_forwards_window_seconds_and_open_prs_to_launch_selected_tasks(
         self, tmp_path
     ):
-        from orchestune.github import PrRecord
+        from orchestune.models import PrRecord
 
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",

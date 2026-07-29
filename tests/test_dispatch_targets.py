@@ -21,8 +21,7 @@ from orchestune.dispatch_targets import (
     detect_installed_local_cli,
     resolve_default_dispatch_target_name,
 )
-from orchestune.github import PrRecord
-from orchestune.models import Task
+from orchestune.models import PrRecord, Task
 
 
 class _IsCompleteOnlyTarget(DispatchTarget):

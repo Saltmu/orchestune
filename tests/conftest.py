@@ -10,7 +10,7 @@ import pytest
 
 from orchestune.dispatch_scoring import Task
 from orchestune.forge import BootstrapResult, Forge
-from orchestune.github import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord
 
 
 def make_task(issue_number: int = 1, **overrides: Any) -> Task:
