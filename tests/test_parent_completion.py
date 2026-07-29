@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import ANY, MagicMock, patch
 
-from orchestune.github import IssueRecord
+from orchestune.models import IssueRecord
 from orchestune.parent_completion import process_parent_completion
 
 

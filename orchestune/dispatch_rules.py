@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.github import PrRecord
+from orchestune.models import PrRecord
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 

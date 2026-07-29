@@ -11,8 +11,8 @@ import pytest
 
 from orchestune.dispatch_targets import DispatchHandle
 from orchestune.dispatch_worktree import file_lock
-from orchestune.github import IssueRecord, PrRecord
 from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.models import IssueRecord, PrRecord
 
 
 @pytest.fixture(autouse=True)

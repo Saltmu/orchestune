@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from orchestune.github import PrRecord
 from orchestune.integrator_pr import (
     ensure_integration_pr,
     ensure_parent_final_pr,
     handle_merge_failure,
 )
-from orchestune.models import Task
+from orchestune.models import PrRecord, Task
 
 
 def _task(issue_number=1, subtask_id="task-1"):
