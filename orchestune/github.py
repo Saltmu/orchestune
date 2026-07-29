@@ -16,7 +16,6 @@ from orchestune.git_cli import (
     list_remote_branches,  # noqa: F401
     resolve_local_or_remote_branch,  # noqa: F401
 )
-
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.validation import (
     validate_issue_number as _validate_issue_number,
