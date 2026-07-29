@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from orchestune import github
-from orchestune.dispatcher import Task
+from orchestune.models import Task
 from orchestune.integrator_pr import handle_merge_failure
 
 
