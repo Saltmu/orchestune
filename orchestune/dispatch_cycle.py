@@ -611,7 +611,9 @@ def _determine_candidate_tasks(
     # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、
     # 権限不足のタスクを起動候補から除外する（status:blockedからのスタッキング
     # 起動であるstack_eligible_tasksは対象外）。
-    actor_decisions = _decide_actor_verification(queued_candidates)
+    actor_decisions = _decide_actor_verification(
+        queued_candidates, forge=ctx.config.resolved_forge
+    )
     queued_candidates = _apply_actor_verification(actor_decisions, ctx.config)
 
     stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(

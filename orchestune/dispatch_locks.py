@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune.dispatch_scoring import Task
-from orchestune.github import PrRecord, resolve_local_or_remote_branch
+from orchestune.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.models import PrRecord
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -134,17 +135,9 @@ def check_footprint_deviation(
     )
 
     try:
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(worktree_path),
-                "diff",
-                "--numstat",
-                f"{resolved_base}...HEAD",
-            ],
-            capture_output=True,
-            text=True,
+        result = run_git(
+            ["diff", "--numstat", f"{resolved_base}...HEAD"],
+            cwd=worktree_path,
             check=True,
         )
     except (subprocess.CalledProcessError, OSError):

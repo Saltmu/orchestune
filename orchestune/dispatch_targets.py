@@ -24,11 +24,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from orchestune import github
+from orchestune.forge import Forge, GitHubForge
+from orchestune.git_cli import run_git
 from orchestune.process_utils import is_process_alive
 
 if TYPE_CHECKING:
-    from orchestune.models import Task
+    from orchestune.models import PrRecord, Task
 
 ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
 ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
@@ -115,14 +116,22 @@ class DispatchTarget(ABC):
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。"""
 
     @abstractmethod
-    def is_complete(self, handle: DispatchHandle) -> bool:
+    def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         """`launch`で起動した実行が完了しているかどうかを判定する。"""
 
     def completion_status(
-        self, handle: DispatchHandle
+        self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
-        """Return a lifecycle status; local targets only expose pending/completed."""
-        return "completed" if self.is_complete(handle) else "pending"
+        """Return a lifecycle status; local targets only expose pending/completed.
+
+        #315レビュー対応: `is_complete`の旧シグネチャ（`forge`引数なし）を実装した
+        サブクラスが残っていても、TypeErrorにせず引数無しで再試行して互換性を保つ。
+        """
+        try:
+            complete = self.is_complete(handle, forge=forge)
+        except TypeError:
+            complete = self.is_complete(handle)
+        return "completed" if complete else "pending"
 
 
 def _parse_github_timestamp(value: str) -> float | None:
@@ -134,7 +143,7 @@ def _parse_github_timestamp(value: str) -> float | None:
         return None
 
 
-def _is_stale_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool:
+def _is_stale_pr_for_handle(pr: PrRecord, handle: DispatchHandle) -> bool:
     """#246: session開始（`handle.started_at`）より前に作成されたPRは、状態
     （OPEN/MERGED/CLOSED）に関係なく現在のsessionの成果物ではない。同名branchの
     古いMERGED PR等で再キュー後の新sessionが即completed扱いされないよう除外する。
@@ -159,11 +168,13 @@ def _is_stale_pr_for_handle(pr: github.PrRecord, handle: DispatchHandle) -> bool
 
 def _task_pr_completion_status(
     handle: DispatchHandle,
+    forge: Forge | None = None,
 ) -> Literal["pending", "completed", "abandoned"]:
     """Classify matching cloud-task PRs without treating rejected PRs as done."""
     if handle.branch_name is None and handle.issue_number is None:
         return "pending"
-    prs = github.list_prs(state="all")
+    forge = forge or GitHubForge()
+    prs = forge.list_prs(state="all")
     matching_prs = [
         pr
         for pr in prs
@@ -204,25 +215,17 @@ def _push_branch_and_verify(branch_name: str, worktree_path: Path) -> None:
     確認できない場合は`BranchReachabilityError`を送出する
     （呼び出し側はfireせずfail closed）。
     """
-    subprocess.run(
-        ["git", "push", "--set-upstream", "origin", branch_name],
-        cwd=str(worktree_path),
-        capture_output=True,
-        text=True,
+    run_git(
+        ["push", "--set-upstream", "origin", branch_name],
+        cwd=worktree_path,
         check=True,
     )
-    local_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=str(worktree_path),
-        capture_output=True,
-        text=True,
-        check=True,
+    local_sha = run_git(
+        ["rev-parse", "HEAD"], cwd=worktree_path, check=True
     ).stdout.strip()
-    ls_remote_output = subprocess.run(
-        ["git", "ls-remote", "origin", f"refs/heads/{branch_name}"],
-        cwd=str(worktree_path),
-        capture_output=True,
-        text=True,
+    ls_remote_output = run_git(
+        ["ls-remote", "origin", f"refs/heads/{branch_name}"],
+        cwd=worktree_path,
         check=True,
     ).stdout.strip()
     remote_sha = ls_remote_output.split()[0] if ls_remote_output else ""
@@ -280,7 +283,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
             )
         return DispatchHandle(pid=process.pid, branch_name=branch_name)
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
+    def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return not _is_pid_alive(handle.pid)
 
 
@@ -391,16 +394,16 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         raise last_error
 
     def completion_status(
-        self, handle: DispatchHandle
+        self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
         """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
-        return _task_pr_completion_status(handle)
+        return _task_pr_completion_status(handle, forge=forge)
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
+    def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
         ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
         （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
-        return self.completion_status(handle) == "completed"
+        return self.completion_status(handle, forge=forge) == "completed"
 
 
 class CodexCloudDispatchTarget(DispatchTarget):
@@ -429,11 +432,9 @@ class CodexCloudDispatchTarget(DispatchTarget):
     def launch(
         self, task: Task, branch_name: str, worktree_path: Path
     ) -> DispatchHandle:
-        subprocess.run(
-            ["git", "push", "--set-upstream", "origin", branch_name],
-            cwd=str(worktree_path),
-            capture_output=True,
-            text=True,
+        run_git(
+            ["push", "--set-upstream", "origin", branch_name],
+            cwd=worktree_path,
             check=True,
         )
         self._log_dir.mkdir(parents=True, exist_ok=True)
@@ -463,12 +464,12 @@ class CodexCloudDispatchTarget(DispatchTarget):
         )
 
     def completion_status(
-        self, handle: DispatchHandle
+        self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
-        return _task_pr_completion_status(handle)
+        return _task_pr_completion_status(handle, forge=forge)
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
-        return self.completion_status(handle) == "completed"
+    def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
+        return self.completion_status(handle, forge=forge) == "completed"
 
 
 def build_dispatch_target(

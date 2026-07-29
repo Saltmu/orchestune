@@ -48,11 +48,11 @@ def _stub_label_actor_permission_by_default():
     tests/test_dispatch_actor_verification.py に集約する。"""
     with (
         patch(
-            "orchestune.dispatch_actor_verification.github.get_label_actor",
+            "orchestune.forge.GitHubForge.get_label_actor",
             return_value="trusted-actor",
         ),
         patch(
-            "orchestune.dispatch_actor_verification.github.get_actor_permission",
+            "orchestune.forge.GitHubForge.get_actor_permission",
             return_value="write",
         ),
     ):
@@ -184,11 +184,11 @@ class TestDetermineCandidateTasksExcludesDualStatus:
 
         with (
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
         ):
@@ -911,12 +911,12 @@ class TestProcessActiveWorktrees:
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_rebase.subprocess.run",
+                "orchestune.git_cli.subprocess.run",
                 side_effect=mock_subprocess_run,
             ),
-            patch("orchestune.dispatch_rebase.github.remove_label") as mock_remove,
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_add,
-            patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             (
                 completion_events,
@@ -1099,11 +1099,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch_cycle._sync_external_locks"),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
             patch("orchestune.dispatch_cycle.save_run_state"),
@@ -1173,11 +1173,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
             patch("orchestune.dispatch_cycle.save_run_state"),
@@ -1276,11 +1276,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.forge.GitHubForge.add_comment"),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
             patch("orchestune.dispatch_cycle.save_run_state"),
@@ -1414,11 +1414,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.forge.GitHubForge.add_comment"),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
             patch("orchestune.dispatch_cycle.save_run_state"),
@@ -2981,11 +2981,11 @@ class TestRunDispatchCycleActorVerification:
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="mallory",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="read",
             ),
             patch("orchestune.dispatch_worktree.subprocess.run"),
@@ -3021,11 +3021,11 @@ class TestRunDispatchCycleActorVerification:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
-                "orchestune.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="mallory",
             ),
             patch(
-                "orchestune.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="none",
             ),
         ):
