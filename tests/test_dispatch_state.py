@@ -209,7 +209,7 @@ class TestRunState:
 
     def test_prune_run_state_preserves_open_pr_latest_completed_worktree(self):
         from orchestune.dispatch_state import prune_run_state
-        from orchestune.github import PrRecord
+        from orchestune.models import PrRecord
 
         now = 5000000.0  # min_completed_time = 2408000
         state = RunState(
@@ -269,7 +269,7 @@ class TestRunState:
         self,
     ):
         from orchestune.dispatch_state import prune_run_state
-        from orchestune.github import PrRecord
+        from orchestune.models import PrRecord
 
         now = 5000000.0  # min_completed_time = 2408000
         # 古い保護レコード (30日以上前の open PR 用)

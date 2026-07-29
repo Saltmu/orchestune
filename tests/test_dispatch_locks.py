@@ -10,7 +10,7 @@ from orchestune.dispatch_locks import check_footprint_deviation, scan_external_l
 from orchestune.dispatch_report import write_github_step_summary
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import RunState
-from orchestune.github import PrRecord
+from orchestune.models import PrRecord
 
 
 @pytest.fixture(autouse=True)

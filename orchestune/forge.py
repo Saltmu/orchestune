@@ -625,7 +625,7 @@ class GitHubForge:
             )
 
         # `gh auth status`の非0終了は「未認証」という想定内の結果であり、
-        # github.pyの`_run`(check=True)のような例外的失敗とは扱いを分ける。
+        # `_run`(check=True)を使う通常のgh操作とは失敗の扱いを分ける。
         result = subprocess.run(
             ["gh", "auth", "status"], capture_output=True, text=True
         )
