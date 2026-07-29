@@ -188,16 +188,24 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 | 層 | モジュール |
 | --- | --- |
-| **L4** エントリポイント — argparse配線と `main()` のみ | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor` |
+| **L4** エントリポイント — `main()` を持つモジュール | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor` |
 | **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `parent_completion` |
 | **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_gc`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
-| **L1** アダプタ — 外部CLIを実行する唯一のモジュール群 | `forge`, `git_cli` |
+| **L1** アダプタ — `git` / `gh` を実行する唯一のモジュール群 | `forge`, `git_cli` |
 | **L0** インフラ — 純粋なDTOと依存を持たないヘルパ | `dag_models`, `dispatch_result`, `json_state`, `models`, `process_utils`, `setup_skills`, `validation`, `version` |
 
 純粋なデータ転送モジュール（`models`, `dag_models`, `dispatch_result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
 `PrRecord` を返すためです。DTOを、それを生成するアダプタより上位に置くと、
 この依存が上向きになってしまいます。
+
+L4の定義は「`main()` を持ち、どこからもimportされない」ことであって、
+「argparse配線しか含まない」ことではありません。5つのうち3つには、この境界を
+定める前から存在するコードが残っています: `dag` は `dag_*` パッケージ全体を
+再エクスポートする互換ファサード、`dispatcher` はオーケストレーションの
+ヘルパ、`monitor` は自前のステータススナップショット構築を抱えています。
+これは既知の残滓であり、新たに増やしてよいという意味ではありません。新規の
+コードは、その振る舞いを所有する層に置いてください。
 
 ### 5.2 CIで機械的に検証される不変条件
 
@@ -206,13 +214,20 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 1. **依存は下向きのみ**。厳密に上位の層に属するモジュールをimportしてはならない。
    特にL4のエントリポイントをimportしてよいのは、それらを合成する `cli` だけ。
-2. **外部CLIの実行はL1に閉じ込める**。`subprocess` 呼び出しは以下のとおり
-   厳密に分割されており、他のモジュールが新たに持つことは許されない。
+2. **`git` / `gh` の実行はL1に閉じ込める**。いずれかのコマンドを指定する
+   `subprocess` 呼び出しは以下のとおり厳密に分割されており、他のモジュールが
+   新たに持つことは許されない。
 
    | コマンド | 実行を許可されるモジュール |
    | --- | --- |
    | `gh` | `forge` |
    | `git` | `git_cli` |
+
+   対象はVCS・GitHubクライアントの表面のみです。それ以外の外部プロセス起動は
+   意図的に対象外であり、ガードもしていません: `dispatch_targets` はエージェント
+   のCLIを起動し、`dispatch_rebase` と `integrator_git_ops` はCIスクリプトや
+   `poetry` を実行します。これらは呼び出し側がフェイクを用意すべきクライアント
+   ではなく単発のプロセス起動であるため、使用箇所に置いたままにしています。
 
 3. **循環インポートはゼロ**。また、循環検知をすり抜ける関数内import（内部
    モジュールに対するもの）も禁止。`cli` のみ、起動時間短縮のために
