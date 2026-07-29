@@ -22,7 +22,7 @@ except ImportError:
 from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import BranchReachabilityError, DispatchTarget
-from orchestune.github import _validate_ref_name
+from orchestune.validation import validate_ref_name
 
 
 @dataclass
@@ -79,7 +79,7 @@ def create_worktree_and_launch(
     dispatch_started_at: float | None = None
 
     try:
-        _validate_ref_name(branch_name)
+        validate_ref_name(branch_name)
         worktree_root = Path(worktree_root)
         slug = branch_name.replace("/", "-")
         worktree_path = worktree_root / slug
