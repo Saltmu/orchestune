@@ -10,6 +10,7 @@ from unittest.mock import ANY, Mock, patch
 import pytest
 
 from orchestune.dispatch_targets import DispatchHandle
+from orchestune.dispatch_worktree import file_lock
 from orchestune.github import IssueRecord, PrRecord
 from orchestune.integrator import Integrator, IntegratorConfig
 
@@ -1986,8 +1987,6 @@ class TestIntegratorWorktreeSafety:
         # 同じ統合ブランチに対する実行が既にロックを保持している間は、
         # 後続の実行はworktreeを奪い取ったり削除したりせず、ロック済みとして
         # 直ちに直列化（自身は何もせず終了）されるべき。
-        from orchestune.dispatcher import file_lock
-
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = IntegratorConfig(

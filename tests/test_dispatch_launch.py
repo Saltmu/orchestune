@@ -1,6 +1,7 @@
 import tempfile
 from pathlib import Path
 
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import CycleContext
 from orchestune.dispatch_launch import (
     _decide_duplicate_candidates,
@@ -10,7 +11,6 @@ from orchestune.dispatch_launch import (
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import CompletedWorktree, RunState
-from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))

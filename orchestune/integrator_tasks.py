@@ -3,7 +3,8 @@ from __future__ import annotations
 import sys
 
 from orchestune import github
-from orchestune.dag import SubTask, build_dag
+from orchestune.dag_graph import build_dag
+from orchestune.dag_models import SubTask
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.models import Task
 

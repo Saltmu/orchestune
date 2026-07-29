@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import ANY, MagicMock, call, patch
 
 from orchestune.dag import FootprintConflict
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_rebase import (
     _decide_footprint_deviation_outcome,
@@ -20,7 +21,6 @@ from orchestune.dispatch_state import (
     load_run_state,
     save_run_state,
 )
-from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import PrRecord
 from tests.conftest import make_issue
 

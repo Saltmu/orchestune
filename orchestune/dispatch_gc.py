@@ -13,11 +13,18 @@ from pathlib import Path
 from orchestune import github
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch_rules import (
+    ActiveWorktreeRuleOutcome,
+    CycleContext,
+    NotNeededReviewDispatcher,
+)
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
-from orchestune.dispatch_targets import DispatchHandle
-from orchestune.process_utils import is_process_alive  # noqa: F401 (再エクスポート)
+from orchestune.dispatch_targets import (
+    ClaudeCodeCloudRoutineDispatchTarget,
+    DispatchHandle,
+)
+from orchestune.process_utils import is_process_alive
 
 
 def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:
@@ -310,6 +317,7 @@ def _finalize_not_needed_worktree(
     active: ActiveWorktree,
     active_task: Task | None,
     config: DispatcherConfig,
+    dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
 ) -> dict:
     """#280/#282: `status:not-needed`ラベル検知による完了後処理。
 
@@ -325,12 +333,6 @@ def _finalize_not_needed_worktree(
     （ローカル/テスト環境）では検証レビューを起動できないため、従来通り
     即座にクローズする。
     """
-    from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
-    from orchestune.integration_coordinator import (
-        IntegrationCoordinator,
-        record_pending_not_needed_review,
-    )
-
     event: dict = {
         "issue_number": active.issue_number,
         "worktree_path": active.worktree_path,
@@ -349,16 +351,9 @@ def _finalize_not_needed_worktree(
         github.remove_label(active.issue_number, "status:in-progress")
 
         if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
-            coordinator = IntegrationCoordinator(config.dispatch_target)
-            handle = coordinator.dispatch_not_needed_review(
-                active.issue_number, subtask_id
-            )
-            record_pending_not_needed_review(
-                config.not_needed_review_state_path,
-                issue_number=active.issue_number,
-                subtask_id=subtask_id,
-                session_handle=handle,
-            )
+            if dispatch_not_needed_review is None:
+                raise RuntimeError("not-needed review dispatcher is not configured")
+            dispatch_not_needed_review(active.issue_number, subtask_id, config)
             event["action"] = "not_needed_review_dispatched"
         else:
             github.close_issue(
@@ -671,7 +666,12 @@ def _rule_not_needed(
     if active_task is None or "status:not-needed" not in active_task.status_labels:
         return None
 
-    completion_event = _finalize_not_needed_worktree(active, active_task, ctx.config)
+    completion_event = _finalize_not_needed_worktree(
+        active,
+        active_task,
+        ctx.config,
+        ctx.not_needed_review_dispatcher,
+    )
     completed_subtask_id = None
     # #282: 即時クローズ・検証レビューへの委譲のどちらの経路でも、対応不要の
     # 根拠自体は「mainに既に実装されている」ことなので、Issueクローズの可否とは

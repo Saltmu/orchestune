@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_gc import (
     ZombieOrTimeoutReclaim,
@@ -33,9 +34,7 @@ from orchestune.dispatch_state import (
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
-    DispatchHandle,
 )
-from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import PrRecord
 from tests.conftest import make_issue
 
@@ -1024,9 +1023,7 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         config = self._cloud_config(
             not_needed_review_state_path=tmp_path / "state.json"
         )
-        handle = DispatchHandle(
-            external_id="sess-1", external_url="https://claude.ai/code/s/sess-1"
-        )
+        dispatch_review = MagicMock()
         with (
             patch(
                 "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
@@ -1035,28 +1032,20 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
             patch("orchestune.dispatch_gc.github.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.github.close_issue") as mock_close_issue,
-            patch(
-                "orchestune.integration_coordinator.ClaudeCodeCloudRoutineDispatchTarget.fire_text",
-                return_value=handle,
-            ) as mock_fire_text,
         ):
-            event = _finalize_not_needed_worktree(active, task, config)
+            event = _finalize_not_needed_worktree(
+                active,
+                task,
+                config,
+                dispatch_not_needed_review=dispatch_review,
+            )
 
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         mock_remove_label.assert_called_once_with(280, "status:in-progress")
         mock_close_issue.assert_not_called()
-        mock_fire_text.assert_called_once()
-        assert "#280" in mock_fire_text.call_args.args[0]
+        dispatch_review.assert_called_once_with(280, "task-a", config)
         assert event["action"] == "not_needed_review_dispatched"
         assert event["subtask_id"] == "task-a"
-
-        from orchestune.not_needed_review_state import load_not_needed_review_state
-
-        state = load_not_needed_review_state(config.not_needed_review_state_path)
-        assert len(state.pending) == 1
-        assert state.pending[0].issue_number == 280
-        assert state.pending[0].subtask_id == "task-a"
-        assert state.pending[0].session_external_id == "sess-1"
 
     def test_dirty_worktree_does_not_dispatch_review(self, tmp_path):
         active = _active()

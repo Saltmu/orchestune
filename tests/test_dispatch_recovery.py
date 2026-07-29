@@ -2,6 +2,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_recovery import (
     _apply_restore_missing_active_worktrees,
     _decide_missing_active_worktrees,
@@ -9,7 +10,6 @@ from orchestune.dispatch_recovery import (
     _parse_subtask_info_from_issue,
 )
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
