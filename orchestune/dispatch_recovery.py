@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune import github
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 
 if TYPE_CHECKING:
     from orchestune.dispatch_config import DispatcherConfig
