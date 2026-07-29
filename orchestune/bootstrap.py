@@ -5,36 +5,22 @@ import subprocess
 import sys
 from pathlib import Path
 
-from orchestune.forge import REQUIRED_LABELS, Forge, ForgeError, GitHubForge
+from orchestune.forge import REQUIRED_LABELS, ForgeError, GitHubForge, RepoAdminForge
+from orchestune.git_cli import run_git
 
 
 def _is_git_repo_empty(cwd: Path) -> bool:
     try:
-        subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=str(cwd),
-            capture_output=True,
-            check=True,
-        )
+        run_git(["rev-parse", "--is-inside-work-tree"], cwd=cwd, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
-    res = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=str(cwd),
-        capture_output=True,
-    )
+    res = run_git(["rev-parse", "HEAD"], cwd=cwd, check=False)
     return res.returncode != 0
 
 
 def _initialize_empty_repo(cwd: Path) -> None:
-    res_staged = subprocess.run(
-        ["git", "ls-files", "--stage"],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    res_staged = run_git(["ls-files", "--stage"], cwd=cwd, check=True)
     if res_staged.stdout.strip():
         raise RuntimeError("Staged files already exist in index before initial commit.")
 
@@ -44,35 +30,16 @@ def _initialize_empty_repo(cwd: Path) -> None:
     )
 
     try:
-        subprocess.run(
-            ["git", "config", "user.name"],
-            cwd=str(cwd),
-            check=True,
-            capture_output=True,
-        )
+        run_git(["config", "user.name"], cwd=cwd, check=True)
     except subprocess.CalledProcessError:
-        subprocess.run(
-            ["git", "config", "user.name", "orchestune-bootstrap"],
-            cwd=str(cwd),
-            check=True,
-        )
+        run_git(["config", "user.name", "orchestune-bootstrap"], cwd=cwd, check=True)
 
     try:
-        subprocess.run(
-            ["git", "config", "user.email"],
-            cwd=str(cwd),
-            check=True,
-            capture_output=True,
-        )
+        run_git(["config", "user.email"], cwd=cwd, check=True)
     except subprocess.CalledProcessError:
-        subprocess.run(
-            [
-                "git",
-                "config",
-                "user.email",
-                "orchestune-bootstrap@users.noreply.github.com",
-            ],
-            cwd=str(cwd),
+        run_git(
+            ["config", "user.email", "orchestune-bootstrap@users.noreply.github.com"],
+            cwd=cwd,
             check=True,
         )
 
@@ -80,28 +47,18 @@ def _initialize_empty_repo(cwd: Path) -> None:
     if not readme_path.exists():
         readme_path.write_text("# Initialized by Orchestune\n")
 
-    subprocess.run(["git", "add", "README.md"], cwd=str(cwd), check=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(cwd), check=True)
+    run_git(["add", "README.md"], cwd=cwd, check=True)
+    run_git(["commit", "-m", "Initial commit"], cwd=cwd, check=True)
 
-    subprocess.run(["git", "branch", "-M", "main"], cwd=str(cwd), check=True)
+    run_git(["branch", "-M", "main"], cwd=cwd, check=True)
 
-    res_remote = subprocess.run(
-        ["git", "remote"],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    res_remote = run_git(["remote"], cwd=cwd, check=True)
     if "origin" in res_remote.stdout.splitlines():
         print("Pushing initial commit to origin/main...", file=sys.stderr)
-        subprocess.run(
-            ["git", "push", "-u", "origin", "main"],
-            cwd=str(cwd),
-            check=True,
-        )
+        run_git(["push", "-u", "origin", "main"], cwd=cwd, check=True)
 
 
-def run_bootstrap(forge: Forge | None = None, cwd: Path = Path(".")) -> int:
+def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) -> int:
     forge = forge or GitHubForge()
 
     if _is_git_repo_empty(cwd):

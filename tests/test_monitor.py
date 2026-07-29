@@ -1,6 +1,6 @@
 import os
 import time
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -26,7 +26,7 @@ def _stub_get_issue_labels():
     """既定ではstatus:in-progressを返し、PID/external_idベースの分類テストが
     従来通り動作するようにする。優先順位そのもののテストは個別にオーバーライドする。"""
     with patch(
-        "orchestune.monitor.github.get_issue_labels",
+        "orchestune.forge.GitHubForge.get_issue_labels",
         return_value=("status:in-progress",),
     ) as mock:
         yield mock
@@ -200,7 +200,7 @@ class TestFetchLabelsCached:
     def test_fetches_and_caches_within_ttl(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
         with patch(
-            "orchestune.monitor.github.get_issue_labels",
+            "orchestune.forge.GitHubForge.get_issue_labels",
             return_value=("status:queued",),
         ) as mock_fetch:
             first = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
@@ -213,7 +213,7 @@ class TestFetchLabelsCached:
     def test_refetches_after_ttl_expires(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
         with patch(
-            "orchestune.monitor.github.get_issue_labels",
+            "orchestune.forge.GitHubForge.get_issue_labels",
             return_value=("status:queued",),
         ) as mock_fetch:
             _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
@@ -224,7 +224,7 @@ class TestFetchLabelsCached:
     def test_fetch_failure_without_cache_returns_none(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
         with patch(
-            "orchestune.monitor.github.get_issue_labels",
+            "orchestune.forge.GitHubForge.get_issue_labels",
             side_effect=RuntimeError("gh unavailable"),
         ):
             result = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
@@ -235,11 +235,28 @@ class TestFetchLabelsCached:
             133: (900.0, ("status:queued",))
         }
         with patch(
-            "orchestune.monitor.github.get_issue_labels",
+            "orchestune.forge.GitHubForge.get_issue_labels",
             side_effect=RuntimeError("gh unavailable"),
         ):
             result = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
         assert result == ("status:queued",)
+
+
+class TestFetchLabelsCachedWithFakeForge:
+    """#294: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
+    `forge`引数への注入だけでテストが書けることを示す。"""
+
+    def test_uses_injected_fake_forge_instead_of_patching(self):
+        fake_forge = MagicMock()
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
+        cache: dict[int, tuple[float, tuple[str, ...]]] = {}
+
+        result = _fetch_labels_cached(
+            133, cache, now=1000.0, ttl=15.0, forge=fake_forge
+        )
+
+        assert result == ("status:in-progress",)
+        fake_forge.get_issue_labels.assert_called_once_with(133)
 
 
 class TestBuildStatusSnapshot:
@@ -318,7 +335,8 @@ class TestBuildStatusSnapshot:
         save_run_state(state, run_state_path)
 
         with patch(
-            "orchestune.monitor.github.get_issue_labels", return_value=("status:done",)
+            "orchestune.forge.GitHubForge.get_issue_labels",
+            return_value=("status:done",),
         ):
             snapshot = build_status_snapshot(
                 run_state_path, tmp_path / "logs", now=1_700_000_100.0
@@ -332,7 +350,7 @@ class TestBuildStatusSnapshot:
         save_run_state(state, run_state_path)
 
         with patch(
-            "orchestune.monitor.github.get_issue_labels",
+            "orchestune.forge.GitHubForge.get_issue_labels",
             side_effect=RuntimeError("network error"),
         ):
             snapshot = build_status_snapshot(
@@ -411,7 +429,7 @@ class TestBuildStatusSnapshot:
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
 
         with patch(
-            "orchestune.monitor.github.get_issue_labels",
+            "orchestune.forge.GitHubForge.get_issue_labels",
             return_value=("status:in-progress",),
         ) as mock_fetch:
             build_status_snapshot(
