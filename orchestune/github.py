@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from urllib.parse import quote
 
 # #284(git-adapter): git実行専任のorchestune.git_cliへ移設済み。呼び出し側
@@ -18,71 +16,13 @@ from orchestune.git_cli import (
     resolve_local_or_remote_branch,  # noqa: F401
 )
 
-_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
-_REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
-_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\[\]-]*$")
-
-
-def _validate_issue_number(value: int | str) -> int:
-    text = str(value)
-    if not re.fullmatch(r"[0-9]+", text) or int(text) <= 0:
-        raise ValueError(f"issue番号が不正です: {value!r}")
-    return int(text)
-
-
-def _validate_label(label: str) -> str:
-    if not label or not _LABEL_PATTERN.match(label):
-        raise ValueError(f"ラベル名が不正です: {label!r}")
-    return label
-
-
-def _validate_ref_name(ref: str) -> str:
-    if (
-        not ref
-        or not _REF_NAME_PATTERN.match(ref)
-        or ref.startswith("-")
-        or ".." in ref
-    ):
-        raise ValueError(f"ブランチ名が不正です: {ref!r}")
-    return ref
-
-
-def _validate_username(username: str) -> str:
-    if not username or not _USERNAME_PATTERN.match(username):
-        raise ValueError(f"ユーザー名が不正です: {username!r}")
-    return username
-
-
-@dataclass(frozen=True)
-class IssueRecord:
-    number: int
-    title: str
-    body: str
-    labels: tuple[str, ...]
-    created_at: str
-    state: str = "OPEN"
-    parent: dict | None = None
-    blocked_by: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True)
-class PrRecord:
-    """#243: `base_ref`/`is_cross_repository`は統合PR再利用時のidentity照合に使う。
-    `is_cross_repository=None`は「取得できず不明」を意味し、呼び出し側は
-    fail closed（正規PRとして扱わない）に判定する。"""
-
-    number: int
-    head_ref: str
-    changed_files: tuple[str, ...]
-    created_at: str = ""
-    closes_issue_numbers: tuple[int, ...] = ()
-    review_decision: str = ""
-    is_ci_passing: bool = True
-    state: str = "OPEN"
-    closed_at: str = ""
-    base_ref: str = ""
-    is_cross_repository: bool | None = None
-    is_files_truncated: bool = False
+from orchestune.models import IssueRecord, PrRecord
+from orchestune.validation import (
+    validate_issue_number as _validate_issue_number,
+    validate_label as _validate_label,
+    validate_ref_name as _validate_ref_name,
+    validate_username as _validate_username,
+)
 
 
 def _run(args: list[str], input_text: str | None = None) -> str:
