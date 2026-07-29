@@ -1250,11 +1250,12 @@ class TestBranchStacking:
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
-            patch(
-                "orchestune.dispatch_rebase.github.remove_label"
-            ) as mock_remove_label,
-            patch("orchestune.dispatch_rebase.github.add_comment") as mock_add_comment,
+            # #292: CHANGES_REQUESTEDエスカレーションはdispatch_escalationの
+            # apply_human_review_escalationがForge注入経由で呼ぶため、
+            # dispatch_rebase.github経由ではなくGitHubForge側をパッチする。
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.run"),
         ):

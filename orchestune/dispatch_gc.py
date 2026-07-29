@@ -228,6 +228,7 @@ def _apply_completed_worktree_outcome(
                 "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
                 "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
                 "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
+                forge=config.resolved_forge,
             )
         event["subtask_id"] = decision.subtask_id
         event["commit_sha"] = None
