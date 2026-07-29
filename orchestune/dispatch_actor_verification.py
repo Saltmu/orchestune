@@ -77,5 +77,6 @@ def _apply_actor_verification(
                 f"自動起動をスキップし、`status:blocked-human-review` に変更しました。"
                 f"意図した操作であれば、権限を持つユーザーが再度 `status:queued` を"
                 f"付与してください。",
+                forge=config.resolved_forge,
             )
     return authorized_tasks

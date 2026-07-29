@@ -71,9 +71,9 @@ class TestApplyHumanReviewEscalation:
 
     def test_removes_in_progress_and_adds_human_review_label(self):
         with (
-            patch("orchestune.dispatch_escalation.github.remove_label") as mock_remove,
-            patch("orchestune.dispatch_escalation.github.add_label") as mock_add,
-            patch("orchestune.dispatch_escalation.github.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             apply_human_review_escalation(1, ("status:in-progress",), "理由")
 
@@ -83,9 +83,9 @@ class TestApplyHumanReviewEscalation:
 
     def test_removes_both_queued_and_blocked_when_both_present(self):
         with (
-            patch("orchestune.dispatch_escalation.github.remove_label") as mock_remove,
-            patch("orchestune.dispatch_escalation.github.add_label"),
-            patch("orchestune.dispatch_escalation.github.add_comment"),
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             apply_human_review_escalation(
                 2, ("status:queued", "status:blocked"), "理由"
@@ -97,9 +97,9 @@ class TestApplyHumanReviewEscalation:
 
     def test_ignores_unrelated_labels(self):
         with (
-            patch("orchestune.dispatch_escalation.github.remove_label") as mock_remove,
-            patch("orchestune.dispatch_escalation.github.add_label"),
-            patch("orchestune.dispatch_escalation.github.add_comment"),
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             apply_human_review_escalation(
                 3, ("status:in-progress", "priority:high"), "理由"
@@ -109,9 +109,9 @@ class TestApplyHumanReviewEscalation:
 
     def test_no_removable_labels_still_adds_human_review_and_comment(self):
         with (
-            patch("orchestune.dispatch_escalation.github.remove_label") as mock_remove,
-            patch("orchestune.dispatch_escalation.github.add_label") as mock_add,
-            patch("orchestune.dispatch_escalation.github.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             apply_human_review_escalation(4, (), "理由")
 
