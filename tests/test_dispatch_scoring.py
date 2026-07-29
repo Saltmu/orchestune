@@ -11,7 +11,7 @@ from orchestune.dispatch_scoring import (
     select_next_tasks,
 )
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
-from orchestune.github import IssueRecord
+from orchestune.models import IssueRecord
 
 
 def _issue(

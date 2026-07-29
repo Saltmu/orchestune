@@ -36,7 +36,7 @@ from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
 )
-from orchestune.github import PrRecord
+from orchestune.models import PrRecord
 from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))

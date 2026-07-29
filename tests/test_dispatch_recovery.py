@@ -10,7 +10,7 @@ from orchestune.dispatch_recovery import (
     _parse_subtask_info_from_issue,
 )
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.github import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 

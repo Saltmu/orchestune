@@ -14,8 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# #288(forge-records)でorchestune.github._validate_ref_nameと統合予定の
-# 一時的な重複。github.pyとの相互依存（循環）を避けるためここでは複製する。
+# git CLIのadapter境界でrefを検証し、不正な値をsubprocessへ渡さない。
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
 
 

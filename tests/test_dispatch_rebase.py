@@ -21,7 +21,7 @@ from orchestune.dispatch_state import (
     load_run_state,
     save_run_state,
 )
-from orchestune.github import PrRecord
+from orchestune.models import PrRecord
 from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))

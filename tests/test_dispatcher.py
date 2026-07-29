@@ -36,8 +36,7 @@ from orchestune.dispatcher import (
     main,
 )
 from orchestune.forge import ForgeAuthError
-from orchestune.github import IssueRecord, PrRecord
-from orchestune.models import Task
+from orchestune.models import IssueRecord, PrRecord, Task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 

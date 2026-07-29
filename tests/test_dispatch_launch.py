@@ -11,7 +11,7 @@ from orchestune.dispatch_launch import (
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import CompletedWorktree, RunState
-from orchestune.github import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -443,7 +443,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
 
         from orchestune.dispatch_launch import _apply_task_launches
         from orchestune.dispatch_state import load_run_state
-        from orchestune.github import PrRecord
+        from orchestune.models import PrRecord
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
