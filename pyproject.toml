@@ -44,6 +44,10 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+# Retained for `tests/`, not for `orchestune/`: since orchestune/__init__.py was
+# added (#297) the package resolves on its own, but tests/ has no __init__.py, so
+# tests/conftest.py would otherwise be found twice as "conftest" and
+# "tests.conftest". Drop this only together with making tests/ a package.
 explicit_package_bases = true
 
 [build-system]
