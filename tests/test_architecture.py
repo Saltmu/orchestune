@@ -151,7 +151,48 @@ def _l4_dependents(graph: dict[str, set[str]]) -> dict[str, set[str]]:
     return dict(dependents)
 
 
+def _leading_command(node: ast.expr | None) -> str | None:
+    """`["git", ...]` / `("gh", ...)` の先頭要素が対象コマンドならその名前を返す。"""
+    if not isinstance(node, ast.List | ast.Tuple) or not node.elts:
+        return None
+    first = node.elts[0]
+    if isinstance(first, ast.Constant) and first.value in _COMMANDS:
+        return str(first.value)
+    return None
+
+
+def _command_bindings(tree: ast.AST) -> dict[str, str]:
+    """`args = ["gh", ...]` のように、コマンドリストを束縛した名前を集める。
+
+    `subprocess.run(args)` のように変数経由で起動された場合も検出するため。
+    束縛を追うのは「同一モジュール内でリテラルのリスト/タプルを代入した名前」
+    までで、動的に組み立てたコマンドまでは追跡しない（`_subprocess_command_modules`
+    のdocstringを参照）。
+    """
+    bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets: list[ast.expr] = list(node.targets)
+        elif isinstance(node, ast.AnnAssign | ast.AugAssign):
+            targets = [node.target]
+        else:
+            continue
+        command = _leading_command(node.value)
+        if command is None:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                bindings[target.id] = command
+    return bindings
+
+
 def _subprocess_command_modules() -> dict[str, set[str]]:
+    """{コマンド: そのコマンドをsubprocess実行しているモジュール名}を返す。
+
+    検出できるのは、コマンドリストがリテラルとして書かれている呼び出し
+    （直接渡す場合と、リテラルを代入した変数を渡す場合）です。実行時に組み立てた
+    リストや、他モジュールから受け取ったコマンドまでは追跡しません。
+    """
     command_modules: dict[str, set[str]] = defaultdict(set)
     for module, path in _package_modules().items():
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -171,6 +212,7 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
                     if alias.name in _SUBPROCESS_CALLS
                 )
 
+        bindings = _command_bindings(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue
@@ -180,17 +222,14 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
                 and node.func.value.id in subprocess_names
                 and node.func.attr in _SUBPROCESS_CALLS
             ) or (isinstance(node.func, ast.Name) and node.func.id in call_names)
-            command = node.args[0]
-            if (
-                is_subprocess_call
-                and isinstance(command, ast.List | ast.Tuple)
-                and command.elts
-                and isinstance(command.elts[0], ast.Constant)
-                and command.elts[0].value in _COMMANDS
-            ):
-                command_modules[str(command.elts[0].value)].add(
-                    module.removeprefix(f"{PACKAGE_NAME}.")
-                )
+            if not is_subprocess_call:
+                continue
+            argument = node.args[0]
+            command = _leading_command(argument)
+            if command is None and isinstance(argument, ast.Name):
+                command = bindings.get(argument.id)
+            if command is not None:
+                command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
     return dict(command_modules)
 
 
