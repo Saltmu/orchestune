@@ -5,15 +5,13 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_state import RunState, save_run_state
 from orchestune.dispatch_targets import DispatchHandle, DispatchTarget
-from orchestune.dispatcher import (
-    DispatcherConfig,
-    Task,
-    run_dispatch_cycle,
-)
 from orchestune.github import IssueRecord, PrRecord
 from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.models import Task
 
 
 class DummyGitRepo:

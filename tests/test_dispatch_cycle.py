@@ -8,6 +8,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from orchestune.dag import FootprintConflict
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import (
     CycleContext,
     IssuesByStatus,
@@ -33,7 +34,6 @@ from orchestune.dispatch_state import (
     load_run_state,
     save_run_state,
 )
-from orchestune.dispatcher import DispatcherConfig
 from orchestune.github import IssueRecord, PrRecord
 from tests.conftest import make_issue
 

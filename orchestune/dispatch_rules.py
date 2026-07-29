@@ -16,6 +16,8 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.github import PrRecord
 
+NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
+
 
 @dataclass
 class CycleContext:
@@ -36,6 +38,7 @@ class CycleContext:
     prs: list[PrRecord]
     pr_by_branch: dict[str, PrRecord]
     config: DispatcherConfig
+    not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
 
 
 @dataclass
