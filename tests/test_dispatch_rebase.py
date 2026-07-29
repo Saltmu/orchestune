@@ -92,8 +92,8 @@ class TestNotifyRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment,
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_label,
         ):
             bodies = notify_recompute(
                 conflict,
@@ -114,9 +114,9 @@ class TestNotifyRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment,
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_label,
-            patch("orchestune.dispatch_rebase.github.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_label,
+            patch("orchestune.forge.GitHubForge.remove_label"),
         ):
             notify_recompute(
                 conflict,
@@ -136,11 +136,9 @@ class TestNotifyRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatch_rebase.github.add_comment"),
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
-            patch(
-                "orchestune.dispatch_rebase.github.remove_label"
-            ) as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             notify_recompute(
                 conflict,
@@ -158,7 +156,7 @@ class TestNotifyForceSerial:
     """#200: リトライ上限超過時の強制直列化フォールバック通知。"""
 
     def test_dry_run_does_not_call_github(self):
-        with patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment:
+        with patch("orchestune.forge.GitHubForge.add_comment") as mock_comment:
             body = notify_force_serial(
                 "task-a",
                 issue_number=1,
@@ -170,7 +168,7 @@ class TestNotifyForceSerial:
         assert "task-a" in body
 
     def test_apply_posts_comment_to_parent_issue(self):
-        with patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment:
+        with patch("orchestune.forge.GitHubForge.add_comment") as mock_comment:
             notify_force_serial(
                 "task-a",
                 issue_number=1,
@@ -181,7 +179,7 @@ class TestNotifyForceSerial:
         mock_comment.assert_called_once_with(181, ANY)
 
     def test_apply_without_parent_issue_skips_comment(self):
-        with patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment:
+        with patch("orchestune.forge.GitHubForge.add_comment") as mock_comment:
             notify_force_serial(
                 "task-a",
                 issue_number=1,
@@ -190,6 +188,26 @@ class TestNotifyForceSerial:
                 apply=True,
             )
         mock_comment.assert_not_called()
+
+
+class TestNotifyForceSerialWithFakeForge:
+    """#293: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
+    `forge`引数への注入だけでテストが書けることを示す。"""
+
+    def test_uses_injected_fake_forge_instead_of_patching(self):
+        fake_forge = MagicMock()
+
+        notify_force_serial(
+            "task-a",
+            issue_number=1,
+            parent_issue_number=181,
+            retry_count=2,
+            apply=True,
+            forge=fake_forge,
+        )
+
+        fake_forge.add_comment.assert_called_once()
+        assert fake_forge.add_comment.call_args.args[0] == 181
 
 
 class TestWaitForProcessTerminate:
@@ -552,9 +570,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.dispatch_rebase.github.remove_label"),
-            patch("orchestune.dispatch_rebase.github.add_label"),
-            patch("orchestune.dispatch_rebase.github.add_comment"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
 
@@ -634,9 +652,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.dispatch_rebase.github.remove_label") as mock_remove,
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
-            patch("orchestune.dispatch_rebase.github.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
 
@@ -691,10 +709,8 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
-            patch(
-                "orchestune.dispatch_rebase.github.remove_label"
-            ) as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
@@ -768,8 +784,8 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatch_rebase.github.add_label"),
-            patch("orchestune.dispatch_rebase.github.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
@@ -856,8 +872,8 @@ class TestBranchStacking:
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
-            patch("orchestune.dispatch_rebase.github.add_label"),
-            patch("orchestune.dispatch_rebase.github.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
             # os.kill と Popen のモック（リブートプロセスのため）
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.Popen") as mock_popen,
@@ -956,8 +972,8 @@ class TestBranchStacking:
                     ),
                 ],
             ),
-            patch("orchestune.dispatch_rebase.github.add_label"),
-            patch("orchestune.dispatch_rebase.github.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
@@ -1146,11 +1162,9 @@ class TestBranchStacking:
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
-            patch("orchestune.dispatch_rebase.github.add_label") as mock_add_label,
-            patch(
-                "orchestune.dispatch_rebase.github.remove_label"
-            ) as mock_remove_label,
-            patch("orchestune.dispatch_rebase.github.add_comment") as mock_add_comment,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch(

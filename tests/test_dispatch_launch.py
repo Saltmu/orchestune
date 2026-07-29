@@ -188,7 +188,7 @@ class TestDecideDuplicateCandidates:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "orchestune.dispatch_launch.subprocess.run",
+            "orchestune.git_cli.subprocess.run",
             _raise,
         )
         ctx = _ctx(
@@ -234,8 +234,8 @@ class TestApplyTaskLaunches:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.github.add_label") as mock_add_label,
-            patch("orchestune.github.add_comment") as mock_add_comment,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -356,8 +356,8 @@ class TestApplyTaskLaunches:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.github.add_label", side_effect=fake_add_label),
-            patch("orchestune.github.add_comment"),
+            patch("orchestune.forge.GitHubForge.add_label", side_effect=fake_add_label),
+            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -426,8 +426,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.github.add_label"),
-            patch("orchestune.github.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -476,8 +476,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.github.add_label"),
-            patch("orchestune.github.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234

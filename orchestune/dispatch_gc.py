@@ -557,18 +557,30 @@ def _local_pr_completion_status(
     return "pending"
 
 
+def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
+    """#315レビュー対応: `is_complete`の旧シグネチャ（`forge`引数なし）を実装した
+    dispatch_targetでもTypeErrorにせず引数無しで再試行して互換性を保つ。"""
+    assert config.dispatch_target is not None
+    try:
+        return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
+    except TypeError:
+        return config.dispatch_target.is_complete(handle)
+
+
 def _cloud_worktree_completion_status(
     active: ActiveWorktree, config: DispatcherConfig
 ) -> str:
     assert config.dispatch_target is not None
     handle = _active_dispatch_handle(active)
     try:
-        status = config.dispatch_target.completion_status(handle)
+        status = config.dispatch_target.completion_status(
+            handle, forge=config.resolved_forge
+        )
     except Exception:
         return "unknown"
     if isinstance(status, str):
         return status
-    return "completed" if config.dispatch_target.is_complete(handle) else "pending"
+    return "completed" if _call_is_complete(config, handle) else "pending"
 
 
 def _finalize_abandoned_cloud_worktree(
@@ -603,10 +615,12 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
     if active.external_id is not None:
         assert config.dispatch_target is not None
         handle = _active_dispatch_handle(active)
-        status = config.dispatch_target.completion_status(handle)
+        status = config.dispatch_target.completion_status(
+            handle, forge=config.resolved_forge
+        )
         if isinstance(status, str):
             return status == "completed"
-        return config.dispatch_target.is_complete(handle)
+        return _call_is_complete(config, handle)
     # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
     # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
     if active.started_at is None:

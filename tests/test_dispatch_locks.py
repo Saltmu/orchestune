@@ -568,7 +568,8 @@ class TestCheckFootprintDeviation:
             )
             mock_run.assert_called_once()
             called_args = mock_run.call_args[0][0]
-            assert called_args[5] == "parent/issue-12...HEAD"
+            assert called_args[-1] == "parent/issue-12...HEAD"
+            assert mock_run.call_args.kwargs["cwd"] == "worktrees/w1"
 
     def test_deviation_error_returns_none(self):
         with patch(
