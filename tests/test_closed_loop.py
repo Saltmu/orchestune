@@ -380,6 +380,17 @@ def test_closed_loop_flow():
         patch(
             "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
         ),
+        # #291: integrator系はForge注入経由でGitHubForgeを呼ぶため、
+        # dispatch_cycle向けのorchestune.github.*パッチとは別に
+        # GitHubForgeのクラスメソッドも同じdummy_githubへ差し替える。
+        patch(
+            "orchestune.forge.GitHubForge.list_issues_by_label",
+            dummy_github.list_issues_by_label,
+        ),
+        patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
+        patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
+        patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
+        patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
     ]
 
     for p in patches:

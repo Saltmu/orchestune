@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.github import IssueRecord
 from orchestune.parent_completion import process_parent_completion
@@ -27,12 +27,12 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=False)
         assert res == {"status": "skipped"}
 
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
-    @patch("orchestune.parent_completion.github.get_issue_state")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_closes_parent_issue_when_branch_still_exists_and_tip_verified(
         self,
         mock_close,
@@ -57,13 +57,13 @@ class TestProcessParentCompletion:
         mock_close.assert_called_once_with(100, "completed", comment=ANY)
         assert res == {"status": "parent_closed", "parent_issue_number": 100}
 
-    @patch("orchestune.parent_completion.github.branch_exists")
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
-    @patch("orchestune.parent_completion.github.get_issue_state")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.branch_exists")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_closes_parent_issue_when_branch_deleted_after_merge(
         self,
         mock_close,
@@ -92,12 +92,12 @@ class TestProcessParentCompletion:
         mock_close.assert_called_once_with(100, "completed", comment=ANY)
         assert res == {"status": "parent_closed", "parent_issue_number": 100}
 
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
-    @patch("orchestune.parent_completion.github.get_issue_state")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_double_close_already_closed_parent(
         self,
         mock_close,
@@ -118,8 +118,8 @@ class TestProcessParentCompletion:
         mock_close.assert_not_called()
         assert res == {"status": "already_closed"}
 
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
     def test_creates_final_pr_once_all_children_are_closed(
         self, mock_ensure_pr, mock_list_sub_issues, mock_merged_at
@@ -133,11 +133,11 @@ class TestProcessParentCompletion:
 
         res = process_parent_completion(100, apply=True)
 
-        mock_ensure_pr.assert_called_once_with(100)
+        mock_ensure_pr.assert_called_once_with(100, forge=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
     def test_waits_when_some_children_still_open(
         self, mock_ensure_pr, mock_list_sub_issues, mock_merged_at
@@ -153,8 +153,8 @@ class TestProcessParentCompletion:
         mock_ensure_pr.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": [102]}
 
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
     def test_waits_when_parent_has_no_children_yet(
         self, mock_ensure_pr, mock_list_sub_issues, mock_merged_at
@@ -167,10 +167,10 @@ class TestProcessParentCompletion:
         mock_ensure_pr.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": []}
 
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_open_child_exists_despite_historical_merged_pr(
         self, mock_close, mock_list_sub_issues, mock_merged_at, mock_tip
     ):
@@ -188,12 +188,12 @@ class TestProcessParentCompletion:
         mock_close.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": [102]}
 
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_branch_has_new_unmerged_commit(
         self,
         mock_close,
@@ -214,18 +214,18 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True)
 
         mock_close.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100)
+        mock_ensure_pr.assert_called_once_with(100, forge=ANY)
         assert res == {
             "status": "final_pr_ready",
             "pr_number": mock_ensure_pr.return_value,
         }
 
-    @patch("orchestune.parent_completion.github.branch_exists")
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.branch_exists")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_tip_verification_fails_for_unknown_reason(
         self,
         mock_close,
@@ -249,11 +249,11 @@ class TestProcessParentCompletion:
         mock_branch_exists.assert_not_called()
         mock_close.assert_not_called()
 
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_reopened_after_last_merge(
         self,
         mock_close,
@@ -272,18 +272,18 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True)
 
         mock_close.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100)
+        mock_ensure_pr.assert_called_once_with(100, forge=ANY)
         assert res == {
             "status": "final_pr_ready",
             "pr_number": mock_ensure_pr.return_value,
         }
 
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
-    @patch("orchestune.parent_completion.github.get_issue_state")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_closes_when_merge_happened_after_reopen(
         self,
         mock_close,
@@ -305,12 +305,12 @@ class TestProcessParentCompletion:
         mock_close.assert_called_once_with(100, "completed", comment=ANY)
         assert res == {"status": "parent_closed", "parent_issue_number": 100}
 
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_merged_at_equals_reopened_at(
         self,
         mock_close,
@@ -332,19 +332,19 @@ class TestProcessParentCompletion:
 
         mock_tip.assert_not_called()
         mock_close.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100)
+        mock_ensure_pr.assert_called_once_with(100, forge=ANY)
         assert res == {
             "status": "final_pr_ready",
             "pr_number": mock_ensure_pr.return_value,
         }
 
-    @patch("orchestune.parent_completion.github.branch_exists")
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.branch_exists")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_branch_still_exists_despite_tip_check_404(
         self,
         mock_close,
@@ -370,19 +370,19 @@ class TestProcessParentCompletion:
 
         mock_branch_exists.assert_called_once_with("parent/issue-100")
         mock_close.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100)
+        mock_ensure_pr.assert_called_once_with(100, forge=ANY)
         assert res == {
             "status": "final_pr_ready",
             "pr_number": mock_ensure_pr.return_value,
         }
 
-    @patch("orchestune.parent_completion.github.branch_exists")
-    @patch("orchestune.parent_completion.github.is_current_branch_tip_merged_into")
-    @patch("orchestune.parent_completion.github.get_issue_last_reopened_at")
-    @patch("orchestune.parent_completion.github.get_merged_pr_timestamp")
-    @patch("orchestune.parent_completion.github.list_sub_issues")
+    @patch("orchestune.forge.GitHubForge.branch_exists")
+    @patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into")
+    @patch("orchestune.forge.GitHubForge.get_issue_last_reopened_at")
+    @patch("orchestune.forge.GitHubForge.get_merged_pr_timestamp")
+    @patch("orchestune.forge.GitHubForge.list_sub_issues")
     @patch("orchestune.parent_completion.ensure_parent_final_pr")
-    @patch("orchestune.parent_completion.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_does_not_close_when_branch_existence_check_itself_fails(
         self,
         mock_close,
@@ -405,8 +405,24 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True)
 
         mock_close.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100)
+        mock_ensure_pr.assert_called_once_with(100, forge=ANY)
         assert res == {
             "status": "final_pr_ready",
             "pr_number": mock_ensure_pr.return_value,
         }
+
+
+class TestProcessParentCompletionWithFakeForge:
+    """#291: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
+    `forge`引数への注入だけでテストが書けることを示す。"""
+
+    def test_waits_on_open_children_using_injected_fake_forge(self):
+        fake_forge = MagicMock()
+        fake_forge.list_sub_issues.return_value = [_issue(101, "OPEN")]
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert res == {"status": "waiting_on_children", "open_children": [101]}
+        fake_forge.list_sub_issues.assert_called_once_with(100)
+        fake_forge.get_merged_pr_timestamp.assert_not_called()
+        fake_forge.close_issue.assert_not_called()
