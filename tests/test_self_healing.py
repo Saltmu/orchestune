@@ -3,8 +3,9 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_recovery import recover_run_state
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.dispatcher import DispatcherConfig, recover_run_state
 from orchestune.github import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))

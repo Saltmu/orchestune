@@ -8,30 +8,36 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatcher import (
-    ActiveWorktree,
-    ClaudeCodeCloudRoutineDispatchTarget,
-    CompletedWorktree,
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle import (
     CycleReport,
-    DispatcherConfig,
-    LocalProcessDispatchTarget,
+    append_event_log,
+    build_event_log_entry,
+    run_dispatch_cycle,
+)
+from orchestune.dispatch_result import PhaseResult, PhaseStatus
+from orchestune.dispatch_state import (
+    ActiveWorktree,
+    CompletedWorktree,
     RunState,
-    Task,
+    load_run_state,
+    save_run_state,
+)
+from orchestune.dispatch_targets import (
+    ClaudeCodeCloudRoutineDispatchTarget,
+    LocalProcessDispatchTarget,
+)
+from orchestune.dispatcher import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
     _process_parent_completion,
     _run_best_effort_phase,
     _run_semantic_integrator,
-    append_event_log,
-    build_event_log_entry,
-    load_run_state,
     main,
-    run_dispatch_cycle,
-    save_run_state,
 )
 from orchestune.forge import ForgeAuthError
 from orchestune.github import IssueRecord, PrRecord
+from orchestune.models import Task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -948,7 +954,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_report_on_success(self, tmp_path):
         args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
         with patch(
-            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            "orchestune.dispatcher.process_pending_not_needed_reviews",
             return_value={"processed": 1},
         ) as mock_poll:
             result = _poll_pending_not_needed_reviews(args)
@@ -961,7 +967,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
         args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
         with patch(
-            "orchestune.integration_coordinator.process_pending_not_needed_reviews",
+            "orchestune.dispatcher.process_pending_not_needed_reviews",
             side_effect=RuntimeError("boom"),
         ):
             result = _poll_pending_not_needed_reviews(args)
@@ -999,10 +1005,10 @@ class TestRunSemanticIntegrator:
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with (
             patch(
-                "orchestune.integrator.Integrator", return_value=mock_instance
+                "orchestune.dispatcher.Integrator", return_value=mock_instance
             ) as mock_integrator_cls,
             patch(
-                "orchestune.integration_coordinator.IntegrationCoordinator"
+                "orchestune.dispatcher.IntegrationCoordinator"
             ) as mock_coordinator_cls,
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=True)
@@ -1023,7 +1029,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.integrator.Integrator", return_value=mock_instance
+            "orchestune.dispatcher.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -1041,7 +1047,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.integrator.Integrator", return_value=mock_instance
+            "orchestune.dispatcher.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             result = _run_semantic_integrator(config, semantic_review_enabled=True)
 
@@ -1056,7 +1062,7 @@ class TestRunSemanticIntegrator:
             worktree_root=tmp_path / "worktrees",
         )
         with patch(
-            "orchestune.integrator.Integrator", side_effect=RuntimeError("boom")
+            "orchestune.dispatcher.Integrator", side_effect=RuntimeError("boom")
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -1073,7 +1079,7 @@ class TestRunSemanticIntegrator:
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "failure", "failed": ["task-1"]}
-        with patch("orchestune.integrator.Integrator", return_value=mock_instance):
+        with patch("orchestune.dispatcher.Integrator", return_value=mock_instance):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
         assert isinstance(result, PhaseResult)
@@ -1103,7 +1109,7 @@ class TestRunSemanticIntegrator:
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": error_status, "error": "boom"}
-        with patch("orchestune.integrator.Integrator", return_value=mock_instance):
+        with patch("orchestune.dispatcher.Integrator", return_value=mock_instance):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
         assert isinstance(result, PhaseResult)
@@ -1119,7 +1125,7 @@ class TestRunSemanticIntegrator:
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": success_status}
-        with patch("orchestune.integrator.Integrator", return_value=mock_instance):
+        with patch("orchestune.dispatcher.Integrator", return_value=mock_instance):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
         assert isinstance(result, PhaseResult)
@@ -1155,7 +1161,7 @@ class TestProcessParentCompletion:
             apply=True,
         )
         with patch(
-            "orchestune.parent_completion.process_parent_completion",
+            "orchestune.dispatcher.process_parent_completion",
             return_value={"status": "waiting_on_children", "open_children": [101]},
         ) as mock_process:
             result = _process_parent_completion(config)
@@ -1176,7 +1182,7 @@ class TestProcessParentCompletion:
             apply=True,
         )
         with patch(
-            "orchestune.parent_completion.process_parent_completion",
+            "orchestune.dispatcher.process_parent_completion",
             side_effect=RuntimeError("boom"),
         ):
             result = _process_parent_completion(config)

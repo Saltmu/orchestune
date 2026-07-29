@@ -2,6 +2,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import (
     _decide_changes_requested_escalation,
     _rule_changes_requested,
@@ -10,7 +11,6 @@ from orchestune.dispatch_escalation import (
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.dispatcher import DispatcherConfig
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 

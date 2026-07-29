@@ -9,94 +9,22 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
-# 実装コード自体はgithub.*を直接呼ばないが、tests/test_dispatcher.pyが
-# orchestune.dispatcher.github.* をmock.patchの対象にしている（githubは共有モジュール
-# オブジェクトのため、実処理がdispatch_cycle.py側にあっても同じモジュールにパッチが効く）。
-# このimportを消すとそれらのパッチがAttributeErrorで壊れるため、意図的に保持する。
-from orchestune import github  # noqa: F401
-from orchestune.dispatch_cycle import (
-    CycleReport,
-    DispatcherConfig,
-    _sync_external_locks,
-    append_event_log,
-    build_event_log_entry,
-    run_dispatch_cycle,
-)
-from orchestune.dispatch_gc import (
-    _is_worktree_complete,
-    is_process_alive,
-    remove_worktree,
-    worktree_has_uncommitted_changes,
-)
-from orchestune.dispatch_locks import (
-    ExternalLockScanResult,
-    check_footprint_deviation,
-    scan_external_locks,
-)
-from orchestune.dispatch_rebase import notify_force_serial, notify_recompute
-from orchestune.dispatch_recovery import recover_run_state
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatch_scoring import (
-    Task,
-    compute_priority_score,
-    parse_task_from_issue,
-    quota_available,
-    select_next_tasks,
-)
-from orchestune.dispatch_state import (
-    ActiveWorktree,
-    CompletedWorktree,
-    RunState,
-    load_run_state,
-    save_run_state,
-)
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
-    DispatchHandle,
-    DispatchTarget,
-    LocalProcessDispatchTarget,
     build_dispatch_target,
-    default_dry_run_command_builder,
     resolve_default_dispatch_target_name,
 )
-from orchestune.dispatch_worktree import file_lock
 from orchestune.forge import ForgeAuthError, GitHubForge
-
-__all__ = [
-    "ActiveWorktree",
-    "CompletedWorktree",
-    "CycleReport",
-    "DispatchHandle",
-    "DispatchTarget",
-    "ExternalLockScanResult",
-    "LocalProcessDispatchTarget",
-    "RunState",
-    "Task",
-    "_is_worktree_complete",
-    "_sync_external_locks",
-    "append_event_log",
-    "build_dispatch_target",
-    "build_event_log_entry",
-    "check_footprint_deviation",
-    "compute_priority_score",
-    "default_dry_run_command_builder",
-    "file_lock",
-    "is_process_alive",
-    "load_run_state",
-    "notify_force_serial",
-    "notify_recompute",
-    "parse_task_from_issue",
-    "quota_available",
-    "recover_run_state",
-    "remove_worktree",
-    "resolve_default_dispatch_target_name",
-    "save_run_state",
-    "scan_external_locks",
-    "select_next_tasks",
-    "worktree_has_uncommitted_changes",
-    "write_github_step_summary",
-]
+from orchestune.integration_coordinator import (
+    IntegrationCoordinator,
+    process_pending_not_needed_reviews,
+)
+from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.parent_completion import process_parent_completion
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -278,10 +206,6 @@ def _poll_pending_not_needed_reviews(
     """
 
     def work() -> dict:
-        from orchestune.integration_coordinator import (
-            process_pending_not_needed_reviews,
-        )
-
         return process_pending_not_needed_reviews(args.not_needed_review_state_path)
 
     return _run_best_effort_phase(
@@ -315,8 +239,6 @@ def _run_semantic_integrator(
     """
 
     def work() -> dict:
-        from orchestune.integrator import Integrator, IntegratorConfig
-
         integrator_config = IntegratorConfig(
             parent_issue_number=config.parent_issue_number,
             apply=config.apply,
@@ -324,8 +246,6 @@ def _run_semantic_integrator(
         if semantic_review_enabled and isinstance(
             config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
         ):
-            from orchestune.integration_coordinator import IntegrationCoordinator
-
             integrator_config.enable_semantic_review = True
             integrator_config.coordinator = IntegrationCoordinator(
                 config.dispatch_target
@@ -359,8 +279,6 @@ def _process_parent_completion(
     """
 
     def work() -> dict:
-        from orchestune.parent_completion import process_parent_completion
-
         return process_parent_completion(config.parent_issue_number, config.apply)
 
     return _run_best_effort_phase(

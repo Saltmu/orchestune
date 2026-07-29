@@ -11,11 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune import dispatch_gc, github
-from orchestune.dag import (
-    FootprintConflict,
-    SubTask,
-    recompute_dag_for_footprint_change,
-)
+from orchestune.dag_graph import recompute_dag_for_footprint_change
+from orchestune.dag_models import FootprintConflict, SubTask
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_locks import check_footprint_deviation
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext

@@ -9,8 +9,8 @@ from enum import Enum
 from pathlib import Path
 
 from orchestune import github
-from orchestune.dispatch_gc import is_process_alive
 from orchestune.dispatch_state import load_run_state
+from orchestune.process_utils import is_process_alive
 
 _CLEAR_SCREEN = "\x1b[2J\x1b[H"
 _TAIL_CHUNK_SIZE = 8192
