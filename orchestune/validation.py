@@ -6,7 +6,7 @@ import re
 
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:.-]*$")
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
-_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\\[\\]-]*$")
+_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\[\]-]*$")
 
 
 def validate_issue_number(value: int | str) -> int:
