@@ -17,7 +17,6 @@ ALLOWED_L4_DEPENDENTS = {
 }
 KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
     {
-        "bootstrap",
         "forge",
         "git_cli",
         "github",
