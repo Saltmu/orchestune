@@ -64,6 +64,14 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
     if _is_git_repo_empty(cwd):
         try:
             _initialize_empty_repo(cwd)
+        except subprocess.CalledProcessError as e:
+            # #294レビュー対応: run_gitはcapture_output=Trueで実行するため、
+            # 失敗したgitコマンドのstderrは端末に継承されず`e.stderr`に
+            # 格納される。str(e)だけでは終了コードしか分からず、認証・権限
+            # エラー等の実際の原因が失われるため、明示的に含める。
+            detail = e.stderr.strip() if e.stderr else str(e)
+            print(f"Error initializing empty repository: {detail}", file=sys.stderr)
+            return 1
         except Exception as e:
             print(f"Error initializing empty repository: {e}", file=sys.stderr)
             return 1
