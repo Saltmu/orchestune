@@ -185,8 +185,9 @@ Pure data-transfer modules (`models`, `dag_models`, `dispatch_result`) sit at
 `PrRecord`. Putting the DTOs above the adapter that produces them would make
 that dependency point upward.
 
-L4 is defined by "has a `main()` and nothing imports it", not by "contains only
-argparse wiring". Three of the five still carry code that predates this
+L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
+"contains only argparse wiring". `cli` is the exception because it dispatches to
+the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. Three of the five still carry code that predates this
 boundary: `dag` re-exports the whole `dag_*` package as a compatibility facade,
 `dispatcher` holds orchestration helpers, and `monitor` builds its own status
 snapshots. That is a known remnant, not a licence to add more — new code
@@ -215,6 +216,11 @@ table above cannot silently drift from the code:
    the CI script and to `poetry`. Those are one-off process launches rather
    than a client that callers need to fake, so they stay where they are used.
 
+   The guard reads the command out of the source, so it sees a literal list —
+   passed inline or through a variable bound to one. A command assembled at
+   runtime would escape it; write `git`/`gh` argv as a literal so the check can
+   do its job.
+
 3. **No import cycles**, and no internal import hidden inside a function body
    (which would evade the cycle check). `cli` is exempt from the second rule
    because it defers entrypoint imports to keep startup fast.
@@ -236,7 +242,14 @@ implementation. A caller that only needs to bootstrap labels (`run_bootstrap`)
 takes a `RepoAdminForge`, so it cannot reach for PR APIs by accident and its
 tests need a double with two methods rather than twenty.
 
-Because the abstraction is a protocol, tests inject a fake instead of patching
-module attributes: `IntegratorConfig(forge=...)` and `DispatcherConfig(forge=...)`
-accept any object satisfying the protocol. That is what keeps `gh` out of the
-test suite without a web of `mock.patch` targets.
+Because the abstraction is a protocol, a test can inject a fake instead of
+patching module attributes: `IntegratorConfig(forge=...)` and
+`DispatcherConfig(forge=...)` accept any object satisfying it, and the shared
+`fake_forge` fixture supplies one.
+
+That migration is partial. Roughly 500 call sites still reach for
+`patch("orchestune.forge.GitHubForge.<method>")` — heaviest in
+`test_dispatch_cycle.py`, `test_dispatch_gc.py` and `test_parent_completion.py`
+— because those suites predate the protocol. Both styles stop `gh` from running,
+which is the invariant that matters; injection is the direction of travel for
+new tests, not a description of the whole suite today.
