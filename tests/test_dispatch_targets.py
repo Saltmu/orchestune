@@ -32,7 +32,7 @@ class _IsCompleteOnlyTarget(DispatchTarget):
     def launch(self, task: Task, branch_name: str, worktree_path):
         return DispatchHandle(branch_name=branch_name)
 
-    def is_complete(self, handle: DispatchHandle) -> bool:
+    def is_complete(self, handle: DispatchHandle, forge=None) -> bool:
         return self.complete
 
 
@@ -222,7 +222,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             "origin",
             "claude/issue-1-task-a",
         ]
-        assert push_call.kwargs["cwd"] == str(tmp_path / "wt")
+        assert push_call.kwargs["cwd"] == tmp_path / "wt"
         push_event = (
             "git",
             "push",
@@ -363,7 +363,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_is_complete_true_when_pr_open_for_branch(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
             ],
@@ -376,7 +376,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_is_complete_false_when_no_matching_pr(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="other-branch", changed_files=())
             ],
@@ -389,7 +389,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_closed_pr_closed_before_launch_is_ignored_as_stale(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -412,7 +412,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         """#246: session開始後に作成されたPRがCLOSEされた場合のみabandoned。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -440,7 +440,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         staleとしない。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -463,7 +463,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         stale判定は維持される。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -487,7 +487,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         起動前のPRは状態に関係なく現sessionの成果物ではないため除外する。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -510,7 +510,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         """#246/#210: session開始後に作成・マージされたPRは完了シグナルのまま。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -533,7 +533,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         """#246: session開始前から存在するOPEN PRも現sessionの成果物ではない。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -555,7 +555,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         """#246: created_atを解釈できないPRは現世代の証拠にならない（fail closed）。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -576,7 +576,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         """started_atを持たないhandle（復元経路）では従来通りPRを完了扱いする。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -603,7 +603,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         PRのclosingIssuesReferences経由で完了を検知できる。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -623,7 +623,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_is_complete_false_when_neither_branch_nor_issue_match(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -650,7 +650,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             state="CLOSED",
         )
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[closed_pr],
         ) as mock_list_prs:
             handle = DispatchHandle(
@@ -679,7 +679,7 @@ class TestCodexCloudDispatchTarget:
             "claude/issue-1-task-a",
         ]
         assert push_call.kwargs == {
-            "cwd": str(tmp_path / "wt"),
+            "cwd": tmp_path / "wt",
             "capture_output": True,
             "text": True,
             "check": True,
@@ -709,9 +709,12 @@ class TestCodexCloudDispatchTarget:
     def test_launch_propagates_codex_cloud_submission_failure(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
         submission_error = subprocess.CalledProcessError(1, ["codex", "cloud", "exec"])
+        push_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
         with patch(
             "orchestune.dispatch_targets.subprocess.run",
-            side_effect=[None, submission_error],
+            side_effect=[push_result, submission_error],
         ):
             with pytest.raises(subprocess.CalledProcessError) as error:
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
@@ -721,7 +724,7 @@ class TestCodexCloudDispatchTarget:
     def test_is_complete_when_pr_is_open_for_task_branch(self):
         target = CodexCloudDispatchTarget("env_123")
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
             ],
@@ -742,7 +745,7 @@ class TestCodexCloudDispatchTarget:
             state="MERGED",
         )
         with patch(
-            "orchestune.dispatch_targets.github.list_prs",
+            "orchestune.forge.GitHubForge.list_prs",
             return_value=[merged_pr],
         ) as mock_list_prs:
             handle = DispatchHandle(

@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 
-from orchestune import github
 from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.git_cli import run_git
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.models import IssueRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatch_config import DispatcherConfig
 
 
-def _extract_raw_subtask_id(issue: github.IssueRecord) -> str | None:
+def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:
     """Issue本文のFootprint YAMLブロックから、素のsubtask_id（未検出ならNone）を取り出す。
 
     呼び出し側ごとにNone時のフォールバック方針が異なる（自己修復ブランチ名生成では
@@ -38,7 +38,7 @@ def _extract_raw_subtask_id(issue: github.IssueRecord) -> str | None:
 
 
 def _parse_subtask_info_from_issue(
-    issue: github.IssueRecord,
+    issue: IssueRecord,
 ) -> tuple[str, tuple[str, ...]]:
     """Issueの本文から subtask_id と declared_footprint を抽出する。"""
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
@@ -62,7 +62,7 @@ def _parse_subtask_info_from_issue(
 
 def _decide_missing_active_worktrees(
     run_state: RunState,
-    in_progress_issues: list[github.IssueRecord],
+    in_progress_issues: list[IssueRecord],
     config: DispatcherConfig,
 ) -> list[tuple[str, str, ActiveWorktree]]:
     """in-progressなIssueのうちrun_stateに欠けているものについて、復元すべき
@@ -85,7 +85,7 @@ def _decide_missing_active_worktrees(
     )
 
     try:
-        open_prs = github.list_open_prs()
+        open_prs = config.resolved_forge.list_open_prs()
     except Exception as e:
         print(
             f"Self-healing warning: Failed to list open PRs: {e}",
@@ -169,7 +169,7 @@ def _apply_restore_missing_active_worktrees(
 
 def _restore_missing_active_worktrees(
     run_state: RunState,
-    in_progress_issues: list[github.IssueRecord],
+    in_progress_issues: list[IssueRecord],
     config: DispatcherConfig,
 ) -> bool:
     """in-progressなIssueからActiveWorktreeを復元する（decide+applyの薄いラッパー）。"""
@@ -182,12 +182,7 @@ def _restore_missing_active_worktrees(
 def _warn_missing_physical_worktrees(run_state: RunState) -> None:
     """物理的な git worktree が存在しない場合に警告ログを出す（読み取り専用）。"""
     try:
-        res = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        res = run_git(["worktree", "list", "--porcelain"], cwd=None, check=True)
         existing_worktree_paths = set()
         for line in res.stdout.splitlines():
             if line.startswith("worktree "):
@@ -211,7 +206,7 @@ def _warn_missing_physical_worktrees(run_state: RunState) -> None:
 
 def recover_run_state(
     run_state: RunState,
-    in_progress_issues: list[github.IssueRecord],
+    in_progress_issues: list[IssueRecord],
     config: DispatcherConfig,
 ) -> bool:
     """run_state.jsonが失われたり不整合が起きている場合に、GitHub API (in_progress_issues / open_prs)

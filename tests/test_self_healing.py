@@ -24,7 +24,7 @@ def test_recover_run_state_no_missing():
     assert len(run_state.active_worktrees) == 0
 
 
-@patch("orchestune.github.list_open_prs")
+@patch("orchestune.forge.GitHubForge.list_open_prs")
 @patch("subprocess.run")
 def test_recover_run_state_with_missing_no_pr(mock_subproc, mock_list_prs):
     # status:in-progress の Issue があるが、run_state にない場合 (PRなし)
@@ -74,7 +74,7 @@ footprint:
     assert active.external_id is None
 
 
-@patch("orchestune.github.list_open_prs")
+@patch("orchestune.forge.GitHubForge.list_open_prs")
 @patch("subprocess.run")
 def test_recover_run_state_with_missing_and_pr(mock_subproc, mock_list_prs):
     # status:in-progress の Issue があり、紐づく PR がある場合

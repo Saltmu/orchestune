@@ -31,11 +31,11 @@ class TestDecideActorVerification:
         task = _task(1)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="alice",
             ),
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
         ):
@@ -51,11 +51,11 @@ class TestDecideActorVerification:
         for permission in ("triage", "maintain", "admin"):
             with (
                 patch(
-                    "orchestune.dispatch_actor_verification.github.get_label_actor",
+                    "orchestune.forge.GitHubForge.get_label_actor",
                     return_value="alice",
                 ),
                 patch(
-                    "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                    "orchestune.forge.GitHubForge.get_actor_permission",
                     return_value=permission,
                 ),
             ):
@@ -66,11 +66,11 @@ class TestDecideActorVerification:
         task = _task(1)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="mallory",
             ),
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="read",
             ),
         ):
@@ -81,11 +81,11 @@ class TestDecideActorVerification:
         task = _task(1)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="mallory",
             ),
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="none",
             ),
         ):
@@ -96,11 +96,11 @@ class TestDecideActorVerification:
         task = _task(42)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="alice",
             ) as mock_get_actor,
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="write",
             ),
         ):
@@ -116,11 +116,11 @@ class TestDecideActorVerification:
         task = _task(1)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="",
             ),
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 return_value="none",
             ),
         ):
@@ -137,11 +137,11 @@ class TestDecideActorVerification:
         task = _task(1)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="",
             ),
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 side_effect=ValueError("ユーザー名が不正です: ''"),
             ),
         ):
@@ -155,11 +155,11 @@ class TestDecideActorVerification:
         task_bad, task_ok = _task(1), _task(2)
         with (
             patch(
-                "orchestune.dispatch_actor_verification.github.get_label_actor",
+                "orchestune.forge.GitHubForge.get_label_actor",
                 side_effect=["", "alice"],
             ),
             patch(
-                "orchestune.dispatch_actor_verification.github.get_actor_permission",
+                "orchestune.forge.GitHubForge.get_actor_permission",
                 side_effect=[ValueError("boom"), "write"],
             ),
         ):
@@ -169,6 +169,29 @@ class TestDecideActorVerification:
         assert decisions[1] == ActorVerificationDecision(
             task=task_ok, actor="alice", permission="write", is_authorized=True
         )
+
+
+class TestDecideActorVerificationWithFakeForge:
+    """#293: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
+    `forge`引数への注入だけでテストが書けることを示す。"""
+
+    def test_uses_injected_fake_forge_instead_of_patching(self):
+        from unittest.mock import MagicMock
+
+        task = _task(1)
+        fake_forge = MagicMock()
+        fake_forge.get_label_actor.return_value = "alice"
+        fake_forge.get_actor_permission.return_value = "write"
+
+        decisions = _decide_actor_verification([task], forge=fake_forge)
+
+        assert decisions == [
+            ActorVerificationDecision(
+                task=task, actor="alice", permission="write", is_authorized=True
+            )
+        ]
+        fake_forge.get_label_actor.assert_called_once_with(1, "status:queued")
+        fake_forge.get_actor_permission.assert_called_once_with("alice")
 
 
 class TestApplyActorVerification:

@@ -89,7 +89,7 @@ class TestDecideMissingActiveWorktrees:
     def test_no_missing_issues_returns_empty_without_calling_github(self):
         run_state = RunState(active_worktrees={"1": None})  # type: ignore[arg-type]
         issue = _issue_with_footprint(1, subtask_id="task-a")
-        with patch("orchestune.dispatch_recovery.github.list_open_prs") as mock_prs:
+        with patch("orchestune.forge.GitHubForge.list_open_prs") as mock_prs:
             result = _decide_missing_active_worktrees(
                 run_state,
                 [issue],
@@ -111,9 +111,7 @@ class TestDecideMissingActiveWorktrees:
             worktree_root=tmp_path / "worktrees",
         )
 
-        with patch(
-            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[]
-        ):
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
             result = _decide_missing_active_worktrees(run_state, [issue], config)
 
         assert len(result) == 1
@@ -139,9 +137,7 @@ class TestDecideMissingActiveWorktrees:
             worktree_root=tmp_path / "worktrees",
         )
 
-        with patch(
-            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[]
-        ):
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
             result = _decide_missing_active_worktrees(run_state, [issue], config)
 
         assert result[0][2].started_at is None
@@ -165,9 +161,7 @@ class TestDecideMissingActiveWorktrees:
             worktree_root=tmp_path / "worktrees",
         )
 
-        with patch(
-            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[pr]
-        ):
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[pr]):
             result = _decide_missing_active_worktrees(run_state, [issue], config)
 
         active = result[0][2]
@@ -193,9 +187,7 @@ class TestDecideMissingActiveWorktrees:
             parent_issue_number=100,
         )
 
-        with patch(
-            "orchestune.dispatch_recovery.github.list_open_prs", return_value=[]
-        ):
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
             result = _decide_missing_active_worktrees(
                 run_state,
                 [issue_under_parent_100, issue_under_parent_200],

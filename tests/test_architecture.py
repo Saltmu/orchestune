@@ -18,12 +18,6 @@ ALLOWED_L4_DEPENDENTS = {
 KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
     {
         "bootstrap",
-        "dispatch_launch",
-        "dispatch_locks",
-        "dispatch_rebase",
-        "dispatch_recovery",
-        "dispatch_targets",
-        "dispatch_worktree",
         "forge",
         "git_cli",
         "github",
