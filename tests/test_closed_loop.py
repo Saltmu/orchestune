@@ -363,26 +363,10 @@ def test_closed_loop_flow():
 
     # Apply patches to simulate GitHub API
     patches = [
-        patch(
-            "orchestune.github.list_issues_by_label", dummy_github.list_issues_by_label
-        ),
-        patch("orchestune.github.add_label", dummy_github.add_label),
-        patch("orchestune.github.remove_label", dummy_github.remove_label),
-        patch("orchestune.github.add_comment", dummy_github.add_comment),
-        patch("orchestune.github.list_open_prs", dummy_github.list_open_prs),
-        patch(
-            "orchestune.github.list_remote_branches", dummy_github.list_remote_branches
-        ),
-        patch(
-            "orchestune.github.branch_changed_files", dummy_github.branch_changed_files
-        ),
-        patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),
-        patch(
-            "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
-        ),
-        # #291: integrator系はForge注入経由でGitHubForgeを呼ぶため、
-        # dispatch_cycle向けのorchestune.github.*パッチとは別に
-        # GitHubForgeのクラスメソッドも同じdummy_githubへ差し替える。
+        # #292: dispatch_cycle/dispatch_gcはForge注入経由でGitHubForgeを呼び、
+        # list_remote_branches/branch_changed_filesはorchestune.git_cliから
+        # 直接importして使うため、GitHubForgeのクラスメソッドと
+        # dispatch_cycle自身の名前空間の両方を同じdummy_githubへ差し替える。
         patch(
             "orchestune.forge.GitHubForge.list_issues_by_label",
             dummy_github.list_issues_by_label,
@@ -391,6 +375,18 @@ def test_closed_loop_flow():
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
+        patch(
+            "orchestune.dispatch_cycle.list_remote_branches",
+            dummy_github.list_remote_branches,
+        ),
+        patch(
+            "orchestune.dispatch_cycle.branch_changed_files",
+            dummy_github.branch_changed_files,
+        ),
+        patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),
+        patch(
+            "orchestune.github.get_actor_permission", dummy_github.get_actor_permission
+        ),
     ]
 
     for p in patches:
@@ -606,24 +602,28 @@ def test_closed_loop_dag_recomputation_serialization():
 
     # Apply patches to simulate GitHub API
     patches = [
+        # #292: dispatch_cycle/dispatch_gcはForge注入経由でGitHubForgeを呼び、
+        # list_remote_branches/branch_changed_filesはorchestune.git_cliから
+        # 直接importして使うため、GitHubForgeのクラスメソッドと
+        # dispatch_cycle自身の名前空間の両方を同じdummy_githubへ差し替える。
         patch(
-            "orchestune.github.list_issues_by_label",
+            "orchestune.forge.GitHubForge.list_issues_by_label",
             dummy_github.list_issues_by_label,
         ),
         patch(
-            "orchestune.github.list_sub_issues",
+            "orchestune.forge.GitHubForge.list_sub_issues",
             dummy_github.list_sub_issues,
         ),
-        patch("orchestune.github.add_label", dummy_github.add_label),
-        patch("orchestune.github.remove_label", dummy_github.remove_label),
-        patch("orchestune.github.add_comment", dummy_github.add_comment),
-        patch("orchestune.github.list_open_prs", dummy_github.list_open_prs),
+        patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
+        patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
+        patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
+        patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
         patch(
-            "orchestune.github.list_remote_branches",
+            "orchestune.dispatch_cycle.list_remote_branches",
             dummy_github.list_remote_branches,
         ),
         patch(
-            "orchestune.github.branch_changed_files",
+            "orchestune.dispatch_cycle.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
         patch("orchestune.github.get_label_actor", dummy_github.get_label_actor),

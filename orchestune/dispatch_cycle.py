@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune import github
 from orchestune.dag_graph import recompute_dag_for_footprint_change
 from orchestune.dispatch_actor_verification import (
     _apply_actor_verification,
@@ -54,11 +53,16 @@ from orchestune.dispatch_state import (
 )
 from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.dispatch_worktree import file_lock
-from orchestune.github import IssueRecord, PrRecord
+from orchestune.git_cli import (
+    branch_changed_files,
+    ensure_parent_branch,
+    list_remote_branches,
+)
 from orchestune.integration_coordinator import (
     IntegrationCoordinator,
     record_pending_not_needed_review,
 )
+from orchestune.models import IssueRecord, PrRecord
 
 
 @dataclass
@@ -285,8 +289,8 @@ def _apply_blocked_promotions(
     events: list[dict] = []
     for task in promotable:
         if config.apply:
-            github.remove_label(task.issue_number, "status:blocked")
-            github.add_label(task.issue_number, "status:queued")
+            config.resolved_forge.remove_label(task.issue_number, "status:blocked")
+            config.resolved_forge.add_label(task.issue_number, "status:queued")
         events.append(
             {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
         )
@@ -314,7 +318,7 @@ def _decide_external_lock_sync(
 ) -> ExternalLockScanResult:
     """githubからの読み取り(list_remote_branches/branch_changed_files)と
     scan_external_locksの純粋計算のみを行い、ラベルの書き込みは行わない。"""
-    remote_branch_names = github.list_remote_branches()
+    remote_branch_names = list_remote_branches()
     active_branches = [aw.branch for aw in run_state.active_worktrees.values()]
     pr_head_refs = {pr.head_ref for pr in prs}
     bare_branches = [
@@ -327,7 +331,7 @@ def _decide_external_lock_sync(
     # scan_external_locks側でfail closed（lock維持・新規lock）に判定させる。
     remote_branch_footprints: list[tuple[str, tuple[str, ...] | None]] = []
     for branch in bare_branches:
-        changed_files = github.branch_changed_files(branch)
+        changed_files = branch_changed_files(branch)
         remote_branch_footprints.append(
             (
                 _strip_remote_prefix(branch),
@@ -347,16 +351,16 @@ def _apply_external_lock_sync(
     if not config.apply:
         return
     for task in lock_result.to_lock:
-        github.add_label(task.issue_number, "status:external-lock")
+        config.resolved_forge.add_label(task.issue_number, "status:external-lock")
     for task in lock_result.to_unlock:
-        github.remove_label(task.issue_number, "status:external-lock")
+        config.resolved_forge.remove_label(task.issue_number, "status:external-lock")
         # #197 / #214: ロック解除時、Taskの現在のラベル状態に基づき status:queued を冪等に再付与・同期する。
         # 既に Task オブジェクトが status:queued を持つ場合でも、GitHub上の実ラベル状態を確実に同期するための明示的処理。
         if (
             "status:queued" in task.status_labels
             and "status:done" not in task.status_labels
         ):
-            github.add_label(task.issue_number, "status:queued")
+            config.resolved_forge.add_label(task.issue_number, "status:queued")
 
 
 def _sync_external_locks(
@@ -420,7 +424,7 @@ class IssuesByStatus:
 
 
 def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
-    """#156: `github.list_sub_issues`が返す親Issue配下の全Issueを、
+    """#156: `forge.list_sub_issues`が返す親Issue配下の全Issueを、
     `list_issues_by_label`のstate引数（open/all）と同じ意味論でステータス
     ラベル別に分類する（`status:done`/`status:not-needed`はclosedも含める）。"""
     queued: list[IssueRecord] = []
@@ -460,24 +464,28 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
 
     #156: `config.parent_issue_number`が指定されている場合、無関係な親配下の
     Issueまでリポジトリ全体から取得して後段で破棄する無駄を避けるため、
-    `github.list_sub_issues`による親Issue起点のfast pathを使う。
+    `forge.list_sub_issues`による親Issue起点のfast pathを使う。
     """
     if config.parent_issue_number is not None:
-        return _group_by_status(github.list_sub_issues(config.parent_issue_number))
+        return _group_by_status(
+            config.resolved_forge.list_sub_issues(config.parent_issue_number)
+        )
 
     return IssuesByStatus(
-        queued=github.list_issues_by_label("status:queued"),
-        locked=github.list_issues_by_label("status:external-lock"),
-        in_progress=github.list_issues_by_label("status:in-progress"),
-        blocked=github.list_issues_by_label("status:blocked"),
+        queued=config.resolved_forge.list_issues_by_label("status:queued"),
+        locked=config.resolved_forge.list_issues_by_label("status:external-lock"),
+        in_progress=config.resolved_forge.list_issues_by_label("status:in-progress"),
+        blocked=config.resolved_forge.list_issues_by_label("status:blocked"),
         # #236: 完了Issueは人間が通常のGitHub運用でCloseすることが多いため、
         # 依存解決判定はclosedなIssueも含めて検索する。
-        done=github.list_issues_by_label("status:done", state="all"),
+        done=config.resolved_forge.list_issues_by_label("status:done", state="all"),
         # #280: セッションがstatus:not-neededを付与すると同時にstatus:in-progressを
         # 外すため、in_progress側の一覧には現れなくなる。tasks_by_issueに含めて
         # おかないと_process_active_worktrees側で完了検知できず、依存解決からも
         # 漏れてしまう（closedなIssueもクローズ後の依存解決に必要なためstate="all"）。
-        not_needed=github.list_issues_by_label("status:not-needed", state="all"),
+        not_needed=config.resolved_forge.list_issues_by_label(
+            "status:not-needed", state="all"
+        ),
     )
 
 
@@ -498,7 +506,9 @@ def _self_heal_run_state(
     """
     if not (config.apply and not Path(config.run_state_path).exists()):
         return
-    in_progress_issues = github.list_issues_by_label("status:in-progress")
+    in_progress_issues = config.resolved_forge.list_issues_by_label(
+        "status:in-progress"
+    )
     if recover_run_state(run_state, in_progress_issues, config):
         save_run_state(
             run_state,
@@ -532,7 +542,7 @@ def _build_cycle_context(
         if task.subtask_id
     }
 
-    prs = github.list_open_prs(paginate_files=True)
+    prs = config.resolved_forge.list_open_prs(paginate_files=True)
 
     done_subtask_ids = {
         task.subtask_id
@@ -724,7 +734,7 @@ def _apply_dual_status_reconciliation(
     events: list[dict] = []
     for task in tasks:
         if config.apply:
-            github.remove_label(task.issue_number, "status:done")
+            config.resolved_forge.remove_label(task.issue_number, "status:done")
         events.append(
             {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
         )
@@ -767,7 +777,9 @@ def _handle_blocked_recompute_recovery(
 
         if task.subtask_id not in active_conflict_subtask_ids:
             if config.apply:
-                github.remove_label(issue.number, "status:blocked-recompute")
+                config.resolved_forge.remove_label(
+                    issue.number, "status:blocked-recompute"
+                )
 
             done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
             has_pending_deps = any(
@@ -776,8 +788,8 @@ def _handle_blocked_recompute_recovery(
 
             if not has_pending_deps:
                 if config.apply:
-                    github.remove_label(issue.number, "status:blocked")
-                    github.add_label(issue.number, "status:queued")
+                    config.resolved_forge.remove_label(issue.number, "status:blocked")
+                    config.resolved_forge.add_label(issue.number, "status:queued")
                 recompute_resolved_promoted_events.append(
                     {"issue_number": issue.number, "subtask_id": task.subtask_id}
                 )
@@ -792,7 +804,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         now = time.time()
 
         if config.parent_issue_number is not None and config.apply:
-            github.ensure_parent_branch(config.parent_issue_number)
+            ensure_parent_branch(config.parent_issue_number)
 
         issues = _fetch_issues(config)
         _self_heal_run_state(run_state, config)

@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-from orchestune import github
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_rules import (
@@ -24,6 +23,13 @@ from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )
+from orchestune.git_cli import (
+    fetch_remote_branch,
+    normalize_remote_branch_name,
+    resolve_local_or_remote_branch,
+    run_git,
+)
+from orchestune.models import PrRecord
 from orchestune.process_utils import is_process_alive
 
 
@@ -34,12 +40,7 @@ def worktree_has_uncommitted_changes(worktree_path: str | Path) -> bool:
     クオータ解放を優先し安全側でクリーン（変更なし）として扱う。
     """
     try:
-        result = subprocess.run(
-            ["git", "-C", str(worktree_path), "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        result = run_git(["status", "--porcelain"], cwd=worktree_path, check=True)
     except (subprocess.CalledProcessError, OSError):
         return False
     return bool(result.stdout.strip())
@@ -63,12 +64,7 @@ def backup_wip_commit(worktree_path: str | Path, commit_message: str) -> str | N
       削除・rebaseを中止して退避未完了として扱うこと）。
     """
     try:
-        status = subprocess.run(
-            ["git", "-C", str(worktree_path), "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        status = run_git(["status", "--porcelain"], cwd=worktree_path, check=True)
     except (subprocess.CalledProcessError, OSError) as e:
         return _describe_git_error(e)
 
@@ -76,18 +72,8 @@ def backup_wip_commit(worktree_path: str | Path, commit_message: str) -> str | N
         return None
 
     try:
-        subprocess.run(
-            ["git", "-C", str(worktree_path), "add", "-A"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(worktree_path), "commit", "-m", commit_message],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        run_git(["add", "-A"], cwd=worktree_path, check=True)
+        run_git(["commit", "-m", commit_message], cwd=worktree_path, check=True)
     except (subprocess.CalledProcessError, OSError) as e:
         return _describe_git_error(e)
     return None
@@ -105,21 +91,13 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
     try:
         # #172: 親ブランチがリモート追跡ブランチとしてのみ存在する場合に対応するため、
         # 比較前に解決を試みる（デフォルトでローカル優先、なければリモートにフォールバック）。
-        resolved_base = github.resolve_local_or_remote_branch(
+        resolved_base = resolve_local_or_remote_branch(
             worktree_path,
             base_branch,
         )
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(worktree_path),
-                "rev-list",
-                "--count",
-                f"{resolved_base}..HEAD",
-            ],
-            capture_output=True,
-            text=True,
+        result = run_git(
+            ["rev-list", "--count", f"{resolved_base}..HEAD"],
+            cwd=worktree_path,
             check=True,
         )
         return int(result.stdout.strip() or "0") > 0
@@ -143,31 +121,20 @@ def remote_branch_commit_sha_if_ahead(
     ないため安全側の ``None`` を返す。
     """
     try:
-        remote_branch = github.fetch_remote_branch(repository_root, branch)
-        remote_base = github.fetch_remote_branch(
+        remote_branch = fetch_remote_branch(repository_root, branch)
+        remote_base = fetch_remote_branch(
             repository_root,
-            github.normalize_remote_branch_name(base_branch),
+            normalize_remote_branch_name(base_branch),
         )
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repository_root),
-                "rev-list",
-                "--count",
-                f"{remote_base}..{remote_branch}",
-            ],
-            capture_output=True,
-            text=True,
+        result = run_git(
+            ["rev-list", "--count", f"{remote_base}..{remote_branch}"],
+            cwd=repository_root,
             check=True,
         )
         if int(result.stdout.strip() or "0") == 0:
             return None
-        sha_result = subprocess.run(
-            ["git", "-C", str(repository_root), "rev-parse", remote_branch],
-            capture_output=True,
-            text=True,
-            check=True,
+        sha_result = run_git(
+            ["rev-parse", remote_branch], cwd=repository_root, check=True
         )
         return sha_result.stdout.strip() or None
     except (subprocess.CalledProcessError, OSError, ValueError) as exc:
@@ -183,12 +150,7 @@ def remove_worktree(worktree_path: str | Path) -> None:
     """#193: 完了したworktreeを撤去する。既に手動削除済み等の失敗は無視する
     （run_stateからのクオータ解放を妨げないことを優先する）。"""
     try:
-        subprocess.run(
-            ["git", "worktree", "remove", str(worktree_path)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        run_git(["worktree", "remove", str(worktree_path)], cwd=None, check=True)
     except (subprocess.CalledProcessError, OSError):
         pass
 
@@ -276,20 +238,16 @@ def _apply_completed_worktree_outcome(
     if config.apply:
         if active.external_id is None:
             try:
-                res = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=active.worktree_path,
-                    capture_output=True,
-                    text=True,
-                    check=True,
+                res = run_git(
+                    ["rev-parse", "HEAD"], cwd=active.worktree_path, check=True
                 )
                 commit_sha = res.stdout.strip()
             except Exception:
                 pass
 
         remove_worktree(active.worktree_path)
-        github.remove_label(active.issue_number, "status:in-progress")
-        github.add_label(active.issue_number, "status:done")
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(active.issue_number, "status:done")
 
     event["subtask_id"] = decision.subtask_id
     event["commit_sha"] = commit_sha
@@ -348,7 +306,7 @@ def _finalize_not_needed_worktree(
     # 以降はact: worktree撤去・githubラベル/クローズ・検証レビューの起動を行う。
     if config.apply:
         remove_worktree(active.worktree_path)
-        github.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
 
         if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
             if dispatch_not_needed_review is None:
@@ -356,7 +314,7 @@ def _finalize_not_needed_worktree(
             dispatch_not_needed_review(active.issue_number, subtask_id, config)
             event["action"] = "not_needed_review_dispatched"
         else:
-            github.close_issue(
+            config.resolved_forge.close_issue(
                 active.issue_number,
                 "not planned",
                 comment=(
@@ -483,7 +441,7 @@ def _apply_zombie_or_timeout_reclaim(
                 active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
             )
             if backup_error is not None:
-                github.add_comment(
+                config.resolved_forge.add_comment(
                     active.issue_number,
                     f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
                     f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
@@ -500,14 +458,14 @@ def _apply_zombie_or_timeout_reclaim(
         if worktree_exists:
             remove_worktree(active.worktree_path)
 
-        github.remove_label(active.issue_number, "status:in-progress")
-        github.add_label(active.issue_number, "status:queued")
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(active.issue_number, "status:queued")
         worktree_note = (
             "作業ブランチにWIPコミットを退避した上で、"
             if worktree_exists
             else "物理worktreeが見つからなかったため、"
         )
-        github.add_comment(
+        config.resolved_forge.add_comment(
             active.issue_number,
             f"タスク実行が {reason} のため、GCにより{worktree_note}"
             "タスクを再キューイング（status:queued）しました。",
@@ -562,19 +520,21 @@ def _parse_github_timestamp(value: str) -> float | None:
         return None
 
 
-def _is_stale_closed_pr_for_active(pr: github.PrRecord, active: ActiveWorktree) -> bool:
+def _is_stale_closed_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
     if pr.state != "CLOSED" or active.started_at is None:
         return False
     closed_at = _parse_github_timestamp(pr.closed_at)
     return closed_at is not None and closed_at < active.started_at
 
 
-def _local_pr_completion_status(active: ActiveWorktree) -> str:
+def _local_pr_completion_status(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> str:
     handle = _active_dispatch_handle(active)
     # `ctx.prs` is typically populated from open PRs for lock/CI scans.  Abandoned
     # detection must also see closed-unmerged PRs, so query all PR states here.
     try:
-        candidate_prs = github.list_prs(state="all")
+        candidate_prs = config.resolved_forge.list_prs(state="all")
     except Exception:
         return "unknown"
     matching_prs = [
@@ -624,9 +584,9 @@ def _finalize_abandoned_cloud_worktree(
         return event
     if config.apply:
         remove_worktree(active.worktree_path)
-        github.remove_label(active.issue_number, "status:in-progress")
-        github.add_label(active.issue_number, "status:queued")
-        github.add_comment(
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(active.issue_number, "status:queued")
+        config.resolved_forge.add_comment(
             active.issue_number,
             "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
             "GCによりタスクを再キューイング（status:queued）しました。",
@@ -750,10 +710,11 @@ def _abandoned_worktree_outcome(
 
 def _find_recovery_pr(
     active: ActiveWorktree,
-) -> github.PrRecord | None:
+    config: DispatcherConfig,
+) -> PrRecord | None:
     """Find a current task PR across all states; None means retry next cycle."""
     try:
-        all_prs = github.list_prs(state="all")
+        all_prs = config.resolved_forge.list_prs(state="all")
     except Exception:
         return None
     matching_prs = [
@@ -773,7 +734,7 @@ def _rule_completed(
         # #198: 自己修復したローカルTaskはPIDを復元できないため、PID消失を
         # 完了シグナルにできない。後続サイクルで当該IssueをcloseするPRを検出
         # した場合だけ、そのリモートブランチを検証して完了判定へ進める。
-        recovery_pr = _find_recovery_pr(active)
+        recovery_pr = _find_recovery_pr(active, ctx.config)
         if recovery_pr is None:
             return None
         if recovery_pr.state.upper() == "CLOSED":
@@ -793,7 +754,7 @@ def _rule_completed(
     else:
         if not _is_worktree_complete(active, ctx.config):
             return None
-        local_pr_status = _local_pr_completion_status(active)
+        local_pr_status = _local_pr_completion_status(active, ctx.config)
         if local_pr_status == "abandoned":
             return _abandoned_worktree_outcome(ctx, key, active, active_task)
         if local_pr_status == "unknown":
