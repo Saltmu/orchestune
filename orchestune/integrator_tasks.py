@@ -4,17 +4,16 @@ import sys
 
 from orchestune import github
 from orchestune.dag import SubTask, build_dag
-from orchestune.dispatcher import Task, parse_task_from_issue
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+from orchestune.models import Task
 
 
 def build_issue_to_subtask_id_map(issues: list[github.IssueRecord]) -> dict[int, str]:
     import yaml
 
-    from orchestune.dispatch_scoring import _FOOTPRINT_BLOCK_PATTERN
-
     issue_to_subtask_id = {}
     for issue in issues:
-        match = _FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+        match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
         if match:
             try:
                 data = yaml.safe_load(match.group(1))
