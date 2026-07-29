@@ -11,7 +11,7 @@ from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_scoring import Task
 
 if TYPE_CHECKING:
-    from orchestune.dispatcher import DispatcherConfig
+    from orchestune.dispatch_config import DispatcherConfig
 
 _AUTHORIZED_PERMISSIONS = frozenset({"admin", "maintain", "write", "triage"})
 
