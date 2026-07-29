@@ -23,12 +23,14 @@ EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge"},
     "git": {"git_cli"},
 }
-_SUBPROCESS_CALLS = frozenset({"run", "Popen", "check_call", "check_output"})
+_SUBPROCESS_CALLS = frozenset({"run", "call", "Popen", "check_call", "check_output"})
 _COMMANDS = frozenset({"git", "gh"})
 _SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _LAYER_ROW = re.compile(r"^\s*\|\s*\*\*L(\d)\*\*")
 _COMMAND_ROW = re.compile(r"^\s*\|\s*`(git|gh)`\s*\|")
-_BACKTICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
+# Dotted so a module under a subpackage can be documented as `sub.worker`,
+# matching the name `_module_name()` produces for it.
+_BACKTICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)`")
 
 
 def _module_name(path: Path) -> str:
@@ -47,19 +49,35 @@ def _package_modules() -> dict[str, Path]:
     return {_module_name(path): path for path in PACKAGE_ROOT.rglob("*.py")}
 
 
-def _relative_import_name(current_module: str, node: ast.ImportFrom) -> str | None:
+def _relative_import_name(
+    current_module: str, node: ast.ImportFrom, *, is_package: bool
+) -> str | None:
+    """`from . import x` / `from ..y import z` の解決先モジュール名を返す。
+
+    相対importの基準は「そのモジュールが属するパッケージ」であり、`__init__.py`
+    ではモジュール自身がそのパッケージになる。`orchestune/sub/__init__.py` の
+    `from .. import cli` は `orchestune.cli` を指すが、`orchestune/foo.py` の
+    同じ記述は1つ上（存在しない親）を指す。この違いを `is_package` で分ける。
+    """
     if node.level == 0:
         return node.module
 
-    package_parts = current_module.rsplit(".", 1)[0].split(".")
+    base = current_module if is_package else current_module.rsplit(".", 1)[0]
+    package_parts = base.split(".")
     parent_parts = package_parts[: len(package_parts) - node.level + 1]
+    if not parent_parts:
+        return None
     if node.module:
         parent_parts.extend(node.module.split("."))
     return ".".join(parent_parts) or None
 
 
 def _internal_imports(
-    current_module: str, tree: ast.AST, known_modules: set[str]
+    current_module: str,
+    tree: ast.AST,
+    known_modules: set[str],
+    *,
+    is_package: bool,
 ) -> set[str]:
     imports: set[str] = set()
     for node in ast.walk(tree):
@@ -72,14 +90,16 @@ def _internal_imports(
         if not isinstance(node, ast.ImportFrom):
             continue
 
-        module_name = _relative_import_name(current_module, node)
+        module_name = _relative_import_name(current_module, node, is_package=is_package)
         if module_name in known_modules:
             imports.add(module_name)
-        if module_name == PACKAGE_NAME:
+        if module_name is not None:
+            # `from orchestune import dispatch_gc` / `from . import worker` は、
+            # パッケージ名そのものではなく個々のサブモジュールへの依存でもある。
             imports.update(
-                f"{PACKAGE_NAME}.{alias.name}"
+                f"{module_name}.{alias.name}"
                 for alias in node.names
-                if f"{PACKAGE_NAME}.{alias.name}" in known_modules
+                if f"{module_name}.{alias.name}" in known_modules
             )
     imports.discard(current_module)
     return imports
@@ -92,7 +112,10 @@ def _import_graph() -> dict[str, set[str]]:
         module.removeprefix(f"{PACKAGE_NAME}."): {
             dependency.removeprefix(f"{PACKAGE_NAME}.")
             for dependency in _internal_imports(
-                module, ast.parse(path.read_text(encoding="utf-8")), known_modules
+                module,
+                ast.parse(path.read_text(encoding="utf-8")),
+                known_modules,
+                is_package=path.name == "__init__.py",
             )
         }
         for module, path in modules.items()
@@ -217,31 +240,60 @@ def _subprocess_first_argument(
     return None
 
 
+def _scope_command_bindings(scope: ast.AST) -> dict[str, set[str]]:
+    """そのスコープが名前へ束縛しうるコマンドを、位置に関係なく全部集める。
+
+    ネストした関数から見た外側の名前は、定義時点ではなく**実行時**に解決される。
+    どの時点で呼ばれるかは静的には決まらないため、外側スコープが与えうる候補は
+    すべて考慮する（見逃すより過剰に報告する側へ倒す）。
+    """
+    candidates: dict[str, set[str]] = defaultdict(set)
+    for node in _nodes_in_scope(scope):
+        if isinstance(node, _SCOPE_NODES):
+            continue
+        targets, value = _assigned_names(node)
+        command = _leading_command(value)
+        if command is None:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                candidates[target.id].add(command)
+    return dict(candidates)
+
+
 def _scan_scope(
     scope: ast.AST,
-    bindings: dict[str, str],
+    inherited: dict[str, set[str]],
     subprocess_names: set[str],
     call_names: set[str],
     found: set[str],
 ) -> None:
     """1つのスコープを位置順に走査し、実行されたコマンド名を `found` へ集める。
 
-    名前の束縛はスコープごとに持ち、そのスコープ内で**その呼び出しより前に**
-    現れた代入だけを参照する。モジュール全体で1つのマップを共有すると、
-    `args` のようなありふれた名前を別々の関数が別のコマンドに使い回した際に、
-    最後の代入が全呼び出しへ適用されて誤判定になるため。
+    そのスコープ自身が代入する名前は、**その呼び出しより前に**現れた代入だけを
+    参照する（`args` のような名前を1つのスコープ内で別のコマンドに使い回しても
+    取り違えないため）。スコープ内で代入されない自由変数は、外側スコープが
+    与えうる候補すべてに解決する（実行時解決なので順序に頼れないため）。
     """
+    local_names = set(_scope_command_bindings(scope))
+    bindings: dict[str, str] = {}
     for node in _nodes_in_scope(scope):
         if isinstance(node, _SCOPE_NODES):
-            _scan_scope(node, dict(bindings), subprocess_names, call_names, found)
+            nested = dict(inherited)
+            nested.update(_scope_command_bindings(scope))
+            _scan_scope(node, nested, subprocess_names, call_names, found)
             continue
         if isinstance(node, ast.Call):
             argument = _subprocess_first_argument(node, subprocess_names, call_names)
             command = _leading_command(argument)
-            if command is None and isinstance(argument, ast.Name):
-                command = bindings.get(argument.id)
             if command is not None:
                 found.add(command)
+            elif isinstance(argument, ast.Name):
+                if argument.id in local_names:
+                    if argument.id in bindings:
+                        found.add(bindings[argument.id])
+                else:
+                    found.update(inherited.get(argument.id, ()))
             continue
         targets, value = _assigned_names(node)
         command = _leading_command(value)
@@ -281,7 +333,7 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
                 )
 
         found: set[str] = set()
-        _scan_scope(tree, {}, subprocess_names, call_names, found)
+        _scan_scope(tree, {}, subprocess_names, call_names, found)  # type: ignore[arg-type]
         for command in found:
             command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
     return dict(command_modules)
@@ -343,7 +395,9 @@ def test_internal_imports_are_not_hidden_inside_functions() -> None:
                         or alias.name.startswith(f"{PACKAGE_NAME}.")
                     ]
                 elif isinstance(node, ast.ImportFrom):
-                    imported = _relative_import_name(module, node)
+                    imported = _relative_import_name(
+                        module, node, is_package=path.name == "__init__.py"
+                    )
                     names = (
                         [imported]
                         if imported == PACKAGE_NAME
