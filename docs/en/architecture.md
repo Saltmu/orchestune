@@ -225,7 +225,12 @@ table above cannot silently drift from the code:
    (which would evade the cycle check). `cli` is exempt from the second rule
    because it defers entrypoint imports to keep startup fast.
 4. **The table is exhaustive.** Every `.py` file under `orchestune/` appears in
-   exactly one layer, in both the English and Japanese documents.
+   exactly one layer, in both the English and Japanese documents — with one
+   deliberate exception: `orchestune/__init__.py` itself. The package root
+   *declares* the boundary rather than living inside it, so it has no layer and
+   is not subject to rule 1. What it may import is checked separately: a
+   dedicated test asserts it pulls in no L4 entrypoint, which is the property
+   that would otherwise be lost.
 
 ### 5.3 Why `Forge` is a protocol, not a class
 

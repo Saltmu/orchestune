@@ -472,6 +472,10 @@ def test_tests_do_not_patch_removed_github_module() -> None:
 
 
 def test_documented_layers_cover_every_module_exactly_once() -> None:
+    # `orchestune/__init__.py` is the one file with no layer: it declares the
+    # boundary rather than living inside it. The exemption is stated in both
+    # architecture documents, and what the package root may import is asserted
+    # by `test_package_root_declares_a_public_api_without_entrypoints`.
     package_modules = {
         module.removeprefix(f"{PACKAGE_NAME}.")
         for module in _package_modules()
