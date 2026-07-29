@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune.dispatch_targets import DispatchTarget, LocalProcessDispatchTarget
+from orchestune.forge import Forge, GitHubForge
 
 
 @dataclass
@@ -25,6 +26,7 @@ class DispatcherConfig:
     parent_issue_number: int | None = None
     apply: bool = False
     dispatch_target: DispatchTarget | None = None
+    forge: Forge | None = None
     deviation_buffer_lines: int = 5
     max_recompute_retries: int = 2
     task_timeout_seconds: int = 0
@@ -35,3 +37,5 @@ class DispatcherConfig:
     def __post_init__(self) -> None:
         if self.dispatch_target is None:
             self.dispatch_target = LocalProcessDispatchTarget(log_dir=self.log_dir)
+        if self.forge is None:
+            self.forge = GitHubForge()
