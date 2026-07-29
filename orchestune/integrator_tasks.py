@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import sys
 
-from orchestune import github
 from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
+from orchestune.forge import Forge, GitHubForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
-from orchestune.models import Task
+from orchestune.models import IssueRecord, Task
 
 
-def build_issue_to_subtask_id_map(issues: list[github.IssueRecord]) -> dict[int, str]:
+def build_issue_to_subtask_id_map(issues: list[IssueRecord]) -> dict[int, str]:
     import yaml
 
     issue_to_subtask_id = {}
@@ -29,6 +29,7 @@ def build_issue_to_subtask_id_map(issues: list[github.IssueRecord]) -> dict[int,
 
 def get_sorted_done_tasks(
     parent_issue_number: int | None,
+    forge: Forge | None = None,
 ) -> tuple[list[Task], list[Task]]:
     """`status:done`タスクを依存関係のトポロジカル順に並べる。
 
@@ -36,7 +37,8 @@ def get_sorted_done_tasks(
     `subtask_id`を抽出できなかった`status:done`タスクで、マージ対象のIDに紐付けられない
     ため統合できない。
     """
-    done_issues = github.list_issues_by_label("status:done", state="all")
+    forge = forge or GitHubForge()
+    done_issues = forge.list_issues_by_label("status:done", state="all")
     if not done_issues:
         return [], []
 
@@ -49,7 +51,7 @@ def get_sorted_done_tasks(
         "status:done",
     ]:
         state = "all" if label == "status:done" else "open"
-        all_issues.extend(github.list_issues_by_label(label, state=state))
+        all_issues.extend(forge.list_issues_by_label(label, state=state))
 
     # parent_issue_number が指定されている場合、親Issueが一致する子Issueのみにフィルタリングする
     if parent_issue_number is not None:

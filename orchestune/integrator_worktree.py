@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
+
+from orchestune.git_cli import run_git
 
 
 class IntegrationWorktree:
@@ -38,10 +39,10 @@ class IntegrationWorktree:
             raise RuntimeError(
                 f"Refusing to remove unrecognized path (not a git worktree): {path}"
             )
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            cwd=str(self.original_root),
-            capture_output=True,
+        run_git(
+            ["worktree", "remove", "--force", str(path)],
+            cwd=self.original_root,
+            check=False,
         )
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)

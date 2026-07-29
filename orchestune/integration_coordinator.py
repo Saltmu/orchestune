@@ -30,7 +30,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from orchestune import github
 from orchestune.dispatch_targets import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,
@@ -38,6 +37,7 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
 )
 from orchestune.dispatch_worktree import file_lock
+from orchestune.forge import Forge, GitHubForge
 from orchestune.not_needed_review_state import (
     NotNeededReviewState,
     PendingNotNeededReview,
@@ -210,7 +210,9 @@ def record_pending_not_needed_review(
         save_not_needed_review_state(state, state_path)
 
 
-def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
+def process_pending_not_needed_reviews(
+    state_path: str | Path, forge: Forge | None = None
+) -> dict:
     """#282: 保留中の`status:not-needed`検証レビューをポーリングし、検証に通った
     ものはIssueを決定論的にクローズする。レビューセッション自身はクローズを
     実行しないため、この関数が「クローズしても問題ないものを実際にクローズする」
@@ -234,6 +236,7 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
       これにより「未処理エントリの取りこぼし」と「消費済みエントリの台帳復帰による
       永久pending化」の両方（いずれも#205と同種のリーク）を防ぐ。
     """
+    forge = forge or GitHubForge()
     lock_path = Path(state_path).with_suffix(".lock")
     with file_lock(lock_path):
         state = load_not_needed_review_state(state_path)
@@ -249,7 +252,7 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
         try:
             for entry in state.pending:
                 try:
-                    labels = github.get_issue_labels(entry.issue_number)
+                    labels = forge.get_issue_labels(entry.issue_number)
                 except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
                     print(
                         f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
@@ -259,14 +262,14 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
 
                 try:
                     if NOT_NEEDED_VERIFIED_LABEL in labels:
-                        _close_verified_issue(entry.issue_number)
-                        github.remove_label(
+                        _close_verified_issue(entry.issue_number, forge)
+                        forge.remove_label(
                             entry.issue_number, NOT_NEEDED_VERIFIED_LABEL
                         )
                         consumed.add(entry.issue_number)
                         closed_summary.append(entry.issue_number)
                     elif NOT_NEEDED_REJECTED_LABEL in labels:
-                        github.remove_label(
+                        forge.remove_label(
                             entry.issue_number, NOT_NEEDED_REJECTED_LABEL
                         )
                         consumed.add(entry.issue_number)
@@ -300,14 +303,14 @@ def process_pending_not_needed_reviews(state_path: str | Path) -> dict:
     }
 
 
-def _close_verified_issue(issue_number: int) -> None:
+def _close_verified_issue(issue_number: int, forge: Forge) -> None:
     """#205: クローズ成功確定前にpassedラベルを消費しないよう、クローズだけを
     独立させたヘルパー。前サイクルで一度クローズに成功していれば（ラベル除去だけが
     失敗して再試行された場合）、二重クローズによる誤動作（コメント重複等）を
     避けるためクローズ自体は再実行しない。
     """
-    if github.get_issue_state(issue_number) == "OPEN":
-        github.close_issue(
+    if forge.get_issue_state(issue_number) == "OPEN":
+        forge.close_issue(
             issue_number,
             "not planned",
             comment=(

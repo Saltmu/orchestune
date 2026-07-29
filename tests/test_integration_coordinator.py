@@ -226,17 +226,17 @@ class TestProcessPendingNotNeededReviews:
     def _state_with(self, *entries: PendingNotNeededReview, path):
         save_not_needed_review_state(NotNeededReviewState(pending=list(entries)), path)
 
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_no_pending_reviews_is_a_noop(self, mock_labels, tmp_path):
         path = tmp_path / "state.json"
         result = process_pending_not_needed_reviews(path)
         assert result == {"closed": [], "reopened": [], "still_pending": 0}
         mock_labels.assert_not_called()
 
-    @patch("orchestune.integration_coordinator.github.get_issue_state")
-    @patch("orchestune.integration_coordinator.github.close_issue")
-    @patch("orchestune.integration_coordinator.github.remove_label")
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_verified_label_closes_issue_and_mentions_human(
         self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
     ):
@@ -269,10 +269,10 @@ class TestProcessPendingNotNeededReviews:
         assert result["still_pending"] == 0
         assert load_not_needed_review_state(path).pending == []
 
-    @patch("orchestune.integration_coordinator.github.get_issue_state")
-    @patch("orchestune.integration_coordinator.github.close_issue")
-    @patch("orchestune.integration_coordinator.github.remove_label")
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_close_failure_keeps_passed_label_unconsumed_and_entry_pending(
         self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
     ):
@@ -294,10 +294,10 @@ class TestProcessPendingNotNeededReviews:
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
-    @patch("orchestune.integration_coordinator.github.get_issue_state")
-    @patch("orchestune.integration_coordinator.github.close_issue")
-    @patch("orchestune.integration_coordinator.github.remove_label")
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_one_entry_failure_does_not_block_others_from_saving(
         self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
     ):
@@ -325,10 +325,10 @@ class TestProcessPendingNotNeededReviews:
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [failing_entry]
 
-    @patch("orchestune.integration_coordinator.github.get_issue_state")
-    @patch("orchestune.integration_coordinator.github.close_issue")
-    @patch("orchestune.integration_coordinator.github.remove_label")
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_remove_label_failure_after_close_retries_without_double_closing(
         self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
     ):
@@ -364,9 +364,9 @@ class TestProcessPendingNotNeededReviews:
         assert second_result["still_pending"] == 0
         assert load_not_needed_review_state(path).pending == []
 
-    @patch("orchestune.integration_coordinator.github.close_issue")
-    @patch("orchestune.integration_coordinator.github.remove_label")
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_rejected_label_clears_without_closing(
         self, mock_labels, mock_remove, mock_close, tmp_path
     ):
@@ -386,7 +386,7 @@ class TestProcessPendingNotNeededReviews:
         assert result["reopened"] == [250]
         assert load_not_needed_review_state(path).pending == []
 
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_neither_label_present_keeps_entry_pending(self, mock_labels, tmp_path):
         path = tmp_path / "state.json"
         entry = PendingNotNeededReview(
@@ -400,7 +400,7 @@ class TestProcessPendingNotNeededReviews:
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_label_polling_failure_keeps_entry_pending(self, mock_labels, tmp_path):
         path = tmp_path / "state.json"
         entry = PendingNotNeededReview(
@@ -414,7 +414,7 @@ class TestProcessPendingNotNeededReviews:
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_base_exception_mid_loop_preserves_full_pending_state(
         self, mock_labels, tmp_path
     ):
@@ -449,10 +449,10 @@ class TestProcessPendingNotNeededReviews:
         remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
         assert remaining == {100, 200}
 
-    @patch("orchestune.integration_coordinator.github.get_issue_state")
-    @patch("orchestune.integration_coordinator.github.close_issue")
-    @patch("orchestune.integration_coordinator.github.remove_label")
-    @patch("orchestune.integration_coordinator.github.get_issue_labels")
+    @patch("orchestune.forge.GitHubForge.get_issue_state")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_base_exception_after_consuming_entry_drops_only_consumed(
         self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
     ):
