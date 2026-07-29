@@ -156,3 +156,33 @@ class TestEmptyRepoInit:
         assert exit_code == 1
         captured = capsys.readouterr()
         assert "staged" in captured.err.lower()
+
+    def test_empty_repo_initialization_surfaces_git_stderr_on_push_failure(
+        self, tmp_path, capsys
+    ):
+        """#294レビュー対応: run_git移行後もgitコマンド失敗時の実際のエラー
+        メッセージ（stderr）がユーザーに見えること（終了コードのみにならない）。"""
+        import subprocess
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        subprocess.run(["git", "init"], cwd=str(local_dir), check=True)
+        # 存在しないリモートを指すoriginを設定し、pushを確実に失敗させる。
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(tmp_path / "does-not-exist.git")],
+            cwd=str(local_dir),
+            check=True,
+        )
+
+        forge = _fake_forge(
+            result=BootstrapResult(created_labels=(), existing_labels=())
+        )
+
+        exit_code = run_bootstrap(forge=forge, cwd=local_dir)
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        # 単に終了コードだけでなく、gitの実際のエラー詳細が含まれていること。
+        assert (
+            "does-not-exist.git" in captured.err or "not found" in captured.err.lower()
+        )
