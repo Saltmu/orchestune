@@ -22,6 +22,7 @@ except ImportError:
 from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import BranchReachabilityError, DispatchTarget
+from orchestune.git_cli import resolve_local_or_remote_branch
 from orchestune.validation import validate_ref_name
 
 
@@ -154,8 +155,6 @@ def create_worktree_and_launch(
             else:
                 cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path)]
                 if base_branch:
-                    from orchestune.github import resolve_local_or_remote_branch
-
                     base_branch = resolve_local_or_remote_branch(
                         ".",
                         base_branch,

@@ -9,50 +9,10 @@ from pathlib import Path
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 PACKAGE_NAME = "orchestune"
 L4_MODULES = frozenset({"cli", "dispatcher", "dag", "monitor", "bootstrap"})
-KNOWN_CYCLE_MEMBERS = frozenset(
-    {
-        "dispatch_actor_verification",
-        "dispatch_config",
-        "dispatch_cycle",
-        "dispatch_escalation",
-        "dispatch_gc",
-        "dispatch_launch",
-        "dispatch_rebase",
-        "dispatch_recovery",
-        "dispatch_report",
-        "dispatch_rules",
-        "dispatch_targets",
-        "dispatch_worktree",
-        "dispatcher",
-        "integration_coordinator",
-        "integrator",
-        "integrator_git_ops",
-        "integrator_pr",
-        "integrator_tasks",
-        # parent_completion -> integrator_pr -> dispatcher -> parent_completion
-        # (dispatcher._process_parent_completionの関数内import経由)は元々存在
-        # した循環だが、以前の`_cycle_members`実装（探索順序に依存し、一部の
-        # 循環メンバーを見逃す欠陥があった）では検出されていなかった。
-        # Tarjan's SCCへの置き換えにより正しく検出されるようになったため
-        # 追加する。
-        "parent_completion",
-    }
-)
-KNOWN_L4_DEPENDENTS = {
+ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
-    "dag": frozenset({"cli", "dispatch_cycle", "dispatch_rebase", "integrator_tasks"}),
-    "dispatcher": frozenset(
-        {
-            "cli",
-            "dispatch_actor_verification",
-            "dispatch_recovery",
-            "dispatch_targets",
-            "integrator",
-            "integrator_git_ops",
-            "integrator_pr",
-            "integrator_tasks",
-        }
-    ),
+    "dag": frozenset({"cli"}),
+    "dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
 }
 KNOWN_SUBPROCESS_COMMAND_MODULES = frozenset(
@@ -240,16 +200,56 @@ def _subprocess_command_modules() -> set[str]:
 
 
 def test_package_import_graph_does_not_gain_cycles() -> None:
-    assert _cycle_members(_import_graph()) <= KNOWN_CYCLE_MEMBERS
+    assert _cycle_members(_import_graph()) == set()
 
 
 def test_l4_modules_do_not_gain_new_dependents() -> None:
     unexpected = {
-        module: dependents - KNOWN_L4_DEPENDENTS.get(module, frozenset())
+        module: dependents - ALLOWED_L4_DEPENDENTS.get(module, frozenset())
         for module, dependents in _l4_dependents(_import_graph()).items()
-        if dependents - KNOWN_L4_DEPENDENTS.get(module, frozenset())
+        if dependents - ALLOWED_L4_DEPENDENTS.get(module, frozenset())
     }
     assert unexpected == {}
+
+
+def test_internal_imports_are_not_hidden_inside_functions() -> None:
+    hidden_imports: list[str] = []
+    for module, path in _package_modules().items():
+        short_name = module.removeprefix(f"{PACKAGE_NAME}.")
+        if short_name == "cli":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for function in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        ):
+            for node in ast.walk(function):
+                if isinstance(node, ast.Import):
+                    names = [
+                        alias.name
+                        for alias in node.names
+                        if alias.name == PACKAGE_NAME
+                        or alias.name.startswith(f"{PACKAGE_NAME}.")
+                    ]
+                elif isinstance(node, ast.ImportFrom):
+                    imported = _relative_import_name(module, node)
+                    names = (
+                        [imported]
+                        if imported == PACKAGE_NAME
+                        or (
+                            imported is not None
+                            and imported.startswith(f"{PACKAGE_NAME}.")
+                        )
+                        else []
+                    )
+                else:
+                    names = []
+                hidden_imports.extend(
+                    f"{short_name}:{getattr(node, 'lineno', '?')}:{name}"
+                    for name in names
+                )
+    assert hidden_imports == []
 
 
 def test_git_and_gh_subprocess_modules_do_not_expand() -> None:

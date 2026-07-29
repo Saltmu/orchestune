@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune import github
+from orchestune.dag_graph import recompute_dag_for_footprint_change
 from orchestune.dispatch_actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
@@ -29,9 +30,14 @@ from orchestune.dispatch_launch import (
 from orchestune.dispatch_locks import (
     ExternalLockScanResult,
     _strip_remote_prefix,
+    check_footprint_deviation,
     scan_external_locks,
 )
-from orchestune.dispatch_rebase import _rule_auto_rebase, _rule_footprint_deviation
+from orchestune.dispatch_rebase import (
+    _build_subtasks_for_recompute,
+    _rule_auto_rebase,
+    _rule_footprint_deviation,
+)
 from orchestune.dispatch_recovery import _extract_raw_subtask_id, recover_run_state
 from orchestune.dispatch_rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
 from orchestune.dispatch_scoring import (
@@ -46,8 +52,13 @@ from orchestune.dispatch_state import (
     load_run_state,
     save_run_state,
 )
+from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.dispatch_worktree import file_lock
 from orchestune.github import IssueRecord, PrRecord
+from orchestune.integration_coordinator import (
+    IntegrationCoordinator,
+    record_pending_not_needed_review,
+)
 
 
 @dataclass
@@ -59,6 +70,22 @@ class CycleReport:
     completion_events: list[dict]
     promotion_events: list[dict]
     applied: bool
+
+
+def _dispatch_not_needed_review(
+    issue_number: int, subtask_id: str, config: DispatcherConfig
+) -> None:
+    dispatch_target = config.dispatch_target
+    if not isinstance(dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
+        raise RuntimeError("not-needed review requires a cloud routine dispatch target")
+    coordinator = IntegrationCoordinator(dispatch_target)
+    handle = coordinator.dispatch_not_needed_review(issue_number, subtask_id)
+    record_pending_not_needed_review(
+        config.not_needed_review_state_path,
+        issue_number=issue_number,
+        subtask_id=subtask_id,
+        session_handle=handle,
+    )
 
 
 def build_event_log_entry(report: CycleReport, now: float) -> dict:
@@ -542,6 +569,7 @@ def _build_cycle_context(
         prs=prs,
         pr_by_branch=pr_by_branch,
         config=config,
+        not_needed_review_dispatcher=_dispatch_not_needed_review,
     )
 
 
@@ -646,9 +674,6 @@ def _collect_active_conflict_subtask_ids(
         if not active_task or not active_task.subtask_id:
             continue
 
-        from orchestune.dag import recompute_dag_for_footprint_change
-        from orchestune.dispatch_locks import check_footprint_deviation
-
         deviated = check_footprint_deviation(
             active.worktree_path,
             active.declared_footprint,
@@ -729,8 +754,6 @@ def _handle_blocked_recompute_recovery(
 
     if not blocked_recompute_issues:
         return recompute_resolved_promoted_events
-
-    from orchestune.dispatch_rebase import _build_subtasks_for_recompute
 
     subtasks_for_recompute = _build_subtasks_for_recompute(ctx.tasks_by_issue)
     active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(

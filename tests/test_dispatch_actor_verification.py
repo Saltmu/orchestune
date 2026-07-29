@@ -5,8 +5,8 @@ from orchestune.dispatch_actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
 )
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatcher import DispatcherConfig
 
 
 def _task(issue_number=1, status_labels=("status:queued",)):
