@@ -2489,6 +2489,44 @@ class TestIntegratorHybridPattern:
         res = runner.execute(ctx)
         assert res["status"] == "composite_failure"
 
+    def test_multi_issue_integrator_preserves_injected_forge_identity(self):
+        """#313レビュー対応: `copy.deepcopy(ctx)`によって注入済みForgeが
+        複製されず、各sub_ctxが同一のForgeインスタンスを参照し続けることを
+        確認する（fake_forgeの呼び出し履歴が複製ごとに分断されない）。"""
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegratorConfig,
+            MultiIssueIntegrator,
+        )
+
+        captured_forges = []
+
+        class CaptureForgeIntegrator(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                captured_forges.append(ctx.forge)
+                return {"status": "success"}
+
+        fake_forge = MagicMock()
+        runner = MultiIssueIntegrator(
+            [CaptureForgeIntegrator(), CaptureForgeIntegrator()]
+        )
+        config = IntegratorConfig(apply=True, forge=fake_forge)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        res = runner.execute(ctx)
+
+        assert res["status"] == "composite_success"
+        assert captured_forges == [fake_forge, fake_forge]
+
 
 class TestIntegrationMergerCI:
     def test_run_ci_poetry_install_and_env_detection(self, tmp_path):
