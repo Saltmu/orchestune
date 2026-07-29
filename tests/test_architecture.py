@@ -240,25 +240,31 @@ def _subprocess_first_argument(
     return None
 
 
-def _scope_command_bindings(scope: ast.AST) -> dict[str, set[str]]:
-    """そのスコープが名前へ束縛しうるコマンドを、位置に関係なく全部集める。
+def _scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]]]:
+    """そのスコープが代入する名前と、名前ごとのコマンド候補を返す。
 
-    ネストした関数から見た外側の名前は、定義時点ではなく**実行時**に解決される。
-    どの時点で呼ばれるかは静的には決まらないため、外側スコープが与えうる候補は
-    すべて考慮する（見逃すより過剰に報告する側へ倒す）。
+    候補は「そのスコープ内のあらゆる代入」の和集合であり、位置も分岐も条件も
+    問わない。`if` の片方だけで再代入される、ループで書き換わる、ネストした
+    関数から実行時に参照される — いずれも静的には実行経路が決まらないため、
+    ありうる束縛はすべて候補として扱う（見逃すより過剰に報告する側へ倒す）。
+
+    第1要素はコマンドリテラル以外を代入された名前も含む。Pythonではスコープ内で
+    一度でも代入された名前はそのスコープのローカルになるため、外側の同名を
+    引き継がないようにするのに必要。
     """
+    assigned: set[str] = set()
     candidates: dict[str, set[str]] = defaultdict(set)
     for node in _nodes_in_scope(scope):
         if isinstance(node, _SCOPE_NODES):
             continue
         targets, value = _assigned_names(node)
         command = _leading_command(value)
-        if command is None:
-            continue
         for target in targets:
             if isinstance(target, ast.Name):
-                candidates[target.id].add(command)
-    return dict(candidates)
+                assigned.add(target.id)
+                if command is not None:
+                    candidates[target.id].add(command)
+    return assigned, dict(candidates)
 
 
 def _scan_scope(
@@ -268,20 +274,21 @@ def _scan_scope(
     call_names: set[str],
     found: set[str],
 ) -> None:
-    """1つのスコープを位置順に走査し、実行されたコマンド名を `found` へ集める。
+    """1つのスコープを走査し、実行されたコマンド名を `found` へ集める。
 
-    そのスコープ自身が代入する名前は、**その呼び出しより前に**現れた代入だけを
-    参照する（`args` のような名前を1つのスコープ内で別のコマンドに使い回しても
-    取り違えないため）。スコープ内で代入されない自由変数は、外側スコープが
-    与えうる候補すべてに解決する（実行時解決なので順序に頼れないため）。
+    スコープ内で代入される名前はそのスコープの候補で解決し（外側の同名は
+    Pythonの規則どおり見えないので引き継がない）、代入されない自由変数は
+    外側から引き継いだ候補で解決する。
     """
-    local_names = set(_scope_command_bindings(scope))
-    bindings: dict[str, str] = {}
+    assigned, candidates = _scope_bindings(scope)
+    bindings = {
+        name: commands for name, commands in inherited.items() if name not in assigned
+    }
+    bindings.update(candidates)
+
     for node in _nodes_in_scope(scope):
         if isinstance(node, _SCOPE_NODES):
-            nested = dict(inherited)
-            nested.update(_scope_command_bindings(scope))
-            _scan_scope(node, nested, subprocess_names, call_names, found)
+            _scan_scope(node, bindings, subprocess_names, call_names, found)
             continue
         if isinstance(node, ast.Call):
             argument = _subprocess_first_argument(node, subprocess_names, call_names)
@@ -289,27 +296,15 @@ def _scan_scope(
             if command is not None:
                 found.add(command)
             elif isinstance(argument, ast.Name):
-                if argument.id in local_names:
-                    if argument.id in bindings:
-                        found.add(bindings[argument.id])
-                else:
-                    found.update(inherited.get(argument.id, ()))
-            continue
-        targets, value = _assigned_names(node)
-        command = _leading_command(value)
-        for target in targets:
-            if isinstance(target, ast.Name):
-                if command is None:
-                    bindings.pop(target.id, None)
-                else:
-                    bindings[target.id] = command
+                found.update(bindings.get(argument.id, ()))
 
 
 def _subprocess_command_modules() -> dict[str, set[str]]:
     """{コマンド: そのコマンドをsubprocess実行しているモジュール名}を返す。
 
     検出できるのは、コマンドリストがリテラルとして書かれている呼び出し
-    （直接渡す場合と、同じスコープでリテラルを代入した変数を渡す場合）です。
+    （直接渡す場合と、リテラルを代入した変数を渡す場合）です。変数経由の場合は
+    分岐やループを問わず、その名前が取りうる束縛をすべて候補とします。
     実行時に組み立てたリストや、他モジュールから受け取ったコマンドまでは
     追跡しません。
     """
@@ -333,7 +328,7 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
                 )
 
         found: set[str] = set()
-        _scan_scope(tree, {}, subprocess_names, call_names, found)  # type: ignore[arg-type]
+        _scan_scope(tree, {}, subprocess_names, call_names, found)
         for command in found:
             command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
     return dict(command_modules)
