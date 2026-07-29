@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 from orchestune import github
-from orchestune.dispatcher import Task
+from orchestune.models import Task
 
 # #295: GitHubコメントの肥大化を避けるため、末尾のみを埋め込む。
 # エラーメッセージ本体は通常出力の末尾に現れるため、これで十分な情報量を確保する。
