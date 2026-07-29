@@ -172,3 +172,71 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 **per-task承認の代替としてのCI**: セクション3で述べたマージ前CI検証は、実質的にサブタスク単位の人間レビューの代替として機能します。すべての子レベル統合PRは`parent/issue-{N}`にマージされる前にCIをパスする必要があるため、個々の差分を人間が見なくても機械的な正しさは自動的に担保されます。
 
 これにより、人間のレビュー労力を最も判断価値の高い2点（スコーピングと最終受け入れの1マージ）に集中させつつ、その間の機械的な処理（子レベルの自動マージ・自動クローズ、リベース、依存順序制御）は完全自動化されています。
+
+---
+
+## 5. モジュール層構造とパッケージ境界
+
+`orchestune/__init__.py` は、パッケージの公開APIを `__all__` で宣言します。
+そこに列挙されていないものはすべて内部実装であり、非推奨期間を置かずに
+改名・削除される可能性があります。
+
+### 5.1 5つの層
+
+`orchestune/` のすべてのモジュールは、ちょうど1つの層に属します。モジュールは
+自分と同じ層、または下位の層からのみimportでき、上位の層からはimportできません。
+
+| 層 | モジュール |
+| --- | --- |
+| **L4** エントリポイント — argparse配線と `main()` のみ | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor` |
+| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `parent_completion` |
+| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_gc`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
+| **L1** アダプタ — 外部CLIを実行する唯一のモジュール群 | `forge`, `git_cli` |
+| **L0** インフラ — 純粋なDTOと依存を持たないヘルパ | `dag_models`, `dispatch_result`, `json_state`, `models`, `process_utils`, `setup_skills`, `validation`, `version` |
+
+純粋なデータ転送モジュール（`models`, `dag_models`, `dispatch_result`）を
+アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
+`PrRecord` を返すためです。DTOを、それを生成するアダプタより上位に置くと、
+この依存が上向きになってしまいます。
+
+### 5.2 CIで機械的に検証される不変条件
+
+`tests/test_architecture.py` が毎回以下をすべて検証するため、上記の表が
+コードから静かに乖離することはありません。
+
+1. **依存は下向きのみ**。厳密に上位の層に属するモジュールをimportしてはならない。
+   特にL4のエントリポイントをimportしてよいのは、それらを合成する `cli` だけ。
+2. **外部CLIの実行はL1に閉じ込める**。`subprocess` 呼び出しは以下のとおり
+   厳密に分割されており、他のモジュールが新たに持つことは許されない。
+
+   | コマンド | 実行を許可されるモジュール |
+   | --- | --- |
+   | `gh` | `forge` |
+   | `git` | `git_cli` |
+
+3. **循環インポートはゼロ**。また、循環検知をすり抜ける関数内import（内部
+   モジュールに対するもの）も禁止。`cli` のみ、起動時間短縮のために
+   エントリポイントのimportを遅延させる目的で例外扱いとする。
+4. **表は網羅的である**。`orchestune/` 配下のすべての `.py` ファイルが、
+   英語版・日本語版の両ドキュメントでちょうど1つの層に現れる。
+
+### 5.3 なぜ `Forge` はクラスではなくプロトコルなのか
+
+L1の境界は、単一の具象クライアントではなく3つの `Protocol` クラスとして
+表現されています。これにより、呼び出し側は実際に使うGitHubの機能だけに
+依存できます。
+
+- `IssueForge` — Issueの読み取りとラベル操作
+- `PullRequestForge` — PRの列挙・作成・マージ
+- `RepoAdminForge` — 認証確認と必須ラベルの初期化
+
+`Forge` はこれらの合成であり、`GitHubForge` が唯一の `gh` 実装です。ラベルの
+初期化しか行わない呼び出し側（`run_bootstrap`）は `RepoAdminForge` を受け取る
+ため、誤ってPR系APIへ手を伸ばすことができず、テストダブルも20個ではなく
+2個のメソッドで済みます。
+
+抽象がプロトコルであるため、テストはモジュール属性をパッチする代わりに
+フェイクを注入できます。`IntegratorConfig(forge=...)` や
+`DispatcherConfig(forge=...)` はプロトコルを満たす任意のオブジェクトを
+受け付けます。これが、`mock.patch` の対象を張り巡らせることなく `gh` を
+テストスイートから締め出している仕組みです。

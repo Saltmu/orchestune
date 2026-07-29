@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ast
+import re
 from collections import defaultdict
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 TESTS_ROOT = Path(__file__).parent
+DOCS_ROOT = Path(__file__).parents[1] / "docs"
+DOC_LANGUAGES = ("en", "ja")
 PACKAGE_NAME = "orchestune"
 L4_MODULES = frozenset({"cli", "dispatcher", "dag", "monitor", "bootstrap"})
 ALLOWED_L4_DEPENDENTS = {
@@ -22,6 +25,9 @@ EXPECTED_SUBPROCESS_COMMAND_MODULES = {
 }
 _SUBPROCESS_CALLS = frozenset({"run", "Popen", "check_call", "check_output"})
 _COMMANDS = frozenset({"git", "gh"})
+_LAYER_ROW = re.compile(r"^\s*\|\s*\*\*L(\d)\*\*")
+_COMMAND_ROW = re.compile(r"^\s*\|\s*`(git|gh)`\s*\|")
+_BACKTICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
 
 
 def _module_name(path: Path) -> str:
@@ -263,6 +269,46 @@ def test_internal_imports_are_not_hidden_inside_functions() -> None:
     assert hidden_imports == []
 
 
+def _architecture_doc(lang: str) -> list[str]:
+    return (
+        (DOCS_ROOT / lang / "architecture.md").read_text(encoding="utf-8").splitlines()
+    )
+
+
+def _row_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _documented_layers(lang: str) -> dict[int, set[str]]:
+    """The `**L<n>**` rows of the module-layer table, as {layer: modules}."""
+    layers: dict[int, set[str]] = {}
+    for line in _architecture_doc(lang):
+        match = _LAYER_ROW.match(line)
+        if match is None:
+            continue
+        modules = set(_BACKTICKED.findall(_row_cells(line)[1]))
+        assert int(match.group(1)) not in layers, f"duplicate layer row in {lang}"
+        layers[int(match.group(1))] = modules
+    return layers
+
+
+def _documented_subprocess_partition(lang: str) -> dict[str, set[str]]:
+    """The command/module rows of the 'external CLIs stay in L1' table."""
+    return {
+        _row_cells(line)[0].strip("`"): set(_BACKTICKED.findall(_row_cells(line)[1]))
+        for line in _architecture_doc(lang)
+        if _COMMAND_ROW.match(line)
+    }
+
+
+def _module_layer(lang: str = "en") -> dict[str, int]:
+    return {
+        module: layer
+        for layer, modules in _documented_layers(lang).items()
+        for module in modules
+    }
+
+
 def test_git_and_gh_subprocess_modules_are_strictly_partitioned() -> None:
     assert _subprocess_command_modules() == EXPECTED_SUBPROCESS_COMMAND_MODULES
 
@@ -273,3 +319,65 @@ def test_github_compatibility_module_is_removed() -> None:
 
 def test_tests_do_not_patch_removed_github_module() -> None:
     assert _stale_github_patch_targets() == []
+
+
+def test_documented_layers_cover_every_module_exactly_once() -> None:
+    package_modules = {
+        module.removeprefix(f"{PACKAGE_NAME}.")
+        for module in _package_modules()
+        if module != PACKAGE_NAME
+    }
+    for lang in DOC_LANGUAGES:
+        layers = _documented_layers(lang)
+        listed = [module for modules in layers.values() for module in modules]
+        assert sorted(listed) == sorted(set(listed)), f"{lang}: module listed twice"
+        assert set(listed) == package_modules, f"{lang}: layer table is out of date"
+
+
+def test_layer_tables_agree_across_languages() -> None:
+    assert _documented_layers("en") == _documented_layers("ja")
+
+
+def test_documented_layers_are_consistent_with_the_l4_constant() -> None:
+    assert _documented_layers("en")[4] == set(L4_MODULES)
+
+
+def test_no_module_imports_a_strictly_higher_layer() -> None:
+    layer = _module_layer()
+    violations = [
+        f"{module}(L{layer[module]}) -> {dependency}(L{layer[dependency]})"
+        for module, dependencies in _import_graph().items()
+        if module in layer
+        for dependency in dependencies
+        # The package root itself is the boundary declaration, not a layer member;
+        # `from orchestune import <submodule>` records an edge to it.
+        if dependency in layer and layer[dependency] > layer[module]
+    ]
+    assert sorted(violations) == []
+
+
+def test_documented_subprocess_partition_matches_the_enforced_one() -> None:
+    expected = {
+        command: set(modules)
+        for command, modules in EXPECTED_SUBPROCESS_COMMAND_MODULES.items()
+    }
+    for lang in DOC_LANGUAGES:
+        assert _documented_subprocess_partition(lang) == expected, lang
+
+
+def test_package_root_declares_a_public_api_without_entrypoints() -> None:
+    import orchestune
+
+    assert orchestune.__all__ == sorted(orchestune.__all__)
+    assert len(orchestune.__all__) == len(set(orchestune.__all__))
+    exported_modules = {
+        getattr(getattr(orchestune, name), "__module__", "")
+        for name in orchestune.__all__
+    }
+    reexported = {
+        module.removeprefix(f"{PACKAGE_NAME}.")
+        for module in exported_modules
+        if module.startswith(f"{PACKAGE_NAME}.")
+    }
+    assert reexported & L4_MODULES == set()
+    assert _import_graph()[PACKAGE_NAME] & L4_MODULES == set()
