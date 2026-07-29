@@ -1,19 +1,27 @@
+import ast
 import json
 import subprocess
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.forge import (
     REQUIRED_LABELS,
     BootstrapResult,
+    Forge,
     ForgeAuthError,
     ForgeError,
     GitHubForge,
+    IssueForge,
     LabelSpec,
+    PullRequestForge,
+    RepoAdminForge,
 )
 from orchestune.github import _validate_label
+from orchestune.models import IssueRecord
 
 
 class TestGitHubForgeCheckAuth:
@@ -275,3 +283,60 @@ class TestBootstrapResult:
         assert result.existing_labels == ("b",)
         with pytest.raises(FrozenInstanceError):
             result.created_labels = ("c",)
+
+
+class TestForgeProtocols:
+    def test_github_forge_implements_each_focused_protocol(self):
+        forge = GitHubForge()
+
+        assert isinstance(forge, IssueForge)
+        assert isinstance(forge, PullRequestForge)
+        assert isinstance(forge, RepoAdminForge)
+        assert isinstance(forge, Forge)
+
+    def test_dispatcher_config_creates_default_github_forge(self):
+        assert isinstance(DispatcherConfig().forge, GitHubForge)
+
+    def test_dispatcher_config_accepts_fake_forge_without_mock_patch(self):
+        class FakeForge(GitHubForge):
+            def list_issues_by_label(
+                self, label: str, state: str = "open", limit: int = 1000
+            ) -> list[IssueRecord]:
+                return [
+                    IssueRecord(
+                        number=290,
+                        title=label,
+                        body=state,
+                        labels=(),
+                        created_at=str(limit),
+                    )
+                ]
+
+        fake_forge = FakeForge()
+        config = DispatcherConfig(forge=fake_forge)
+
+        assert config.forge is fake_forge
+        assert config.forge.list_issues_by_label("status:queued") == [
+            IssueRecord(
+                number=290,
+                title="status:queued",
+                body="open",
+                labels=(),
+                created_at="1000",
+            )
+        ]
+
+    def test_gh_command_literals_exist_only_in_forge_module(self):
+        package_root = Path(__file__).parents[1] / "orchestune"
+        modules_with_gh_commands: set[str] = set()
+
+        for path in package_root.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.List | ast.Tuple) or not node.elts:
+                    continue
+                command = node.elts[0]
+                if isinstance(command, ast.Constant) and command.value == "gh":
+                    modules_with_gh_commands.add(path.name)
+
+        assert modules_with_gh_commands == {"forge.py"}
