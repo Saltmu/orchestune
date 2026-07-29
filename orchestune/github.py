@@ -19,6 +19,7 @@ from orchestune.git_cli import (
     ensure_parent_branch,  # noqa: F401
     fetch_remote_branch,  # noqa: F401
     list_remote_branches,  # noqa: F401
+    normalize_remote_branch_name,  # noqa: F401
     resolve_local_or_remote_branch,  # noqa: F401
 )
 from orchestune.models import IssueRecord, PrRecord
@@ -26,7 +27,6 @@ from orchestune.validation import (  # noqa: F401
     validate_issue_number as _validate_issue_number,
 )
 from orchestune.validation import validate_label as _validate_label  # noqa: F401
-from orchestune.validation import validate_ref_name as _validate_ref_name
 from orchestune.validation import validate_username as _validate_username  # noqa: F401
 
 _DEFAULT_FORGE = GitHubForge()
@@ -131,10 +131,3 @@ def _is_check_passing(check: dict[str, object]) -> bool:
 
 def _status_check_contexts(rollup: object) -> list[dict[str, object]]:
     return GitHubForge._status_check_contexts(rollup)
-
-
-def normalize_remote_branch_name(branch: str) -> str:
-    """`origin/` 接頭辞の有無を吸収し、リモートのブランチ名を返す。"""
-    if branch.startswith("origin/"):
-        branch = branch.removeprefix("origin/")
-    return _validate_ref_name(branch)

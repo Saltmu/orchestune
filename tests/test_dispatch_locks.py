@@ -583,9 +583,9 @@ class TestCheckFootprintDeviation:
 
 
 class TestSyncExternalLocks:
-    @patch("orchestune.dispatch_cycle.github.list_remote_branches")
-    @patch("orchestune.dispatch_cycle.github.remove_label")
-    @patch("orchestune.dispatch_cycle.github.add_label")
+    @patch("orchestune.dispatch_cycle.list_remote_branches")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_sync_external_locks_unlocks_without_requeue_for_done_tasks(
         self, mock_add_label, mock_remove_label, mock_list_branches
     ):

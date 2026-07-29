@@ -39,3 +39,11 @@ class DispatcherConfig:
             self.dispatch_target = LocalProcessDispatchTarget(log_dir=self.log_dir)
         if self.forge is None:
             self.forge = GitHubForge()
+
+    @property
+    def resolved_forge(self) -> Forge:
+        """`__post_init__`が常に既定値を設定するため、`self.forge`自体は
+        `Forge | None`型だがここでは非Noneであることが保証される。
+        呼び出し側での重複した`is not None`チェックを避ける。"""
+        assert self.forge is not None
+        return self.forge

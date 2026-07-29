@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 
-from orchestune import github
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.forge import Forge, GitHubForge
 
 _REMOVABLE_STATUS_LABELS = ("status:in-progress", "status:queued", "status:blocked")
 
@@ -17,6 +17,7 @@ def apply_human_review_escalation(
     issue_number: int,
     current_status_labels: tuple[str, ...],
     comment: str,
+    forge: Forge | None = None,
 ) -> None:
     """現在保持しているstatus:*ラベル（in-progress/queued/blocked）を除去した上で
     status:blocked-human-reviewを付与し、理由をコメントする。
@@ -25,11 +26,12 @@ def apply_human_review_escalation(
     重複していたラベル遷移ロジックを集約したもの。`config.apply`によるゲーティング
     は呼び出し側の責務とし、この関数自体は常に無条件で実行する。
     """
+    forge = forge or GitHubForge()
     for label in _REMOVABLE_STATUS_LABELS:
         if label in current_status_labels:
-            github.remove_label(issue_number, label)
-    github.add_label(issue_number, "status:blocked-human-review")
-    github.add_comment(issue_number, comment)
+            forge.remove_label(issue_number, label)
+    forge.add_label(issue_number, "status:blocked-human-review")
+    forge.add_comment(issue_number, comment)
 
 
 def _decide_changes_requested_escalation(
@@ -62,6 +64,7 @@ def _apply_changes_requested_escalation(
             active.issue_number,
             ("status:in-progress",),
             "依存元PRが変更要求（Request Changes）を受けたため、スタックされたタスクを一時停止しました。",
+            forge=config.resolved_forge,
         )
         del run_state.active_worktrees[key]
     return {

@@ -9,7 +9,6 @@ from orchestune.github import (
     PrRecord,
     _validate_issue_number,
     _validate_label,
-    _validate_ref_name,
     _validate_username,
     add_comment,
     add_label,
@@ -31,6 +30,7 @@ from orchestune.github import (
     merge_pull_request,
     remove_label,
 )
+from orchestune.validation import validate_ref_name as _validate_ref_name
 
 
 class TestValidateIssueNumber:
