@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 
 from orchestune import github
-from orchestune.models import Task
 from orchestune.integrator_pr import handle_merge_failure
+from orchestune.models import Task
 
 
 class IntegrationMerger:
