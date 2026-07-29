@@ -28,7 +28,7 @@ from orchestune import github
 from orchestune.process_utils import is_process_alive
 
 if TYPE_CHECKING:
-    from orchestune.dispatcher import Task
+    from orchestune.models import Task
 
 ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
 ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
