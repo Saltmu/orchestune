@@ -174,16 +174,23 @@ from its own layer or from any layer below it, never from a layer above.
 
 | Layer | Modules |
 | --- | --- |
-| **L4** entrypoints — argparse wiring and `main()` only | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor` |
+| **L4** entrypoints — the modules that expose a `main()` | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor` |
 | **L3** workflows — dispatch cycle and integration pipelines | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `parent_completion` |
 | **L2** domain — DAG construction, scoring, dispatch mechanics | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_gc`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
-| **L1** adapters — the only modules that run an external CLI | `forge`, `git_cli` |
+| **L1** adapters — the only modules that run `git` or `gh` | `forge`, `git_cli` |
 | **L0** infra — pure DTOs and dependency-free helpers | `dag_models`, `dispatch_result`, `json_state`, `models`, `process_utils`, `setup_skills`, `validation`, `version` |
 
 Pure data-transfer modules (`models`, `dag_models`, `dispatch_result`) sit at
 **L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and
 `PrRecord`. Putting the DTOs above the adapter that produces them would make
 that dependency point upward.
+
+L4 is defined by "has a `main()` and nothing imports it", not by "contains only
+argparse wiring". Three of the five still carry code that predates this
+boundary: `dag` re-exports the whole `dag_*` package as a compatibility facade,
+`dispatcher` holds orchestration helpers, and `monitor` builds its own status
+snapshots. That is a known remnant, not a licence to add more — new code
+belongs in the layer that owns the behaviour.
 
 ### 5.2 Invariants enforced by CI
 
@@ -193,13 +200,20 @@ table above cannot silently drift from the code:
 1. **Dependencies point downward.** No module imports a module in a strictly
    higher layer. In particular nothing imports an L4 entrypoint except `cli`,
    which composes them.
-2. **External CLIs are confined to L1.** `subprocess` invocations are
-   partitioned exactly as follows — no other module may grow one.
+2. **`git` and `gh` are confined to L1.** `subprocess` invocations naming
+   either command are partitioned exactly as follows — no other module may
+   grow one.
 
    | Command | Module allowed to run it |
    | --- | --- |
    | `gh` | `forge` |
    | `git` | `git_cli` |
+
+   This covers the VCS and GitHub client surface only. Other external processes
+   are deliberately outside it and are not guarded: `dispatch_targets` launches
+   the agent CLIs, and `dispatch_rebase` and `integrator_git_ops` shell out to
+   the CI script and to `poetry`. Those are one-off process launches rather
+   than a client that callers need to fake, so they stay where they are used.
 
 3. **No import cycles**, and no internal import hidden inside a function body
    (which would evade the cycle check). `cli` is exempt from the second rule

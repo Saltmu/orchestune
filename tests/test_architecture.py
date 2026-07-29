@@ -279,21 +279,24 @@ def _row_cells(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def _documented_layers(lang: str) -> dict[int, set[str]]:
-    """The `**L<n>**` rows of the module-layer table, as {layer: modules}."""
-    layers: dict[int, set[str]] = {}
+def _documented_layers(lang: str) -> dict[int, list[str]]:
+    """The `**L<n>**` rows of the module-layer table, as {layer: modules}.
+
+    Each row stays a list rather than a set so that a module repeated inside one
+    row survives to be caught by the exact-once assertion.
+    """
+    layers: dict[int, list[str]] = {}
     for line in _architecture_doc(lang):
         match = _LAYER_ROW.match(line)
         if match is None:
             continue
-        modules = set(_BACKTICKED.findall(_row_cells(line)[1]))
         assert int(match.group(1)) not in layers, f"duplicate layer row in {lang}"
-        layers[int(match.group(1))] = modules
+        layers[int(match.group(1))] = _BACKTICKED.findall(_row_cells(line)[1])
     return layers
 
 
 def _documented_subprocess_partition(lang: str) -> dict[str, set[str]]:
-    """The command/module rows of the 'external CLIs stay in L1' table."""
+    """The command/module rows of the '`git`/`gh` stay in L1' table."""
     return {
         _row_cells(line)[0].strip("`"): set(_BACKTICKED.findall(_row_cells(line)[1]))
         for line in _architecture_doc(lang)
@@ -339,7 +342,7 @@ def test_layer_tables_agree_across_languages() -> None:
 
 
 def test_documented_layers_are_consistent_with_the_l4_constant() -> None:
-    assert _documented_layers("en")[4] == set(L4_MODULES)
+    assert set(_documented_layers("en")[4]) == set(L4_MODULES)
 
 
 def test_no_module_imports_a_strictly_higher_layer() -> None:
