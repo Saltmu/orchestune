@@ -9,12 +9,12 @@ from pathlib import Path
 
 from orchestune import github
 from orchestune.dispatch_worktree import file_lock
-from orchestune.models import Task
 from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
 from orchestune.integrator_tasks import get_sorted_done_tasks
 from orchestune.integrator_worktree import IntegrationWorktree
+from orchestune.models import Task
 
 
 @dataclass
