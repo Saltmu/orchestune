@@ -250,12 +250,18 @@ def _scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]]]:
 
     第1要素はコマンドリテラル以外を代入された名前も含む。Pythonではスコープ内で
     一度でも代入された名前はそのスコープのローカルになるため、外側の同名を
-    引き継がないようにするのに必要。
+    引き継がないようにするのに必要。ただし`global` / `nonlocal`宣言された名前は
+    代入してもローカルにならない（外側の名前そのものを書き換える）ので除外し、
+    外側から引き継いだ候補が残るようにする。
     """
     assigned: set[str] = set()
+    rebound_outer: set[str] = set()
     candidates: dict[str, set[str]] = defaultdict(set)
     for node in _nodes_in_scope(scope):
         if isinstance(node, _SCOPE_NODES):
+            continue
+        if isinstance(node, ast.Global | ast.Nonlocal):
+            rebound_outer.update(node.names)
             continue
         targets, value = _assigned_names(node)
         command = _leading_command(value)
@@ -264,7 +270,7 @@ def _scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]]]:
                 assigned.add(target.id)
                 if command is not None:
                     candidates[target.id].add(command)
-    return assigned, dict(candidates)
+    return assigned - rebound_outer, dict(candidates)
 
 
 def _scan_scope(
@@ -278,17 +284,26 @@ def _scan_scope(
 
     スコープ内で代入される名前はそのスコープの候補で解決し（外側の同名は
     Pythonの規則どおり見えないので引き継がない）、代入されない自由変数は
-    外側から引き継いだ候補で解決する。
+    外側から引き継いだ候補で解決する。`global` / `nonlocal`宣言された名前は
+    ローカルを作らないため、外側の候補と自スコープの候補を合わせて扱う。
     """
     assigned, candidates = _scope_bindings(scope)
     bindings = {
-        name: commands for name, commands in inherited.items() if name not in assigned
+        name: set(commands)
+        for name, commands in inherited.items()
+        if name not in assigned
     }
-    bindings.update(candidates)
+    for name, commands in candidates.items():
+        bindings[name] = bindings.get(name, set()) | commands
 
     for node in _nodes_in_scope(scope):
         if isinstance(node, _SCOPE_NODES):
-            _scan_scope(node, bindings, subprocess_names, call_names, found)
+            # クラス本体の名前はメソッドからは見えない（メソッド内の裸の名前は
+            # 外側の関数スコープ→モジュールグローバルへと解決され、クラス属性は
+            # 参照されない）。そのためクラス配下のスコープへは、クラス本体が
+            # 作った束縛ではなく、クラス自身が引き継いだ束縛をそのまま渡す。
+            nested = inherited if isinstance(scope, ast.ClassDef) else bindings
+            _scan_scope(node, nested, subprocess_names, call_names, found)
             continue
         if isinstance(node, ast.Call):
             argument = _subprocess_first_argument(node, subprocess_names, call_names)
