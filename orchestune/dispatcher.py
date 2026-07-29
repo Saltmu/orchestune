@@ -18,7 +18,7 @@ from orchestune.dispatch_targets import (
     build_dispatch_target,
     resolve_default_dispatch_target_name,
 )
-from orchestune.forge import ForgeAuthError, GitHubForge
+from orchestune.forge import Forge, ForgeAuthError, GitHubForge
 from orchestune.integration_coordinator import (
     IntegrationCoordinator,
     process_pending_not_needed_reviews,
@@ -198,7 +198,9 @@ def _run_best_effort_phase(
 
 
 def _poll_pending_not_needed_reviews(
-    args: argparse.Namespace, auth_error: ForgeAuthError | None = None
+    args: argparse.Namespace,
+    forge: Forge | None = None,
+    auth_error: ForgeAuthError | None = None,
 ) -> PhaseResult:
     """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
 
@@ -206,7 +208,9 @@ def _poll_pending_not_needed_reviews(
     """
 
     def work() -> dict:
-        return process_pending_not_needed_reviews(args.not_needed_review_state_path)
+        return process_pending_not_needed_reviews(
+            args.not_needed_review_state_path, forge=forge
+        )
 
     return _run_best_effort_phase(
         phase_name="poll_pending_not_needed_reviews",
@@ -242,6 +246,7 @@ def _run_semantic_integrator(
         integrator_config = IntegratorConfig(
             parent_issue_number=config.parent_issue_number,
             apply=config.apply,
+            forge=config.forge,
         )
         if semantic_review_enabled and isinstance(
             config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
@@ -279,7 +284,9 @@ def _process_parent_completion(
     """
 
     def work() -> dict:
-        return process_parent_completion(config.parent_issue_number, config.apply)
+        return process_parent_completion(
+            config.parent_issue_number, config.apply, forge=config.forge
+        )
 
     return _run_best_effort_phase(
         phase_name="process_parent_completion",
@@ -440,7 +447,9 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
 
             semantic_review_enabled = _decide_semantic_review_enabled()
             if semantic_review_enabled:
-                r1 = _poll_pending_not_needed_reviews(args, auth_error=auth_error)
+                r1 = _poll_pending_not_needed_reviews(
+                    args, forge=config.forge, auth_error=auth_error
+                )
                 post_cycle_results.append(r1)
             r2 = _run_semantic_integrator(
                 config, semantic_review_enabled, auth_error=auth_error

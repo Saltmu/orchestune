@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import sys
 
-from orchestune import github
-from orchestune.models import Task
+from orchestune.forge import Forge, GitHubForge
+from orchestune.models import PrRecord, Task
 
 # #295: GitHubコメントの肥大化を避けるため、末尾のみを埋め込む。
 # エラーメッセージ本体は通常出力の末尾に現れるため、これで十分な情報量を確保する。
 CI_OUTPUT_COMMENT_TAIL_CHARS = 4000
 
 
-def _is_reusable_integration_pr(pr: github.PrRecord, head: str, base: str) -> bool:
+def _is_reusable_integration_pr(pr: PrRecord, head: str, base: str) -> bool:
     """#243: head名だけの照合では、外部fork・別baseの同名branch PRを正規統合PRと
     誤認し、parent modeでは未検証のPRを自動マージし得る。upstream repository上の
     正規head（`is_cross_repository is False`）かつ指定base向けのPRだけを再利用し、
@@ -22,18 +22,22 @@ def _is_reusable_integration_pr(pr: github.PrRecord, head: str, base: str) -> bo
 
 
 def ensure_integration_pr(
-    temp_branch: str, base_branch: str, merged_tasks: list[str]
+    temp_branch: str,
+    base_branch: str,
+    merged_tasks: list[str],
+    forge: Forge | None = None,
 ) -> int | None:
     """統合ブランチ(`temp_branch`)から`base_branch`へのPRを作成/再利用する。
 
     既にopenなPRがあれば重複作成せずその番号を返す。PR作成自体に失敗しても
     （差分無し等）Integrator全体は失敗させず、警告ログのみ出して`None`を返す。
     """
+    forge = forge or GitHubForge()
     try:
         base = base_branch.removeprefix("origin/")
         existing = [
             pr
-            for pr in github.list_open_prs()
+            for pr in forge.list_open_prs()
             if _is_reusable_integration_pr(pr, temp_branch, base)
         ]
         if existing:
@@ -45,7 +49,7 @@ def ensure_integration_pr(
             )
         else:
             merge_note = "最終マージは人間が行ってください。"
-        return github.create_pull_request(
+        return forge.create_pull_request(
             head=temp_branch,
             base=base,
             title=f"Integrate completed tasks ({', '.join(merged_tasks)})",
@@ -61,7 +65,9 @@ def ensure_integration_pr(
 
 
 def ensure_parent_final_pr(
-    parent_issue_number: int, base_branch: str = "main"
+    parent_issue_number: int,
+    base_branch: str = "main",
+    forge: Forge | None = None,
 ) -> int | None:
     """#170: 親Issue配下の全子Issueが完了した際、`parent/issue-{N}`から
     `base_branch`への最終統合PRを用意する。
@@ -69,17 +75,18 @@ def ensure_parent_final_pr(
     このPRのマージが「最終マージ」であり、常に人間が行う。マージ検知後の
     親Issueクローズは`parent_completion.process_parent_completion`が担う。
     """
+    forge = forge or GitHubForge()
     try:
         head = f"parent/issue-{parent_issue_number}"
         existing = [
             pr
-            for pr in github.list_open_prs()
+            for pr in forge.list_open_prs()
             if _is_reusable_integration_pr(pr, head, base_branch)
         ]
         if existing:
             return existing[0].number
 
-        return github.create_pull_request(
+        return forge.create_pull_request(
             head=head,
             base=base_branch,
             title=f"Integrate parent issue #{parent_issue_number} into {base_branch}",
@@ -97,7 +104,11 @@ def ensure_parent_final_pr(
 
 
 def handle_merge_failure(
-    task: Task, reason: str, apply: bool, ci_output: str | None = None
+    task: Task,
+    reason: str,
+    apply: bool,
+    ci_output: str | None = None,
+    forge: Forge | None = None,
 ) -> None:
     if ci_output:
         # #295: ジョブログ（stderr）には切り詰めずに全文を残し、
@@ -107,6 +118,7 @@ def handle_merge_failure(
             file=sys.stderr,
         )
     if apply:
+        forge = forge or GitHubForge()
         # #254: remove→addの順だと、removeが成功した直後にaddが一時障害で
         # 例外を送出した場合、Issueがどのprimary status(`status:done`/
         # `status:queued`)にも属さなくなり、dispatcher/Integrator両方の
@@ -117,8 +129,8 @@ def handle_merge_failure(
         # - addは成功しremoveが失敗: status:queued/status:doneが
         #   一時的に両方付いた状態になるが、Issueが検索対象から
         #   消えることはなく、次cycleでremoveが再試行される。
-        github.add_label(task.issue_number, "status:queued")
-        github.remove_label(task.issue_number, "status:done")
+        forge.add_label(task.issue_number, "status:queued")
+        forge.remove_label(task.issue_number, "status:done")
         comment_body = (
             f"仮マージCIでエラーが検出されたため、マージを取り消し差し戻しました。\n"
             f"理由: {reason}\n"
@@ -131,4 +143,4 @@ def handle_merge_failure(
                 f"```\n{truncated}\n```\n</details>\n"
             )
         comment_body += "自動修復エージェントの再起動を待ちます。"
-        github.add_comment(task.issue_number, comment_body)
+        forge.add_comment(task.issue_number, comment_body)

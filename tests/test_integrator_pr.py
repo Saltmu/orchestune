@@ -31,9 +31,9 @@ class TestHandleMergeFailure:
     防ぐ。add(status:queued)をremove(status:done)より先に行うことで、
     途中失敗時も必ずどちらか一方が残る。"""
 
-    @patch("orchestune.integrator_pr.github.add_comment")
-    @patch("orchestune.integrator_pr.github.remove_label")
-    @patch("orchestune.integrator_pr.github.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_adds_queued_before_removing_done(
         self, mock_add_label, mock_remove_label, mock_add_comment
     ):
@@ -47,9 +47,9 @@ class TestHandleMergeFailure:
         mock_remove_label.assert_called_once_with(1, "status:done")
         assert call_order == ["add", "remove"]
 
-    @patch("orchestune.integrator_pr.github.add_comment")
-    @patch("orchestune.integrator_pr.github.remove_label")
-    @patch("orchestune.integrator_pr.github.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_add_label_failure_leaves_status_done_untouched(
         self, mock_add_label, mock_remove_label, mock_add_comment
     ):
@@ -66,9 +66,9 @@ class TestHandleMergeFailure:
         mock_remove_label.assert_not_called()
         mock_add_comment.assert_not_called()
 
-    @patch("orchestune.integrator_pr.github.add_comment")
-    @patch("orchestune.integrator_pr.github.remove_label")
-    @patch("orchestune.integrator_pr.github.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_remove_label_failure_after_add_succeeds_does_not_lose_status(
         self, mock_add_label, mock_remove_label, mock_add_comment
     ):
@@ -85,9 +85,9 @@ class TestHandleMergeFailure:
         mock_add_label.assert_called_once_with(1, "status:queued")
         mock_add_comment.assert_not_called()
 
-    @patch("orchestune.integrator_pr.github.add_comment")
-    @patch("orchestune.integrator_pr.github.remove_label")
-    @patch("orchestune.integrator_pr.github.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_success_posts_comment_with_reason(
         self, mock_add_label, mock_remove_label, mock_add_comment
     ):
@@ -98,9 +98,9 @@ class TestHandleMergeFailure:
         assert mock_add_comment.call_args[0][0] == 1
         assert "Merge conflict: boom" in mock_add_comment.call_args[0][1]
 
-    @patch("orchestune.integrator_pr.github.add_comment")
-    @patch("orchestune.integrator_pr.github.remove_label")
-    @patch("orchestune.integrator_pr.github.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_dry_run_does_not_touch_labels_or_comments(
         self, mock_add_label, mock_remove_label, mock_add_comment
     ):
@@ -114,8 +114,8 @@ class TestHandleMergeFailure:
 class TestEnsureIntegrationPrIdentity:
     """#243: head名だけの照合で外部fork・別baseのPRを再利用しないことを検証する。"""
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_reuses_pr_with_verified_head_base_and_same_repo(
         self, mock_create_pr, mock_open_prs
     ):
@@ -136,8 +136,8 @@ class TestEnsureIntegrationPrIdentity:
         assert pr_number == 77
         mock_create_pr.assert_not_called()
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_does_not_reuse_cross_repository_pr_with_same_head_name(
         self, mock_create_pr, mock_open_prs
     ):
@@ -160,8 +160,8 @@ class TestEnsureIntegrationPrIdentity:
         assert pr_number == 78
         mock_create_pr.assert_called_once()
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_does_not_reuse_pr_with_different_base(self, mock_create_pr, mock_open_prs):
         mock_open_prs.return_value = [
             PrRecord(
@@ -181,8 +181,8 @@ class TestEnsureIntegrationPrIdentity:
         assert pr_number == 79
         mock_create_pr.assert_called_once()
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_does_not_reuse_pr_with_unknown_identity(
         self, mock_create_pr, mock_open_prs
     ):
@@ -205,8 +205,8 @@ class TestEnsureIntegrationPrIdentity:
 
 
 class TestEnsureParentFinalPr:
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_creates_pr_from_parent_branch_to_main(self, mock_create_pr, mock_open_prs):
         mock_open_prs.return_value = []
         mock_create_pr.return_value = 555
@@ -218,8 +218,8 @@ class TestEnsureParentFinalPr:
         assert mock_create_pr.call_args.kwargs["base"] == "main"
         assert "100" in mock_create_pr.call_args.kwargs["body"]
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_reuses_existing_open_pr(self, mock_create_pr, mock_open_prs):
         mock_open_prs.return_value = [
             PrRecord(
@@ -236,8 +236,8 @@ class TestEnsureParentFinalPr:
         assert pr_number == 321
         mock_create_pr.assert_not_called()
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_does_not_reuse_cross_repository_parent_pr(
         self, mock_create_pr, mock_open_prs
     ):
@@ -258,8 +258,8 @@ class TestEnsureParentFinalPr:
         assert pr_number == 322
         mock_create_pr.assert_called_once()
 
-    @patch("orchestune.integrator_pr.github.list_open_prs")
-    @patch("orchestune.integrator_pr.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_pr_creation_failure_is_non_fatal(self, mock_create_pr, mock_open_prs):
         mock_open_prs.return_value = []
         mock_create_pr.side_effect = RuntimeError("no commits between main and branch")

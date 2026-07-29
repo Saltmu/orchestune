@@ -43,8 +43,8 @@ def _stub_label_mutations_by_default():
     （このデフォルトスタブを上書きする）ことで従来通りアサーションできる。
     """
     with (
-        patch("orchestune.integrator.github.add_label"),
-        patch("orchestune.integrator.github.remove_label"),
+        patch("orchestune.forge.GitHubForge.add_label"),
+        patch("orchestune.forge.GitHubForge.remove_label"),
     ):
         yield
 
@@ -87,7 +87,7 @@ def _issue(
 
 
 class TestIntegrator:
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     def test_no_done_tasks(self, mock_list):
         mock_list.return_value = []
         config = IntegratorConfig(apply=True)
@@ -95,12 +95,12 @@ class TestIntegrator:
         res = integrator.run()
         assert res["status"] == "no_done_tasks"
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_success_integration(
         self,
         mock_merge_pr,
@@ -165,11 +165,11 @@ class TestIntegrator:
         assert res["auto_merged"] is True
         assert sorted(res["closed_issues"]) == [1, 2]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_success_integration_marks_merged_issues_as_integration_included(
         self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -203,12 +203,12 @@ class TestIntegrator:
         mock_add.assert_any_call(2, "integration:included")
         assert mock_add.call_count == 2
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_already_included_task_is_recovered_via_retry_not_remerged(
         self,
         mock_close_issue,
@@ -271,9 +271,9 @@ class TestIntegrator:
         assert len(merge_calls) == 1
         assert any("claude/issue-2-task-2" in arg for arg in merge_calls[0].args[0])
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_success_integration_reuses_existing_open_pr(
         self, mock_create_pr, mock_run, mock_list
     ):
@@ -284,7 +284,7 @@ class TestIntegrator:
             args=[], returncode=0, stdout=b"", stderr=b""
         )
 
-        with patch("orchestune.integrator.github.list_open_prs") as mock_open_prs:
+        with patch("orchestune.forge.GitHubForge.list_open_prs") as mock_open_prs:
             # #243: identityを検証できたPR（upstream上の正規head・指定base向け）
             # だけが再利用対象になる。
             mock_open_prs.return_value = [
@@ -304,11 +304,11 @@ class TestIntegrator:
         assert res["integration_pr_number"] == 777
         mock_create_pr.assert_not_called()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_success_integration_pr_creation_failure_is_non_fatal(
         self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -341,12 +341,12 @@ class TestAutoMergeChildIntegration:
     一切自動マージ・クローズを行わない。
     """
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_no_auto_merge_when_parent_issue_number_is_none(
         self,
         mock_merge_pr,
@@ -375,14 +375,14 @@ class TestAutoMergeChildIntegration:
         assert res.get("auto_merged") is None
         assert res.get("closed_issues") is None
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_auto_merge_failure_leaves_pr_open_and_skips_closing(
         self,
         mock_comment,
@@ -420,12 +420,12 @@ class TestAutoMergeChildIntegration:
         mock_add_label.assert_not_called()
         mock_comment.assert_any_call(1, ANY)
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_close_issue_failure_for_one_task_does_not_block_others(
         self,
         mock_merge_pr,
@@ -464,15 +464,15 @@ class TestAutoMergeChildIntegration:
         assert mock_close_issue.call_count == 2
         assert res["closed_issues"] == [2]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
     @patch(
         "orchestune.integrator.AutoMergeChildIntegrationStep._close_merged_child_issues"
     )
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_label_granted_before_close_even_if_close_step_crashes(
         self,
         mock_merge_pr,
@@ -508,13 +508,13 @@ class TestAutoMergeChildIntegration:
 
         mock_add_label.assert_called_once_with(1, "integration:included")
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_label_is_added_before_close_is_attempted(
         self,
         mock_merge_pr,
@@ -546,15 +546,15 @@ class TestAutoMergeChildIntegration:
         assert res["status"] == "success"
         assert call_order == ["add_label", "close_issue"]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
     @patch(
         "orchestune.integrator.AutoMergeChildIntegrationStep._close_merged_child_issues"
     )
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_next_cycle_retries_close_after_label_persisted_from_crashed_cycle(
         self,
         mock_merge_pr,
@@ -592,18 +592,18 @@ class TestAutoMergeChildIntegration:
         )
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a_labeled]
 
-        with patch("orchestune.integrator.github.close_issue") as mock_close_issue:
+        with patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue:
             res = Integrator(config).run()
 
         assert res["status"] == "no_done_tasks"
         assert res["retried_closed_issues"] == [1]
         mock_close_issue.assert_called_once_with(1, "completed", comment=ANY)
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_no_auto_merge_when_pr_creation_failed(
         self,
         mock_merge_pr,
@@ -620,7 +620,7 @@ class TestAutoMergeChildIntegration:
         mock_open_prs.return_value = []
 
         with patch(
-            "orchestune.integrator.github.create_pull_request",
+            "orchestune.forge.GitHubForge.create_pull_request",
             side_effect=RuntimeError("no commits"),
         ):
             config = IntegratorConfig(apply=True, parent_issue_number=100)
@@ -632,11 +632,11 @@ class TestAutoMergeChildIntegration:
         mock_merge_pr.assert_not_called()
         mock_close_issue.assert_not_called()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_merge_conflict_failure(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -646,12 +646,12 @@ class TestAutoMergeChildIntegration:
 
         def run_side_effect(args, **kwargs):
             if "checkout" in args:
-                return subprocess.CompletedProcess(args=args, returncode=0)
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
             if "merge" in args:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"CONFLICT (content): Merge conflict"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -668,11 +668,11 @@ class TestAutoMergeChildIntegration:
         mock_comment.assert_called_once()
         assert "Merge conflict" in mock_comment.call_args[0][1]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_ci_failure_recovery(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -691,9 +691,9 @@ class TestAutoMergeChildIntegration:
                 )
             if "rev-parse" in args:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=f"{pre_merge_sha}\n".encode()
+                    args=args, returncode=0, stdout=f"{pre_merge_sha}\n"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -720,11 +720,11 @@ class TestAutoMergeChildIntegration:
         assert "CI fail" in comment_body
         assert "5 passed, 1 failed" in comment_body
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_ci_failure_output_is_logged_to_job_log(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list, capsys
     ):
@@ -738,7 +738,7 @@ class TestAutoMergeChildIntegration:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"UNIQUE_JOB_LOG_MARKER"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -749,11 +749,11 @@ class TestAutoMergeChildIntegration:
         captured = capsys.readouterr()
         assert "UNIQUE_JOB_LOG_MARKER" in captured.err
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_ci_failure_comment_truncates_long_output(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -768,7 +768,7 @@ class TestAutoMergeChildIntegration:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, output=long_output
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -780,7 +780,7 @@ class TestAutoMergeChildIntegration:
         assert "TAIL_MARKER" in comment_body
         assert len(comment_body) < 6000
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_fetches_branch_with_explicit_refspec_before_merge(
         self, mock_run, mock_list
@@ -821,7 +821,7 @@ class TestAutoMergeChildIntegration:
         )
         assert fetch_index < merge_index
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_configures_git_identity_before_merging(self, mock_run, mock_list):
         # CI環境（actions/checkout等）ではgit committer identityが未設定のことがあり、
@@ -861,7 +861,7 @@ class TestAutoMergeChildIntegration:
         )
         assert identity_index < merge_index
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_unshallows_repository_before_merging_when_shallow(
         self, mock_run, mock_list
@@ -876,10 +876,10 @@ class TestAutoMergeChildIntegration:
         def run_side_effect(args, **kwargs):
             if args[:2] == ["git", "rev-parse"]:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=b"true\n", stderr=b""
+                    args=args, returncode=0, stdout="true\n", stderr=""
                 )
             return subprocess.CompletedProcess(
-                args=args, returncode=0, stdout=b"", stderr=b""
+                args=args, returncode=0, stdout="", stderr=""
             )
 
         mock_run.side_effect = run_side_effect
@@ -916,7 +916,7 @@ class TestAutoMergeChildIntegration:
         )
         assert unshallow_index < branch_fetch_index
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_skips_unshallow_when_repository_is_not_shallow(self, mock_run, mock_list):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
@@ -925,10 +925,10 @@ class TestAutoMergeChildIntegration:
         def run_side_effect(args, **kwargs):
             if args[:2] == ["git", "rev-parse"]:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=b"false\n", stderr=b""
+                    args=args, returncode=0, stdout="false\n", stderr=""
                 )
             return subprocess.CompletedProcess(
-                args=args, returncode=0, stdout=b"", stderr=b""
+                args=args, returncode=0, stdout="", stderr=""
             )
 
         mock_run.side_effect = run_side_effect
@@ -944,14 +944,14 @@ class TestAutoMergeChildIntegration:
         ]
         assert len(unshallow_calls) == 0
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
-    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_current_branch_tip_merged_into",
+        "orchestune.forge.GitHubForge.is_current_branch_tip_merged_into",
         return_value=False,
     )
     def test_fetch_failure_is_handled_like_merge_failure(
@@ -984,7 +984,7 @@ class TestAutoMergeChildIntegration:
                     cmd=args,
                     stderr=b"fatal: couldn't find remote ref claude/issue-1-task-1",
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1006,11 +1006,11 @@ class TestAutoMergeChildIntegration:
         mock_add.assert_called_with(1, "status:queued")
         mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_merge_conflict_aborts_before_next_task(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -1028,7 +1028,7 @@ class TestAutoMergeChildIntegration:
                     cmd=args,
                     stderr=b"CONFLICT (content): Merge conflict",
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1057,11 +1057,11 @@ class TestAutoMergeChildIntegration:
         # abort は task-1 のマージ失敗の直後、task-2 のマージ試行より前に呼ばれる
         assert merge_call_indices[0] < abort_call_index < merge_call_indices[1]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_ci_failure_runs_only_once_no_whole_script_retry(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -1077,7 +1077,7 @@ class TestAutoMergeChildIntegration:
             if "local-ci.sh" in args[0] or "local-ci.sh" in args:
                 ci_calls += 1
                 raise subprocess.CalledProcessError(returncode=1, cmd=args)
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1089,8 +1089,8 @@ class TestAutoMergeChildIntegration:
         assert res["failed"] == ["task-1"]
         assert ci_calls == 1
 
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_semantic_review_dispatched_fire_and_forget_after_pr_created(
         self, mock_run, mock_list, mock_open_prs
@@ -1120,7 +1120,7 @@ class TestAutoMergeChildIntegration:
         )
         integrator = Integrator(config)
         with patch(
-            "orchestune.integrator.github.create_pull_request"
+            "orchestune.forge.GitHubForge.create_pull_request"
         ) as mock_create_pr:
             mock_create_pr.return_value = 315
             res = integrator.run()
@@ -1143,10 +1143,10 @@ class TestAutoMergeChildIntegration:
         ]
         assert len(push_calls) == 1
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_semantic_review_explicitly_disabled_is_not_dispatched(
         self, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -1179,7 +1179,7 @@ class TestAutoMergeChildIntegration:
         assert called == []
         assert res["semantic_review_dispatched"] is False
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_semantic_review_default_on_but_skips_without_coordinator(
         self, mock_run, mock_list
@@ -1195,15 +1195,15 @@ class TestAutoMergeChildIntegration:
         assert config.enable_semantic_review is True
         integrator = Integrator(config)
         with (
-            patch("orchestune.integrator.github.list_open_prs", return_value=[]),
-            patch("orchestune.integrator.github.create_pull_request", return_value=315),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.create_pull_request", return_value=315),
         ):
             res = integrator.run()
 
         assert res["status"] == "success"
         assert res["semantic_review_dispatched"] is False
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_integration_with_closed_done_task(self, mock_run, mock_list):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
@@ -1232,7 +1232,7 @@ class TestAutoMergeChildIntegration:
         assert res["status"] == "success"
         assert res["merged"] == ["task-1", "task-2"]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_integrator_ci_env_injection(self, mock_run, mock_list):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
@@ -1276,11 +1276,11 @@ class TestAutoMergeChildIntegration:
         assert "PATH" in env
         assert env["PATH"].startswith(str(expected_venv / "bin"))
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_current_branch_tip_merged_into",
+        "orchestune.forge.GitHubForge.is_current_branch_tip_merged_into",
         return_value=False,
     )
     def test_fetch_failure_for_reused_branch_with_old_pr_fails_closed(
@@ -1299,7 +1299,7 @@ class TestAutoMergeChildIntegration:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"fatal: couldn't find remote ref"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1307,9 +1307,9 @@ class TestAutoMergeChildIntegration:
         integrator = Integrator(config)
 
         with (
-            patch("orchestune.integrator.github.remove_label") as mock_remove,
-            patch("orchestune.integrator.github.add_label") as mock_add,
-            patch("orchestune.integrator.github.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             res = integrator.run()
 
@@ -1321,11 +1321,11 @@ class TestAutoMergeChildIntegration:
         mock_comment.assert_called_once()
         mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_current_branch_tip_merged_into",
+        "orchestune.forge.GitHubForge.is_current_branch_tip_merged_into",
         return_value=True,
     )
     def test_fetch_failure_is_skipped_when_matching_pr_is_merged(
@@ -1340,14 +1340,14 @@ class TestAutoMergeChildIntegration:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"fatal: couldn't find remote ref"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
         with (
-            patch("orchestune.integrator.github.remove_label") as mock_remove,
-            patch("orchestune.integrator.github.add_label") as mock_add,
-            patch("orchestune.integrator.github.add_comment") as mock_comment,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             res = Integrator(IntegratorConfig(apply=True)).run()
 
@@ -1358,11 +1358,11 @@ class TestAutoMergeChildIntegration:
         mock_add.assert_not_called()
         mock_comment.assert_not_called()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch(
-        "orchestune.integrator.github.is_current_branch_tip_merged_into",
+        "orchestune.forge.GitHubForge.is_current_branch_tip_merged_into",
         side_effect=RuntimeError("GitHub API unavailable"),
     )
     def test_fetch_failure_fails_closed_when_merged_lookup_fails(
@@ -1377,14 +1377,14 @@ class TestAutoMergeChildIntegration:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"temporary network failure"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
         with (
-            patch("orchestune.integrator.github.remove_label"),
-            patch("orchestune.integrator.github.add_label"),
-            patch("orchestune.integrator.github.add_comment"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             res = Integrator(IntegratorConfig(apply=True)).run()
 
@@ -1392,10 +1392,10 @@ class TestAutoMergeChildIntegration:
         assert res["failed"] == ["task-1"]
         mock_is_merged.assert_called_once_with("claude/issue-1-task-1", "main")
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_exclude_closed_tasks(
         self, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -1448,8 +1448,8 @@ class TestRetryChildIssueCloseStep:
     子Issueを独立に再試行してクローズする。
     """
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
-    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_retries_closing_issue_already_marked_integration_included(
         self, mock_close_issue, mock_list
     ):
@@ -1468,12 +1468,12 @@ class TestRetryChildIssueCloseStep:
         mock_close_issue.assert_called_once_with(1, "completed", comment=ANY)
         assert res["retried_closed_issues"] == [1]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_retry_close_does_not_block_normal_processing_of_other_tasks(
         self,
         mock_merge_pr,
@@ -1514,12 +1514,12 @@ class TestRetryChildIssueCloseStep:
         assert mock_close_issue.call_count == 2
         mock_merge_pr.assert_called_once_with(999)
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
-    @patch("orchestune.integrator.github.merge_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
+    @patch("orchestune.forge.GitHubForge.merge_pull_request")
     def test_retry_close_failure_falls_back_to_normal_reprocessing(
         self,
         mock_merge_pr,
@@ -1555,11 +1555,11 @@ class TestRetryChildIssueCloseStep:
         assert res["closed_issues"] == [1]
         assert mock_close_issue.call_count == 2
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.close_issue")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.close_issue")
     def test_no_retry_close_when_parent_issue_number_is_none(
         self,
         mock_close_issue,
@@ -1593,10 +1593,10 @@ class TestRetryChildIssueCloseStep:
 class TestIntegratorWorktreeIsolation:
     """#254: repository_rootの一時差し替え・ワークツリー分離・クリーンアップの検証。"""
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_cleanup_uses_original_root_not_cwd(
         self, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -1623,13 +1623,13 @@ class TestIntegratorWorktreeIsolation:
             if "worktree" in call.args[0] and "remove" in call.args[0]
         ]
         assert len(remove_calls) == 1
-        assert remove_calls[0].kwargs["cwd"] == str(custom_root.resolve())
+        assert remove_calls[0].kwargs["cwd"] == custom_root.resolve()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_cleanup_runs_even_when_merge_fails(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -1639,7 +1639,7 @@ class TestIntegratorWorktreeIsolation:
         def run_side_effect(args, **kwargs):
             if "merge" in args and "--abort" not in args:
                 raise subprocess.CalledProcessError(returncode=1, cmd=args, stderr=b"")
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1655,9 +1655,9 @@ class TestIntegratorWorktreeIsolation:
             if "worktree" in call.args[0] and "remove" in call.args[0]
         ]
         assert len(remove_calls) == 1
-        assert remove_calls[0].kwargs["cwd"] == str(custom_root.resolve())
+        assert remove_calls[0].kwargs["cwd"] == custom_root.resolve()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
     def test_worktree_creation_failure_reports_status(self, mock_run, mock_list):
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
@@ -1666,7 +1666,7 @@ class TestIntegratorWorktreeIsolation:
         def run_side_effect(args, **kwargs):
             if "worktree" in args and "add" in args:
                 raise subprocess.CalledProcessError(returncode=1, cmd=args, stderr=b"")
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1791,19 +1791,19 @@ class TestIntegratorRelativeRepositoryRoot:
             try:
                 with (
                     patch(
-                        "orchestune.integrator.github.list_issues_by_label",
+                        "orchestune.forge.GitHubForge.list_issues_by_label",
                         lambda label, *a, **k: [issue_a],
                     ),
                     patch(
-                        "orchestune.integrator.github.list_open_prs", return_value=[]
+                        "orchestune.forge.GitHubForge.list_open_prs", return_value=[]
                     ),
                     patch(
-                        "orchestune.integrator.github.create_pull_request",
+                        "orchestune.forge.GitHubForge.create_pull_request",
                         return_value=999,
                     ),
-                    patch("orchestune.integrator.github.add_label"),
-                    patch("orchestune.integrator.github.remove_label"),
-                    patch("orchestune.integrator.github.add_comment"),
+                    patch("orchestune.forge.GitHubForge.add_label"),
+                    patch("orchestune.forge.GitHubForge.remove_label"),
+                    patch("orchestune.forge.GitHubForge.add_comment"),
                 ):
                     config = IntegratorConfig(repository_root=Path("repo"), apply=True)
                     integrator = Integrator(config)
@@ -1824,11 +1824,11 @@ class TestIntegratorDependencyFailureBlocking:
     """#50: 依存タスクの失敗後も後続タスクをmerge・CIしてしまい、無関係な後続タスクを
     誤って差し戻す不具合の回帰テスト。"""
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_dependent_task_is_blocked_not_merged_when_dependency_fails(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -1853,7 +1853,7 @@ class TestIntegratorDependencyFailureBlocking:
                     cmd=args,
                     stderr=b"CONFLICT (content): Merge conflict",
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1881,11 +1881,11 @@ class TestIntegratorDependencyFailureBlocking:
         mock_comment.assert_called_once()
         assert mock_comment.call_args[0][0] == 1
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_transitive_dependents_are_blocked(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -1908,7 +1908,7 @@ class TestIntegratorDependencyFailureBlocking:
         def run_side_effect(args, **kwargs):
             if "local-ci.sh" in args[0] or "local-ci.sh" in args:
                 raise subprocess.CalledProcessError(returncode=1, cmd=args)
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -1933,11 +1933,11 @@ class TestIntegratorDependencyFailureBlocking:
         mock_remove.assert_called_once_with(1, "status:done")
         mock_add.assert_called_once_with(1, "status:queued")
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_result_report_distinguishes_own_failure_from_blocked(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -1953,7 +1953,7 @@ class TestIntegratorDependencyFailureBlocking:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"CONFLICT"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -2003,7 +2003,7 @@ class TestIntegratorWorktreeSafety:
                     parent_number=42,
                 )
                 with patch(
-                    "orchestune.integrator.github.list_issues_by_label",
+                    "orchestune.forge.GitHubForge.list_issues_by_label",
                     lambda label, *a, **k: [issue_a],
                 ):
                     res = integrator.run()
@@ -2053,11 +2053,11 @@ class TestIntegratorPushFailure:
     """#52: 統合ブランチのpush失敗後もPR作成・レビューを続行し、成功扱いになっていた
     不具合の回帰テスト。"""
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_label")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_label")
     def test_push_failure_without_existing_pr_returns_explicit_failure(
         self, mock_add, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -2067,9 +2067,9 @@ class TestIntegratorPushFailure:
         def run_side_effect(args, **kwargs):
             if "push" in args:
                 raise subprocess.CalledProcessError(
-                    returncode=1, cmd=args, stderr=b"remote rejected"
+                    returncode=1, cmd=args, stderr="remote rejected"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
         mock_open_prs.return_value = []
@@ -2088,10 +2088,10 @@ class TestIntegratorPushFailure:
         # integration:includedを付与してはならない。
         mock_add.assert_not_called()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_push_failure_with_existing_pr_does_not_reuse_or_review(
         self, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -2103,9 +2103,9 @@ class TestIntegratorPushFailure:
         def run_side_effect(args, **kwargs):
             if "push" in args:
                 raise subprocess.CalledProcessError(
-                    returncode=1, cmd=args, stderr=b"non-fast-forward"
+                    returncode=1, cmd=args, stderr="non-fast-forward"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
         mock_open_prs.return_value = [
@@ -2124,19 +2124,20 @@ class TestIntegratorPushFailure:
         mock_create_pr.assert_not_called()
         coordinator.dispatch_review.assert_not_called()
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    def test_push_failure_stderr_decode_is_safe_for_non_utf8(self, mock_run, mock_list):
-        # エラー出力のdecodeが非UTF-8バイト列でも例外を送出しないことを確認する。
+    def test_push_failure_stderr_with_non_ascii_text_is_safe(self, mock_run, mock_list):
+        # run_gitはtext=Trueで実行されるため、非ASCII文字を含むエラー出力も
+        # そのまま文字列として安全に扱えることを確認する。
         issue_a = _issue(1, labels=("status:done",), subtask_id="task-1")
         mock_list.side_effect = lambda label, *args, **kwargs: [issue_a]
 
         def run_side_effect(args, **kwargs):
             if "push" in args:
                 raise subprocess.CalledProcessError(
-                    returncode=1, cmd=args, stderr=b"\xff\xfe invalid utf-8"
+                    returncode=1, cmd=args, stderr="拒否されました: non-fast-forward"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -2146,6 +2147,7 @@ class TestIntegratorPushFailure:
 
         assert res["status"] == "failed_to_push_temp_branch"
         assert isinstance(res["error"], str)
+        assert "拒否されました" in res["error"]
 
 
 class TestIntegratorRollbackSha:
@@ -2153,11 +2155,11 @@ class TestIntegratorRollbackSha:
     作らなかった場合（対象ブランチの先端が既にHEADへ含まれている等）に無関係な
     直前のコミットを削除してしまっていた不具合の回帰テスト。"""
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_rollback_uses_pre_merge_sha_even_when_merge_created_no_new_commit(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -2171,16 +2173,16 @@ class TestIntegratorRollbackSha:
         def run_side_effect(args, **kwargs):
             if "rev-parse" in args:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=f"{pre_merge_sha}\n".encode()
+                    args=args, returncode=0, stdout=f"{pre_merge_sha}\n"
                 )
             if "merge" in args:
                 # --no-ffでも新規コミットが作られない("Already up to date")ケース。
-                return subprocess.CompletedProcess(args=args, returncode=0)
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
             if "local-ci.sh" in args[0] or "local-ci.sh" in args:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"CI fail"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -2200,11 +2202,11 @@ class TestIntegratorRollbackSha:
             pre_merge_sha,
         ]
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.remove_label")
-    @patch("orchestune.integrator.github.add_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.remove_label")
+    @patch("orchestune.forge.GitHubForge.add_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_rollback_failure_is_reported_explicitly(
         self, mock_comment, mock_add, mock_remove, mock_run, mock_list
     ):
@@ -2215,7 +2217,7 @@ class TestIntegratorRollbackSha:
         def run_side_effect(args, **kwargs):
             if "rev-parse" in args:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=b"abc123\n"
+                    args=args, returncode=0, stdout="abc123\n"
                 )
             if "reset" in args:
                 raise subprocess.CalledProcessError(
@@ -2225,7 +2227,7 @@ class TestIntegratorRollbackSha:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"CI fail"
                 )
-            return subprocess.CompletedProcess(args=args, returncode=0)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="")
 
         mock_run.side_effect = run_side_effect
 
@@ -2242,8 +2244,8 @@ class TestIntegratorUnparsableDoneTask:
     """#54: Footprint YAMLから`subtask_id`を抽出できなかった`status:done`タスクが、
     警告もなく黙って処理対象から消えていた不具合の回帰テスト。"""
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_unparsable_done_task_is_flagged_not_silently_dropped(
         self, mock_comment, mock_list
     ):
@@ -2263,11 +2265,11 @@ class TestIntegratorUnparsableDoneTask:
         mock_comment.assert_called_once()
         assert mock_comment.call_args[0][0] == 7
 
-    @patch("orchestune.integrator.github.list_issues_by_label")
+    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.integrator.subprocess.run")
-    @patch("orchestune.integrator.github.list_open_prs")
-    @patch("orchestune.integrator.github.create_pull_request")
-    @patch("orchestune.integrator.github.add_comment")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    @patch("orchestune.forge.GitHubForge.add_comment")
     def test_unparsable_done_task_flagged_alongside_valid_merged_task(
         self, mock_comment, mock_create_pr, mock_open_prs, mock_run, mock_list
     ):
@@ -2487,6 +2489,44 @@ class TestIntegratorHybridPattern:
         res = runner.execute(ctx)
         assert res["status"] == "composite_failure"
 
+    def test_multi_issue_integrator_preserves_injected_forge_identity(self):
+        """#313レビュー対応: `copy.deepcopy(ctx)`によって注入済みForgeが
+        複製されず、各sub_ctxが同一のForgeインスタンスを参照し続けることを
+        確認する（fake_forgeの呼び出し履歴が複製ごとに分断されない）。"""
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        from orchestune.integrator import (
+            IntegrationComponent,
+            IntegrationContext,
+            IntegratorConfig,
+            MultiIssueIntegrator,
+        )
+
+        captured_forges = []
+
+        class CaptureForgeIntegrator(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> dict:
+                captured_forges.append(ctx.forge)
+                return {"status": "success"}
+
+        fake_forge = MagicMock()
+        runner = MultiIssueIntegrator(
+            [CaptureForgeIntegrator(), CaptureForgeIntegrator()]
+        )
+        config = IntegratorConfig(apply=True, forge=fake_forge)
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="main",
+            temp_branch="temp-main",
+        )
+        res = runner.execute(ctx)
+
+        assert res["status"] == "composite_success"
+        assert captured_forges == [fake_forge, fake_forge]
+
 
 class TestIntegrationMergerCI:
     def test_run_ci_poetry_install_and_env_detection(self, tmp_path):
@@ -2515,7 +2555,7 @@ class TestIntegrationMergerCI:
         def mock_run_impl(args, **kwargs):
             if "poetry" in args and "install" in args:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=b"", stderr=b""
+                    args=args, returncode=0, stdout="", stderr=""
                 )
             elif "poetry" in args and "info" in args and "--path" in args:
                 return subprocess.CompletedProcess(
@@ -2526,10 +2566,10 @@ class TestIntegrationMergerCI:
                 )
             elif "./scripts/local-ci.sh" in args:
                 return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout=b"", stderr=b""
+                    args=args, returncode=0, stdout="", stderr=""
                 )
             return subprocess.CompletedProcess(
-                args=args, returncode=0, stdout=b"", stderr=b""
+                args=args, returncode=0, stdout="", stderr=""
             )
 
         with patch("subprocess.run", side_effect=mock_run_impl) as mock_run:

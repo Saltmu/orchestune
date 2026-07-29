@@ -5,7 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from orchestune import github
+from orchestune.forge import Forge, GitHubForge
+from orchestune.git_cli import run_git
 from orchestune.integrator_pr import handle_merge_failure
 from orchestune.models import Task
 
@@ -14,11 +15,16 @@ class IntegrationMerger:
     """統合ブランチ上での git 操作（配管処理とマージループ）を担う。"""
 
     def __init__(
-        self, repository_root: Path, original_root: Path, ci_command: list[str]
+        self,
+        repository_root: Path,
+        original_root: Path,
+        ci_command: list[str],
+        forge: Forge | None = None,
     ):
         self.repository_root = repository_root
         self.original_root = original_root
         self.ci_command = ci_command
+        self.forge = forge or GitHubForge()
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
@@ -26,11 +32,10 @@ class IntegrationMerger:
         if not apply:
             return True
         try:
-            subprocess.run(
-                ["git", "checkout", "-B", temp_branch, base_branch],
-                cwd=str(self.repository_root),
+            run_git(
+                ["checkout", "-B", temp_branch, base_branch],
+                cwd=self.repository_root,
                 check=True,
-                capture_output=True,
             )
             return True
         except subprocess.CalledProcessError:
@@ -40,20 +45,19 @@ class IntegrationMerger:
         # CI環境（actions/checkout等）ではgit committer identityが未設定のことがあり、
         # `git merge --no-ff`でマージコミットを作成する際に
         # "Committer identity unknown" で必ず失敗するため、事前に設定しておく。
-        subprocess.run(
-            ["git", "config", "user.name", "orchestune-integrator"],
-            cwd=str(self.repository_root),
-            capture_output=True,
+        run_git(
+            ["config", "user.name", "orchestune-integrator"],
+            cwd=self.repository_root,
+            check=False,
         )
-        subprocess.run(
+        run_git(
             [
-                "git",
                 "config",
                 "user.email",
                 "orchestune-integrator@users.noreply.github.com",
             ],
-            cwd=str(self.repository_root),
-            capture_output=True,
+            cwd=self.repository_root,
+            check=False,
         )
 
     def ensure_full_history(self, base_branch: str) -> None:
@@ -63,46 +67,34 @@ class IntegrationMerger:
         # 見つからず `refusing to merge unrelated histories` でmergeが必ず
         # 失敗する。浅いリポジトリの場合のみ、ベースブランチの履歴を深くしておく。
         try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--is-shallow-repository"],
-                cwd=str(self.repository_root),
+            result = run_git(
+                ["rev-parse", "--is-shallow-repository"],
+                cwd=self.repository_root,
                 check=True,
-                capture_output=True,
             )
         except subprocess.CalledProcessError:
             return
 
-        if (result.stdout or b"").decode().strip() != "true":
+        if result.stdout.strip() != "true":
             return
 
         base_branch_name = base_branch.removeprefix("origin/")
         try:
-            subprocess.run(
-                ["git", "fetch", "--unshallow", "origin", base_branch_name],
-                cwd=str(self.repository_root),
+            run_git(
+                ["fetch", "--unshallow", "origin", base_branch_name],
+                cwd=self.repository_root,
                 check=True,
-                capture_output=True,
             )
         except subprocess.CalledProcessError:
             pass
 
     def current_head_sha(self) -> str:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(self.repository_root),
-            check=True,
-            capture_output=True,
-        )
-        return (result.stdout or b"").decode(errors="replace").strip()
+        result = run_git(["rev-parse", "HEAD"], cwd=self.repository_root, check=True)
+        return result.stdout.strip()
 
     def rollback_to(self, sha: str) -> bool:
         try:
-            subprocess.run(
-                ["git", "reset", "--hard", sha],
-                cwd=str(self.repository_root),
-                check=True,
-                capture_output=True,
-            )
+            run_git(["reset", "--hard", sha], cwd=self.repository_root, check=True)
             return True
         except (subprocess.CalledProcessError, OSError):
             return False
@@ -112,11 +104,7 @@ class IntegrationMerger:
         # 「進行中の未完了マージがある」ために巻き添えで失敗してしまうため、
         # 一時ブランチの直前の状態へ確実に戻す。
         try:
-            subprocess.run(
-                ["git", "merge", "--abort"],
-                cwd=str(self.repository_root),
-                capture_output=True,
-            )
+            run_git(["merge", "--abort"], cwd=self.repository_root, check=False)
         except (subprocess.CalledProcessError, OSError):
             pass
 
@@ -211,7 +199,7 @@ class IntegrationMerger:
             task: Task, reason: str, ci_output: str | None = None
         ) -> None:
             failed_reasons[task.subtask_id] = reason
-            handle_merge_failure(task, reason, apply, ci_output)
+            handle_merge_failure(task, reason, apply, ci_output, forge=self.forge)
 
         for task in sorted_done_tasks:
             blocking_deps = sorted(
@@ -242,16 +230,14 @@ class IntegrationMerger:
                 # refspecを明示してfetchしないと後続のmergeが常に
                 # 「not something we can merge」で失敗する（内容衝突ではない）。
                 try:
-                    subprocess.run(
+                    run_git(
                         [
-                            "git",
                             "fetch",
                             "origin",
                             f"{branch_name}:refs/remotes/origin/{branch_name}",
                         ],
-                        cwd=str(self.repository_root),
+                        cwd=self.repository_root,
                         check=True,
-                        capture_output=True,
                     )
                 except subprocess.CalledProcessError as e:
                     # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
@@ -260,7 +246,7 @@ class IntegrationMerger:
                     # branch削除/API障害を含む不確実なケースはfail closedにする。
                     base_branch_name = base_branch.removeprefix("origin/")
                     try:
-                        already_merged = github.is_current_branch_tip_merged_into(
+                        already_merged = self.forge.is_current_branch_tip_merged_into(
                             branch_name, base_branch_name
                         )
                     except Exception as lookup_error:
@@ -282,7 +268,7 @@ class IntegrationMerger:
                         merged_tasks.append(task.subtask_id)
                         continue
 
-                    fetch_error = (e.stderr or b"").decode(errors="replace")
+                    fetch_error = e.stderr or ""
                     handle_failure(task, f"Failed to fetch branch: {fetch_error}")
                     failed_tasks.append(task.subtask_id)
                     unavailable_ids.add(task.subtask_id)
@@ -297,7 +283,7 @@ class IntegrationMerger:
                 try:
                     pre_merge_sha = self.current_head_sha()
                 except subprocess.CalledProcessError as e:
-                    head_error = (e.stderr or b"").decode(errors="replace")
+                    head_error = e.stderr or ""
                     handle_failure(
                         task, f"Failed to capture pre-merge HEAD: {head_error}"
                     )
@@ -306,22 +292,20 @@ class IntegrationMerger:
                     continue
 
                 try:
-                    subprocess.run(
+                    run_git(
                         [
-                            "git",
                             "merge",
                             "--no-ff",
                             "-m",
                             f"Temp merge {branch_name}",
                             f"origin/{branch_name}",
                         ],
-                        cwd=str(self.repository_root),
+                        cwd=self.repository_root,
                         check=True,
-                        capture_output=True,
                     )
                 except subprocess.CalledProcessError as e:
                     self.abort_merge()
-                    merge_error = (e.stderr or b"").decode(errors="replace")
+                    merge_error = e.stderr or ""
                     handle_failure(task, f"Merge conflict: {merge_error}")
                     failed_tasks.append(task.subtask_id)
                     unavailable_ids.add(task.subtask_id)

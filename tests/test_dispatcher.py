@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -962,7 +962,7 @@ class TestPollPendingNotNeededReviews:
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.SUCCESS
         assert result.report == {"processed": 1}
-        mock_poll.assert_called_once_with(args.not_needed_review_state_path)
+        mock_poll.assert_called_once_with(args.not_needed_review_state_path, forge=ANY)
 
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
         args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
@@ -1172,7 +1172,7 @@ class TestProcessParentCompletion:
             "status": "waiting_on_children",
             "open_children": [101],
         }
-        mock_process.assert_called_once_with(100, True)
+        mock_process.assert_called_once_with(100, True, forge=ANY)
 
     def test_returns_none_and_warns_on_failure(self, capsys):
         config = DispatcherConfig(
