@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import contextlib
+import subprocess
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from orchestune.dispatch_scoring import Task
-from orchestune.forge import BootstrapResult, Forge
+from orchestune.forge import BootstrapResult, Forge, GitHubForge
 from orchestune.models import IssueRecord, PrRecord
 
 
@@ -70,6 +73,22 @@ def make_issue(number: int = 1, **overrides: Any) -> IssueRecord:
     return IssueRecord(**values)
 
 
+def make_done_issue(number: int = 1, **overrides: Any) -> IssueRecord:
+    """Create a `status:done` child IssueRecord for Integrator tests.
+
+    Footprint/symbols default to empty so the parsed `Task` carries only the
+    `subtask_id`/`depends_on` that integration ordering actually depends on.
+    """
+    values: dict[str, Any] = {
+        "labels": ("status:done",),
+        "footprint": (),
+        "symbols": (),
+        "parent": {"number": 100, "state": "OPEN"},
+    }
+    values.update(overrides)
+    return make_issue(number, **values)
+
+
 def make_pr(number: int = 1, **overrides: Any) -> PrRecord:
     """Create a PrRecord with a conventional issue branch by default."""
     values: dict[str, Any] = {
@@ -88,6 +107,149 @@ def fake_forge() -> MagicMock:
     forge.check_auth.return_value = None
     forge.ensure_labels.return_value = BootstrapResult((), ())
     return forge
+
+
+def _completed(args: Sequence[str] | None = None, stdout: Any = "") -> Any:
+    return subprocess.CompletedProcess(
+        args=list(args or []), returncode=0, stdout=stdout, stderr=""
+    )
+
+
+@dataclass
+class IntegratorEnv:
+    """All external edges of an `Integrator.run()` replaced by doubles.
+
+    Integrator tests otherwise repeat a six-to-eight deep `@patch` stack plus
+    the same default return values; this collects them behind one fixture so a
+    test only spells out the behaviour it is actually asserting on.
+    """
+
+    run: MagicMock
+    list_issues_by_label: MagicMock
+    list_open_prs: MagicMock
+    create_pull_request: MagicMock
+    merge_pull_request: MagicMock
+    close_issue: MagicMock
+    add_label: MagicMock
+    remove_label: MagicMock
+    add_comment: MagicMock
+    is_current_branch_tip_merged_into: MagicMock
+
+    def set_done_issues(
+        self,
+        *issues: IssueRecord,
+        done: Sequence[IssueRecord] | None = None,
+    ) -> None:
+        """Answer the `status:done` lookup and the DAG-building label lookups.
+
+        `done` overrides only the `status:done` answer, which lets a test hand
+        back a deliberately unsorted list to prove topological ordering.
+        """
+        done_issues = list(done) if done is not None else list(issues)
+        all_issues = list(issues)
+        self.list_issues_by_label.side_effect = (
+            lambda label, *a, **k: done_issues if label == "status:done" else all_issues
+        )
+
+    def stub_git(self, handler: Callable[[list[str]], Any]) -> None:
+        """Route `subprocess.run` through `handler`, defaulting to success.
+
+        `handler` returns `None` for every command it does not care about.
+        """
+
+        def side_effect(args: list[str], **kwargs: Any) -> Any:
+            result = handler(args)
+            return _completed(args) if result is None else result
+
+        self.run.side_effect = side_effect
+
+    def fail_git(
+        self,
+        matches: Callable[[list[str]], bool],
+        *,
+        stderr: Any = b"",
+        output: Any = None,
+    ) -> None:
+        """Raise `CalledProcessError` for the commands `matches` selects."""
+
+        def handler(args: list[str]) -> Any:
+            if matches(args):
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=args, output=output, stderr=stderr
+                )
+            return None
+
+        self.stub_git(handler)
+
+    def calls_with(self, *tokens: str) -> list[Any]:
+        """Recorded `subprocess.run` calls whose argv contains every token."""
+        return [
+            call
+            for call in self.run.call_args_list
+            if all(token in call.args[0] for token in tokens)
+        ]
+
+    def call_index(self, call: Any) -> int:
+        """Position of a recorded call, for asserting relative ordering."""
+        return self.run.call_args_list.index(call)
+
+
+@pytest.fixture
+def integrator_env() -> Iterator[IntegratorEnv]:
+    with (
+        patch("orchestune.integrator.subprocess.run") as run,
+        patch("orchestune.forge.GitHubForge.list_issues_by_label") as list_issues,
+        patch("orchestune.forge.GitHubForge.list_open_prs") as list_open_prs,
+        patch("orchestune.forge.GitHubForge.create_pull_request") as create_pr,
+        patch("orchestune.forge.GitHubForge.merge_pull_request") as merge_pr,
+        patch("orchestune.forge.GitHubForge.close_issue") as close_issue,
+        patch("orchestune.forge.GitHubForge.add_label") as add_label,
+        patch("orchestune.forge.GitHubForge.remove_label") as remove_label,
+        patch("orchestune.forge.GitHubForge.add_comment") as add_comment,
+        patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into") as tip,
+    ):
+        run.return_value = _completed(stdout=b"")
+        list_issues.side_effect = lambda label, *a, **k: []
+        list_open_prs.return_value = []
+        create_pr.return_value = 999
+        tip.return_value = False
+        yield IntegratorEnv(
+            run=run,
+            list_issues_by_label=list_issues,
+            list_open_prs=list_open_prs,
+            create_pull_request=create_pr,
+            merge_pull_request=merge_pr,
+            close_issue=close_issue,
+            add_label=add_label,
+            remove_label=remove_label,
+            add_comment=add_comment,
+            is_current_branch_tip_merged_into=tip,
+        )
+
+
+@pytest.fixture
+def gh_run() -> Iterator[MagicMock]:
+    """`subprocess.run` as seen by `GitHubForge`, defaulting to empty success.
+
+    `GitHubForge` contract tests only ever vary the captured stdout, so the
+    fixture exposes `gh_run.stdout(payload)` instead of making each test
+    rebuild a `CompletedProcess`.
+    """
+    with patch("orchestune.forge.subprocess.run") as run:
+        run.return_value = _completed()
+        run.stdout = lambda payload: run.configure_mock(
+            return_value=_completed(stdout=payload)
+        )
+        run.stdout_sequence = lambda *payloads: run.configure_mock(
+            side_effect=[_completed(stdout=payload) for payload in payloads]
+        )
+        yield run
+
+
+@pytest.fixture
+def forge() -> GitHubForge:
+    """A real `GitHubForge`, used with `gh_run` to assert the gh CLI contract."""
+    return GitHubForge()
 
 
 @pytest.fixture(autouse=True)
