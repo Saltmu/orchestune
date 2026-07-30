@@ -408,6 +408,34 @@ class TestProvisionIssuesApply:
         assert new_parent is not None
         assert _PARENT_MARKER in forge.issues[new_parent]["body"]
 
+    def test_does_not_trust_a_persisted_parent_from_a_different_plan(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review round 8 (P2): `_PARENT_MARKER` is a single constant
+        shared by every EPIC this module ever creates, so carrying it alone
+        can't distinguish this plan's own parent from an EPIC created for a
+        *different* plan (e.g. a colliding issue number in another
+        Orchestune-managed repo). The persisted-number verification must
+        also check the title, the same requirement the title-recovery
+        search below it already applies."""
+        forge = FakeForge()
+        other_plans_parent = forge.create_issue(
+            "[EPIC] A completely different plan",
+            _parent_body("A completely different plan"),
+        )
+
+        from orchestune.plan_writer import write_issue_numbers
+
+        write_issue_numbers(plan_path, parent_issue_number=other_plans_parent)
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number != other_plans_parent
+        assert forge.sub_issues.get(other_plans_parent, []) == []
+        new_parent = result.parent_issue_number
+        assert new_parent is not None
+        assert forge.issues[new_parent]["title"] == "[EPIC] Example big rock"
+
     def test_links_sub_issue_and_blocked_by(self, plan_path: Path, template_path: Path):
         forge = FakeForge()
         result = provision_issues(plan_path, forge=forge, template_path=template_path)
@@ -729,6 +757,27 @@ def test_missing_subtask_id_yaml_placeholder_raises(tmp_path: Path, plan_path: P
     )
 
     with pytest.raises(ValueError, match="subtask_id_yaml"):
+        provision_issues(plan_path, forge=FakeForge(), template_path=bad_template)
+
+
+def test_subtask_id_yaml_placeholder_outside_the_footprint_fence_raises(
+    tmp_path: Path, plan_path: Path
+):
+    """#323 review round 8 (P2): the raw token `{{subtask_id_yaml}}` can be
+    present in the template text (satisfying a naive substring check) while
+    sitting outside any Footprint YAML fence, so no rendered body can ever
+    yield an extractable `subtask_id` via `_subtask_id_from_body`. The
+    validation must render a probe and check extraction actually succeeds,
+    not just that the token string appears somewhere."""
+    bad_template = tmp_path / "bad_template.md"
+    bad_template.write_text(
+        "# {{subtask_id}}: {{description}}\n"
+        "Not inside a fence: {{subtask_id_yaml}}\n"
+        "{{overview}}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="subtask_id"):
         provision_issues(plan_path, forge=FakeForge(), template_path=bad_template)
 
 

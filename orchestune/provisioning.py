@@ -190,6 +190,38 @@ def _subtask_id_from_body(body: str) -> str | None:
     return str(subtask_id) if subtask_id else None
 
 
+def _validate_template_identity_marker(
+    template: str, template_path: str | Path
+) -> None:
+    """Render a throwaway probe subtask through `template` and confirm
+    `_subtask_id_from_body` can extract its id back out.
+
+    Checking for the raw `{{subtask_id_yaml}}` token's presence isn't
+    enough: it could sit outside any Footprint YAML fence (a heading, or a
+    second unrelated fence) and still "be present" in the template text
+    while never producing an extractable `subtask_id:` key, silently
+    breaking idempotency in exactly the same way an entirely missing
+    placeholder would.
+    """
+    probe_id = "orchestune-provision-template-probe"
+    probe = SubTask(
+        id=probe_id,
+        description="",
+        footprint=(),
+        symbols=(),
+        depends_on=(),
+        risk=False,
+        risk_reasons=(),
+    )
+    rendered = _render_issue_body(probe, template)
+    if _subtask_id_from_body(rendered) != probe_id:
+        raise ValueError(
+            f"{template_path} から subtask_id を再照合できません"
+            "（'{{subtask_id_yaml}}' がFootprint YAMLフェンス内の"
+            "'subtask_id:' として描画されていません）。冪等性が壊れます"
+        )
+
+
 def _index_sub_issues_by_subtask_id(
     forge: IssueForge, parent_issue_number: int
 ) -> dict[str, int]:
@@ -245,16 +277,7 @@ def provision_issues(
 
     dag = build_dag(subtasks)
     template = Path(template_path).read_text(encoding="utf-8")
-    if "{{subtask_id_yaml}}" not in template:
-        # Without this placeholder, no rendered issue body can ever contain
-        # a `subtask_id:` line for `_subtask_id_from_body` to find, so a
-        # custom `--template` missing it wouldn't fail loudly — it would
-        # just silently create a duplicate issue for every subtask on every
-        # future run, since idempotency detection could never succeed.
-        raise ValueError(
-            f"{template_path} に必須のプレースホルダ '{{{{subtask_id_yaml}}}}' が"
-            "見つかりません（Issue本文からsubtask_idを再照合できず、冪等性が壊れます）"
-        )
+    _validate_template_identity_marker(template, template_path)
 
     if not apply:
         return _preview_only(subtasks, dag.topological_order, template)
@@ -262,18 +285,26 @@ def provision_issues(
     resolved_forge = forge or GitHubForge()
 
     parent_issue_number = metadata.parent_issue_number
+    parent_title = f"[EPIC] {metadata.title}"
     if parent_issue_number is not None:
         # A persisted parent number is verified the same way a persisted
         # subtask number is below: it could be stale (e.g. the plan was
         # copied to another repo and that number now belongs to an
-        # unrelated issue there), so it's trusted only after confirming its
-        # body still carries our marker, not just because a number happens
-        # to be recorded in the plan.
+        # unrelated issue there), so it's trusted only after confirming it.
+        # `_PARENT_MARKER` alone isn't enough proof: it's a single constant
+        # shared by every EPIC this module ever creates, so it can't tell
+        # this plan's own parent apart from an unrelated EPIC created for a
+        # *different* plan (e.g. a colliding issue number in another
+        # Orchestune-managed repo) — the title must match too, the same
+        # requirement the orphan-recovery search below already applies.
         candidate = resolved_forge.get_issue(parent_issue_number)
-        if candidate is None or _PARENT_MARKER not in candidate.body:
+        if (
+            candidate is None
+            or candidate.title != parent_title
+            or _PARENT_MARKER not in candidate.body
+        ):
             parent_issue_number = None
     if parent_issue_number is None:
-        parent_title = f"[EPIC] {metadata.title}"
         # Recover an orphan from a prior run that created the parent issue
         # but crashed (or failed to write) before persisting its number,
         # rather than unconditionally creating a duplicate EPIC. An exact
