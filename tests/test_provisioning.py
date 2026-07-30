@@ -107,17 +107,18 @@ class FakeForge:
     def get_issue_labels(self, issue_number: int | str) -> tuple[str, ...]:
         return tuple(self.issues[int(issue_number)]["labels"])
 
-    def find_open_issue_by_exact_title(self, title: str) -> IssueRecord | None:
-        for number, entry in self.issues.items():
-            if entry["title"] == title:
-                return IssueRecord(
-                    number=number,
-                    title=entry["title"],
-                    body=entry["body"],
-                    labels=tuple(entry["labels"]),
-                    created_at="",
-                )
-        return None
+    def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]:
+        return [
+            IssueRecord(
+                number=number,
+                title=entry["title"],
+                body=entry["body"],
+                labels=tuple(entry["labels"]),
+                created_at="",
+            )
+            for number, entry in self.issues.items()
+            if entry["title"] == title
+        ]
 
     # --- Unused by provisioning.py; present only for IssueForge conformance. ---
 
@@ -258,6 +259,28 @@ class TestRenderIssueBodySubtaskIdSafety:
         assert match
         assert "..." not in match.group(1)
 
+    def test_a_fields_own_value_is_not_reprocessed_as_a_template_token(self):
+        """#323 review (P2): substituting one field at a time (as opposed to
+        a single pass over the original template) means an earlier field's
+        *value* can itself contain a literal `{{token}}`, which then gets
+        corrupted by a later placeholder's substitution — even though that
+        text was never part of the template."""
+        subtask = SubTask(
+            id="x",
+            description="Preserve {{overview}} in the template",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            overview="THE REAL OVERVIEW",
+        )
+
+        body = _render_issue_body(subtask, _TEMPLATE)
+
+        assert "Preserve {{overview}} in the template" in body
+        assert "Preserve THE REAL OVERVIEW in the template" not in body
+
 
 class TestProvisionIssuesApply:
     def test_creates_parent_and_subtasks_in_topological_order(
@@ -320,6 +343,32 @@ class TestProvisionIssuesApply:
             if entry["title"] == "[EPIC] Example big rock"
         ]
         assert len(epic_issues) == 2  # the unrelated one, plus our own new EPIC
+
+    def test_finds_marked_parent_among_multiple_same_titled_candidates(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review (P2): if an unrelated same-titled issue AND our own
+        orphaned marked parent both exist, the marked one (wherever it
+        appears in the search results) must be selected — checking only
+        the first exact-title match would miss it and create a duplicate."""
+        forge = FakeForge()
+        unrelated = forge.create_issue(
+            "[EPIC] Example big rock", "Some unrelated human-written issue."
+        )
+        our_orphan = forge.create_issue(
+            "[EPIC] Example big rock", _parent_body("Example big rock")
+        )
+        assert unrelated < our_orphan  # unrelated appears first in FakeForge order
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number == our_orphan
+        epic_issues = [
+            entry
+            for entry in forge.issues.values()
+            if entry["title"] == "[EPIC] Example big rock"
+        ]
+        assert len(epic_issues) == 2  # no third (duplicate) EPIC created
 
     def test_links_sub_issue_and_blocked_by(self, plan_path: Path, template_path: Path):
         forge = FakeForge()

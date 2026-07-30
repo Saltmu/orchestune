@@ -123,7 +123,7 @@ class IssueForge(Protocol):
         self, issue_number: int | str, blocking_issue_number: int | str
     ) -> None: ...
 
-    def find_open_issue_by_exact_title(self, title: str) -> IssueRecord | None: ...
+    def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]: ...
 
 
 @runtime_checkable
@@ -401,11 +401,14 @@ class GitHubForge:
             ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
         )
 
-    def find_open_issue_by_exact_title(self, title: str) -> IssueRecord | None:
-        """タイトル完全一致のopen Issueを検索する（親Issueの重複作成防止用）。
+    def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]:
+        """タイトル完全一致のopen Issueを全件検索する（親Issueの重複作成防止用）。
 
         タイトル一致だけでは無関係な既存Issueを誤って採用しうるため、
-        呼び出し側が本文の由来マーカーを確認できるようbodyも返す。
+        呼び出し側が本文の由来マーカーを確認できるようbodyも返す。GitHubの
+        検索は同名のIssueを複数返しうる（無関係な既存Issueと、書き戻し失敗で
+        孤立した自分自身のIssueが両方存在する場合など）ため、最初の1件だけで
+        なく全件返し、マーカーを持つ候補の選別を呼び出し側に委ねる。
         """
         stdout = self._run(
             [
@@ -422,16 +425,17 @@ class GitHubForge:
                 "100",
             ]
         )
-        for entry in json.loads(stdout):
-            if entry.get("title") == title:
-                return IssueRecord(
-                    number=int(entry["number"]),
-                    title=str(entry["title"]),
-                    body=entry.get("body") or "",
-                    labels=(),
-                    created_at=entry.get("createdAt") or "",
-                )
-        return None
+        return [
+            IssueRecord(
+                number=int(entry["number"]),
+                title=str(entry["title"]),
+                body=entry.get("body") or "",
+                labels=(),
+                created_at=entry.get("createdAt") or "",
+            )
+            for entry in json.loads(stdout)
+            if entry.get("title") == title
+        ]
 
     def merge_pull_request(self, pr_number: int | str) -> None:
         """PRをmerge commit方式でマージする。"""

@@ -493,10 +493,10 @@ class TestSetBlockedBy:
         gh_run.assert_not_called()
 
 
-class TestFindOpenIssueByExactTitle:
+class TestFindOpenIssuesByExactTitle:
     """#323 review: 親Issueの重複作成を防ぐための、部分失敗後のオーファン復旧に使う。"""
 
-    def test_returns_record_on_exact_title_match(self, forge: GitHubForge, gh_run):
+    def test_returns_only_exact_title_matches(self, forge: GitHubForge, gh_run):
         gh_run.stdout(
             '[{"number": 100, "title": "[EPIC] Big rock", "body": "marker text", '
             '"createdAt": "2026-01-01T00:00:00Z"}, '
@@ -504,22 +504,40 @@ class TestFindOpenIssueByExactTitle:
             '"createdAt": "2026-01-01T00:00:00Z"}]'
         )
 
-        result = forge.find_open_issue_by_exact_title("[EPIC] Big rock")
+        results = forge.find_open_issues_by_exact_title("[EPIC] Big rock")
 
-        assert result is not None
-        assert result.number == 100
-        assert result.body == "marker text"
+        assert [r.number for r in results] == [100]
+        assert results[0].body == "marker text"
         called_args = gh_run.call_args.args[0]
         assert called_args[:4] == ["gh", "issue", "list", "--search"]
         assert "--state" in called_args
         assert called_args[called_args.index("--state") + 1] == "open"
 
-    def test_returns_none_when_no_exact_title_match(self, forge: GitHubForge, gh_run):
+    def test_returns_every_exact_title_match(self, forge: GitHubForge, gh_run):
+        """#323 review: two issues can share the exact title (an unrelated
+        one and our own orphaned parent); the caller must be able to see
+        all of them, not just the first."""
+        gh_run.stdout(
+            '[{"number": 100, "title": "[EPIC] Big rock", "body": "no marker", '
+            '"createdAt": "2026-01-01T00:00:00Z"}, '
+            '{"number": 102, "title": "[EPIC] Big rock", "body": "has marker", '
+            '"createdAt": "2026-01-02T00:00:00Z"}]'
+        )
+
+        results = forge.find_open_issues_by_exact_title("[EPIC] Big rock")
+
+        assert [r.number for r in results] == [100, 102]
+
+    def test_returns_empty_list_when_no_exact_title_match(
+        self, forge: GitHubForge, gh_run
+    ):
         gh_run.stdout('[{"number": 101, "title": "[EPIC] Big rock v2"}]')
 
-        assert forge.find_open_issue_by_exact_title("[EPIC] Big rock") is None
+        assert forge.find_open_issues_by_exact_title("[EPIC] Big rock") == []
 
-    def test_returns_none_when_search_finds_nothing(self, forge: GitHubForge, gh_run):
+    def test_returns_empty_list_when_search_finds_nothing(
+        self, forge: GitHubForge, gh_run
+    ):
         gh_run.stdout("[]")
 
-        assert forge.find_open_issue_by_exact_title("[EPIC] Big rock") is None
+        assert forge.find_open_issues_by_exact_title("[EPIC] Big rock") == []
