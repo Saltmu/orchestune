@@ -18,14 +18,20 @@ _FRONTMATTER_DELIMITER = re.compile(r"^---\s*$")
 _TITLE_LINE = re.compile(r"^title:\s*.*$")
 _PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
 _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
-_ID_LINE = re.compile(r"^(\s*)-\s*id:\s*(.+?)\s*(?:#.*)?$")
+_ID_LINE = re.compile(r"^(\s*)-\s*id:\s*(.+)$")
 
 
 def _matching_id_line(line: str, subtask_id: str) -> re.Match[str] | None:
     """Match a `- id: <value>` line whose YAML-decoded value equals
     `subtask_id`, not its raw source text: `id` may be quoted, escaped, or
     followed by a comment, and `dag_parsing.parse_decomposition_plan`
-    (the source of truth for `subtask_id`) always compares decoded values."""
+    (the source of truth for `subtask_id`) always compares decoded values.
+
+    The whole remainder of the line (comment included) is handed to
+    `yaml.safe_load` as-is rather than comment-stripped first: only a real
+    YAML parser reliably knows whether a given `#` starts a comment or sits
+    inside a quoted scalar (`"task#1"`), a distinction a regex can't make.
+    """
     match = _ID_LINE.match(line)
     if not match:
         return None

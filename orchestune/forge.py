@@ -123,7 +123,7 @@ class IssueForge(Protocol):
         self, issue_number: int | str, blocking_issue_number: int | str
     ) -> None: ...
 
-    def find_open_issue_by_exact_title(self, title: str) -> int | None: ...
+    def find_open_issue_by_exact_title(self, title: str) -> IssueRecord | None: ...
 
 
 @runtime_checkable
@@ -401,8 +401,12 @@ class GitHubForge:
             ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
         )
 
-    def find_open_issue_by_exact_title(self, title: str) -> int | None:
-        """タイトル完全一致のopen Issueを検索する（親Issueの重複作成防止用）。"""
+    def find_open_issue_by_exact_title(self, title: str) -> IssueRecord | None:
+        """タイトル完全一致のopen Issueを検索する（親Issueの重複作成防止用）。
+
+        タイトル一致だけでは無関係な既存Issueを誤って採用しうるため、
+        呼び出し側が本文の由来マーカーを確認できるようbodyも返す。
+        """
         stdout = self._run(
             [
                 "gh",
@@ -413,14 +417,20 @@ class GitHubForge:
                 "--state",
                 "open",
                 "--json",
-                "number,title",
+                "number,title,body,createdAt",
                 "--limit",
                 "100",
             ]
         )
         for entry in json.loads(stdout):
             if entry.get("title") == title:
-                return int(entry["number"])
+                return IssueRecord(
+                    number=int(entry["number"]),
+                    title=str(entry["title"]),
+                    body=entry.get("body") or "",
+                    labels=(),
+                    created_at=entry.get("createdAt") or "",
+                )
         return None
 
     def merge_pull_request(self, pr_number: int | str) -> None:

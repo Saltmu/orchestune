@@ -10,7 +10,9 @@ from orchestune.dag_models import SubTask
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.models import IssueRecord
 from orchestune.provisioning import (
+    _PARENT_MARKER,
     _derive_labels,
+    _parent_body,
     _render_issue_body,
     _subtask_id_from_body,
     main,
@@ -105,10 +107,16 @@ class FakeForge:
     def get_issue_labels(self, issue_number: int | str) -> tuple[str, ...]:
         return tuple(self.issues[int(issue_number)]["labels"])
 
-    def find_open_issue_by_exact_title(self, title: str) -> int | None:
+    def find_open_issue_by_exact_title(self, title: str) -> IssueRecord | None:
         for number, entry in self.issues.items():
             if entry["title"] == title:
-                return number
+                return IssueRecord(
+                    number=number,
+                    title=entry["title"],
+                    body=entry["body"],
+                    labels=tuple(entry["labels"]),
+                    created_at="",
+                )
         return None
 
     # --- Unused by provisioning.py; present only for IssueForge conformance. ---
@@ -273,7 +281,9 @@ class TestProvisionIssuesApply:
         the next run must find it by exact title rather than creating a
         second EPIC and splitting the sub-issue hierarchy."""
         forge = FakeForge()
-        orphaned_parent = forge.create_issue("[EPIC] Example big rock", "body")
+        orphaned_parent = forge.create_issue(
+            "[EPIC] Example big rock", _parent_body("Example big rock")
+        )
 
         result = provision_issues(plan_path, forge=forge, template_path=template_path)
 
@@ -284,6 +294,32 @@ class TestProvisionIssuesApply:
             if entry["title"] == "[EPIC] Example big rock"
         ]
         assert len(epic_issues) == 1  # no duplicate EPIC
+
+    def test_does_not_adopt_an_unrelated_issue_with_the_same_title(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review (P2): an exact title match alone isn't proof that an
+        issue came from a prior run of this command — a coincidentally
+        same-titled, unrelated issue must not have every generated subtask
+        attached beneath it. Only adopt a match that also carries our
+        marker in its body."""
+        forge = FakeForge()
+        unrelated = forge.create_issue(
+            "[EPIC] Example big rock", "Some unrelated human-written issue."
+        )
+        assert _PARENT_MARKER not in forge.issues[unrelated]["body"]
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number != unrelated
+        assert result.parent_issue_number is not None
+        assert _PARENT_MARKER in forge.issues[result.parent_issue_number]["body"]
+        epic_issues = [
+            entry
+            for entry in forge.issues.values()
+            if entry["title"] == "[EPIC] Example big rock"
+        ]
+        assert len(epic_issues) == 2  # the unrelated one, plus our own new EPIC
 
     def test_links_sub_issue_and_blocked_by(self, plan_path: Path, template_path: Path):
         forge = FakeForge()
