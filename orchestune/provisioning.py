@@ -202,8 +202,15 @@ def _validate_template_identity_marker(
     while never producing an extractable `subtask_id:` key, silently
     breaking idempotency in exactly the same way an entirely missing
     placeholder would.
+
+    The probe id is deliberately one that forces `_yaml_scalar` to quote it
+    (it contains `:` and `#`), not a plain word: a plain-scalar probe would
+    round-trip fine even through a *buggy* custom template that wraps
+    `{{subtask_id_yaml}}` in its own literal quotes (already-quoted output
+    quoted a second time), silently corrupting any real id that actually
+    needs quoting while this validation reports success.
     """
-    probe_id = "orchestune-provision-template-probe"
+    probe_id = "orchestune-template-probe: needs-quoting #1"
     probe = SubTask(
         id=probe_id,
         description="",

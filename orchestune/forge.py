@@ -458,8 +458,16 @@ class GitHubForge:
                     "number,title,body,state,labels,createdAt",
                 ]
             )
-        except subprocess.CalledProcessError:
-            return None
+        except subprocess.CalledProcessError as exc:
+            # Mirror `branch_exists`: only a confirmed not-found response
+            # means "doesn't exist". A transient failure (auth, rate limit,
+            # network) must not be conflated with that, or a persisted
+            # issue_number's identity-verification step would wrongly treat
+            # a real, still-existing issue as gone and create a duplicate.
+            detail = (exc.stderr or "").lower()
+            if "404" in detail or "not found" in detail:
+                return None
+            raise
         raw = json.loads(stdout)
         return IssueRecord(
             number=int(raw["number"]),

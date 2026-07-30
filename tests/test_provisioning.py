@@ -781,6 +781,32 @@ def test_subtask_id_yaml_placeholder_outside_the_footprint_fence_raises(
         provision_issues(plan_path, forge=FakeForge(), template_path=bad_template)
 
 
+def test_template_that_redundantly_quotes_the_placeholder_raises(
+    tmp_path: Path, plan_path: Path
+):
+    """#323 review round 9 (P2): a custom template that wraps
+    `{{subtask_id_yaml}}` in its own literal quotes (`subtask_id:
+    "{{subtask_id_yaml}}"`) double-quotes any id that already needed
+    quoting (e.g. one containing `:`), corrupting the fence for real
+    subtask ids. A plain-word probe id round-trips fine either way and
+    can't detect this, so the probe must use an id that forces
+    `_yaml_scalar` to quote it."""
+    bad_template = tmp_path / "bad_template.md"
+    bad_template.write_text(
+        "# {{subtask_id}}: {{description}}\n"
+        "```yaml\n"
+        'subtask_id: "{{subtask_id_yaml}}"\n'
+        "footprint: {{footprint}}\n"
+        "symbols: {{symbols}}\n"
+        "depends_on: {{depends_on}}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="subtask_id"):
+        provision_issues(plan_path, forge=FakeForge(), template_path=bad_template)
+
+
 def test_missing_title_raises(tmp_path: Path, template_path: Path):
     path = tmp_path / "decomposition_plan.md"
     path.write_text(

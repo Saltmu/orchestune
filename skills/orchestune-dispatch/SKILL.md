@@ -52,6 +52,7 @@ output_schema:
 
 * 親Issue: `decomposition_plan.md`の`title`から`[EPIC] <title>`のタイトルで起票し、確定した番号を`parent_issue_number`へ書き戻す。
 * 各サブタスクIssue: `.github/issue_template.md`のプレースホルダー（`{{subtask_id}}`, `{{subtask_id_yaml}}`, `{{description}}`, `{{overview}}`, `{{proposed_changes}}`, `{{acceptance_criteria}}`, `{{verification_plan}}`, `{{footprint}}`, `{{symbols}}`, `{{depends_on}}`）へサブタスクの情報を埋め込み、確定した番号を各サブタスクの`issue_number`へ書き戻す。`{{subtask_id}}`は見出し等の表示用（生の値）、`{{subtask_id_yaml}}`はFootprint YAMLブロック内専用（`:`や`#`を含むIDでも安全な、YAMLスカラーとしてクォート済みの値）で、両者は必ず使い分けること。
+* **ラベル付与を必ず行うこと**: `dispatch_cycle._group_by_status`はステータスラベル（`status:queued`/`status:blocked`等）が付いていないIssueを一切拾わないため、ラベルを付け忘れるとステージBでそのサブタスクが永久にディスパッチされない。`depends_on`が空、またはその依存先が全て完了済みなら`status:queued`、そうでなければ`status:blocked`を付与する。加えて`priority:{subtask.priority}`（`decomposition_plan.md`の`priority`。未指定時は`medium`）を必ず、`risk`が真の場合は`risk:flagged`も付与する（導出規則は`orchestune/provisioning.py`の`_derive_labels`と同一）。
 * GitHub MCPによるIssue起票ではnativeの`blocked_by`/`parent`関係を設定できない場合がある。この場合もFootprint YAMLの`depends_on`を必ず保持すること。ディスパッチャーはこの値を依存判定と自己修復時のブランチスタッキング復元に使用する。GitHub上の関係を可視化したい場合は、起票後にWeb UIまたは`gh issue edit --set-parent`/`--add-blocked-by`でnativeの関係を追加する。
 
 ## ステージB: ディスパッチャーのスケジュール実行
