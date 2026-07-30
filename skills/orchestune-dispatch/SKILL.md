@@ -26,6 +26,7 @@ output_schema:
 * システムに `ochestune` CLIツール（`orchestune-dispatch`, `orchestune-dag`）がインストールされていること。
 * GitHub CLI (`gh` command) がインストール・認証済み（`gh auth status`）であること。
   * `gh` が利用できない場合は、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。
+  * GitHub MCPによるIssue起票ではnativeの`blocked_by`関係を設定できない。この場合もFootprint YAMLの`depends_on`を必ず保持すること。ディスパッチャーはこの値を依存判定と自己修復時のブランチスタッキング復元に使用する。GitHub上の関係を可視化したい場合は、起票後にWeb UIからnativeの`blocked_by`を追加する。
 * ステージA開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと（詳細はステージAの手順1を参照）。
 * ディスパッチャーの書き込み系操作（ラベル更新・`git worktree`作成・エージェント起動）は、既定で実行されます（`--apply`）。テスト確認したい場合は `--no-apply` を明示指定してください。
 * エージェントの起動先（`--dispatch-target`）は、未指定時は実行環境に応じて自動選択されます：ローカル/対話実行時は`auto`（PATH上にインストールされているローカルCLIを`claude`優先・`agy`次点・`codex`次々点で自動検出しsubprocess起動、いずれも未検出なら警告してダミー起動にフォールバック）、GitHub Actions実行時（`GITHUB_ACTIONS=true`）は`cloud-routine`（Claude Code Cloud Routine）です。明示的に`local`を指定した場合のみ、後方互換のダミー起動（`true`のno-op、テスト・dry-run用途）になります。クラウド実行先は、Claude Code Cloud Routine（`cloud-routine`、`ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要）と Codex Cloud（`codex-cloud`、`ORCHESTUNE_CODEX_CLOUD_ENV` または `--codex-cloud-env` が必要）をサポートします。`codex-cloud` はタスクブランチを `origin` にpushしてから `codex cloud exec` を起動し、対象ブランチのopen PRを完了シグナルとして扱います。セットアップは[セットアップガイド](../../docs/ja/setup.md#4-codex-cloud-のセットアップ手順)を参照してください。
