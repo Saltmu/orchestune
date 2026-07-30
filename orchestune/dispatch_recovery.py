@@ -10,8 +10,8 @@ import yaml
 
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.git_cli import run_git
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
-from orchestune.models import IssueRecord
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatch_config import DispatcherConfig
@@ -60,6 +60,48 @@ def _parse_subtask_info_from_issue(
     return subtask_id, declared_footprint
 
 
+def _dependency_issue_numbers(
+    issue: IssueRecord,
+    issue_to_subtask_id: dict[int, str],
+    subtask_id_to_issue_number: dict[str, int],
+) -> tuple[int, ...]:
+    """自己修復に使う依存Issue番号をnative関係またはYAMLから解決する。"""
+    if issue.blocked_by:
+        return issue.blocked_by
+
+    task = parse_task_from_issue(issue, issue_to_subtask_id)
+    return tuple(
+        subtask_id_to_issue_number[subtask_id]
+        for subtask_id in task.depends_on
+        if subtask_id in subtask_id_to_issue_number
+    )
+
+
+def _restored_base_branch(
+    issue: IssueRecord,
+    open_prs: list[PrRecord],
+    issue_to_subtask_id: dict[int, str],
+    subtask_id_to_issue_number: dict[str, int],
+) -> str:
+    """Issueの親・依存関係から自己修復時のbase branchを決定する。"""
+    base_branch = "origin/main"
+    if issue.parent and issue.parent.get("number") is not None:
+        base_branch = f"parent/issue-{issue.parent['number']}"
+
+    dependency_issue_numbers = _dependency_issue_numbers(
+        issue,
+        issue_to_subtask_id,
+        subtask_id_to_issue_number,
+    )
+    for pr in open_prs:
+        if any(
+            dep_num in pr.closes_issue_numbers for dep_num in dependency_issue_numbers
+        ):
+            return pr.head_ref
+
+    return base_branch
+
+
 def _decide_missing_active_worktrees(
     run_state: RunState,
     in_progress_issues: list[IssueRecord],
@@ -78,6 +120,16 @@ def _decide_missing_active_worktrees(
 
     if not missing_issues:
         return []
+
+    issue_to_subtask_id: dict[int, str] = {}
+    for issue in in_progress_issues:
+        raw_subtask_id = _extract_raw_subtask_id(issue)
+        if raw_subtask_id is not None:
+            issue_to_subtask_id[issue.number] = raw_subtask_id
+    subtask_id_to_issue_number = {
+        subtask_id: issue_number
+        for issue_number, subtask_id in issue_to_subtask_id.items()
+    }
 
     print(
         f"Self-healing: Found {len(missing_issues)} active issues missing from run_state.",
@@ -113,20 +165,12 @@ def _decide_missing_active_worktrees(
         slug = branch_name.replace("/", "-")
         worktree_path = Path(config.worktree_root) / slug
 
-        restored_base_branch = "origin/main"
-        if issue.parent and issue.parent.get("number") is not None:
-            restored_base_branch = f"parent/issue-{issue.parent['number']}"
-
-        if issue.blocked_by:
-            dep_pr = None
-            for pr in open_prs:
-                if any(
-                    dep_num in pr.closes_issue_numbers for dep_num in issue.blocked_by
-                ):
-                    dep_pr = pr
-                    break
-            if dep_pr:
-                restored_base_branch = dep_pr.head_ref
+        restored_base_branch = _restored_base_branch(
+            issue,
+            open_prs,
+            issue_to_subtask_id,
+            subtask_id_to_issue_number,
+        )
 
         active_worktree = ActiveWorktree(
             issue_number=issue.number,
@@ -152,7 +196,7 @@ def _apply_restore_missing_active_worktrees(
     run_state: RunState,
     restorations: list[tuple[str, str, ActiveWorktree]],
 ) -> bool:
-    """decide層が算出した復元内容をrun_state.active_worktreesへ書き込む。"""
+    """decide層が算出した復元内容のみをrun_state.active_worktreesへ書き込む。"""
     if not restorations:
         return False
 
