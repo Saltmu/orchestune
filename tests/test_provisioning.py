@@ -105,6 +105,12 @@ class FakeForge:
     def get_issue_labels(self, issue_number: int | str) -> tuple[str, ...]:
         return tuple(self.issues[int(issue_number)]["labels"])
 
+    def find_open_issue_by_exact_title(self, title: str) -> int | None:
+        for number, entry in self.issues.items():
+            if entry["title"] == title:
+                return number
+        return None
+
     # --- Unused by provisioning.py; present only for IssueForge conformance. ---
 
     def list_issues_by_label(
@@ -212,27 +218,37 @@ class TestRenderIssueBodySubtaskIdSafety:
             risk_reasons=(),
         )
 
-    @pytest.mark.parametrize("subtask_id", ["auth: login", "task#1", "plain-id"])
-    def test_id_round_trips_through_rendered_yaml_block(self, subtask_id, tmp_path):
-        template = (tmp_path / "issue_template.md").resolve()
-        template.write_text(
-            "# [FEAT] {{subtask_id}}: {{description}}\n\n"
-            "```yaml\nsubtask_id: {{subtask_id_yaml}}\n```\n",
-            encoding="utf-8",
-        )
-        body = _render_issue_body(
-            self._subtask(subtask_id), template.read_text(encoding="utf-8")
-        )
+    @pytest.mark.parametrize(
+        "subtask_id", ["auth: login", "task#1", "plain-id", "setup-database"]
+    )
+    def test_id_round_trips_through_rendered_yaml_block(self, subtask_id):
+        # Use the real (multi-key) template: a bug that only manifests when
+        # more YAML follows `subtask_id:` in the fence (see the `...`
+        # document-terminator regression below) wouldn't show up in a
+        # single-key fence.
+        body = _render_issue_body(self._subtask(subtask_id), _TEMPLATE)
 
         # The heading keeps the raw (human-readable) id.
         assert body.startswith(f"# [FEAT] {subtask_id}: d")
 
-        # The Footprint block is valid YAML and yields the exact id back.
+        # The Footprint block is valid YAML and yields the exact id back,
+        # including the fields declared after `subtask_id:` in the fence.
         match = FOOTPRINT_BLOCK_PATTERN.search(body)
         assert match
         data = yaml.safe_load(match.group(1))
         assert data["subtask_id"] == subtask_id
+        assert "footprint" in data  # would be silently dropped by a `...` marker
         assert _subtask_id_from_body(body) == subtask_id
+
+    def test_plain_id_scalar_has_no_yaml_document_terminator(self):
+        """#323 review (P1): `yaml.dump("task-a")` emits a trailing `...`
+        document-end marker for bare scalars; embedding that verbatim turns
+        the rest of the Footprint block into an unparseable second
+        document."""
+        body = _render_issue_body(self._subtask("task-a"), _TEMPLATE)
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        assert "..." not in match.group(1)
 
 
 class TestProvisionIssuesApply:
@@ -248,6 +264,26 @@ class TestProvisionIssuesApply:
         # task-a must be created before task-b (topological order).
         titles_in_order = [call[0] for call in forge.create_issue_calls]
         assert any("task-a" in title for title in titles_in_order[:-1])
+
+    def test_recovers_orphaned_parent_by_title_before_creating_duplicate(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review (P1): if a prior run created the parent issue but
+        crashed (or failed to write) before persisting parent_issue_number,
+        the next run must find it by exact title rather than creating a
+        second EPIC and splitting the sub-issue hierarchy."""
+        forge = FakeForge()
+        orphaned_parent = forge.create_issue("[EPIC] Example big rock", "body")
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number == orphaned_parent
+        epic_issues = [
+            entry
+            for entry in forge.issues.values()
+            if entry["title"] == "[EPIC] Example big rock"
+        ]
+        assert len(epic_issues) == 1  # no duplicate EPIC
 
     def test_links_sub_issue_and_blocked_by(self, plan_path: Path, template_path: Path):
         forge = FakeForge()

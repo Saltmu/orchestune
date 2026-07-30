@@ -109,8 +109,17 @@ def _yaml_inline_list(items: Sequence[str]) -> str:
 
 
 def _yaml_scalar(value: str) -> str:
-    """Render `value` as a safe YAML scalar (quoting it if it contains `:`, `#`, etc.)."""
-    return yaml.dump(value, allow_unicode=True).strip()
+    """Render `value` as a safe YAML scalar (quoting it if it contains `:`, `#`, etc.).
+
+    `yaml.dump(value)` on a bare scalar emits a trailing `...` document-end
+    marker, which breaks the surrounding Footprint block (the fields after
+    it become an unexpected second YAML document). Dumping a throwaway
+    single-key mapping instead avoids the marker, since a mapping root isn't
+    ambiguous the way a bare scalar root is; the fixed `k: ` prefix is then
+    stripped back off.
+    """
+    dumped = yaml.dump({"k": value}, allow_unicode=True, default_flow_style=False)
+    return dumped.removeprefix("k: ").rstrip("\n")
 
 
 def _bullet_list(items: Sequence[str]) -> str:
@@ -216,10 +225,16 @@ def provision_issues(
 
     parent_issue_number = metadata.parent_issue_number
     if parent_issue_number is None:
-        parent_body = f"{metadata.title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-        parent_issue_number = resolved_forge.create_issue(
-            f"[EPIC] {metadata.title}", parent_body
+        parent_title = f"[EPIC] {metadata.title}"
+        # Recover an orphan from a prior run that created the parent issue
+        # but crashed (or failed to write) before persisting its number,
+        # rather than unconditionally creating a duplicate EPIC.
+        parent_issue_number = resolved_forge.find_open_issue_by_exact_title(
+            parent_title
         )
+        if parent_issue_number is None:
+            parent_body = f"{metadata.title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+            parent_issue_number = resolved_forge.create_issue(parent_title, parent_body)
         write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
 
     existing_by_subtask_id = _index_sub_issues_by_subtask_id(
