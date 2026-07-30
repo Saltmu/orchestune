@@ -158,3 +158,115 @@ Between these two gates, child-level integration PRs, CI verification, and the r
 **CI as the de facto quality gate**: the pre-merge CI verification described in Section 3 substitutes for per-task human review — every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
 
 This keeps human review effort concentrated where judgment matters most (scoping and the final acceptance merge), while everything mechanical in between — including Issue closing at both tiers — is fully automated.
+
+---
+
+## 5. Module Layers & Package Boundary
+
+`orchestune/__init__.py` declares the package's public API in `__all__`. Anything
+not listed there is internal: it exists to serve the layers below and may be
+renamed or removed without a deprecation cycle.
+
+### 5.1 The five layers
+
+Every module in `orchestune/` belongs to exactly one layer. A module may import
+from its own layer or from any layer below it, never from a layer above.
+
+| Layer | Modules |
+| --- | --- |
+| **L4** entrypoints — the modules that expose a `main()` | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor` |
+| **L3** workflows — dispatch cycle and integration pipelines | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `parent_completion` |
+| **L2** domain — DAG construction, scoring, dispatch mechanics | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_gc`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
+| **L1** adapters — the only modules that run `git` or `gh` | `forge`, `git_cli` |
+| **L0** infra — pure DTOs and dependency-free helpers | `dag_models`, `dispatch_result`, `json_state`, `models`, `process_utils`, `setup_skills`, `validation`, `version` |
+
+Pure data-transfer modules (`models`, `dag_models`, `dispatch_result`) sit at
+**L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and
+`PrRecord`. Putting the DTOs above the adapter that produces them would make
+that dependency point upward.
+
+L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
+"contains only argparse wiring". `cli` is the exception because it dispatches to
+the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. Three of the five still carry code that predates this
+boundary: `dag` re-exports the whole `dag_*` package as a compatibility facade,
+`dispatcher` holds orchestration helpers, and `monitor` builds its own status
+snapshots. That is a known remnant, not a licence to add more — new code
+belongs in the layer that owns the behaviour.
+
+### 5.2 Invariants enforced by CI
+
+`tests/test_architecture.py` checks all of the following on every run, so the
+table above cannot silently drift from the code:
+
+1. **Dependencies point downward.** No module imports a module in a strictly
+   higher layer. In particular nothing imports an L4 entrypoint except `cli`,
+   which composes them.
+2. **`git` and `gh` are confined to L1.** `subprocess` invocations naming
+   either command are partitioned exactly as follows — no other module may
+   grow one.
+
+   | Command | Module allowed to run it |
+   | --- | --- |
+   | `gh` | `forge` |
+   | `git` | `git_cli` |
+
+   This covers the VCS and GitHub client surface only. Other external processes
+   are deliberately outside it and are not guarded: `dispatch_targets` launches
+   the agent CLIs, and `dispatch_rebase` and `integrator_git_ops` shell out to
+   the CI script and to `poetry`. Those are one-off process launches rather
+   than a client that callers need to fake, so they stay where they are used.
+
+   **Scope of the check.** The guard reads the command out of the source, so it
+   sees a literal list — passed inline, or through a variable that some
+   assignment in scope binds to one. It models Python's scoping rules well
+   enough to be trusted on ordinary code: it follows branches and loops, keeps
+   class bodies out of their methods, honours `global`/`nonlocal`, and reads the
+   `args=` keyword as well as the first positional argument. It does not
+   evaluate anything. A command assembled at runtime, read from configuration,
+   or handed in by another module escapes it entirely.
+
+   That boundary is deliberate. This invariant exists to catch the accident —
+   someone reaching for `subprocess` in an L2 module instead of `run_git` — not
+   to prevent a determined bypass. Anyone who wants to run `git` outside
+   `git_cli` can do so, and no static check in a test file will stop them; the
+   thing standing in their way is code review. So write `git`/`gh` argv as a
+   literal, and treat a failure here as "this belongs in L1", not as a puzzle
+   to route around.
+
+3. **No import cycles**, and no internal import hidden inside a function body
+   (which would evade the cycle check). `cli` is exempt from the second rule
+   because it defers entrypoint imports to keep startup fast.
+4. **The table is exhaustive.** Every `.py` file under `orchestune/` appears in
+   exactly one layer, in both the English and Japanese documents — with one
+   deliberate exception: `orchestune/__init__.py` itself. The package root
+   *declares* the boundary rather than living inside it, so it has no layer and
+   is not subject to rule 1. What it may import is checked separately: a
+   dedicated test asserts it pulls in no L4 entrypoint, which is the property
+   that would otherwise be lost.
+
+### 5.3 Why `Forge` is a protocol, not a class
+
+The L1 boundary is expressed as three `Protocol` classes rather than one
+concrete client, so callers depend only on the slice of GitHub they actually
+use:
+
+- `IssueForge` — reading and labelling issues
+- `PullRequestForge` — listing, creating and merging pull requests
+- `RepoAdminForge` — auth checks and label bootstrapping
+
+`Forge` is their union, and `GitHubForge` is the single `gh`-backed
+implementation. A caller that only needs to bootstrap labels (`run_bootstrap`)
+takes a `RepoAdminForge`, so it cannot reach for PR APIs by accident and its
+tests need a double with two methods rather than twenty.
+
+Because the abstraction is a protocol, a test can inject a fake instead of
+patching module attributes: `IntegratorConfig(forge=...)` and
+`DispatcherConfig(forge=...)` accept any object satisfying it, and the shared
+`fake_forge` fixture supplies one.
+
+That migration is partial. Roughly 500 call sites still reach for
+`patch("orchestune.forge.GitHubForge.<method>")` — heaviest in
+`test_dispatch_cycle.py`, `test_dispatch_gc.py` and `test_parent_completion.py`
+— because those suites predate the protocol. Both styles stop `gh` from running,
+which is the invariant that matters; injection is the direction of travel for
+new tests, not a description of the whole suite today.

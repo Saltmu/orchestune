@@ -4,10 +4,38 @@
 > 開発者向けの内部作業計画書です。各フェーズの完了に伴い更新されます。
 >
 > 調査時点: `43ffd7d`（`main` マージ直後）
+>
+> **ステータス: 完了（2026-07-29）**。Epic #280 配下の 17 subtask（#281〜#297）が
+> すべて `main` へマージ済みです。以降は本書を「なぜこの構造なのか」の記録として
+> 参照してください。**現在の層構造と不変条件の正典は
+> [`docs/ja/architecture.md` 第5節](ja/architecture.md#5-モジュール層構造とパッケージ境界)
+> （英語版は [`docs/en/architecture.md` §5](en/architecture.md#5-module-layers--package-boundary)）**
+> であり、`tests/test_architecture.py` がその記述とコードの一致を毎回検証します。
 
 ---
 
 ## 0. サマリ
+
+### 0.1 完了後の実績（2026-07-29 時点）
+
+| 指標 | 着手前 | 完了後 |
+| --- | --- | --- |
+| プロダクションコード | 41 モジュール / 10,150 行 | 45 モジュール / 10,150 行 |
+| テストコード | 36 ファイル / 22,864 行（**2.25 倍**） | 47 ファイル / 22,838 行（**2.25 倍**） |
+| 循環インポートに参加するモジュール | 41 中 **19** | **0** |
+| `git` を直接 subprocess 実行するモジュール | **12** | **1**（`git_cli.py` のみ） |
+| `gh` を直接 subprocess 実行するモジュール | 1（`github.py`） | **1**（`forge.py` のみ） |
+| 公開 API 境界 | 未定義（暗黙名前空間パッケージ） | `orchestune/__init__.py` の `__all__` で宣言 |
+| 最大モジュール | `github.py` (880) | `dispatch_cycle.py` (907) |
+| 最大テストファイル | `test_dispatcher.py` (4,288 行) | `test_dispatch_cycle.py` (3,039 行) |
+
+行数の総量は当初想定ほど縮まっていません（テストは分割・重複モック削除で
+1,000 行超を削減しましたが、`Forge` プロトコルの導入と各呼び出し側への
+`forge` 引数追加が同程度の増加をもたらしたためです）。一方、**構造上の目標
+（循環ゼロ・IO の L1 への封じ込め・公開 API 境界の宣言）はすべて達成**し、
+いずれも CI で機械的に検証されるようになりました。
+
+### 0.2 着手前の調査結果
 
 | 指標 | 値 |
 | --- | --- |
@@ -464,25 +492,25 @@ Issue は orchestune の流儀に従い、**footprint が互いに素になる�
 **#281 → #297 を番号順に進めれば依存関係を満たします。** 手作業では並列実行の
 意味が薄いため、Wave ではなく直列順で示します。
 
-| # | Issue | subtask | 依存 |
-| --- | --- | --- | --- |
-| 1 | #281 | `arch-guard` | — |
-| 2 | #282 | `test-fixtures` | — |
-| 3 | #283 | `domain-models` | #281 |
-| 4 | #284 | `git-adapter` | #281 |
-| 5 | #285 | `split-test-dispatcher` | #282 |
-| 6 | #286 | `rewire-dispatch-imports` | #283 |
-| 7 | #287 | `rewire-integrator-imports` | #283 |
-| 8 | #288 | `forge-records` | #283, #284 |
-| 9 | #289 | `dismantle-facade` | #285, #286, #287 |
-| 10 | #290 | `forge-protocol` | #288 |
-| 11 | #291 | `adapter-migrate-integrator` | #287, #290 |
-| 12 | #292 | `adapter-migrate-dispatch-core` | #289, #290 |
-| 13 | #293 | `adapter-migrate-dispatch-aux` | #286, #289, #290 |
-| 14 | #294 | `adapter-migrate-entrypoints` | #289, #290 |
-| 15 | #295 | `forge-cleanup` | #291〜#294 |
-| 16 | #296 | `split-large-tests` | #295 |
-| 17 | #297 | `package-boundary` | #295 |
+| # | Issue | subtask | 依存 | 状態 |
+| --- | --- | --- | --- | --- |
+| 1 | #281 | `arch-guard` | — | ✅ 完了 |
+| 2 | #282 | `test-fixtures` | — | ✅ 完了 |
+| 3 | #283 | `domain-models` | #281 | ✅ 完了 |
+| 4 | #284 | `git-adapter` | #281 | ✅ 完了 |
+| 5 | #285 | `split-test-dispatcher` | #282 | ✅ 完了 |
+| 6 | #286 | `rewire-dispatch-imports` | #283 | ✅ 完了 |
+| 7 | #287 | `rewire-integrator-imports` | #283 | ✅ 完了 |
+| 8 | #288 | `forge-records` | #283, #284 | ✅ 完了 |
+| 9 | #289 | `dismantle-facade` | #285, #286, #287 | ✅ 完了 |
+| 10 | #290 | `forge-protocol` | #288 | ✅ 完了 |
+| 11 | #291 | `adapter-migrate-integrator` | #287, #290 | ✅ 完了 |
+| 12 | #292 | `adapter-migrate-dispatch-core` | #289, #290 | ✅ 完了 |
+| 13 | #293 | `adapter-migrate-dispatch-aux` | #286, #289, #290 | ✅ 完了 |
+| 14 | #294 | `adapter-migrate-entrypoints` | #289, #290 | ✅ 完了 |
+| 15 | #295 | `forge-cleanup` | #291〜#294 | ✅ 完了 |
+| 16 | #296 | `split-large-tests` | #295 | ✅ 完了 |
+| 17 | #297 | `package-boundary` | #295 | ✅ 完了 |
 
 `#291`〜`#294` は相互に独立、`#296` と `#297` も相互に独立なので、この 2 グループ内は
 任意の順序で構いません。それ以外は上表の順序に従ってください。
@@ -553,7 +581,27 @@ GitHub ネイティブの `blocked_by` 依存は設定していません（起�
 GitHub MCP がこのフィールドをサポートしないため）。依存関係は各 Issue 本文の
 Footprint YAML の `depends_on` と冒頭の Issue 番号参照に記録されています。
 
-### 次のアクション
+### 実施結果
 
-§5 の順序に従って #281 から着手する。各 Issue につき 1 ブランチ・1 PR を作成し、
-`./scripts/local-ci.sh` を通してから `main` へマージする。
+§5 の順序どおり #281 から #297 まで 17 subtask を直列に実施し、各 Issue につき
+1 ブランチ・1 PR で `main` へ直接マージしました（本 Epic 限定の特別運用）。
+すべての PR で `./scripts/local-ci.sh` がグリーンです。
+
+最終 Issue #297 で `orchestune/__init__.py` を追加して公開 API 境界を宣言し、
+フェーズ 0 で `xfail` として導入したガードテストはすべて `strict` な表明へ
+移行済みです。現在 `tests/test_architecture.py` が検証している不変条件:
+
+1. 循環インポートがゼロであること（Tarjan の SCC で検出）
+2. 関数内に隠された内部 import が無いこと（`cli` のみ例外）
+3. L4 エントリポイントの被 import が `cli` からのみであること
+4. ドキュメントの層テーブルに対し、上位層への import が存在しないこと
+5. `gh` の実行は `forge.py`、`git` の実行は `git_cli.py` の中だけであること
+6. `orchestune/github.py`（互換シム）が存在しないこと
+7. テストから `patch("orchestune.github...")` が消えていること
+8. 層テーブルが `orchestune/` の実ファイル集合と過不足なく一致し、
+   英語版と日本語版で内容が一致していること
+
+`pyproject.toml` の `explicit_package_bases` は、`orchestune/` については
+`__init__.py` の追加により不要になりましたが、`tests/` が名前空間パッケージの
+ままで `tests/conftest.py` が二重解決されるため、`mypy orchestune tests` を
+通すには引き続き必要です（同ファイルにコメントで理由を記載）。
