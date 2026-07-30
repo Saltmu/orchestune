@@ -82,7 +82,11 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
     issue_numbers: dict[str, int] = {}
     for entry in raw.get("subtasks") or []:
         if isinstance(entry, dict) and entry.get("issue_number") not in (None, ""):
-            issue_numbers[str(entry["id"])] = validate_issue_number(
+            # `dag_parsing._parse_subtask_id` strips the id before it becomes
+            # `SubTask.id`, which is what `issue_numbers.get(subtask.id)`
+            # below looks up by; mirror that here or a raw id with padding
+            # whitespace would never match its own subtask.
+            issue_numbers[str(entry["id"]).strip()] = validate_issue_number(
                 entry["issue_number"]
             )
 
@@ -241,6 +245,16 @@ def provision_issues(
 
     dag = build_dag(subtasks)
     template = Path(template_path).read_text(encoding="utf-8")
+    if "{{subtask_id_yaml}}" not in template:
+        # Without this placeholder, no rendered issue body can ever contain
+        # a `subtask_id:` line for `_subtask_id_from_body` to find, so a
+        # custom `--template` missing it wouldn't fail loudly — it would
+        # just silently create a duplicate issue for every subtask on every
+        # future run, since idempotency detection could never succeed.
+        raise ValueError(
+            f"{template_path} に必須のプレースホルダ '{{{{subtask_id_yaml}}}}' が"
+            "見つかりません（Issue本文からsubtask_idを再照合できず、冪等性が壊れます）"
+        )
 
     if not apply:
         return _preview_only(subtasks, dag.topological_order, template)
@@ -248,6 +262,16 @@ def provision_issues(
     resolved_forge = forge or GitHubForge()
 
     parent_issue_number = metadata.parent_issue_number
+    if parent_issue_number is not None:
+        # A persisted parent number is verified the same way a persisted
+        # subtask number is below: it could be stale (e.g. the plan was
+        # copied to another repo and that number now belongs to an
+        # unrelated issue there), so it's trusted only after confirming its
+        # body still carries our marker, not just because a number happens
+        # to be recorded in the plan.
+        candidate = resolved_forge.get_issue(parent_issue_number)
+        if candidate is None or _PARENT_MARKER not in candidate.body:
+            parent_issue_number = None
     if parent_issue_number is None:
         parent_title = f"[EPIC] {metadata.title}"
         # Recover an orphan from a prior run that created the parent issue
