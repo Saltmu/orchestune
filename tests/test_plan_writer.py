@@ -88,6 +88,27 @@ class TestWriteSubtaskIssueNumber:
         assert "    issue_number: 101" in lines
         assert "  - id: task-a  # implementation task" in lines
 
+    def test_finds_id_line_with_escaped_yaml_scalar(self, tmp_path: Path):
+        """#323 review (P2): `- id: "task\\x2da"` is valid YAML that decodes
+        to `task-a` (matching what `dag_parsing.parse_decomposition_plan`
+        produces), but a literal source-text match for the decoded value
+        can't find this line since the raw text differs from the decoded
+        value."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - id: "task\\x2da"\n'
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        assert '  - id: "task\\x2da"' in lines
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):

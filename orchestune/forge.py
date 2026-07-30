@@ -123,6 +123,8 @@ class IssueForge(Protocol):
         self, issue_number: int | str, blocking_issue_number: int | str
     ) -> None: ...
 
+    def find_open_issue_by_exact_title(self, title: str) -> int | None: ...
+
 
 @runtime_checkable
 class PullRequestForge(Protocol):
@@ -398,6 +400,28 @@ class GitHubForge:
         self._run(
             ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
         )
+
+    def find_open_issue_by_exact_title(self, title: str) -> int | None:
+        """タイトル完全一致のopen Issueを検索する（親Issueの重複作成防止用）。"""
+        stdout = self._run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--search",
+                f'in:title "{title}"',
+                "--state",
+                "open",
+                "--json",
+                "number,title",
+                "--limit",
+                "100",
+            ]
+        )
+        for entry in json.loads(stdout):
+            if entry.get("title") == title:
+                return int(entry["number"])
+        return None
 
     def merge_pull_request(self, pr_number: int | str) -> None:
         """PRをmerge commit方式でマージする。"""
