@@ -4,10 +4,18 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+import yaml
 
 from orchestune.dag_models import SubTask
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.models import IssueRecord
-from orchestune.provisioning import _derive_labels, main, provision_issues
+from orchestune.provisioning import (
+    _derive_labels,
+    _render_issue_body,
+    _subtask_id_from_body,
+    main,
+    provision_issues,
+)
 
 _TEMPLATE = (
     "# [FEAT] {{subtask_id}}: {{description}}\n\n"
@@ -16,7 +24,7 @@ _TEMPLATE = (
     "## Acceptance Criteria\n{{acceptance_criteria}}\n\n"
     "## Verification Plan\n{{verification_plan}}\n\n"
     "```yaml\n"
-    "subtask_id: {{subtask_id}}\n"
+    "subtask_id: {{subtask_id_yaml}}\n"
     "footprint: {{footprint}}\n"
     "symbols: {{symbols}}\n"
     "depends_on: {{depends_on}}\n"
@@ -189,6 +197,44 @@ class TestDeriveLabels:
         assert "priority:low" in labels
 
 
+class TestRenderIssueBodySubtaskIdSafety:
+    """#323 review (P2): a subtask id containing `:` or `#` must still
+    round-trip through the rendered Footprint YAML block."""
+
+    def _subtask(self, subtask_id: str) -> SubTask:
+        return SubTask(
+            id=subtask_id,
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+
+    @pytest.mark.parametrize("subtask_id", ["auth: login", "task#1", "plain-id"])
+    def test_id_round_trips_through_rendered_yaml_block(self, subtask_id, tmp_path):
+        template = (tmp_path / "issue_template.md").resolve()
+        template.write_text(
+            "# [FEAT] {{subtask_id}}: {{description}}\n\n"
+            "```yaml\nsubtask_id: {{subtask_id_yaml}}\n```\n",
+            encoding="utf-8",
+        )
+        body = _render_issue_body(
+            self._subtask(subtask_id), template.read_text(encoding="utf-8")
+        )
+
+        # The heading keeps the raw (human-readable) id.
+        assert body.startswith(f"# [FEAT] {subtask_id}: d")
+
+        # The Footprint block is valid YAML and yields the exact id back.
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["subtask_id"] == subtask_id
+        assert _subtask_id_from_body(body) == subtask_id
+
+
 class TestProvisionIssuesApply:
     def test_creates_parent_and_subtasks_in_topological_order(
         self, plan_path: Path, template_path: Path
@@ -287,6 +333,105 @@ class TestProvisionIssuesApply:
         result = provision_issues(plan_path, forge=forge, template_path=template_path)
         assert result.reused["task-a"] == existing_task_a
         assert "task-a" not in result.created
+
+    def test_orphaned_issue_is_persisted_and_not_duplicated_on_resume(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review (P1): if create_issue succeeds but add_sub_issue then
+        fails, the issue isn't linked as a sub-issue yet, so the subtask_id
+        search over the parent's children can't find it either. Without an
+        immediate write-back, a naive retry would create a duplicate."""
+
+        class FlakyForge(FakeForge):
+            def __init__(self):
+                super().__init__()
+                self.fail_next_add_sub_issue = True
+
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                if self.fail_next_add_sub_issue:
+                    self.fail_next_add_sub_issue = False
+                    raise RuntimeError("simulated transient failure")
+                super().add_sub_issue(parent_issue_number, child_issue_number)
+
+        flaky = FlakyForge()
+        with pytest.raises(RuntimeError):
+            provision_issues(plan_path, forge=flaky, template_path=template_path)
+
+        # task-a's issue was created (orphaned: not yet linked as a sub-issue)
+        # but its number must already be durably written back.
+        assert len(flaky.issues) == 2  # parent + task-a
+        assert "issue_number: 101" in plan_path.read_text(encoding="utf-8")
+
+        resumed = provision_issues(plan_path, forge=flaky, template_path=template_path)
+        assert resumed.reused.get("task-a") == 101
+        assert len(flaky.issues) == 3  # no duplicate of task-a
+        parent = resumed.parent_issue_number
+        assert parent is not None
+        assert 101 in flaky.sub_issues[parent]  # orphan got linked on retry
+
+    def test_reused_issue_missing_a_blocker_gets_it_reconciled_on_resume(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#323 review (P1): a subtask with 2+ dependencies where the first
+        set_blocked_by succeeds and a later one fails must have the missing
+        blocker restored on retry, even though its own issue is reused."""
+        plan = tmp_path / "decomposition_plan.md"
+        plan.write_text(
+            "---\n"
+            'title: "Example big rock"\n'
+            "parent_issue_number: null\n"
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "A"\n'
+            "    depends_on: []\n"
+            "    issue_number: null\n"
+            "  - id: task-b\n"
+            '    description: "B"\n'
+            "    depends_on: []\n"
+            "    issue_number: null\n"
+            "  - id: task-c\n"
+            '    description: "C"\n'
+            "    depends_on: [task-a, task-b]\n"
+            "    issue_number: null\n"
+            "---\n",
+            encoding="utf-8",
+        )
+
+        class FlakyForge(FakeForge):
+            def __init__(self):
+                super().__init__()
+                self.blocked_by_call_count = 0
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                self.blocked_by_call_count += 1
+                if self.blocked_by_call_count == 2:
+                    raise RuntimeError("simulated transient failure")
+                super().set_blocked_by(issue_number, blocking_issue_number)
+
+        flaky = FlakyForge()
+        with pytest.raises(RuntimeError):
+            provision_issues(plan, forge=flaky, template_path=template_path)
+
+        task_c_number = next(
+            number
+            for number, entry in flaky.issues.items()
+            if entry["title"].startswith("[FEAT] task-c")
+        )
+        # Only the first dependency's blocked-by call landed before the crash.
+        assert len(flaky.blocked_by.get(task_c_number, [])) == 1
+
+        provision_issues(plan, forge=flaky, template_path=template_path)
+        task_a_number = next(
+            number
+            for number, entry in flaky.issues.items()
+            if entry["title"].startswith("[FEAT] task-a")
+        )
+        task_b_number = next(
+            number
+            for number, entry in flaky.issues.items()
+            if entry["title"].startswith("[FEAT] task-b")
+        )
+        assert set(flaky.blocked_by[task_c_number]) == {task_a_number, task_b_number}
 
 
 class TestProvisionIssuesNoApply:
