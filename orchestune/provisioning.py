@@ -281,7 +281,24 @@ def provision_issues(
 
     for subtask_id in dag.topological_order:
         subtask = dag.subtasks[subtask_id]
-        number = subtask.issue_number or existing_by_subtask_id.get(subtask_id)
+        # A persisted issue_number could be stale (e.g. the plan was copied
+        # to another repo and that number now belongs to an unrelated
+        # issue), so it isn't trusted outright: fetch it and check its body
+        # actually carries this subtask's marker before reusing it — the
+        # same test used for the subtask_id-search fallback below. This
+        # check works even if the issue hasn't been linked to the parent
+        # yet (a crash between create_issue and add_sub_issue), since the
+        # marker is written at creation time regardless of linkage.
+        number = None
+        if subtask.issue_number is not None:
+            candidate = resolved_forge.get_issue(subtask.issue_number)
+            if (
+                candidate is not None
+                and _subtask_id_from_body(candidate.body) == subtask_id
+            ):
+                number = subtask.issue_number
+        if number is None:
+            number = existing_by_subtask_id.get(subtask_id)
 
         if number is not None:
             reused[subtask_id] = number

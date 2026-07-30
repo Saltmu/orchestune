@@ -129,6 +129,26 @@ class TestWriteSubtaskIssueNumber:
         assert "    issue_number: 101" in lines
         assert '  - id: "task#1"' in lines
 
+    def test_finds_id_line_with_surrounding_whitespace(self, tmp_path: Path):
+        """#323 review (P2): `id: " task-a "` is valid YAML that decodes with
+        the surrounding whitespace intact, but `dag_parsing._parse_subtask_id`
+        strips it before use, so the matcher must strip too or it can never
+        find the entry."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - id: " task-a "\n'
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        assert '  - id: " task-a "' in lines
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):
@@ -188,3 +208,13 @@ class TestAtomicWrite:
         assert plan_path.read_text(encoding="utf-8") == original
         siblings = {p.name for p in plan_path.parent.iterdir()}
         assert siblings == {plan_path.name}  # no leftover temp file either
+
+    def test_preserves_original_file_permissions(self, plan_path: Path):
+        """#323 review (P2): `mkstemp` creates the replacement at mode 0600;
+        without copying the original's mode across, a typical 0644 plan
+        would silently become owner-only on every write."""
+        os.chmod(plan_path, 0o644)
+
+        write_issue_numbers(plan_path, {"task-a": 101})
+
+        assert oct(plan_path.stat().st_mode)[-3:] == "644"

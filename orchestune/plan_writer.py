@@ -41,6 +41,11 @@ def _matching_id_line(line: str, subtask_id: str) -> re.Match[str] | None:
         decoded = yaml.safe_load(match.group(2))
     except yaml.YAMLError:
         return None
+    # `dag_parsing._parse_subtask_id` strips the decoded id before using it
+    # as `SubTask.id`; mirror that here or `id: " task-a "` (valid YAML,
+    # decodes with the surrounding whitespace intact) would never match.
+    if isinstance(decoded, str):
+        decoded = decoded.strip()
     return match if decoded == subtask_id else None
 
 
@@ -103,6 +108,11 @@ def _atomic_write_text(target: Path, content: str) -> None:
         dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
     )
     try:
+        # `mkstemp` always creates the file at mode 0600, and `os.replace`
+        # carries that mode onto the target — without this, every write
+        # would silently strip the plan's original permissions (e.g.
+        # 0644 -> 0600), which could stop other automation from reading it.
+        os.chmod(tmp_name, target.stat().st_mode)
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
             tmp_file.write(content)
             tmp_file.flush()
