@@ -25,6 +25,7 @@ from orchestune.dag_parsing import extract_frontmatter, parse_decomposition_plan
 from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.plan_writer import write_issue_numbers
+from orchestune.validation import validate_issue_number
 
 # Embedded in every parent (EPIC) issue this module creates, and required
 # (in addition to an exact title match) before an orphan-recovery lookup is
@@ -81,7 +82,9 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
     issue_numbers: dict[str, int] = {}
     for entry in raw.get("subtasks") or []:
         if isinstance(entry, dict) and entry.get("issue_number") not in (None, ""):
-            issue_numbers[str(entry["id"])] = int(entry["issue_number"])
+            issue_numbers[str(entry["id"])] = validate_issue_number(
+                entry["issue_number"]
+            )
 
     enriched = [
         dataclasses.replace(subtask, issue_number=issue_numbers.get(subtask.id))
@@ -89,7 +92,9 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
     ]
     raw_parent = raw.get("parent_issue_number")
     parent_issue_number = (
-        None if raw_parent is None or raw_parent == "" else int(raw_parent)
+        None
+        if raw_parent is None or raw_parent == ""
+        else validate_issue_number(raw_parent)
     )
     metadata = PlanMetadata(
         title=str(raw.get("title") or "").strip(),

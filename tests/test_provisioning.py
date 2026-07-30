@@ -623,3 +623,45 @@ def test_missing_title_raises(tmp_path: Path, template_path: Path):
     )
     with pytest.raises(ValueError, match="title"):
         provision_issues(path, forge=FakeForge(), template_path=template_path)
+
+
+class TestRejectsInvalidIssueNumbers:
+    """#323 review (P2): a malformed issue_number must never be silently
+    coerced (e.g. `int(1.5) == 1`, `int(True) == 1`) into treating an
+    unrelated real issue as the subtask/parent."""
+
+    @pytest.mark.parametrize("bad_value", ["1.5", "true", "-1", "0", '"abc"'])
+    def test_rejects_bad_subtask_issue_number(
+        self, tmp_path: Path, template_path: Path, bad_value
+    ):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "d"\n'
+            f"    issue_number: {bad_value}\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError):
+            provision_issues(path, forge=FakeForge(), template_path=template_path)
+
+    @pytest.mark.parametrize("bad_value", ["1.5", "true", "-1", "0"])
+    def test_rejects_bad_parent_issue_number(
+        self, tmp_path: Path, template_path: Path, bad_value
+    ):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            f"parent_issue_number: {bad_value}\n"
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError):
+            provision_issues(path, forge=FakeForge(), template_path=template_path)
