@@ -20,7 +20,7 @@ _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
 
 def _subtask_id_line(subtask_id: str) -> re.Pattern[str]:
     escaped = re.escape(subtask_id)
-    return re.compile(rf"^(\s*)-\s*id:\s*(['\"]?){escaped}\2\s*$")
+    return re.compile(rf"^(\s*)-\s*id:\s*(['\"]?){escaped}\2\s*(#.*)?$")
 
 
 def _find_frontmatter_bounds(lines: list[str]) -> tuple[int, int]:

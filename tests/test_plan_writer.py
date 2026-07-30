@@ -69,6 +69,25 @@ class TestWriteSubtaskIssueNumber:
         with pytest.raises(ValueError, match="task-z"):
             write_issue_numbers(plan_path, {"task-z": 1})
 
+    def test_finds_id_line_with_trailing_comment(self, tmp_path: Path):
+        """#323 review (P2): `- id: task-a  # comment` is valid YAML (the
+        parser ignores the comment) but the old end-anchored regex couldn't
+        locate the line at all, so provisioning could never complete."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a  # implementation task\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        assert "  - id: task-a  # implementation task" in lines
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -23,12 +22,12 @@ from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
 from orchestune.dag_parsing import extract_frontmatter, parse_decomposition_plan
 from orchestune.forge import GitHubForge, IssueForge
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.plan_writer import write_issue_numbers
-
-_SUBTASK_ID_IN_BODY = re.compile(r"subtask_id:\s*(\S+)")
 
 _PLACEHOLDERS = (
     "subtask_id",
+    "subtask_id_yaml",
     "description",
     "overview",
     "proposed_changes",
@@ -109,6 +108,11 @@ def _yaml_inline_list(items: Sequence[str]) -> str:
     return yaml.dump(list(items), default_flow_style=True, allow_unicode=True).strip()
 
 
+def _yaml_scalar(value: str) -> str:
+    """Render `value` as a safe YAML scalar (quoting it if it contains `:`, `#`, etc.)."""
+    return yaml.dump(value, allow_unicode=True).strip()
+
+
 def _bullet_list(items: Sequence[str]) -> str:
     return "\n".join(f"- {item}" for item in items) if items else "特になし"
 
@@ -116,6 +120,7 @@ def _bullet_list(items: Sequence[str]) -> str:
 def _render_issue_body(subtask: SubTask, template: str) -> str:
     values = {
         "subtask_id": subtask.id,
+        "subtask_id_yaml": _yaml_scalar(subtask.id),
         "description": subtask.description,
         "overview": subtask.overview or "特になし",
         "proposed_changes": _bullet_list(subtask.proposed_changes),
@@ -131,14 +136,31 @@ def _render_issue_body(subtask: SubTask, template: str) -> str:
     return body
 
 
+def _subtask_id_from_body(body: str) -> str | None:
+    """Extract `subtask_id` from a Footprint YAML fence the same way
+    `issue_parsing.parse_task_from_issue` does, so IDs containing `:`/`#`
+    (rendered as quoted YAML scalars) are matched correctly."""
+    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    subtask_id = data.get("subtask_id")
+    return str(subtask_id) if subtask_id else None
+
+
 def _index_sub_issues_by_subtask_id(
     forge: IssueForge, parent_issue_number: int
 ) -> dict[str, int]:
     index: dict[str, int] = {}
     for record in forge.list_sub_issues(parent_issue_number):
-        match = _SUBTASK_ID_IN_BODY.search(record.body or "")
-        if match:
-            index.setdefault(match.group(1), record.number)
+        subtask_id = _subtask_id_from_body(record.body)
+        if subtask_id:
+            index.setdefault(subtask_id, record.number)
     return index
 
 
@@ -226,11 +248,23 @@ def provision_issues(
             number = resolved_forge.create_issue(
                 _issue_title(subtask), body, labels=labels
             )
-            resolved_forge.add_sub_issue(parent_issue_number, number)
-            for dependency_id in subtask.depends_on:
-                resolved_forge.set_blocked_by(number, resolved_numbers[dependency_id])
+            # Persist before the fallible relationship calls below: if
+            # add_sub_issue/set_blocked_by then fails, a retry must find this
+            # issue via `subtask.issue_number` rather than orphan-create a
+            # duplicate (it isn't linked as a sub-issue yet, so the
+            # subtask_id search over the parent's children can't find it).
+            write_issue_numbers(plan_path, {subtask_id: number})
             created[subtask_id] = number
             dependencies_done[subtask_id] = False
+
+        # Reconcile parent/blocked-by relationships unconditionally, not just
+        # on creation: a prior run may have created this issue (or an earlier
+        # dependency's set_blocked_by call) and then failed before finishing
+        # all of them, in which case a reused issue can still be missing some.
+        # Both operations are idempotent (`--set-parent` / `--add-blocked-by`).
+        resolved_forge.add_sub_issue(parent_issue_number, number)
+        for dependency_id in subtask.depends_on:
+            resolved_forge.set_blocked_by(number, resolved_numbers[dependency_id])
 
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})

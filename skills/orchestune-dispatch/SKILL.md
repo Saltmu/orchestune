@@ -51,7 +51,7 @@ output_schema:
 `orchestune provision`は内部で`gh` CLIを呼び出す。`gh`自体がインストール・認証できない環境では、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。この場合、以下の対応関係を守って手作業で代替する：
 
 * 親Issue: `decomposition_plan.md`の`title`から`[EPIC] <title>`のタイトルで起票し、確定した番号を`parent_issue_number`へ書き戻す。
-* 各サブタスクIssue: `.github/issue_template.md`のプレースホルダー（`{{subtask_id}}`, `{{description}}`, `{{overview}}`, `{{proposed_changes}}`, `{{acceptance_criteria}}`, `{{verification_plan}}`, `{{footprint}}`, `{{symbols}}`, `{{depends_on}}`）へサブタスクの情報を埋め込み、確定した番号を各サブタスクの`issue_number`へ書き戻す。
+* 各サブタスクIssue: `.github/issue_template.md`のプレースホルダー（`{{subtask_id}}`, `{{subtask_id_yaml}}`, `{{description}}`, `{{overview}}`, `{{proposed_changes}}`, `{{acceptance_criteria}}`, `{{verification_plan}}`, `{{footprint}}`, `{{symbols}}`, `{{depends_on}}`）へサブタスクの情報を埋め込み、確定した番号を各サブタスクの`issue_number`へ書き戻す。`{{subtask_id}}`は見出し等の表示用（生の値）、`{{subtask_id_yaml}}`はFootprint YAMLブロック内専用（`:`や`#`を含むIDでも安全な、YAMLスカラーとしてクォート済みの値）で、両者は必ず使い分けること。
 * GitHub MCPによるIssue起票ではnativeの`blocked_by`/`parent`関係を設定できない場合がある。この場合もFootprint YAMLの`depends_on`を必ず保持すること。ディスパッチャーはこの値を依存判定と自己修復時のブランチスタッキング復元に使用する。GitHub上の関係を可視化したい場合は、起票後にWeb UIまたは`gh issue edit --set-parent`/`--add-blocked-by`でnativeの関係を追加する。
 
 ## ステージB: ディスパッチャーのスケジュール実行
