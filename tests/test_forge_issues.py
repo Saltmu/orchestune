@@ -541,3 +541,38 @@ class TestFindOpenIssuesByExactTitle:
         gh_run.stdout("[]")
 
         assert forge.find_open_issues_by_exact_title("[EPIC] Big rock") == []
+
+
+class TestGetIssue:
+    """#323 review: verifies a persisted issue_number actually belongs to
+    this subtask before reusing/mutating it, independent of whether it's
+    already linked to the parent."""
+
+    def test_returns_record_with_body(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 42, "title": "[FEAT] task-a: x", "body": "b", '
+            '"state": "OPEN", "labels": [{"name": "status:queued"}], '
+            '"createdAt": "2026-01-01T00:00:00Z"}'
+        )
+
+        result = forge.get_issue(42)
+
+        assert result is not None
+        assert result.number == 42
+        assert result.body == "b"
+        assert result.labels == ("status:queued",)
+        called_args = gh_run.call_args.args[0]
+        assert called_args[:3] == ["gh", "issue", "view"]
+        assert "42" in called_args
+
+    def test_returns_none_when_gh_fails(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "issue", "view", "999"]
+        )
+
+        assert forge.get_issue(999) is None
+
+    def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.get_issue("1; evil")
+        gh_run.assert_not_called()

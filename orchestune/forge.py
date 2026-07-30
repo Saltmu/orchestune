@@ -125,6 +125,8 @@ class IssueForge(Protocol):
 
     def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]: ...
 
+    def get_issue(self, issue_number: int | str) -> IssueRecord | None: ...
+
 
 @runtime_checkable
 class PullRequestForge(Protocol):
@@ -436,6 +438,37 @@ class GitHubForge:
             for entry in json.loads(stdout)
             if entry.get("title") == title
         ]
+
+    def get_issue(self, issue_number: int | str) -> IssueRecord | None:
+        """指定Issueの詳細を取得する。存在しない場合はNoneを返す。
+
+        永続化された`issue_number`が本当にこのサブタスク由来かを、リンク済み
+        子Issue一覧に頼らず検証するために使う（`add_sub_issue`が未実行でも
+        本文のマーカーは作成時から変わらないため）。
+        """
+        number = validate_issue_number(issue_number)
+        try:
+            stdout = self._run(
+                [
+                    "gh",
+                    "issue",
+                    "view",
+                    str(number),
+                    "--json",
+                    "number,title,body,state,labels,createdAt",
+                ]
+            )
+        except subprocess.CalledProcessError:
+            return None
+        raw = json.loads(stdout)
+        return IssueRecord(
+            number=int(raw["number"]),
+            title=str(raw["title"]),
+            body=raw.get("body") or "",
+            labels=tuple(entry["name"] for entry in raw.get("labels", [])),
+            created_at=raw.get("createdAt") or "",
+            state=raw.get("state", "OPEN"),
+        )
 
     def merge_pull_request(self, pr_number: int | str) -> None:
         """PRをmerge commit方式でマージする。"""

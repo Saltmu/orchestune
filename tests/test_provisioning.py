@@ -120,6 +120,18 @@ class FakeForge:
             if entry["title"] == title
         ]
 
+    def get_issue(self, issue_number: int | str) -> IssueRecord | None:
+        entry = self.issues.get(int(issue_number))
+        if entry is None:
+            return None
+        return IssueRecord(
+            number=int(issue_number),
+            title=entry["title"],
+            body=entry["body"],
+            labels=tuple(entry["labels"]),
+            created_at="",
+        )
+
     # --- Unused by provisioning.py; present only for IssueForge conformance. ---
 
     def list_issues_by_label(
@@ -454,6 +466,34 @@ class TestProvisionIssuesApply:
         result = provision_issues(plan_path, forge=forge, template_path=template_path)
         assert result.reused["task-a"] == existing_task_a
         assert "task-a" not in result.created
+
+    def test_does_not_mutate_an_unrelated_issue_with_a_stale_persisted_number(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review (P2): a plan's persisted issue_number could be stale
+        (e.g. the plan was copied to another repo where that number now
+        belongs to an unrelated issue). It must not be trusted just because
+        it's a valid positive integer — an unrelated issue must not get
+        reparented or blocked-by relationships added."""
+        forge = FakeForge()
+        unrelated = forge.create_issue(
+            "Someone else's real issue", "Nothing to do with this plan."
+        )
+
+        from orchestune.plan_writer import write_issue_numbers
+
+        write_issue_numbers(plan_path, {"task-a": unrelated})
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.reused.get("task-a") != unrelated
+        assert result.created.get("task-a") != unrelated
+        parent = result.parent_issue_number
+        assert parent is not None
+        # The unrelated issue must never have been touched: not linked as a
+        # sub-issue, and no blocked-by relationship added to/from it.
+        assert unrelated not in forge.sub_issues.get(parent, [])
+        assert unrelated not in forge.blocked_by
 
     def test_orphaned_issue_is_persisted_and_not_duplicated_on_resume(
         self, plan_path: Path, template_path: Path
