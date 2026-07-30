@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import yaml
@@ -20,33 +20,102 @@ _FRONTMATTER_DELIMITER = re.compile(r"^---\s*$")
 _TITLE_LINE = re.compile(r"^title:\s*.*$")
 _PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
 _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
-_ID_LINE = re.compile(r"^(\s*)-\s*id:\s*(.+)$")
+_LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
+_MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 
 
-def _matching_id_line(line: str, subtask_id: str) -> re.Match[str] | None:
-    """Match a `- id: <value>` line whose YAML-decoded value equals
-    `subtask_id`, not its raw source text: `id` may be quoted, escaped, or
-    followed by a comment, and `dag_parsing.parse_decomposition_plan`
-    (the source of truth for `subtask_id`) always compares decoded values.
+def _iter_list_item_blocks(
+    lines: list[str], start: int, end: int
+) -> Iterator[tuple[int, int]]:
+    """Yield `(block_start, block_end)` for each top-level `- ` list item
+    within `[start, end)`. A block spans every following line more deeply
+    indented than the `-` itself (its mapping's own fields, plus any
+    further-nested lists/mappings inside them), up to the next line at or
+    below that indentation — a sibling item, or a dedent out of the list.
+    """
+    index = start
+    while index < end:
+        match = _LIST_ITEM_START.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        item_indent = len(match.group(1))
+        block_end = index + 1
+        while block_end < end:
+            line = lines[block_end]
+            if line.strip() and len(line) - len(line.lstrip(" ")) <= item_indent:
+                break
+            block_end += 1
+        yield index, block_end
+        index = block_end
+
+
+def _direct_fields(
+    lines: list[str], block_start: int, block_end: int
+) -> list[tuple[int, int, str, str]]:
+    """Return `(line_index, field_indent, key, value_text)` for each key
+    that belongs directly to this list item's own mapping — not to a
+    further-nested mapping/list inside one of its values (e.g. a
+    `footprint:` entry). Restricting to a single, consistent indentation
+    column keeps a coincidental `id` key several levels deeper from
+    shadowing this item's actual `id`.
+    """
+    start_match = _LIST_ITEM_START.match(lines[block_start])
+    assert start_match is not None
+    indent, dash_gap, inline = start_match.groups()
+    field_indent = len(indent) + 1 + len(dash_gap)
+    fields: list[tuple[int, int, str, str]] = []
+    inline_key_match = _MAPPING_KEY.match(inline)
+    if inline_key_match:
+        fields.append(
+            (
+                block_start,
+                field_indent,
+                inline_key_match.group(1),
+                inline_key_match.group(2),
+            )
+        )
+    else:
+        # A bare `-` with the mapping starting on the next line: that
+        # line's own indentation defines this item's direct-field column.
+        for index in range(block_start + 1, block_end):
+            if lines[index].strip():
+                field_indent = len(lines[index]) - len(lines[index].lstrip(" "))
+                break
+    for index in range(block_start + 1, block_end):
+        line = lines[index]
+        if not line.strip():
+            continue
+        line_indent = len(line) - len(line.lstrip(" "))
+        if line_indent != field_indent:
+            continue
+        key_match = _MAPPING_KEY.match(line[line_indent:])
+        if key_match:
+            fields.append((index, field_indent, key_match.group(1), key_match.group(2)))
+    return fields
+
+
+def _decoded_id_matches(value_text: str, subtask_id: str) -> bool:
+    """Compare a YAML-decoded `id` value against `subtask_id`, not the raw
+    source text: `id` may be quoted, escaped, or followed by a comment, and
+    `dag_parsing.parse_decomposition_plan` (the source of truth for
+    `subtask_id`) always compares decoded, stripped values.
 
     The whole remainder of the line (comment included) is handed to
     `yaml.safe_load` as-is rather than comment-stripped first: only a real
     YAML parser reliably knows whether a given `#` starts a comment or sits
     inside a quoted scalar (`"task#1"`), a distinction a regex can't make.
     """
-    match = _ID_LINE.match(line)
-    if not match:
-        return None
     try:
-        decoded = yaml.safe_load(match.group(2))
+        decoded = yaml.safe_load(value_text)
     except yaml.YAMLError:
-        return None
+        return False
     # `dag_parsing._parse_subtask_id` strips the decoded id before using it
     # as `SubTask.id`; mirror that here or `id: " task-a "` (valid YAML,
     # decodes with the surrounding whitespace intact) would never match.
     if isinstance(decoded, str):
         decoded = decoded.strip()
-    return match if decoded == subtask_id else None
+    return bool(decoded == subtask_id)
 
 
 def _find_frontmatter_bounds(lines: list[str]) -> tuple[int, int]:
@@ -82,19 +151,26 @@ def _write_parent_issue_number(
 def _write_subtask_issue_number(
     lines: list[str], start: int, end: int, subtask_id: str, number: int
 ) -> int:
-    for index in range(start, end):
-        id_match = _matching_id_line(lines[index], subtask_id)
-        if not id_match:
+    for block_start, block_end in _iter_list_item_blocks(lines, start, end):
+        fields = _direct_fields(lines, block_start, block_end)
+        id_field = next(
+            (
+                (line_index, field_indent)
+                for line_index, field_indent, key, value_text in fields
+                if key == "id" and _decoded_id_matches(value_text, subtask_id)
+            ),
+            None,
+        )
+        if id_field is None:
             continue
-        block_end = index + 1
-        while block_end < end and not re.match(r"^\s*-\s*id:\s*", lines[block_end]):
-            existing = _ISSUE_NUMBER_LINE.match(lines[block_end])
+        id_index, field_indent = id_field
+        for index in range(block_start, block_end):
+            existing = _ISSUE_NUMBER_LINE.match(lines[index])
             if existing:
-                lines[block_end] = f"{existing.group(1)}{existing.group(2)}{number}\n"
+                lines[index] = f"{existing.group(1)}{existing.group(2)}{number}\n"
                 return end
-            block_end += 1
-        child_indent = id_match.group(1) + "  "
-        lines.insert(index + 1, f"{child_indent}issue_number: {number}\n")
+        indent_str = " " * field_indent
+        lines.insert(id_index + 1, f"{indent_str}issue_number: {number}\n")
         return end + 1
     raise ValueError(
         f"decomposition_plan.md に該当するサブタスクが見つかりません: {subtask_id}"

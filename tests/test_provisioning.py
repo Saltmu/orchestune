@@ -382,6 +382,32 @@ class TestProvisionIssuesApply:
         ]
         assert len(epic_issues) == 2  # no third (duplicate) EPIC created
 
+    def test_does_not_trust_a_stale_persisted_parent_issue_number(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#323 review round 7 (P2): an already-set `parent_issue_number`
+        was used with zero verification, unlike a persisted subtask number
+        (which is checked against `get_issue` + the marker). A stale parent
+        number (e.g. the plan copied to another repo, where that number now
+        belongs to an unrelated issue) must not have every subtask attached
+        beneath it either."""
+        forge = FakeForge()
+        unrelated = forge.create_issue(
+            "Someone else's real issue", "Nothing to do with this plan."
+        )
+
+        from orchestune.plan_writer import write_issue_numbers
+
+        write_issue_numbers(plan_path, parent_issue_number=unrelated)
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number != unrelated
+        assert forge.sub_issues.get(unrelated, []) == []
+        new_parent = result.parent_issue_number
+        assert new_parent is not None
+        assert _PARENT_MARKER in forge.issues[new_parent]["body"]
+
     def test_links_sub_issue_and_blocked_by(self, plan_path: Path, template_path: Path):
         forge = FakeForge()
         result = provision_issues(plan_path, forge=forge, template_path=template_path)
@@ -452,7 +478,9 @@ class TestProvisionIssuesApply:
         self, plan_path: Path, template_path: Path
     ):
         forge = FakeForge()
-        parent = forge.create_issue("[EPIC] Example big rock", "body")
+        parent = forge.create_issue(
+            "[EPIC] Example big rock", _parent_body("Example big rock")
+        )
         existing_task_a = forge.create_issue(
             "[FEAT] task-a: pre-filed",
             "```yaml\nsubtask_id: task-a\n```\n",
@@ -494,6 +522,39 @@ class TestProvisionIssuesApply:
         # sub-issue, and no blocked-by relationship added to/from it.
         assert unrelated not in forge.sub_issues.get(parent, [])
         assert unrelated not in forge.blocked_by
+
+    def test_reuses_persisted_number_when_plan_id_has_surrounding_whitespace(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#323 review round 7 (P2): `dag_parsing._parse_subtask_id` strips
+        the id before it becomes `SubTask.id` (`" task-a "` -> `"task-a"`),
+        but `_load_plan`'s `issue_numbers` lookup dict was keyed by the raw,
+        unstripped id — so the lookup by the stripped `subtask.id` could
+        never hit, and a persisted number would be silently ignored,
+        creating a duplicate issue instead of reusing it."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - id: " task-a "\n'
+            '    description: "d"\n'
+            "    issue_number: 555\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        forge.issues[555] = {
+            "title": "[FEAT] task-a: d",
+            "body": "```yaml\nsubtask_id: task-a\n```\n",
+            "labels": [],
+        }
+        forge._next_number = 556
+
+        result = provision_issues(path, forge=forge, template_path=template_path)
+
+        assert result.reused.get("task-a") == 555
+        assert "task-a" not in result.created
 
     def test_orphaned_issue_is_persisted_and_not_duplicated_on_resume(
         self, plan_path: Path, template_path: Path
@@ -654,6 +715,21 @@ class TestMain:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
+
+
+def test_missing_subtask_id_yaml_placeholder_raises(tmp_path: Path, plan_path: Path):
+    """#323 review round 7 (P2): without `{{subtask_id_yaml}}`, no rendered
+    issue body can ever contain a `subtask_id:` line, so
+    `_subtask_id_from_body` could never succeed and idempotency would break
+    silently — every future run would create a duplicate issue for every
+    subtask instead of failing loudly up front."""
+    bad_template = tmp_path / "bad_template.md"
+    bad_template.write_text(
+        "# {{subtask_id}}: {{description}}\n{{overview}}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="subtask_id_yaml"):
+        provision_issues(plan_path, forge=FakeForge(), template_path=bad_template)
 
 
 def test_missing_title_raises(tmp_path: Path, template_path: Path):

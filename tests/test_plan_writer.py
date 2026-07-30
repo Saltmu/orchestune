@@ -149,6 +149,49 @@ class TestWriteSubtaskIssueNumber:
         assert "    issue_number: 101" in lines
         assert '  - id: " task-a "' in lines
 
+    def test_finds_id_key_when_not_the_first_key_in_the_mapping(self, tmp_path: Path):
+        """#323 review round 7 (P2): the old matcher only recognized `id`
+        as the literal first key right after `- `; a subtask whose mapping
+        lists another field first (e.g. `description`) could never be
+        located at all."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - description: "d"\n'
+            "    id: task-a\n"
+            "    priority: medium\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        id_index = lines.index("    id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_ignores_nested_id_key_that_is_not_the_subtasks_own(self, tmp_path: Path):
+        """#323 review round 7 (P2): a coincidental `id` key nested deeper
+        inside one of this subtask's own fields (e.g. a `metadata:` mapping)
+        must not shadow the subtask's actual `id` — even when its value
+        collides with a real subtask id elsewhere, it must not be mistaken
+        for that subtask's own `id` field."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            "    metadata:\n"
+            "      id: task-b\n"
+            '      note: "x"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="task-b"):
+            write_issue_numbers(path, {"task-b": 101})
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):
