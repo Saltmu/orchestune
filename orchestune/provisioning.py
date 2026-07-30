@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -43,6 +44,9 @@ _PLACEHOLDERS = (
     "footprint",
     "symbols",
     "depends_on",
+)
+_PLACEHOLDER_PATTERN = re.compile(
+    "{{(" + "|".join(re.escape(name) for name in _PLACEHOLDERS) + ")}}"
 )
 
 
@@ -153,10 +157,11 @@ def _render_issue_body(subtask: SubTask, template: str) -> str:
         "symbols": _yaml_inline_list(subtask.symbols),
         "depends_on": _yaml_inline_list(subtask.depends_on),
     }
-    body = template
-    for placeholder in _PLACEHOLDERS:
-        body = body.replace(f"{{{{{placeholder}}}}}", values[placeholder])
-    return body
+    # A single-pass substitution (not one `.replace()` call per placeholder):
+    # a field's own value could otherwise contain a literal `{{token}}` (a
+    # `description` that mentions the template, say) and get corrupted by a
+    # later replacement reprocessing text that isn't part of the template.
+    return _PLACEHOLDER_PATTERN.sub(lambda match: values[match.group(1)], template)
 
 
 def _subtask_id_from_body(body: str) -> str | None:
@@ -245,10 +250,15 @@ def provision_issues(
         # rather than unconditionally creating a duplicate EPIC. An exact
         # title match alone isn't enough proof of provenance (an unrelated
         # issue could coincidentally share the title), so also require our
-        # own marker in the body before adopting it.
-        candidate = resolved_forge.find_open_issue_by_exact_title(parent_title)
-        if candidate is not None and _PARENT_MARKER in candidate.body:
-            parent_issue_number = candidate.number
+        # own marker in the body before adopting it — and check every
+        # exact-title match, not just the first, in case an unrelated
+        # same-titled issue and our own orphaned parent both exist.
+        candidates = resolved_forge.find_open_issues_by_exact_title(parent_title)
+        marked_candidate = next(
+            (c for c in candidates if _PARENT_MARKER in c.body), None
+        )
+        if marked_candidate is not None:
+            parent_issue_number = marked_candidate.number
         else:
             parent_issue_number = resolved_forge.create_issue(
                 parent_title, _parent_body(metadata.title)
