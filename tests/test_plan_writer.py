@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -160,3 +161,30 @@ def test_missing_frontmatter_raises(tmp_path: Path):
     path.write_text("# No frontmatter here\n", encoding="utf-8")
     with pytest.raises(ValueError, match="フロントマター"):
         write_issue_numbers(path, {"task-a": 1})
+
+
+class TestAtomicWrite:
+    """#323 review (P2): the write must never leave the plan truncated or
+    partially written if the process dies mid-write."""
+
+    def test_no_leftover_temp_file_after_a_normal_write(self, plan_path: Path):
+        write_issue_numbers(plan_path, {"task-a": 101})
+        siblings = {p.name for p in plan_path.parent.iterdir()}
+        assert siblings == {plan_path.name}
+
+    def test_original_file_is_untouched_if_the_write_fails_partway(
+        self, plan_path: Path, monkeypatch
+    ):
+        original = plan_path.read_text(encoding="utf-8")
+
+        def _failing_fsync(fd):
+            raise OSError("simulated disk failure")
+
+        monkeypatch.setattr(os, "fsync", _failing_fsync)
+
+        with pytest.raises(OSError):
+            write_issue_numbers(plan_path, {"task-a": 101})
+
+        assert plan_path.read_text(encoding="utf-8") == original
+        siblings = {p.name for p in plan_path.parent.iterdir()}
+        assert siblings == {plan_path.name}  # no leftover temp file either

@@ -8,7 +8,9 @@ serializer is deliberately avoided.
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -94,6 +96,26 @@ def _write_subtask_issue_number(
     )
 
 
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Replace `target`'s contents without ever leaving it truncated or
+    partially written if the process dies or the disk fills mid-write."""
+    fd, tmp_name = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.remove(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def write_issue_numbers(
     path: str | Path,
     subtask_issue_numbers: Mapping[str, int] | None = None,
@@ -116,4 +138,4 @@ def write_issue_numbers(
     for subtask_id, number in (subtask_issue_numbers or {}).items():
         end = _write_subtask_issue_number(lines, start, end, subtask_id, number)
 
-    target.write_text("".join(lines), encoding="utf-8")
+    _atomic_write_text(target, "".join(lines))
