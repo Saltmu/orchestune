@@ -25,6 +25,13 @@ from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.plan_writer import write_issue_numbers
 
+# Embedded in every parent (EPIC) issue this module creates, and required
+# (in addition to an exact title match) before an orphan-recovery lookup is
+# allowed to adopt an existing issue as "our" parent: an unrelated issue
+# that coincidentally has the same title has no way to also have this
+# exact literal string in its body.
+_PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
+
 _PLACEHOLDERS = (
     "subtask_id",
     "subtask_id_yaml",
@@ -102,6 +109,13 @@ def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, .
 
 def _issue_title(subtask: SubTask) -> str:
     return f"[FEAT] {subtask.id}: {subtask.description}"
+
+
+def _parent_body(title: str) -> str:
+    return (
+        f"{title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+        f"\n\n{_PARENT_MARKER}"
+    )
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
@@ -228,13 +242,17 @@ def provision_issues(
         parent_title = f"[EPIC] {metadata.title}"
         # Recover an orphan from a prior run that created the parent issue
         # but crashed (or failed to write) before persisting its number,
-        # rather than unconditionally creating a duplicate EPIC.
-        parent_issue_number = resolved_forge.find_open_issue_by_exact_title(
-            parent_title
-        )
-        if parent_issue_number is None:
-            parent_body = f"{metadata.title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-            parent_issue_number = resolved_forge.create_issue(parent_title, parent_body)
+        # rather than unconditionally creating a duplicate EPIC. An exact
+        # title match alone isn't enough proof of provenance (an unrelated
+        # issue could coincidentally share the title), so also require our
+        # own marker in the body before adopting it.
+        candidate = resolved_forge.find_open_issue_by_exact_title(parent_title)
+        if candidate is not None and _PARENT_MARKER in candidate.body:
+            parent_issue_number = candidate.number
+        else:
+            parent_issue_number = resolved_forge.create_issue(
+                parent_title, _parent_body(metadata.title)
+            )
         write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
 
     existing_by_subtask_id = _index_sub_issues_by_subtask_id(

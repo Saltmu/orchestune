@@ -496,13 +496,19 @@ class TestSetBlockedBy:
 class TestFindOpenIssueByExactTitle:
     """#323 review: 親Issueの重複作成を防ぐための、部分失敗後のオーファン復旧に使う。"""
 
-    def test_returns_number_on_exact_title_match(self, forge: GitHubForge, gh_run):
+    def test_returns_record_on_exact_title_match(self, forge: GitHubForge, gh_run):
         gh_run.stdout(
-            '[{"number": 100, "title": "[EPIC] Big rock"}, '
-            '{"number": 101, "title": "[EPIC] Big rock v2"}]'
+            '[{"number": 100, "title": "[EPIC] Big rock", "body": "marker text", '
+            '"createdAt": "2026-01-01T00:00:00Z"}, '
+            '{"number": 101, "title": "[EPIC] Big rock v2", "body": "", '
+            '"createdAt": "2026-01-01T00:00:00Z"}]'
         )
 
-        assert forge.find_open_issue_by_exact_title("[EPIC] Big rock") == 100
+        result = forge.find_open_issue_by_exact_title("[EPIC] Big rock")
+
+        assert result is not None
+        assert result.number == 100
+        assert result.body == "marker text"
         called_args = gh_run.call_args.args[0]
         assert called_args[:4] == ["gh", "issue", "list", "--search"]
         assert "--state" in called_args

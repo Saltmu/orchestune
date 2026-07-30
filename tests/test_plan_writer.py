@@ -109,6 +109,25 @@ class TestWriteSubtaskIssueNumber:
         assert "    issue_number: 101" in lines
         assert '  - id: "task\\x2da"' in lines
 
+    def test_finds_id_line_with_hash_inside_quotes(self, tmp_path: Path):
+        """#323 review (P2): `#` inside a quoted YAML scalar (`"task#1"`) is
+        not a comment, but a regex that comment-strips before decoding
+        can't tell the difference and truncates the value at the `#`."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - id: "task#1"\n'
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task#1": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        assert '  - id: "task#1"' in lines
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):
