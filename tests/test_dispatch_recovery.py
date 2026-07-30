@@ -19,6 +19,7 @@ def _issue_with_footprint(
     number,
     subtask_id=None,
     footprint=None,
+    depends_on=None,
     blocked_by=(),
     parent=None,
     created_at="2026-01-01T00:00:00+00:00",
@@ -29,11 +30,13 @@ def _issue_with_footprint(
         footprint_lines = (
             "\n".join(f"  - {f}" for f in footprint) if footprint else "  []"
         )
+        depends_on_values = ", ".join(depends_on or ())
         body = (
             "## Footprint\n```yaml\n"
             f"subtask_id: {subtask_id}\n"
             "footprint:\n"
             f"{footprint_lines}\n"
+            f"depends_on: [{depends_on_values}]\n"
             "```\n"
         )
     return IssueRecord(
@@ -197,6 +200,102 @@ class TestDecideMissingActiveWorktrees:
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["101"].base_branch == "parent/issue-100"
         assert active_by_key["201"].base_branch == "parent/issue-200"
+
+    def test_yaml_dependency_restores_open_dependency_pr_as_base_branch(self):
+        """#305: GitHub MCP起票でnative blocked_byが空でも、Footprint YAMLの
+        depends_onから依存PRのhead branchを復元する。"""
+        run_state = RunState(active_worktrees={})
+        dependency = _issue_with_footprint(101, subtask_id="task-a")
+        dependent = _issue_with_footprint(
+            102,
+            subtask_id="task-b",
+            depends_on=["task-a"],
+        )
+        dependency_pr = PrRecord(
+            number=41,
+            head_ref="claude/issue-101-task-a",
+            changed_files=(),
+            closes_issue_numbers=(101,),
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "orchestune.forge.GitHubForge.list_open_prs",
+            return_value=[dependency_pr],
+        ):
+            result = _decide_missing_active_worktrees(
+                run_state,
+                [dependency, dependent],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
+
+    def test_native_blocked_by_takes_precedence_over_yaml_dependency(self):
+        run_state = RunState(active_worktrees={})
+        yaml_dependency = _issue_with_footprint(101, subtask_id="task-a")
+        native_dependency = _issue_with_footprint(103, subtask_id="task-c")
+        dependent = _issue_with_footprint(
+            102,
+            subtask_id="task-b",
+            depends_on=["task-a"],
+            blocked_by=(103,),
+        )
+        yaml_dependency_pr = PrRecord(
+            number=41,
+            head_ref="claude/issue-101-task-a",
+            changed_files=(),
+            closes_issue_numbers=(101,),
+        )
+        native_dependency_pr = PrRecord(
+            number=43,
+            head_ref="claude/issue-103-task-c",
+            changed_files=(),
+            closes_issue_numbers=(103,),
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "orchestune.forge.GitHubForge.list_open_prs",
+            return_value=[yaml_dependency_pr, native_dependency_pr],
+        ):
+            result = _decide_missing_active_worktrees(
+                run_state,
+                [yaml_dependency, native_dependency, dependent],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        assert active_by_key["102"].base_branch == "claude/issue-103-task-c"
+
+    def test_unresolved_yaml_dependency_keeps_parent_base_branch(self):
+        run_state = RunState(active_worktrees={})
+        dependent = _issue_with_footprint(
+            102,
+            subtask_id="task-b",
+            depends_on=["unknown-task"],
+            parent={"number": 100},
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            result = _decide_missing_active_worktrees(
+                run_state,
+                [dependent],
+                config,
+            )
+
+        assert result[0][2].base_branch == "parent/issue-100"
 
 
 class TestApplyRestoreMissingActiveWorktrees:
