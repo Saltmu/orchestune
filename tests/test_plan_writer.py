@@ -1,0 +1,103 @@
+from pathlib import Path
+
+import pytest
+
+from orchestune.plan_writer import write_issue_numbers
+
+_PLAN = """\
+---
+title: "Example big rock"
+parent_issue_number: null
+subtasks:
+  - id: task-a
+    description: "Implement feature XX"
+    priority: medium    # high, medium, low (default: medium)
+    depends_on: []
+    issue_number: null
+  - id: task-b
+    description: "Implement feature YY"
+    depends_on: [task-a]
+---
+
+# Decomposition Plan
+Free text body.
+"""
+
+
+@pytest.fixture
+def plan_path(tmp_path: Path) -> Path:
+    path = tmp_path / "decomposition_plan.md"
+    path.write_text(_PLAN, encoding="utf-8")
+    return path
+
+
+class TestWriteSubtaskIssueNumber:
+    def test_replaces_existing_null_value(self, plan_path: Path):
+        write_issue_numbers(plan_path, {"task-a": 101})
+        lines = plan_path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        assert "    issue_number: null" not in lines
+
+    def test_inserts_when_field_is_absent(self, plan_path: Path):
+        write_issue_numbers(plan_path, {"task-b": 102})
+        text = plan_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 102"
+
+    def test_updates_value_on_second_call(self, plan_path: Path):
+        write_issue_numbers(plan_path, {"task-a": 101})
+        write_issue_numbers(plan_path, {"task-a": 999})
+        lines = plan_path.read_text(encoding="utf-8").splitlines()
+        assert lines.count("    issue_number: 999") == 1
+        assert "    issue_number: 101" not in lines
+
+    def test_idempotent_on_repeated_identical_write(self, plan_path: Path):
+        write_issue_numbers(plan_path, {"task-a": 101})
+        first = plan_path.read_text(encoding="utf-8")
+        write_issue_numbers(plan_path, {"task-a": 101})
+        second = plan_path.read_text(encoding="utf-8")
+        assert first == second
+
+    def test_preserves_comments_and_unrelated_formatting(self, plan_path: Path):
+        write_issue_numbers(plan_path, {"task-a": 101})
+        text = plan_path.read_text(encoding="utf-8")
+        assert "# high, medium, low (default: medium)" in text
+        assert "# Decomposition Plan\nFree text body.\n" in text
+
+    def test_unknown_subtask_id_raises(self, plan_path: Path):
+        with pytest.raises(ValueError, match="task-z"):
+            write_issue_numbers(plan_path, {"task-z": 1})
+
+
+class TestWriteParentIssueNumber:
+    def test_replaces_existing_null_value(self, plan_path: Path):
+        write_issue_numbers(plan_path, parent_issue_number=42)
+        text = plan_path.read_text(encoding="utf-8")
+        assert "parent_issue_number: 42\n" in text
+        assert "parent_issue_number: null" not in text
+
+    def test_idempotent_on_repeated_identical_write(self, plan_path: Path):
+        write_issue_numbers(plan_path, parent_issue_number=42)
+        first = plan_path.read_text(encoding="utf-8")
+        write_issue_numbers(plan_path, parent_issue_number=42)
+        second = plan_path.read_text(encoding="utf-8")
+        assert first == second
+
+    def test_inserts_after_title_when_field_absent(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            '---\ntitle: "No parent field yet"\nsubtasks:\n  - id: task-a\n---\n',
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, parent_issue_number=7)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        title_index = lines.index('title: "No parent field yet"')
+        assert lines[title_index + 1] == "parent_issue_number: 7"
+
+
+def test_missing_frontmatter_raises(tmp_path: Path):
+    path = tmp_path / "decomposition_plan.md"
+    path.write_text("# No frontmatter here\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="フロントマター"):
+        write_issue_numbers(path, {"task-a": 1})

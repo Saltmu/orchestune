@@ -10,6 +10,7 @@ def main() -> None:
         print("  status    Monitor dispatched agent sessions (--watch for live view)")
         print("  setup     Setup skills symlinks for AI assistants")
         print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
+        print("  provision Provision GitHub Issues from decomposition_plan.md")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -35,6 +36,10 @@ def main() -> None:
         from orchestune.bootstrap import main as bootstrap_main
 
         bootstrap_main()
+    elif cmd == "provision":
+        from orchestune.provisioning import main as provision_main
+
+        provision_main()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

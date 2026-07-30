@@ -1,6 +1,6 @@
 # Usage & Command Reference
 
-This document describes how to use the Orchestune CLI commands (`orchestune dag`, `orchestune dispatch`) and the specification for the task decomposition plan (`decomposition_plan.md`).
+This document describes how to use the Orchestune CLI commands (`orchestune dag`, `orchestune provision`, `orchestune dispatch`) and the specification for the task decomposition plan (`decomposition_plan.md`).
 
 ---
 
@@ -13,6 +13,8 @@ This file consists of a YAML frontmatter section at the top for metadata and a m
 
 ```markdown
 ---
+title: "One-line summary of the 'big rock' itself"
+parent_issue_number: null  # filled in by `orchestune provision` once the parent issue exists
 subtasks:
   - id: setup-database
     description: "Initialize DB schemas and connection pool"
@@ -31,6 +33,7 @@ subtasks:
       - "poetry run pytest tests/test_connection.py"
     shared_contract: db-connection
     writes_shared_contract: true
+    issue_number: null  # filled in by `orchestune provision` once this subtask's issue exists
 
   - id: user-auth
     description: "Implement user authentication endpoints"
@@ -40,12 +43,20 @@ subtasks:
       - auth.login_user
     depends_on: [setup-database]
     shared_contract: db-connection
+    issue_number: null
 ---
 # Decomposition Plan Description
 This plan outlines the steps required to build...
 ```
 
 ### Frontmatter Schema
+
+The top level supports the following fields:
+
+- **`title`** (string, required): A one-line summary of the "big rock" as a whole. `orchestune provision` (see below) uses it to create the parent issue (`[EPIC] <title>`).
+- **`parent_issue_number`** (integer or `null`, optional, defaults to `null`): The parent issue's number. **Do not set this by hand** — `orchestune provision` writes it back after creating (or reusing) the parent issue. If it is already set when the command is re-run after a partial failure, the parent issue is not created twice.
+- **`subtasks`** (list of subtasks, required): Each item supports the following fields.
+
 Each subtask item supports the following fields:
 
 * **`id`** (string, required): A unique identifier for the subtask. Used for branch names and issue titles. It must be a string: YAML numbers, booleans, dates, nulls, and lists (e.g. `id: 123`, `id:`, `id: []`) are rejected with an error. Quote the value (`id: "123"`) if you need a numeric-looking ID.
@@ -67,6 +78,7 @@ Each subtask item supports the following fields:
     * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
 
     Auto-detection does not apply to custom filenames outside those categories (e.g. `src/db/connection.py`, `src/custom_hook.py`), so for those you **must set `writes_shared_contract: true`**. Omitting it makes both subtasks count as consumers even when they share the same `shared_contract` tag, and no warning is emitted at all.
+* **`issue_number`** (integer or `null`, optional, defaults to `null`): This subtask's issue number. **Do not set this by hand** — `orchestune provision` writes it back after creating (or reusing) this subtask's issue. If it is already set, `orchestune provision` reuses that issue instead of creating a new one.
 
 > [!NOTE]
 > `id` is the only required field. Parsing fails with an error if `id` is missing or blank.
@@ -75,7 +87,35 @@ Each subtask item supports the following fields:
 
 ---
 
-## 2. DAG Validation (orchestune-dag)
+## 2. Provisioning Issues (orchestune provision)
+
+Files GitHub Issues from an approved `decomposition_plan.md`: `title` becomes the parent issue, and each subtask becomes a child issue (sub-issue). Issue bodies are rendered from `.github/issue_template.md`'s placeholder rules, subtasks are filed in `depends_on` topological order, and the native parent/blocked-by relationships are set via `--parent`/`--blocked-by`-equivalent operations. Every resolved issue number is written back into `decomposition_plan.md`'s frontmatter (`parent_issue_number`, each subtask's `issue_number`) as soon as it is known, which makes the command **idempotent** (a subtask that already has an issue is never recreated) and **resumable after a partial failure** (if subtask N fails, re-running does not duplicate subtasks 1..N-1).
+
+```bash
+# Preview only (nothing is written to GitHub; prints the generated body/labels)
+orchestune provision --plan decomposition_plan.md --no-apply
+
+# Actually file the issues
+orchestune provision --plan decomposition_plan.md
+```
+
+### Major Options
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--plan <path>` | `decomposition_plan.md` | Path to the decomposition plan to provision from. |
+| `--template <path>` | `.github/issue_template.md` | Path to the issue body template. |
+| `--apply` / `--no-apply` | `--apply` | Choose whether to actually create issues on GitHub and write back numbers, or just preview them (dry-run). |
+
+### Provisioning Rules
+
+* **Labels**: `status:queued` if `depends_on` is empty or every dependency is already `status:done`; otherwise `status:blocked`. `priority:high`/`medium`/`low` follows `priority`; `risk: true` adds `risk:flagged`.
+* **Idempotency check order**: (1) reuse the subtask's `issue_number` if already set; (2) otherwise search the parent's existing child issues for one whose body embeds a matching `subtask_id` in its Footprint YAML block, and reuse it if found; (3) only create a new issue if neither matches.
+* Requires the `gh` CLI to be installed and authenticated (`orchestune bootstrap` verifies this beforehand). See the [orchestune-dispatch skill](../../skills/orchestune-dispatch/SKILL.md) for the fallback procedure when `gh` is unavailable.
+
+---
+
+## 3. DAG Validation (orchestune-dag)
 
 Validates that the tasks defined in `decomposition_plan.md` form a valid Directed Acyclic Graph (DAG) and have no conflicts.
 While AI agents normally run this check automatically, you can also run it manually:
@@ -95,7 +135,7 @@ orchestune dag --plan decomposition_plan.md
 
 ---
 
-## 3. Running the Dispatcher (orchestune-dispatch)
+## 4. Running the Dispatcher (orchestune-dispatch)
 
 Once the plan is finalized and approved, start the dispatcher to allocate subtasks to agents and begin development:
 
@@ -155,7 +195,7 @@ run-state-path = "run_state.json"
 
 ---
 
-## 4. Integration & Auto-Rebase
+## 5. Integration & Auto-Rebase
 
 The `orchestune-dispatch` command **handles both dispatching new tasks and integrating completed ones.**
 

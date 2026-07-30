@@ -12,12 +12,15 @@ TESTS_ROOT = Path(__file__).parent
 DOCS_ROOT = Path(__file__).parents[1] / "docs"
 DOC_LANGUAGES = ("en", "ja")
 PACKAGE_NAME = "orchestune"
-L4_MODULES = frozenset({"cli", "dispatcher", "dag", "monitor", "bootstrap"})
+L4_MODULES = frozenset(
+    {"cli", "dispatcher", "dag", "monitor", "bootstrap", "provisioning"}
+)
 ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
     "dag": frozenset({"cli"}),
     "dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
+    "provisioning": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge"},
