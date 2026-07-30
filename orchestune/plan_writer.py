@@ -22,6 +22,8 @@ _PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
 _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
 _LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
 _MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
+_FLOW_ITEM = re.compile(r"^(\s*)-(\s*)\{(.*)\}\s*$")
+_FLOW_ISSUE_NUMBER_KEY = re.compile(r"(?<![\"'\w])issue_number\s*:\s*[^,}]*")
 
 
 def _iter_list_item_blocks(
@@ -118,6 +120,51 @@ def _decoded_id_matches(value_text: str, subtask_id: str) -> bool:
     return bool(decoded == subtask_id)
 
 
+def _write_flow_style_issue_number(
+    lines: list[str], block_start: int, subtask_id: str, number: int
+) -> bool:
+    """Handle a single-line flow-style list item (`- {id: task-a, ...}`):
+    a valid form `dag_parsing.parse_decomposition_plan` accepts via plain
+    `yaml.safe_load`, but that `_LIST_ITEM_START`/`_MAPPING_KEY` (built for
+    block-style `key: value` lines) can't parse — the `{` doesn't match a
+    mapping key, so a flow-style subtask's `id` would otherwise never be
+    found at all.
+
+    Returns `True` if this line was flow-style and its `id` matched (the
+    line has been rewritten in place), `False` otherwise so the caller can
+    fall through to the block-style search.
+    """
+    raw_line = lines[block_start]
+    newline = "\n" if raw_line.endswith("\n") else ""
+    match = _FLOW_ITEM.match(raw_line[: len(raw_line) - len(newline)])
+    if not match:
+        return False
+    indent, dash_gap, inner = match.groups()
+    try:
+        decoded = yaml.safe_load("{" + inner + "}")
+    except yaml.YAMLError:
+        return False
+    if not isinstance(decoded, dict) or "id" not in decoded:
+        return False
+    decoded_id = decoded["id"]
+    if isinstance(decoded_id, str):
+        decoded_id = decoded_id.strip()
+    if decoded_id != subtask_id:
+        return False
+
+    existing = _FLOW_ISSUE_NUMBER_KEY.search(inner)
+    if existing:
+        new_inner = (
+            inner[: existing.start()]
+            + f"issue_number: {number}"
+            + inner[existing.end() :]
+        )
+    else:
+        new_inner = inner.rstrip() + f", issue_number: {number}"
+    lines[block_start] = f"{indent}-{dash_gap}{{{new_inner}}}{newline}"
+    return True
+
+
 def _find_frontmatter_bounds(lines: list[str]) -> tuple[int, int]:
     if not lines or not _FRONTMATTER_DELIMITER.match(lines[0]):
         raise ValueError(
@@ -152,6 +199,8 @@ def _write_subtask_issue_number(
     lines: list[str], start: int, end: int, subtask_id: str, number: int
 ) -> int:
     for block_start, block_end in _iter_list_item_blocks(lines, start, end):
+        if _write_flow_style_issue_number(lines, block_start, subtask_id, number):
+            return end
         fields = _direct_fields(lines, block_start, block_end)
         id_field = next(
             (
@@ -164,11 +213,20 @@ def _write_subtask_issue_number(
         if id_field is None:
             continue
         id_index, field_indent = id_field
-        for index in range(block_start, block_end):
-            existing = _ISSUE_NUMBER_LINE.match(lines[index])
-            if existing:
-                lines[index] = f"{existing.group(1)}{existing.group(2)}{number}\n"
-                return end
+        # Only a direct field of this item's own mapping may be treated as
+        # its `issue_number` — the same restriction the `id` lookup above
+        # applies — so a coincidental `issue_number` key nested inside one
+        # of this item's own fields (e.g. a `metadata:` sub-mapping) can't
+        # be mistaken for, and overwritten in place of, the subtask's own.
+        existing_index = next(
+            (line_index for line_index, _, key, _ in fields if key == "issue_number"),
+            None,
+        )
+        if existing_index is not None:
+            existing = _ISSUE_NUMBER_LINE.match(lines[existing_index])
+            assert existing is not None
+            lines[existing_index] = f"{existing.group(1)}{existing.group(2)}{number}\n"
+            return end
         indent_str = " " * field_indent
         lines.insert(id_index + 1, f"{indent_str}issue_number: {number}\n")
         return end + 1

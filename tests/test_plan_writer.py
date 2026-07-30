@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from orchestune.plan_writer import write_issue_numbers
 
@@ -191,6 +192,65 @@ class TestWriteSubtaskIssueNumber:
         )
         with pytest.raises(ValueError, match="task-b"):
             write_issue_numbers(path, {"task-b": 101})
+
+    def test_does_not_overwrite_a_nested_issue_number_key(self, tmp_path: Path):
+        """#323 review round 8 (P2): a coincidental `issue_number` key
+        nested inside one of this subtask's own fields (e.g. a `metadata:`
+        mapping) must not be mistaken for the subtask's own direct
+        `issue_number` field and overwritten in place of it."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            "    metadata:\n"
+            "      issue_number: 77\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+        assert "      issue_number: 77" in lines  # nested value left untouched
+
+    def test_writes_into_a_flow_style_subtask_mapping(self, tmp_path: Path):
+        """#323 review round 8 (P2): `- {id: task-a, description: d}` is
+        valid YAML `dag_parsing.parse_decomposition_plan` accepts, but the
+        block-style-only matcher couldn't locate (or write into) it at
+        all."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - {id: task-a, description: "d"}\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        decoded = yaml.safe_load(flow_line.strip().removeprefix("- "))
+        assert decoded == {"id": "task-a", "description": "d", "issue_number": 101}
+
+    def test_updates_existing_issue_number_in_a_flow_style_subtask_mapping(
+        self, tmp_path: Path
+    ):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - {id: task-a, issue_number: 101}\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 999})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        decoded = yaml.safe_load(flow_line.strip().removeprefix("- "))
+        assert decoded == {"id": "task-a", "issue_number": 999}
 
 
 class TestWriteParentIssueNumber:
