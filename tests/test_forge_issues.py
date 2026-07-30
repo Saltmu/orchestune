@@ -565,12 +565,28 @@ class TestGetIssue:
         assert called_args[:3] == ["gh", "issue", "view"]
         assert "42" in called_args
 
-    def test_returns_none_when_gh_fails(self, forge: GitHubForge, gh_run):
+    def test_returns_none_on_404(self, forge: GitHubForge, gh_run):
         gh_run.side_effect = subprocess.CalledProcessError(
-            1, ["gh", "issue", "view", "999"]
+            1,
+            ["gh", "issue", "view", "999"],
+            stderr="GraphQL: Could not resolve to an Issue (HTTP 404)",
         )
 
         assert forge.get_issue(999) is None
+
+    def test_propagates_non_not_found_failures(self, forge: GitHubForge, gh_run):
+        """#323 review round 9 (P2): a transient failure (auth, rate limit,
+        network) must not be conflated with a genuinely missing issue — the
+        persisted-issue-identity verification callers rely on `None`
+        meaning "confirmed gone", not "the CLI call failed for some
+        reason", or a transient error would wrongly make provisioning
+        create a duplicate issue."""
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "issue", "view", "999"], stderr="gh: rate limit exceeded"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.get_issue(999)
 
     def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
         with pytest.raises(ValueError):

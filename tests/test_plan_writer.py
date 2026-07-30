@@ -252,6 +252,108 @@ class TestWriteSubtaskIssueNumber:
         decoded = yaml.safe_load(flow_line.strip().removeprefix("- "))
         assert decoded == {"id": "task-a", "issue_number": 999}
 
+    def test_writes_into_a_flow_style_mapping_with_a_trailing_comment(
+        self, tmp_path: Path
+    ):
+        """#323 review round 9 (P2): `- {id: task-a, description: d} # note`
+        is valid YAML (PyYAML accepts a comment after the closing brace),
+        but the old flow-item regex required only whitespace after `}`, so
+        this line was silently treated as not flow-style at all."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - {id: task-a, description: "d"} # note\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        assert flow_line.rstrip().endswith("# note")
+        decoded = yaml.safe_load(flow_line.split("#")[0].strip().removeprefix("- "))
+        assert decoded == {"id": "task-a", "description": "d", "issue_number": 101}
+
+    def test_does_not_corrupt_a_quoted_value_containing_issue_number_text(
+        self, tmp_path: Path
+    ):
+        """#323 review round 9 (P2): a naive raw-text search for
+        `issue_number:` inside a flow mapping could match that literal
+        substring sitting inside an unrelated quoted string value,
+        corrupting the line into invalid YAML instead of adding a new
+        top-level `issue_number` key."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - {id: task-a, description: "foo issue_number: 77 bar"}\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        decoded = yaml.safe_load(flow_line.strip().removeprefix("- "))
+        assert decoded == {
+            "id": "task-a",
+            "description": "foo issue_number: 77 bar",
+            "issue_number": 101,
+        }
+
+    def test_does_not_overwrite_a_nested_issue_number_in_a_flow_style_mapping(
+        self, tmp_path: Path
+    ):
+        """#323 review round 9 (P2): a nested flow mapping's own
+        `issue_number` key (e.g. inside `metadata: {issue_number: 77}`)
+        must not be mistaken for the subtask's own top-level field."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - {id: task-a, metadata: {issue_number: 77}}\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        decoded = yaml.safe_load(flow_line.strip().removeprefix("- "))
+        assert decoded == {
+            "id": "task-a",
+            "metadata": {"issue_number": 77},
+            "issue_number": 101,
+        }
+
+    def test_ignores_an_id_in_a_list_that_precedes_the_subtasks_list(
+        self, tmp_path: Path
+    ):
+        """#323 review round 9 (P2): `_write_subtask_issue_number` used to
+        scan the whole frontmatter, not just the `subtasks:` list. A same-
+        valued `id` key in some other top-level list appearing earlier in
+        the frontmatter must not be mistaken for the actual subtask."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "examples:\n"
+            "  - id: task-a\n"
+            "    note: not a real subtask\n"
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        examples_id_index = lines.index("  - id: task-a")
+        assert lines[examples_id_index + 1].strip() != "issue_number: 101"
+        subtasks_id_index = lines.index("  - id: task-a", examples_id_index + 1)
+        assert lines[subtasks_id_index + 1].strip() == "issue_number: 101"
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):

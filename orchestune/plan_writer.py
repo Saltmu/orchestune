@@ -22,8 +22,8 @@ _PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
 _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
 _LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
 _MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
-_FLOW_ITEM = re.compile(r"^(\s*)-(\s*)\{(.*)\}\s*$")
-_FLOW_ISSUE_NUMBER_KEY = re.compile(r"(?<![\"'\w])issue_number\s*:\s*[^,}]*")
+_FLOW_ITEM = re.compile(r"^(\s*)-(\s*)\{(.*)\}(.*)$")
+_SUBTASKS_KEY_LINE = re.compile(r"^subtasks:\s*(#.*)?$")
 
 
 def _iter_list_item_blocks(
@@ -120,6 +120,45 @@ def _decoded_id_matches(value_text: str, subtask_id: str) -> bool:
     return bool(decoded == subtask_id)
 
 
+def _split_flow_top_level(inner: str) -> list[str]:
+    """Split a flow mapping's inner text (between `{` and `}`) into its
+    top-level `key: value` segments on commas, the way a real YAML parser
+    would — not on every literal `,`, which would also cut through commas
+    sitting inside a quoted string value or a nested `{...}`/`[...]`."""
+    segments = []
+    depth = 0
+    quote: str | None = None
+    current: list[str] = []
+    index = 0
+    while index < len(inner):
+        char = inner[index]
+        if quote:
+            current.append(char)
+            if char == "\\" and quote == '"' and index + 1 < len(inner):
+                index += 1
+                current.append(inner[index])
+            elif char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+            current.append(char)
+        elif char in "{[":
+            depth += 1
+            current.append(char)
+        elif char in "}]":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        index += 1
+    if current:
+        segments.append("".join(current))
+    return segments
+
+
 def _write_flow_style_issue_number(
     lines: list[str], block_start: int, subtask_id: str, number: int
 ) -> bool:
@@ -139,7 +178,7 @@ def _write_flow_style_issue_number(
     match = _FLOW_ITEM.match(raw_line[: len(raw_line) - len(newline)])
     if not match:
         return False
-    indent, dash_gap, inner = match.groups()
+    indent, dash_gap, inner, trailing = match.groups()
     try:
         decoded = yaml.safe_load("{" + inner + "}")
     except yaml.YAMLError:
@@ -152,16 +191,26 @@ def _write_flow_style_issue_number(
     if decoded_id != subtask_id:
         return False
 
-    existing = _FLOW_ISSUE_NUMBER_KEY.search(inner)
-    if existing:
-        new_inner = (
-            inner[: existing.start()]
-            + f"issue_number: {number}"
-            + inner[existing.end() :]
-        )
-    else:
-        new_inner = inner.rstrip() + f", issue_number: {number}"
-    lines[block_start] = f"{indent}-{dash_gap}{{{new_inner}}}{newline}"
+    # Rewrite only the top-level `issue_number` segment (matched by its
+    # decoded key, not by searching the raw text for the substring
+    # `issue_number:` — that would also match inside a quoted string value
+    # or a nested flow mapping's own `issue_number` key, corrupting the
+    # line or silently updating the wrong field).
+    segments = _split_flow_top_level(inner)
+    updated = False
+    new_segments = []
+    for segment in segments:
+        key_match = _MAPPING_KEY.match(segment.strip())
+        if key_match and key_match.group(1) == "issue_number":
+            prefix = " " if segment.startswith(" ") else ""
+            new_segments.append(f"{prefix}issue_number: {number}")
+            updated = True
+        else:
+            new_segments.append(segment)
+    if not updated:
+        new_segments.append(f" issue_number: {number}")
+    new_inner = ",".join(new_segments)
+    lines[block_start] = f"{indent}-{dash_gap}{{{new_inner}}}{trailing}{newline}"
     return True
 
 
@@ -176,6 +225,27 @@ def _find_frontmatter_bounds(lines: list[str]) -> tuple[int, int]:
     raise ValueError(
         "decomposition_plan.md にYAMLフロントマターの終端(---)が見つかりません"
     )
+
+
+def _find_subtasks_bounds(lines: list[str], start: int, end: int) -> tuple[int, int]:
+    """Scope `[start, end)` down to just the `subtasks:` list's own lines.
+
+    Without this, a subtask lookup would scan the *entire* frontmatter: if
+    some other top-level list happens to precede `subtasks:` and one of its
+    entries happens to carry an `id` (or `issue_number`) key with the same
+    value, it would be found and mutated instead of the actual subtask.
+    """
+    for index in range(start, end):
+        if _SUBTASKS_KEY_LINE.match(lines[index]):
+            list_start = index + 1
+            list_end = list_start
+            while list_end < end:
+                line = lines[list_end]
+                if line.strip() and len(line) - len(line.lstrip(" ")) == 0:
+                    break
+                list_end += 1
+            return list_start, list_end
+    raise ValueError("decomposition_plan.md に 'subtasks:' フィールドが見つかりません")
 
 
 def _write_parent_issue_number(
@@ -280,6 +350,10 @@ def write_issue_numbers(
         end = _write_parent_issue_number(lines, start, end, parent_issue_number)
 
     for subtask_id, number in (subtask_issue_numbers or {}).items():
-        end = _write_subtask_issue_number(lines, start, end, subtask_id, number)
+        subtasks_start, subtasks_end = _find_subtasks_bounds(lines, start, end)
+        new_subtasks_end = _write_subtask_issue_number(
+            lines, subtasks_start, subtasks_end, subtask_id, number
+        )
+        end += new_subtasks_end - subtasks_end
 
     _atomic_write_text(target, "".join(lines))
