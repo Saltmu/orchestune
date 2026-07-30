@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+
+import pytest
+
+from orchestune.dag_models import SubTask
+from orchestune.models import IssueRecord
+from orchestune.provisioning import _derive_labels, main, provision_issues
+
+_TEMPLATE = (
+    "# [FEAT] {{subtask_id}}: {{description}}\n\n"
+    "## Overview\n{{overview}}\n\n"
+    "## Proposed Changes\n{{proposed_changes}}\n\n"
+    "## Acceptance Criteria\n{{acceptance_criteria}}\n\n"
+    "## Verification Plan\n{{verification_plan}}\n\n"
+    "```yaml\n"
+    "subtask_id: {{subtask_id}}\n"
+    "footprint: {{footprint}}\n"
+    "symbols: {{symbols}}\n"
+    "depends_on: {{depends_on}}\n"
+    "```\n"
+)
+
+_PLAN = """\
+---
+title: "Example big rock"
+parent_issue_number: null
+subtasks:
+  - id: task-a
+    description: "Implement feature XX"
+    priority: high
+    footprint: [src/foo.py]
+    symbols: [foo.Foo]
+    depends_on: []
+    issue_number: null
+  - id: task-b
+    description: "Implement feature YY"
+    priority: medium
+    depends_on: [task-a]
+    issue_number: null
+---
+
+# Decomposition Plan
+"""
+
+
+class FakeForge:
+    """Minimal in-memory IssueForge double; no mock.patch.
+
+    Only the methods `provisioning.py` actually calls have real behaviour;
+    the rest are stubs present solely to satisfy the `IssueForge` protocol.
+    """
+
+    def __init__(self) -> None:
+        self._next_number = 100
+        self.issues: dict[int, dict] = {}
+        self.sub_issues: dict[int, list[int]] = {}
+        self.blocked_by: dict[int, list[int]] = {}
+        self.create_issue_calls: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str] = ()) -> int:
+        number = self._next_number
+        self._next_number += 1
+        self.issues[number] = {"title": title, "body": body, "labels": list(labels)}
+        self.create_issue_calls.append((title, body, tuple(labels)))
+        return number
+
+    def add_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None:
+        self.sub_issues.setdefault(int(parent_issue_number), []).append(
+            int(child_issue_number)
+        )
+
+    def set_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None:
+        self.blocked_by.setdefault(int(issue_number), []).append(
+            int(blocking_issue_number)
+        )
+
+    def list_sub_issues(self, parent_issue_number: int | str) -> list[IssueRecord]:
+        numbers = self.sub_issues.get(int(parent_issue_number), [])
+        return [
+            IssueRecord(
+                number=number,
+                title=self.issues[number]["title"],
+                body=self.issues[number]["body"],
+                labels=tuple(self.issues[number]["labels"]),
+                created_at="",
+            )
+            for number in numbers
+        ]
+
+    def get_issue_labels(self, issue_number: int | str) -> tuple[str, ...]:
+        return tuple(self.issues[int(issue_number)]["labels"])
+
+    # --- Unused by provisioning.py; present only for IssueForge conformance. ---
+
+    def list_issues_by_label(
+        self, label: str, state: str = "open", limit: int = 1000
+    ) -> list[IssueRecord]:
+        raise NotImplementedError
+
+    def add_label(self, issue_number: int | str, label: str) -> None:
+        raise NotImplementedError
+
+    def remove_label(self, issue_number: int | str, label: str) -> None:
+        raise NotImplementedError
+
+    def close_issue(
+        self, issue_number: int | str, reason: str, comment: str | None = None
+    ) -> None:
+        raise NotImplementedError
+
+    def add_comment(self, issue_number: int | str, body: str) -> None:
+        raise NotImplementedError
+
+    def get_issue_state(self, issue_number: int | str) -> str:
+        raise NotImplementedError
+
+    def get_label_actor(self, issue_number: int | str, label: str) -> str:
+        raise NotImplementedError
+
+    def get_actor_permission(self, username: str) -> str:
+        raise NotImplementedError
+
+    def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None:
+        raise NotImplementedError
+
+
+@pytest.fixture
+def plan_path(tmp_path: Path) -> Path:
+    path = tmp_path / "decomposition_plan.md"
+    path.write_text(_PLAN, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def template_path(tmp_path: Path) -> Path:
+    path = tmp_path / "issue_template.md"
+    path.write_text(_TEMPLATE, encoding="utf-8")
+    return path
+
+
+class TestDeriveLabels:
+    def _subtask(
+        self,
+        *,
+        depends_on: tuple[str, ...] = (),
+        risk: bool = False,
+        priority: str = "medium",
+    ) -> SubTask:
+        return SubTask(
+            id="x",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=depends_on,
+            risk=risk,
+            risk_reasons=(),
+            priority=priority,
+        )
+
+    def test_no_dependencies_is_queued(self):
+        labels = _derive_labels(self._subtask(depends_on=()), dependencies_done=False)
+        assert labels == ("status:queued", "priority:medium")
+
+    def test_unresolved_dependency_is_blocked(self):
+        labels = _derive_labels(
+            self._subtask(depends_on=("y",)), dependencies_done=False
+        )
+        assert labels[0] == "status:blocked"
+
+    def test_resolved_dependencies_is_queued(self):
+        labels = _derive_labels(
+            self._subtask(depends_on=("y",)), dependencies_done=True
+        )
+        assert labels[0] == "status:queued"
+
+    def test_risk_flag_appends_label(self):
+        labels = _derive_labels(self._subtask(risk=True), dependencies_done=False)
+        assert "risk:flagged" in labels
+
+    def test_priority_label_reflects_field(self):
+        labels = _derive_labels(self._subtask(priority="low"), dependencies_done=False)
+        assert "priority:low" in labels
+
+
+class TestProvisionIssuesApply:
+    def test_creates_parent_and_subtasks_in_topological_order(
+        self, plan_path: Path, template_path: Path
+    ):
+        forge = FakeForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.applied is True
+        assert result.parent_issue_number is not None
+        assert set(result.created) == {"task-a", "task-b"}
+        # task-a must be created before task-b (topological order).
+        titles_in_order = [call[0] for call in forge.create_issue_calls]
+        assert any("task-a" in title for title in titles_in_order[:-1])
+
+    def test_links_sub_issue_and_blocked_by(self, plan_path: Path, template_path: Path):
+        forge = FakeForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        parent = result.parent_issue_number
+        assert parent is not None
+        task_a_number = result.created["task-a"]
+        task_b_number = result.created["task-b"]
+        assert task_a_number in forge.sub_issues[parent]
+        assert task_b_number in forge.sub_issues[parent]
+        assert forge.blocked_by[task_b_number] == [task_a_number]
+
+    def test_writes_issue_numbers_back_to_plan(
+        self, plan_path: Path, template_path: Path
+    ):
+        forge = FakeForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        text = plan_path.read_text(encoding="utf-8")
+        assert f"parent_issue_number: {result.parent_issue_number}" in text
+        assert f"issue_number: {result.created['task-a']}" in text
+        assert f"issue_number: {result.created['task-b']}" in text
+
+    def test_rerun_reuses_issue_numbers_without_creating_duplicates(
+        self, plan_path: Path, template_path: Path
+    ):
+        forge = FakeForge()
+        first = provision_issues(plan_path, forge=forge, template_path=template_path)
+        second = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert second.created == {}
+        assert second.reused == {
+            "task-a": first.created["task-a"],
+            "task-b": first.created["task-b"],
+        }
+        assert len(forge.issues) == 3  # parent + 2 subtasks, no duplicates
+
+    def test_partial_failure_then_resume_does_not_duplicate_completed_subtasks(
+        self, plan_path: Path, template_path: Path
+    ):
+        class FlakyForge(FakeForge):
+            def __init__(self):
+                super().__init__()
+                self.fail_next_blocked_by = True
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                if self.fail_next_blocked_by:
+                    self.fail_next_blocked_by = False
+                    raise RuntimeError("simulated transient failure")
+                super().set_blocked_by(issue_number, blocking_issue_number)
+
+        flaky = FlakyForge()
+        with pytest.raises(RuntimeError):
+            provision_issues(plan_path, forge=flaky, template_path=template_path)
+
+        # task-a (and the parent) must have been persisted before the crash.
+        assert (
+            "task-a"
+            in [entry["title"].split(": ", 1)[0] for entry in flaky.issues.values()]
+            or len(flaky.issues) >= 2
+        )
+
+        resumed = provision_issues(plan_path, forge=flaky, template_path=template_path)
+        assert "task-a" in resumed.reused
+        assert len(flaky.issues) == 3  # no duplicate of task-a created on resume
+
+    def test_finds_existing_sub_issue_by_subtask_id_when_issue_number_unset(
+        self, plan_path: Path, template_path: Path
+    ):
+        forge = FakeForge()
+        parent = forge.create_issue("[EPIC] Example big rock", "body")
+        existing_task_a = forge.create_issue(
+            "[FEAT] task-a: pre-filed",
+            "```yaml\nsubtask_id: task-a\n```\n",
+        )
+        forge.add_sub_issue(parent, existing_task_a)
+
+        from orchestune.plan_writer import write_issue_numbers
+
+        write_issue_numbers(plan_path, parent_issue_number=parent)
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert result.reused["task-a"] == existing_task_a
+        assert "task-a" not in result.created
+
+
+class TestProvisionIssuesNoApply:
+    def test_no_apply_makes_no_forge_calls_and_returns_preview(
+        self, plan_path: Path, template_path: Path
+    ):
+        class ExplodingForge:
+            def __getattr__(self, name):
+                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+
+        result = provision_issues(
+            plan_path, forge=ExplodingForge(), apply=False, template_path=template_path
+        )
+
+        assert result.applied is False
+        assert result.created == {}
+        assert result.reused == {}
+        subtask_ids = [p.subtask_id for p in result.previews]
+        assert subtask_ids == ["task-a", "task-b"]
+        assert "[FEAT] task-a: Implement feature XX" == result.previews[0].title
+        assert "status:queued" in result.previews[0].labels
+        assert "status:blocked" in result.previews[1].labels
+
+
+class TestMain:
+    def test_no_apply_prints_preview_and_exits_0(
+        self, plan_path: Path, template_path: Path, capsys
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "Dry run" in captured.out
+        assert "task-a" in captured.out
+
+    def test_apply_mode_prints_summary_and_exits_0(
+        self, plan_path: Path, template_path: Path, capsys, monkeypatch
+    ):
+        forge = FakeForge()
+        monkeypatch.setattr("orchestune.provisioning.GitHubForge", lambda: forge)
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "Parent issue:" in captured.out
+        assert "task-a" in captured.out
+
+    def test_missing_plan_file_exits_1_with_error(self, tmp_path: Path, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(tmp_path / "nonexistent.md")])
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+
+
+def test_missing_title_raises(tmp_path: Path, template_path: Path):
+    path = tmp_path / "decomposition_plan.md"
+    path.write_text(
+        "---\nsubtasks:\n  - id: task-a\n    description: x\n---\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="title"):
+        provision_issues(path, forge=FakeForge(), template_path=template_path)

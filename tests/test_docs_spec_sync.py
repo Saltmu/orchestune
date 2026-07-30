@@ -13,6 +13,7 @@ import pytest
 from orchestune.dag_contracts import _SHARED_CONTRACT_PATTERNS
 from orchestune.dag_parsing import _parse_subtask
 from orchestune.dispatcher import _build_arg_parser
+from orchestune.provisioning import _build_arg_parser as _build_provision_arg_parser
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 USAGE_DOCS = {
@@ -32,14 +33,23 @@ def _read_usage(lang: str) -> str:
     return USAGE_DOCS[lang].read_text(encoding="utf-8")
 
 
-def _documented_options(lang: str) -> dict[str, str | None]:
+def _section(lang: str, heading_number: int) -> str:
+    """Usageの`## <heading_number>.`見出し節（次の`## `見出しの直前まで）を切り出す。"""
+    text = _read_usage(lang)
+    pattern = rf"^## {heading_number}\..*?(?=^## |\Z)"
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    assert match, f"{lang}のUsageに見出し（## {heading_number}.）が見つかりません"
+    return match.group(0)
+
+
+def _documented_options_in(section_text: str) -> dict[str, str | None]:
     """Usageのオプション表から {オプション名: 記載デフォルト値} を抽出する。
 
     デフォルト値がバッククォートで囲まれた単一トークンでない行（`-`や
     「自動選択」のような散文）は、機械比較の対象外として ``None`` を返す。
     """
     options: dict[str, str | None] = {}
-    for line in _read_usage(lang).splitlines():
+    for line in section_text.splitlines():
         match = _OPTION_ROW_PATTERN.match(line)
         if not match:
             continue
@@ -50,6 +60,16 @@ def _documented_options(lang: str) -> dict[str, str | None]:
             documented = None
         options[option] = documented
     return options
+
+
+def _documented_options(lang: str) -> dict[str, str | None]:
+    """`orchestune-dispatch`（## 4.）節のオプション表を抽出する。"""
+    return _documented_options_in(_section(lang, 4))
+
+
+def _documented_provision_options(lang: str) -> dict[str, str | None]:
+    """`orchestune provision`（## 2.）節のオプション表を抽出する。"""
+    return _documented_options_in(_section(lang, 2))
 
 
 def _documented_schema_fields(lang: str) -> dict[str, str]:
@@ -68,11 +88,8 @@ def _documented_schema_fields(lang: str) -> dict[str, str]:
 
 
 def _integration_section(lang: str) -> str:
-    """Usageの「4. 統合」節（次の`## `見出しの直前まで）を切り出す。"""
-    text = _read_usage(lang)
-    match = re.search(r"^## 4\..*?(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
-    assert match, f"{lang}のUsageに統合節（## 4.）が見つかりません"
-    return match.group(0)
+    """Usageの「5. 統合」節（次の`## `見出しの直前まで）を切り出す。"""
+    return _section(lang, 5)
 
 
 def _schema_bullet_block(lang: str, field: str) -> str:
@@ -123,6 +140,45 @@ class TestDocsCliConsistency:
 
     def test_ja_and_en_document_the_same_defaults(self):
         ja, en = _documented_options("ja"), _documented_options("en")
+        assert {k: v for k, v in ja.items() if v is not None} == {
+            k: v for k, v in en.items() if v is not None
+        }
+
+
+class TestDocsProvisionCliConsistency:
+    """#306: Usageに記載された`orchestune provision`のオプションと実装の乖離を検知する。"""
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_documented_defaults_match_parser(self, lang):
+        parser_defaults = vars(_build_provision_arg_parser().parse_args([]))
+        documented = _documented_provision_options(lang)
+        assert (
+            documented
+        ), f"{lang}のUsageからprovisionのオプション表を抽出できませんでした"
+
+        for option, documented_default in documented.items():
+            dest = option.removeprefix("--").replace("-", "_")
+            assert (
+                dest in parser_defaults
+            ), f"{lang}のUsageに記載された{option}は実装に存在しません"
+            if documented_default is None:
+                continue
+            assert documented_default == str(parser_defaults[dest]), (
+                f"{lang}のUsageの{option}のデフォルト値が実装と一致しません: "
+                f"docs={documented_default} / implementation={parser_defaults[dest]}"
+            )
+
+    def test_ja_and_en_document_the_same_options(self):
+        assert (
+            _documented_provision_options("ja").keys()
+            == _documented_provision_options("en").keys()
+        )
+
+    def test_ja_and_en_document_the_same_defaults(self):
+        ja, en = (
+            _documented_provision_options("ja"),
+            _documented_provision_options("en"),
+        )
         assert {k: v for k, v in ja.items() if v is not None} == {
             k: v for k, v in en.items() if v is not None
         }

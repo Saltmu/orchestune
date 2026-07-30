@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from urllib.parse import quote
@@ -109,6 +110,18 @@ class IssueForge(Protocol):
     def get_actor_permission(self, username: str) -> str: ...
 
     def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None: ...
+
+    def create_issue(
+        self, title: str, body: str, labels: Sequence[str] = ()
+    ) -> int: ...
+
+    def add_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None: ...
+
+    def set_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -357,6 +370,34 @@ class GitHubForge:
             if event.get("event") == "reopened"
         ]
         return str(reopened_at[-1]) if reopened_at else None
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str] = ()) -> int:
+        """Issueを新規作成し、番号を返す。"""
+        args = ["gh", "issue", "create", "--title", title, "--body-file", "-"]
+        for label in labels:
+            validate_label(label)
+            args.extend(["--label", label])
+        stdout = self._run(args, input_text=body)
+        url = stdout.strip().splitlines()[-1]
+        return int(url.rstrip("/").rsplit("/", 1)[-1])
+
+    def add_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None:
+        """childをparent配下のsub-issueとして紐付ける。"""
+        parent = validate_issue_number(parent_issue_number)
+        child = validate_issue_number(child_issue_number)
+        self._run(["gh", "issue", "edit", str(child), "--set-parent", str(parent)])
+
+    def set_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None:
+        """issue_numberをblocking_issue_numberでブロック済みとしてマークする。"""
+        number = validate_issue_number(issue_number)
+        blocker = validate_issue_number(blocking_issue_number)
+        self._run(
+            ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
+        )
 
     def merge_pull_request(self, pr_number: int | str) -> None:
         """PRをmerge commit方式でマージする。"""

@@ -24,83 +24,35 @@ output_schema:
 ## 前提
 
 * システムに `ochestune` CLIツール（`orchestune-dispatch`, `orchestune-dag`）がインストールされていること。
-* GitHub CLI (`gh` command) がインストール・認証済み（`gh auth status`）であること。
-  * `gh` が利用できない場合は、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。
-  * GitHub MCPによるIssue起票ではnativeの`blocked_by`関係を設定できない。この場合もFootprint YAMLの`depends_on`を必ず保持すること。ディスパッチャーはこの値を依存判定と自己修復時のブランチスタッキング復元に使用する。GitHub上の関係を可視化したい場合は、起票後にWeb UIからnativeの`blocked_by`を追加する。
+* GitHub CLI (`gh` command) がインストール・認証済み（`gh auth status`）であること。`gh`が利用できない環境での代替手順は、ステージAの「`gh`が利用できない環境でのフォールバック」を参照。
 * ステージA開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと（詳細はステージAの手順1を参照）。
 * ディスパッチャーの書き込み系操作（ラベル更新・`git worktree`作成・エージェント起動）は、既定で実行されます（`--apply`）。テスト確認したい場合は `--no-apply` を明示指定してください。
 * エージェントの起動先（`--dispatch-target`）は、未指定時は実行環境に応じて自動選択されます：ローカル/対話実行時は`auto`（PATH上にインストールされているローカルCLIを`claude`優先・`agy`次点・`codex`次々点で自動検出しsubprocess起動、いずれも未検出なら警告してダミー起動にフォールバック）、GitHub Actions実行時（`GITHUB_ACTIONS=true`）は`cloud-routine`（Claude Code Cloud Routine）です。明示的に`local`を指定した場合のみ、後方互換のダミー起動（`true`のno-op、テスト・dry-run用途）になります。クラウド実行先は、Claude Code Cloud Routine（`cloud-routine`、`ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要）と Codex Cloud（`codex-cloud`、`ORCHESTUNE_CODEX_CLOUD_ENV` または `--codex-cloud-env` が必要）をサポートします。`codex-cloud` はタスクブランチを `origin` にpushしてから `codex cloud exec` を起動し、対象ブランチのopen PRを完了シグナルとして扱います。セットアップは[セットアップガイド](../../docs/ja/setup.md#4-codex-cloud-のセットアップ手順)を参照してください。
 
 ## ステージA: Issue起票
 
+`decomposition_plan.md`からのIssue起票は`orchestune provision`コマンドに完全にコード化されている（#306）。承認済みplanがあれば起票は決定的な変換であり、エージェントが手順を解釈する必要はない。
+
 1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
-2. **親Issueの起票（冪等）**: `decomposition_plan.md`の`title`を用いて、「大きな石」自体を表す親Issueを用意します。サブタスクIssueより先に、必ずこの手順を実行してください。手順3のサブタスク起票が部分的に失敗して本ステージを再実行した場合でも、親Issueを重複作成しないよう、以下の順で「既存を再利用できないか」を先に確認します。
+2. **プレビュー**: 書き込み前に内容を確認します。
+   ```bash
+   orchestune provision --plan decomposition_plan.md --no-apply
+   ```
+   生成される各Issueのタイトル・ラベル・本文が出力される。GitHubへの書き込みは行われない。
+3. **起票**: 問題なければ実際に適用します。
+   ```bash
+   orchestune provision --plan decomposition_plan.md
+   ```
+   `title`から親Issue（`[EPIC] <title>`）を起票し、`decomposition_plan.md`の`depends_on`のトポロジカル順で各サブタスクIssueを起票して`--parent`/`--blocked-by`相当の関係を`gh issue edit --set-parent`/`--add-blocked-by`で設定する。起票済みのIssue番号は起票の都度`decomposition_plan.md`のフロントマター（`parent_issue_number`、各サブタスクの`issue_number`）へ書き戻される。**冪等かつ部分失敗から再開可能**: 既に`issue_number`が設定済みのサブタスク、または親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの`subtask_id`が一致するサブタスクは、再作成されず既存のIssue番号がそのまま再利用される。詳細な導出規則（ラベル付与規則、`.github/issue_template.md`のプレースホルダー置換規則等）は`orchestune/provisioning.py`のdocstringおよび`docs/ja/usage.md`を参照。
+4. **起票したIssue一覧とディスパッチ結果を[orchestune スキル](../orchestune/SKILL.md)に返し、ユーザーへの最終報告に用いさせます。**
 
-   a. `decomposition_plan.md`の`parent_issue_number`が既に設定されている（`null`でない）場合は、そのIssue番号をそのまま再利用します。念のため`gh issue view <番号>`で存在・オープン状態を確認し、問題なければ手順bをスキップして手順3へ進みます。
+### `gh` が利用できない環境でのフォールバック（手動起票）
 
-   b. `parent_issue_number`が未設定の場合、同一タイトルのopenな親Issueが既に存在しないか検索します（過去の実行が親Issue作成後・`decomposition_plan.md`書き戻し前に中断した可能性があるため）：
+`orchestune provision`は内部で`gh` CLIを呼び出す。`gh`自体がインストール・認証できない環境では、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。この場合、以下の対応関係を守って手作業で代替する：
 
-      ```bash
-      gh issue list --search "in:title \"[EPIC] <decomposition_plan.mdのtitle>\"" --state open
-      ```
-
-      該当するIssueが見つかった場合は、それを誤って重複作成しないよう、そのIssue番号を再利用してよいか必ず人間に確認を求めてください。見つからない場合のみ、新規に起票します：
-
-      ```bash
-      gh issue create --title "[EPIC] <decomposition_plan.mdのtitle>" --body "decomposition_plan.md記載の設計方針の要約。配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-      ```
-
-   c. 上記a/bで確定したIssue番号を、**必ず**`decomposition_plan.md`のフロントマターの`parent_issue_number`フィールドへ書き戻してから、次の手順へ進みます。これを怠ると、後続のサブタスク起票中にエラーが発生し本ステージを再実行した際、親Issueが重複作成されSub-issue階層が分裂します。
-
-   確定した親Issue番号は、以降すべてのサブタスクIssue起票の`--parent`として使用します。
-3. **サブタスクIssueの起票（冪等）**: 承認済みの`decomposition_plan.md`の各サブタスクについて、`depends_on`のトポロジカル順（依存元を先に処理する順）で以下を行います。手順2と同様、部分失敗からの再実行でサブタスクIssueを重複作成しないよう、起票前に必ず「既存を再利用できないか」を確認します。
-
-   a. そのサブタスクの`issue_number`が既に設定されている場合は、そのIssue番号をそのまま再利用します。`gh issue view <番号>`で存在確認と、`parent`が手順2で確定した親Issue番号と一致することを確認してください。問題なければ手順b・cをスキップし、次のサブタスクへ進みます。
-   b. `issue_number`が未設定の場合、親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの`subtask_id`が、このサブタスクの`id`と一致するものが無いか検索します（Issueタイトルの一致より`subtask_id`の方が構造化されており安定するため、こちらを優先する）。**`gh issue view --json subIssues`は`number`/`title`/`state`程度しか返さず本文（body）を含まないため、この照合には使えません。** 代わりに、`gh api graphql`で`subIssues`の`body`まで含めて直接取得してください：
-
-      ```bash
-      gh api graphql -F owner='{owner}' -F name='{repo}' -F number=<親Issue番号> -f query='
-      query($owner: String!, $name: String!, $number: Int!) {
-        repository(owner: $owner, name: $name) {
-          issue(number: $number) {
-            subIssues(first: 100) {
-              nodes { number body }
-            }
-          }
-        }
-      }'
-      ```
-
-      （本リポジトリの`orchestune/github.py`の`list_sub_issues()`が同じ理由・同じ手法でこのフィールドを取得している。100件を超えるサブタスクがある大きな石を扱う場合は`pageInfo`によるページネーションが必要になる点も同様。）各`node.body`からFootprint YAMLの`subtask_id`を読み取って照合し、一致するIssueが見つかった場合はそのIssue番号を再利用します。同一親配下・同一`subtask_id`という強い一致のため、手順2bのような人間への確認は不要です。
-    c. それでも見つからない場合のみ、新規にIssueを起票します。`.github/issue_template.md` のテンプレートファイルをベースに、サブタスクの情報をプレースホルダーに埋め込んで一時ファイル（例: `/tmp/issue_body.md`）を作成し、本文として使用します。
-       * **タイトル**: `[FEAT] <subtask_id>: <description の要約>`
-       * **置換ルール**:
-         * `{{subtask_id}}`: サブタスクID
-         * `{{description}}`: `description` の内容
-         * `{{overview}}`: `overview` の内容。未定義の場合は「特になし」とする。
-         * `{{proposed_changes}}`: `proposed_changes` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
-         * `{{acceptance_criteria}}`: `acceptance_criteria` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
-         * `{{verification_plan}}`: `verification_plan` の各項目を `- ` による箇条書き形式にしたもの。未定義の場合は「特になし」とする。
-         * `{{footprint}}`: YAMLのリスト形式で置換。例: `[path1, path2]`（空の場合は `[]`）
-         * `{{symbols}}`: YAMLのリスト形式で置換. 例: `[class1, class2]`（空の場合は `[]`）
-         * `{{depends_on}}`: YAMLのリスト形式で置換。例: `[dep_task1, dep_task2]`（空の場合は `[]`）
-
-      ラベルおよびGitHub関係性の付与:
-      * **親子関係の紐付け**: 手順2で確定した親Issueの番号（例: `#100`）を設定するため `--parent <親Issue番号>` を必ず付与します。
-      * **依存関係の紐付け**: 依存関係（`depends_on`）がある場合、先行タスクの`issue_number`（トポロジカル順で処理しているため、この時点で手順a〜cのいずれかにより確定済み）を `--blocked-by <先行Issue番号>` として付与します。
-      * **初期ステータスラベル**: 依存関係が未解決（未完了の先行タスクがある）なら `status:blocked`、依存がない/全て解決済みなら `status:queued`。
-      * **優先度・リスク**: 優先度に応じて `priority:high` / `priority:medium` / `priority:low`、また `risk: true` であれば `risk:flagged` を付与。
-   d. 上記a〜cで確定したIssue番号を、**必ず**`decomposition_plan.md`の該当サブタスクエントリの`issue_number`フィールドへ書き戻してから、次のサブタスクへ進みます。これを怠ると、後続のサブタスク起票中にエラーが発生し本ステージを再実行した際、このサブタスクのIssueが重複作成されます。
-
-4. **Issue起票コマンド例（GitHub CLI使用、手順3cの新規作成の場合）**:
-   * 親Issueが `#100` で、先行依存Issueとして `#101` がある場合の例：
-     ```bash
-     gh issue create --title "[FEAT] task-b: Implement bar feature" --body-file /tmp/issue_body.md --parent 100 --blocked-by 101 --label "status:blocked,priority:medium"
-     ```
-   * 親Issueが `#100` で、依存関係がない場合の例：
-     ```bash
-     gh issue create --title "[FEAT] task-a: Implement foo feature" --body-file /tmp/issue_body.md --parent 100 --label "status:queued,priority:medium"
-     ```
+* 親Issue: `decomposition_plan.md`の`title`から`[EPIC] <title>`のタイトルで起票し、確定した番号を`parent_issue_number`へ書き戻す。
+* 各サブタスクIssue: `.github/issue_template.md`のプレースホルダー（`{{subtask_id}}`, `{{description}}`, `{{overview}}`, `{{proposed_changes}}`, `{{acceptance_criteria}}`, `{{verification_plan}}`, `{{footprint}}`, `{{symbols}}`, `{{depends_on}}`）へサブタスクの情報を埋め込み、確定した番号を各サブタスクの`issue_number`へ書き戻す。
+* GitHub MCPによるIssue起票ではnativeの`blocked_by`/`parent`関係を設定できない場合がある。この場合もFootprint YAMLの`depends_on`を必ず保持すること。ディスパッチャーはこの値を依存判定と自己修復時のブランチスタッキング復元に使用する。GitHub上の関係を可視化したい場合は、起票後にWeb UIまたは`gh issue edit --set-parent`/`--add-blocked-by`でnativeの関係を追加する。
 
 ## ステージB: ディスパッチャーのスケジュール実行
 
