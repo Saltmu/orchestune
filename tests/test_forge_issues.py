@@ -413,3 +413,182 @@ class TestGetActorPermission:
         ValueErrorを送出せず安全側の`none`を返す。"""
         assert forge.get_actor_permission("") == "none"
         gh_run.assert_not_called()
+
+
+class TestCreateIssue:
+    """#306: orchestune provisionが親/サブタスクIssueを起票する際に使う。"""
+
+    def test_creates_issue_and_returns_number_parsed_from_url(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout("https://github.com/Saltmu/orchestune/issues/321\n")
+
+        number = forge.create_issue("[FEAT] task-a: Do the thing", "body text")
+
+        assert number == 321
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "issue",
+            "create",
+            "--title",
+            "[FEAT] task-a: Do the thing",
+            "--body-file",
+            "-",
+        ]
+        assert gh_run.call_args.kwargs.get("input") == "body text"
+
+    def test_passes_each_label_as_a_separate_flag(self, forge: GitHubForge, gh_run):
+        gh_run.stdout("https://github.com/Saltmu/orchestune/issues/1\n")
+
+        forge.create_issue("t", "b", labels=("status:queued", "priority:high"))
+
+        called_args = gh_run.call_args.args[0]
+        assert called_args.count("--label") == 2
+        assert "status:queued" in called_args
+        assert "priority:high" in called_args
+
+    def test_rejects_invalid_label_before_calling_subprocess(
+        self, forge: GitHubForge, gh_run
+    ):
+        with pytest.raises(ValueError):
+            forge.create_issue("t", "b", labels=("status:queued; evil",))
+        gh_run.assert_not_called()
+
+
+class TestAddSubIssue:
+    def test_calls_gh_issue_edit_with_set_parent(self, forge: GitHubForge, gh_run):
+        forge.add_sub_issue(100, 101)
+
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "issue",
+            "edit",
+            "101",
+            "--set-parent",
+            "100",
+        ]
+
+    def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.add_sub_issue("100; evil", 101)
+        gh_run.assert_not_called()
+
+
+class TestSetBlockedBy:
+    def test_calls_gh_issue_edit_with_add_blocked_by(self, forge: GitHubForge, gh_run):
+        forge.set_blocked_by(102, 101)
+
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "issue",
+            "edit",
+            "102",
+            "--add-blocked-by",
+            "101",
+        ]
+
+    def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.set_blocked_by(102, "101; evil")
+        gh_run.assert_not_called()
+
+
+class TestFindOpenIssuesByExactTitle:
+    """#323 review: 親Issueの重複作成を防ぐための、部分失敗後のオーファン復旧に使う。"""
+
+    def test_returns_only_exact_title_matches(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '[{"number": 100, "title": "[EPIC] Big rock", "body": "marker text", '
+            '"createdAt": "2026-01-01T00:00:00Z"}, '
+            '{"number": 101, "title": "[EPIC] Big rock v2", "body": "", '
+            '"createdAt": "2026-01-01T00:00:00Z"}]'
+        )
+
+        results = forge.find_open_issues_by_exact_title("[EPIC] Big rock")
+
+        assert [r.number for r in results] == [100]
+        assert results[0].body == "marker text"
+        called_args = gh_run.call_args.args[0]
+        assert called_args[:4] == ["gh", "issue", "list", "--search"]
+        assert "--state" in called_args
+        assert called_args[called_args.index("--state") + 1] == "open"
+
+    def test_returns_every_exact_title_match(self, forge: GitHubForge, gh_run):
+        """#323 review: two issues can share the exact title (an unrelated
+        one and our own orphaned parent); the caller must be able to see
+        all of them, not just the first."""
+        gh_run.stdout(
+            '[{"number": 100, "title": "[EPIC] Big rock", "body": "no marker", '
+            '"createdAt": "2026-01-01T00:00:00Z"}, '
+            '{"number": 102, "title": "[EPIC] Big rock", "body": "has marker", '
+            '"createdAt": "2026-01-02T00:00:00Z"}]'
+        )
+
+        results = forge.find_open_issues_by_exact_title("[EPIC] Big rock")
+
+        assert [r.number for r in results] == [100, 102]
+
+    def test_returns_empty_list_when_no_exact_title_match(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout('[{"number": 101, "title": "[EPIC] Big rock v2"}]')
+
+        assert forge.find_open_issues_by_exact_title("[EPIC] Big rock") == []
+
+    def test_returns_empty_list_when_search_finds_nothing(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout("[]")
+
+        assert forge.find_open_issues_by_exact_title("[EPIC] Big rock") == []
+
+
+class TestGetIssue:
+    """#323 review: verifies a persisted issue_number actually belongs to
+    this subtask before reusing/mutating it, independent of whether it's
+    already linked to the parent."""
+
+    def test_returns_record_with_body(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 42, "title": "[FEAT] task-a: x", "body": "b", '
+            '"state": "OPEN", "labels": [{"name": "status:queued"}], '
+            '"createdAt": "2026-01-01T00:00:00Z"}'
+        )
+
+        result = forge.get_issue(42)
+
+        assert result is not None
+        assert result.number == 42
+        assert result.body == "b"
+        assert result.labels == ("status:queued",)
+        called_args = gh_run.call_args.args[0]
+        assert called_args[:3] == ["gh", "issue", "view"]
+        assert "42" in called_args
+
+    def test_returns_none_on_404(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["gh", "issue", "view", "999"],
+            stderr="GraphQL: Could not resolve to an Issue (HTTP 404)",
+        )
+
+        assert forge.get_issue(999) is None
+
+    def test_propagates_non_not_found_failures(self, forge: GitHubForge, gh_run):
+        """#323 review round 9 (P2): a transient failure (auth, rate limit,
+        network) must not be conflated with a genuinely missing issue — the
+        persisted-issue-identity verification callers rely on `None`
+        meaning "confirmed gone", not "the CLI call failed for some
+        reason", or a transient error would wrongly make provisioning
+        create a duplicate issue."""
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "issue", "view", "999"], stderr="gh: rate limit exceeded"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.get_issue(999)
+
+    def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.get_issue("1; evil")
+        gh_run.assert_not_called()

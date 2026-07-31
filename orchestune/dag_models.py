@@ -75,6 +75,7 @@ class SubTask:
     verification_plan: tuple[str, ...] = ()
     shared_contract: str | None = None
     writes_shared_contract: bool = False
+    issue_number: int | None = None
 
     def __post_init__(self) -> None:
         normalized = tuple(normalize_footprint_path(p) for p in self.footprint)

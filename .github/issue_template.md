@@ -14,7 +14,7 @@
 
 ## Footprint
 ```yaml
-subtask_id: {{subtask_id}}
+subtask_id: {{subtask_id_yaml}}
 footprint: {{footprint}}
 symbols: {{symbols}}
 depends_on: {{depends_on}}
