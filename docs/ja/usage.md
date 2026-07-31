@@ -1,6 +1,6 @@
 # 使用方法とコマンドリファレンス
 
-Orchestuneの各CLIコマンド（`orchestune dag`、`orchestune dispatch`）の使い方、およびタスクの分解計画ファイル（`decomposition_plan.md`）の記述仕様について説明します。
+Orchestuneの各CLIコマンド（`orchestune dag`、`orchestune provision`、`orchestune dispatch`）の使い方、およびタスクの分解計画ファイル（`decomposition_plan.md`）の記述仕様について説明します。
 
 ---
 
@@ -13,6 +13,8 @@ Orchestuneの各CLIコマンド（`orchestune dag`、`orchestune dispatch`）の
 
 ```markdown
 ---
+title: "大きな石（開発対象全体）の一行要約"
+parent_issue_number: null  # orchestune provision が親Issue作成後に書き戻す
 subtasks:
   - id: setup-database
     description: "データベーススキーマとコネクションプールの初期化"
@@ -31,6 +33,7 @@ subtasks:
       - "poetry run pytest tests/test_connection.py"
     shared_contract: db-connection
     writes_shared_contract: true
+    issue_number: null  # orchestune provision がこのサブタスクのIssue作成後に書き戻す
 
   - id: user-auth
     description: "ユーザー認証エンドポイントの実装"
@@ -40,12 +43,20 @@ subtasks:
       - auth.login_user
     depends_on: [setup-database]
     shared_contract: db-connection
+    issue_number: null
 ---
 # タスク分解計画の説明
 この計画は、構築に必要な手順をまとめたものです...
 ```
 
 ### フロントマターのスキーマ定義
+
+トップレベルには以下のフィールドがあります：
+
+- **`title`** (文字列, 必須): 「大きな石」全体を表す一行要約。`orchestune provision`（後述）が親Issue（`[EPIC] <title>`）の起票に使用します。
+- **`parent_issue_number`** (整数または`null`, 任意, 既定値 `null`): 親Issueの番号。**手動で設定しないでください** — `orchestune provision`が親Issue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。部分失敗からの再実行時に、この値が設定済みであれば親Issueは重複作成されません。
+- **`subtasks`** (サブタスクのリスト, 必須): 各サブタスクは以下のフィールドを持ちます。
+
 各サブタスクは以下のフィールドを持ちます：
 
 * **`id`** (文字列, 必須): サブタスクを一意に特定するための識別子。ブランチ名やIssueのタイトル等に使用されます。文字列である必要があり、YAMLの数値・真偽値・日付・null・リスト（例: `id: 123`、`id:`、`id: []`）を指定した場合はエラーになります。数字だけのIDを使いたい場合は `id: "123"` のように引用符で囲んでください。
@@ -67,15 +78,47 @@ subtasks:
     * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
+* **`issue_number`** (整数または`null`, 任意, 既定値 `null`): このサブタスクのIssue番号。**手動で設定しないでください** — `orchestune provision`がこのサブタスクのIssue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。設定済みの場合、`orchestune provision`はそのサブタスクのIssueを再作成せず再利用します。
 
 > [!NOTE]
 > 必須フィールドは `id` のみです。`id` が欠落している、または空文字の場合はパース時にエラーで停止します。
 > それ以外のフィールドは省略可能で、上記の既定値へフォールバックします。ただし `description` または `footprint` を省略した場合、
 > パーサーは警告ログを出力します（リスク検知・フットプリント競合検知の精度が低下するため、実運用では両方の指定を推奨します）。
 
+> [!NOTE]
+> `orchestune provision` によるIssue番号の書き戻し（`parent_issue_number`・各サブタスクの `issue_number`）は、上記フォーマット例のような**標準的なブロックスタイルYAML**（各サブタスクを `- key: value` の複数行で記述し、キーは非クォートの識別子）を前提としています。フロースタイル（`- {id: task-a, ...}`）の単一行マッピングにも対応していますが、複数行にまたがるフローマッピングやクォート済みキー（`"id": task-a`）などの非標準的な記法はサポート対象外です。承認済みplanは上記の標準的な記法で記述してください。
+
 ---
 
-## 2. DAG検証（orchestune-dag）
+## 2. Issue起票（orchestune provision）
+
+承認済みの `decomposition_plan.md` から、`title` を親Issue、各サブタスクを子Issue（Sub-issue）としてGitHub上に起票します。`.github/issue_template.md` のプレースホルダー規則に沿って本文を生成し、`depends_on` のトポロジカル順で起票、`--parent`/`--blocked-by` 相当のnative関係を設定します。起票したIssue番号は都度 `decomposition_plan.md` のフロントマター（`parent_issue_number`、各サブタスクの `issue_number`）へ書き戻されるため、**冪等**（既にIssueがあるサブタスクは再作成されない）かつ**部分失敗から再開可能**（N件目で失敗しても再実行時に1〜N-1件目は重複作成されない）です。
+
+```bash
+# プレビュー（GitHubへ書き込まず、生成される本文・ラベルのみ出力）
+orchestune provision --plan decomposition_plan.md --no-apply
+
+# 実際に起票する
+orchestune provision --plan decomposition_plan.md
+```
+
+### 主要なオプション
+
+| オプション | デフォルト値 | 説明 |
+| :--- | :--- | :--- |
+| `--plan <path>` | `decomposition_plan.md` | 起票元の分解計画ファイルのパス。 |
+| `--template <path>` | `.github/issue_template.md` | Issue本文のテンプレートファイルのパス。 |
+| `--apply` / `--no-apply` | `--apply` | 実際にGitHubへIssueを作成・書き戻しを行うか、プレビュー（ドライラン）のみにするかを選択。 |
+
+### 起票ルール
+
+* **ラベル**: `depends_on` が空、または依存先サブタスクが全て `status:done` なら `status:queued`、未解決の依存があれば `status:blocked`。`priority` に応じて `priority:high`/`medium`/`low`、`risk: true` なら `risk:flagged`。
+* **冪等性の判定順**: (1) そのサブタスクの `issue_number` が設定済みならそれを再利用、(2) 未設定なら親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの `subtask_id` と照合して一致すれば再利用、(3) どちらもなければ新規作成。
+* 実行には `gh` CLIのインストール・認証が必要です（`orchestune bootstrap` で事前確認）。`gh` が使えない環境でのフォールバックは [orchestune-dispatch スキル](../../skills/orchestune-dispatch/SKILL.md) を参照してください。
+
+---
+
+## 3. DAG検証（orchestune-dag）
 
 `decomposition_plan.md` で定義されたタスク構成が正しいDAG（有向非巡回グラフ）になっているか、コンフリクトがないかを検証します。
 通常、AIエージェントが自動でこのコマンドを実行して計画を修正しますが、手動で検証を行うこともできます。
@@ -95,7 +138,7 @@ orchestune dag --plan decomposition_plan.md
 
 ---
 
-## 3. ディスパッチャーの実行（orchestune-dispatch）
+## 4. ディスパッチャーの実行（orchestune-dispatch）
 
 準備が整い、計画が承認されたら、ディスパッチャーを起動してサブタスクをエージェントに割り振り、実装を開始します。
 
@@ -155,7 +198,7 @@ run-state-path = "run_state.json"
 
 ---
 
-## 4. 統合（Integration）と自動リベース
+## 5. 統合（Integration）と自動リベース
 
 `orchestune-dispatch` コマンドは、**タスクの割り振りだけでなく、完了したタスクの統合処理も同時に行います。**
 

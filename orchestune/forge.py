@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from urllib.parse import quote
@@ -109,6 +110,22 @@ class IssueForge(Protocol):
     def get_actor_permission(self, username: str) -> str: ...
 
     def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None: ...
+
+    def create_issue(
+        self, title: str, body: str, labels: Sequence[str] = ()
+    ) -> int: ...
+
+    def add_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None: ...
+
+    def set_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None: ...
+
+    def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]: ...
+
+    def get_issue(self, issue_number: int | str) -> IssueRecord | None: ...
 
 
 @runtime_checkable
@@ -357,6 +374,109 @@ class GitHubForge:
             if event.get("event") == "reopened"
         ]
         return str(reopened_at[-1]) if reopened_at else None
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str] = ()) -> int:
+        """Issueを新規作成し、番号を返す。"""
+        args = ["gh", "issue", "create", "--title", title, "--body-file", "-"]
+        for label in labels:
+            validate_label(label)
+            args.extend(["--label", label])
+        stdout = self._run(args, input_text=body)
+        url = stdout.strip().splitlines()[-1]
+        return int(url.rstrip("/").rsplit("/", 1)[-1])
+
+    def add_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None:
+        """childをparent配下のsub-issueとして紐付ける。"""
+        parent = validate_issue_number(parent_issue_number)
+        child = validate_issue_number(child_issue_number)
+        self._run(["gh", "issue", "edit", str(child), "--set-parent", str(parent)])
+
+    def set_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None:
+        """issue_numberをblocking_issue_numberでブロック済みとしてマークする。"""
+        number = validate_issue_number(issue_number)
+        blocker = validate_issue_number(blocking_issue_number)
+        self._run(
+            ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
+        )
+
+    def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]:
+        """タイトル完全一致のopen Issueを全件検索する（親Issueの重複作成防止用）。
+
+        タイトル一致だけでは無関係な既存Issueを誤って採用しうるため、
+        呼び出し側が本文の由来マーカーを確認できるようbodyも返す。GitHubの
+        検索は同名のIssueを複数返しうる（無関係な既存Issueと、書き戻し失敗で
+        孤立した自分自身のIssueが両方存在する場合など）ため、最初の1件だけで
+        なく全件返し、マーカーを持つ候補の選別を呼び出し側に委ねる。
+        """
+        stdout = self._run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--search",
+                f'in:title "{title}"',
+                "--state",
+                "open",
+                "--json",
+                "number,title,body,createdAt",
+                "--limit",
+                "100",
+            ]
+        )
+        return [
+            IssueRecord(
+                number=int(entry["number"]),
+                title=str(entry["title"]),
+                body=entry.get("body") or "",
+                labels=(),
+                created_at=entry.get("createdAt") or "",
+            )
+            for entry in json.loads(stdout)
+            if entry.get("title") == title
+        ]
+
+    def get_issue(self, issue_number: int | str) -> IssueRecord | None:
+        """指定Issueの詳細を取得する。存在しない場合はNoneを返す。
+
+        永続化された`issue_number`が本当にこのサブタスク由来かを、リンク済み
+        子Issue一覧に頼らず検証するために使う（`add_sub_issue`が未実行でも
+        本文のマーカーは作成時から変わらないため）。
+        """
+        number = validate_issue_number(issue_number)
+        try:
+            stdout = self._run(
+                [
+                    "gh",
+                    "issue",
+                    "view",
+                    str(number),
+                    "--json",
+                    "number,title,body,state,labels,createdAt",
+                ]
+            )
+        except subprocess.CalledProcessError as exc:
+            # Mirror `branch_exists`: only a confirmed not-found response
+            # means "doesn't exist". A transient failure (auth, rate limit,
+            # network) must not be conflated with that, or a persisted
+            # issue_number's identity-verification step would wrongly treat
+            # a real, still-existing issue as gone and create a duplicate.
+            detail = (exc.stderr or "").lower()
+            if "404" in detail or "not found" in detail:
+                return None
+            raise
+        raw = json.loads(stdout)
+        return IssueRecord(
+            number=int(raw["number"]),
+            title=str(raw["title"]),
+            body=raw.get("body") or "",
+            labels=tuple(entry["name"] for entry in raw.get("labels", [])),
+            created_at=raw.get("createdAt") or "",
+            state=raw.get("state", "OPEN"),
+        )
 
     def merge_pull_request(self, pr_number: int | str) -> None:
         """PRをmerge commit方式でマージする。"""
