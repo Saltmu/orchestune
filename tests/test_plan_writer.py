@@ -378,6 +378,30 @@ class TestWriteSubtaskIssueNumber:
         id_index = lines.index("  - id: task-b")
         assert lines[id_index + 1].strip() == "issue_number: 101"
 
+    def test_finds_a_field_across_a_column_zero_comment_inside_the_item(
+        self, tmp_path: Path
+    ):
+        """#323 review round 11 (P2): a column-0 comment interrupting a
+        block-style item's own fields (before `id`, in this case) is valid
+        YAML that `parse_decomposition_plan` still accepts as one mapping,
+        but `_iter_list_item_blocks` mistook the comment for a dedent out
+        of the item, cutting the block off before `id` was ever seen."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - description: "d"\n'
+            "# identity\n"
+            "    id: task-a\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("    id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
     def test_finds_the_flow_mapping_close_brace_before_a_trailing_comment(
         self, tmp_path: Path
     ):
