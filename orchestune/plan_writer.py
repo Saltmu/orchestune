@@ -6,14 +6,14 @@ byte-for-byte identical, so re-dumping the frontmatter through a YAML
 serializer is deliberately avoided.
 
 Supports standard block-style subtask mappings (`- key: value` across
-multiple lines, `id` in any position, unquoted bare-identifier keys) and
+multiple lines, `id` in any position, unquoted bare-identifier keys,
+comments anywhere including interrupting a mapping mid-item) and
 single-line flow-style mappings (`- {id: task-a, ...}`). Deliberately not
-supported: a flow mapping split across multiple physical lines, quoted or
-oddly-spaced keys in block style (`- "id": task-a`), and a column-0 comment
-interrupting a subtask's own fields mid-mapping — these are valid YAML that
-`dag_parsing.parse_decomposition_plan` accepts, but are exotic enough that
-`decomposition_plan.md` authors are expected to avoid them; see
-`docs/{en,ja}/usage.md`.
+supported: a flow mapping split across multiple physical lines, and quoted
+or oddly-spaced keys in block style (`- "id": task-a`) — these are valid
+YAML that `dag_parsing.parse_decomposition_plan` accepts, but are exotic
+enough that `decomposition_plan.md` authors are expected to avoid them;
+see `docs/{en,ja}/usage.md`.
 """
 
 from __future__ import annotations
@@ -55,7 +55,17 @@ def _iter_list_item_blocks(
         block_end = index + 1
         while block_end < end:
             line = lines[block_end]
-            if line.strip() and len(line) - len(line.lstrip(" ")) <= item_indent:
+            stripped = line.strip()
+            # A column-0 (or otherwise shallow) comment interrupting a
+            # block-style item's own fields is valid YAML and must not be
+            # mistaken for a sibling item or a dedent out of the list —
+            # only a real (non-comment) line at or below `item_indent`
+            # does that.
+            if (
+                stripped
+                and not stripped.startswith("#")
+                and len(line) - len(line.lstrip(" ")) <= item_indent
+            ):
                 break
             block_end += 1
         yield index, block_end
