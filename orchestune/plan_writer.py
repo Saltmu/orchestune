@@ -22,7 +22,7 @@ _PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
 _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
 _LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
 _MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
-_FLOW_ITEM = re.compile(r"^(\s*)-(\s*)\{(.*)\}(.*)$")
+_FLOW_ITEM_OPEN = re.compile(r"^(\s*)-(\s*)\{")
 _SUBTASKS_KEY_LINE = re.compile(r"^subtasks:\s*(#.*)?$")
 
 
@@ -120,6 +120,49 @@ def _decoded_id_matches(value_text: str, subtask_id: str) -> bool:
     return bool(decoded == subtask_id)
 
 
+def _find_matching_brace(text: str, open_index: int) -> int | None:
+    """Return the index of the `}` that closes the `{` at `open_index`,
+    tracking quotes and nesting depth so a brace character sitting inside
+    a quoted value or a trailing comment is never mistaken for it — unlike
+    a greedy `\\{(.*)\\}` regex, which always prefers the *last* `}` in the
+    line, wherever it is."""
+    depth = 0
+    quote: str | None = None
+    index = open_index
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == "\\" and quote == '"' and index + 1 < len(text):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _decode_segment_key(segment: str) -> str | None:
+    """Decode a flow mapping's top-level `key: value` segment and return
+    its real (parsed) key — not a source-text regex match, which can't
+    recognize a quoted or oddly-spaced key (`"issue_number": 77`) as the
+    same field a plain `issue_number: 77` key names."""
+    try:
+        decoded = yaml.safe_load("{" + segment + "}")
+    except yaml.YAMLError:
+        return None
+    if isinstance(decoded, dict) and len(decoded) == 1:
+        return str(next(iter(decoded)))
+    return None
+
+
 def _split_flow_top_level(inner: str) -> list[str]:
     """Split a flow mapping's inner text (between `{` and `}`) into its
     top-level `key: value` segments on commas, the way a real YAML parser
@@ -175,10 +218,17 @@ def _write_flow_style_issue_number(
     """
     raw_line = lines[block_start]
     newline = "\n" if raw_line.endswith("\n") else ""
-    match = _FLOW_ITEM.match(raw_line[: len(raw_line) - len(newline)])
-    if not match:
+    body = raw_line[: len(raw_line) - len(newline)]
+    open_match = _FLOW_ITEM_OPEN.match(body)
+    if not open_match:
         return False
-    indent, dash_gap, inner, trailing = match.groups()
+    indent, dash_gap = open_match.groups()
+    open_index = open_match.end() - 1  # position of the `{` itself
+    close_index = _find_matching_brace(body, open_index)
+    if close_index is None:
+        return False
+    inner = body[open_index + 1 : close_index]
+    trailing = body[close_index + 1 :]
     try:
         decoded = yaml.safe_load("{" + inner + "}")
     except yaml.YAMLError:
@@ -191,17 +241,17 @@ def _write_flow_style_issue_number(
     if decoded_id != subtask_id:
         return False
 
-    # Rewrite only the top-level `issue_number` segment (matched by its
-    # decoded key, not by searching the raw text for the substring
+    # Rewrite only the top-level `issue_number` segment, matched by its
+    # decoded key (so a quoted or oddly-spaced existing key is still
+    # recognized) rather than a raw-text search for the substring
     # `issue_number:` — that would also match inside a quoted string value
     # or a nested flow mapping's own `issue_number` key, corrupting the
-    # line or silently updating the wrong field).
+    # line or silently updating the wrong field.
     segments = _split_flow_top_level(inner)
     updated = False
     new_segments = []
     for segment in segments:
-        key_match = _MAPPING_KEY.match(segment.strip())
-        if key_match and key_match.group(1) == "issue_number":
+        if _decode_segment_key(segment) == "issue_number":
             prefix = " " if segment.startswith(" ") else ""
             new_segments.append(f"{prefix}issue_number: {number}")
             updated = True
@@ -241,7 +291,16 @@ def _find_subtasks_bounds(lines: list[str], start: int, end: int) -> tuple[int, 
             list_end = list_start
             while list_end < end:
                 line = lines[list_end]
-                if line.strip() and len(line) - len(line.lstrip(" ")) == 0:
+                stripped = line.strip()
+                # A column-0 comment (`# ...`) between sequence items is
+                # valid YAML and must not be mistaken for the next
+                # top-level frontmatter key ending the list — only a real
+                # (non-comment) line at indent 0 does that.
+                if (
+                    stripped
+                    and not stripped.startswith("#")
+                    and len(line) - len(line.lstrip(" ")) == 0
+                ):
                     break
                 list_end += 1
             return list_start, list_end
