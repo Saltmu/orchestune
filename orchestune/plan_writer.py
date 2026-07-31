@@ -4,6 +4,16 @@ Only the `issue_number` / `parent_issue_number` lines this module owns are
 touched; every other line (including comments and formatting) is left
 byte-for-byte identical, so re-dumping the frontmatter through a YAML
 serializer is deliberately avoided.
+
+Supports standard block-style subtask mappings (`- key: value` across
+multiple lines, `id` in any position, unquoted bare-identifier keys) and
+single-line flow-style mappings (`- {id: task-a, ...}`). Deliberately not
+supported: a flow mapping split across multiple physical lines, quoted or
+oddly-spaced keys in block style (`- "id": task-a`), and a column-0 comment
+interrupting a subtask's own fields mid-mapping — these are valid YAML that
+`dag_parsing.parse_decomposition_plan` accepts, but are exotic enough that
+`decomposition_plan.md` authors are expected to avoid them; see
+`docs/{en,ja}/usage.md`.
 """
 
 from __future__ import annotations

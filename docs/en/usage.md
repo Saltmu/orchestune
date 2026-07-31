@@ -85,6 +85,9 @@ Each subtask item supports the following fields:
 > Every other field may be omitted and falls back to the default above. However, omitting `description` or `footprint`
 > makes the parser emit a warning log, because risk detection and footprint conflict detection lose accuracy — specifying both is recommended in practice.
 
+> [!NOTE]
+> `orchestune provision`'s issue-number write-back (`parent_issue_number` and each subtask's `issue_number`) assumes **standard block-style YAML** for the `subtasks:` list, as shown in the format example above — each subtask spelled out across multiple `- key: value` lines with unquoted, bare-identifier keys. Single-line flow-style mappings (`- {id: task-a, ...}`) are also supported, but non-standard forms — a flow mapping split across multiple physical lines, quoted keys (`"id": task-a`), or a column-0 comment interrupting a subtask's own fields — are not guaranteed to work. Write approved plans using the standard forms shown above.
+
 ---
 
 ## 2. Provisioning Issues (orchestune provision)
