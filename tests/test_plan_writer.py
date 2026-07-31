@@ -354,6 +354,81 @@ class TestWriteSubtaskIssueNumber:
         subtasks_id_index = lines.index("  - id: task-a", examples_id_index + 1)
         assert lines[subtasks_id_index + 1].strip() == "issue_number: 101"
 
+    def test_finds_subtasks_across_a_column_zero_comment(self, tmp_path: Path):
+        """#323 review round 10 (P2): a comment at column 0 between
+        sequence items (`# next task`) is valid YAML and must not be
+        mistaken for the next top-level frontmatter key ending the
+        `subtasks:` list — a subtask after such a comment must still be
+        found."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "a"\n'
+            "# next task\n"
+            "  - id: task-b\n"
+            '    description: "b"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_finds_the_flow_mapping_close_brace_before_a_trailing_comment(
+        self, tmp_path: Path
+    ):
+        """#323 review round 10 (P2): when the trailing comment on a
+        flow-style item itself contains `}` (`- {id: task-a} # } note`), a
+        greedy end-anchored search for the *last* `}` in the line picks the
+        one inside the comment instead of the mapping's real closing brace,
+        corrupting the rewritten line."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n" 'title: "x"\n' "subtasks:\n" "  - {id: task-a} # } note\n" "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        before_comment = flow_line.split("#", 1)[0].strip().removeprefix("- ")
+        decoded = yaml.safe_load(before_comment)
+        assert decoded == {"id": "task-a", "issue_number": 101}
+        assert flow_line.rstrip().endswith("} note")
+
+    def test_recognizes_a_quoted_existing_issue_number_key_in_flow_style(
+        self, tmp_path: Path
+    ):
+        """#323 review round 10 (P2): an existing `issue_number` key that's
+        quoted or oddly spaced (`"issue_number": 77`) is still the same
+        field as a plain `issue_number: 77` key once decoded — a raw-text
+        regex that only recognizes bare identifiers would append a second,
+        duplicate key instead of replacing the existing one."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - {id: task-a, "issue_number": 77}\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        flow_line = next(line for line in lines if "task-a" in line)
+        decoded = yaml.safe_load(flow_line.strip().removeprefix("- "))
+        assert decoded == {"id": "task-a", "issue_number": 101}
+        # Not just decoded correctly (PyYAML silently resolves duplicate
+        # keys by keeping the last one) but genuinely replaced in place:
+        # the stale value and the old quoted key must both be gone, or a
+        # different YAML parser reading the raw file could pick the first
+        # duplicate key instead and see the stale number.
+        assert "77" not in flow_line
+        assert flow_line.count("issue_number") == 1
+
 
 class TestWriteParentIssueNumber:
     def test_replaces_existing_null_value(self, plan_path: Path):
