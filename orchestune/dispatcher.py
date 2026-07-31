@@ -23,7 +23,7 @@ from orchestune.integration_coordinator import (
     IntegrationCoordinator,
     process_pending_not_needed_reviews,
 )
-from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator import IntegrationStatus, Integrator, IntegratorConfig
 from orchestune.parent_completion import process_parent_completion
 
 
@@ -225,7 +225,10 @@ def _poll_pending_not_needed_reviews(
 # Integratorパイプラインが成功として扱う唯一のステータス群（#207: これ以外は
 # すべて失敗として扱うホワイトリスト方式。個別のエラーステータス追加時に
 # 判定漏れが起きるブラックリスト方式を避けるため）。
-_INTEGRATOR_SUCCESS_STATUSES = {"success", "no_done_tasks"}
+_INTEGRATOR_SUCCESS_STATUSES = {
+    IntegrationStatus.SUCCESS,
+    IntegrationStatus.NO_DONE_TASKS,
+}
 
 
 def _run_semantic_integrator(
@@ -257,7 +260,11 @@ def _run_semantic_integrator(
             )
         else:
             integrator_config.enable_semantic_review = False
-        return Integrator(integrator_config).run()
+        # `_run_best_effort_phase`は`_process_parent_completion`等の異なる形の
+        # reportとも共有されるため`work`は`Callable[[], dict]`のまま。
+        # `IntegrationReport`(TypedDict)は`dict[Any, Any]`と型として
+        # 互換にならないため、ここで素の`dict`へ変換する。
+        return dict(Integrator(integrator_config).run())
 
     def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:
         if report.get("status") not in _INTEGRATOR_SUCCESS_STATUSES:

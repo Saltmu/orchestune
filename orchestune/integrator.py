@@ -5,7 +5,9 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+from typing import TypedDict
 
 from orchestune.dispatch_worktree import file_lock
 from orchestune.forge import Forge, GitHubForge
@@ -16,6 +18,39 @@ from orchestune.integrator_pr import ensure_integration_pr
 from orchestune.integrator_tasks import get_sorted_done_tasks
 from orchestune.integrator_worktree import IntegrationWorktree
 from orchestune.models import Task
+
+
+class IntegrationStatus(str, Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    PARTIAL_SUCCESS = "partial_success"
+    NO_DONE_TASKS = "no_done_tasks"
+    FAILED_TO_CREATE_TEMP_WORKTREE = "failed_to_create_temp_worktree"
+    FAILED_TO_CREATE_TEMP_BRANCH = "failed_to_create_temp_branch"
+    FAILED_TO_PUSH_TEMP_BRANCH = "failed_to_push_temp_branch"
+    AUTO_MERGE_FAILED = "auto_merge_failed"
+    INTEGRATION_BRANCH_LOCKED = "integration_branch_locked"
+    COMPOSITE_SUCCESS = "composite_success"
+    COMPOSITE_PARTIAL_SUCCESS = "composite_partial_success"
+    COMPOSITE_FAILURE = "composite_failure"
+
+
+class IntegrationReport(TypedDict, total=False):
+    status: IntegrationStatus
+    error: str
+    merged: list[str]
+    failed: list[str]
+    failed_reasons: dict[str, str]
+    blocked: list[str]
+    blocked_reasons: dict[str, str]
+    integration_pr_number: int | None
+    semantic_review_dispatched: bool
+    newly_included: list[str]
+    unparsable_done_issues: list[int]
+    retried_closed_issues: list[int]
+    auto_merged: bool
+    closed_issues: list[int]
+    details: dict[str, IntegrationReport]
 
 
 @dataclass
@@ -66,7 +101,7 @@ class IntegrationContext:
     temp_worktree_path: Path | None = None
 
     # 全体結果ステータス
-    status: str = "success"
+    status: IntegrationStatus = IntegrationStatus.SUCCESS
     error: str | None = None
 
     @property
@@ -80,7 +115,7 @@ class IntegrationContext:
 
 class IntegrationComponent(ABC):
     @abstractmethod
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         pass
 
 
@@ -88,8 +123,8 @@ class IntegrationPipeline(IntegrationComponent):
     def __init__(self, steps: list[IntegrationComponent]):
         self.steps = steps
 
-    def execute(self, ctx: IntegrationContext) -> dict:
-        merged_report = {}
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+        merged_report: IntegrationReport = {}
         try:
             for step in self.steps:
                 res = step.execute(ctx)
@@ -101,7 +136,7 @@ class IntegrationPipeline(IntegrationComponent):
                     ctx.error = res["error"]
 
                 # success以外（failure, partial_success, no_done_tasksなど）の場合は処理を中断
-                if ctx.status != "success":
+                if ctx.status != IntegrationStatus.SUCCESS:
                     break
         finally:
             if ctx.temp_worktree_path:
@@ -120,11 +155,11 @@ class IntegrationPipeline(IntegrationComponent):
                     pass
 
         # 各ステップが返した辞書の内容をベースに、最終結果を集約
-        final_report = copy.deepcopy(merged_report)
+        final_report: IntegrationReport = copy.deepcopy(merged_report)
         final_report["status"] = ctx.status
         final_report["merged"] = ctx.merged_tasks
 
-        if ctx.status == "success":
+        if ctx.status == IntegrationStatus.SUCCESS:
             final_report["integration_pr_number"] = ctx.integration_pr_number
             final_report["semantic_review_dispatched"] = ctx.semantic_review_dispatched
             final_report["newly_included"] = ctx.newly_included
@@ -148,8 +183,8 @@ class MultiIssueIntegrator(IntegrationComponent):
     def __init__(self, integrators: list[IntegrationComponent]):
         self.integrators = integrators
 
-    def execute(self, ctx: IntegrationContext) -> dict:
-        details = {}
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+        details: dict[str, IntegrationReport] = {}
         success_count = 0
         failure_count = 0
 
@@ -168,20 +203,20 @@ class MultiIssueIntegrator(IntegrationComponent):
             details[key] = res
 
             status = res.get("status")
-            if status in ("success", "no_done_tasks"):
+            if status in (IntegrationStatus.SUCCESS, IntegrationStatus.NO_DONE_TASKS):
                 success_count += 1
             else:
                 failure_count += 1
 
         if success_count > 0 and failure_count == 0:
-            overall_status = "composite_success"
+            overall_status = IntegrationStatus.COMPOSITE_SUCCESS
         elif success_count > 0 and failure_count > 0:
-            overall_status = "composite_partial_success"
+            overall_status = IntegrationStatus.COMPOSITE_PARTIAL_SUCCESS
         else:
-            overall_status = "composite_failure"
+            overall_status = IntegrationStatus.COMPOSITE_FAILURE
 
         if not self.integrators:
-            overall_status = "composite_success"
+            overall_status = IntegrationStatus.COMPOSITE_SUCCESS
 
         return {
             "status": overall_status,
@@ -194,7 +229,7 @@ class SingleIssueIntegrator(IntegrationComponent):
         self.parent_issue = parent_issue
         self.pipeline = pipeline
 
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if self.parent_issue is not None:
             ctx.config.parent_issue_number = self.parent_issue
             ctx.base_branch = f"origin/parent/issue-{self.parent_issue}"
@@ -210,13 +245,13 @@ class SingleIssueIntegrator(IntegrationComponent):
                 return self.pipeline.execute(ctx)
         except RuntimeError as e:
             return {
-                "status": "integration_branch_locked",
+                "status": IntegrationStatus.INTEGRATION_BRANCH_LOCKED,
                 "error": str(e),
             }
 
 
 class PrepareTasksStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
             ctx.config.parent_issue_number, forge=ctx.config.forge
         )
@@ -229,9 +264,9 @@ class PrepareTasksStep(IntegrationComponent):
         ]
 
         if not ctx.active_done_tasks:
-            return {"status": "no_done_tasks"}
+            return {"status": IntegrationStatus.NO_DONE_TASKS}
 
-        return {"status": "success"}
+        return {"status": IntegrationStatus.SUCCESS}
 
     def _warn_and_flag_unparsable_done_tasks(self, ctx: IntegrationContext) -> None:
         for task in ctx.unparsable_done_tasks:
@@ -268,9 +303,9 @@ class RetryChildIssueCloseStep(IntegrationComponent):
     回復パスとして、`PrepareTasksStep`の直後に実行する。
     """
 
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply or ctx.config.parent_issue_number is None:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
 
         remaining_tasks = []
         retried_closed: list[int] = []
@@ -298,14 +333,20 @@ class RetryChildIssueCloseStep(IntegrationComponent):
 
         ctx.active_done_tasks = remaining_tasks
         if not ctx.active_done_tasks:
-            return {"status": "no_done_tasks", "retried_closed_issues": retried_closed}
-        return {"status": "success", "retried_closed_issues": retried_closed}
+            return {
+                "status": IntegrationStatus.NO_DONE_TASKS,
+                "retried_closed_issues": retried_closed,
+            }
+        return {
+            "status": IntegrationStatus.SUCCESS,
+            "retried_closed_issues": retried_closed,
+        }
 
 
 class SetupWorktreeStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
 
         try:
             run_git(["worktree", "prune"], cwd=ctx.original_root, check=False)
@@ -328,14 +369,14 @@ class SetupWorktreeStep(IntegrationComponent):
             ctx.temp_worktree_path = worktree_manager.temp_path()
         except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
             return {
-                "status": "failed_to_create_temp_worktree",
+                "status": IntegrationStatus.FAILED_TO_CREATE_TEMP_WORKTREE,
                 "error": f"Failed to create temp worktree: {e}",
             }
-        return {"status": "success"}
+        return {"status": IntegrationStatus.SUCCESS}
 
 
 class MergeAndTestStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         merger = IntegrationMerger(
             repository_root=ctx.repository_root,
             original_root=ctx.original_root,
@@ -348,7 +389,7 @@ class MergeAndTestStep(IntegrationComponent):
                 ctx.temp_branch, ctx.base_branch, ctx.config.apply
             ):
                 return {
-                    "status": "failed_to_create_temp_branch",
+                    "status": IntegrationStatus.FAILED_TO_CREATE_TEMP_BRANCH,
                     "error": "Failed to create temp branch",
                 }
 
@@ -368,9 +409,13 @@ class MergeAndTestStep(IntegrationComponent):
             ctx.blocked_reasons.update(blocked_reasons)
 
             if not failed_tasks and merged_tasks:
-                return {"status": "success"}
+                return {"status": IntegrationStatus.SUCCESS}
 
-            status = "partial_success" if merged_tasks else "failure"
+            status = (
+                IntegrationStatus.PARTIAL_SUCCESS
+                if merged_tasks
+                else IntegrationStatus.FAILURE
+            )
             return {
                 "status": status,
                 "merged": ctx.merged_tasks,
@@ -381,15 +426,15 @@ class MergeAndTestStep(IntegrationComponent):
             }
         except Exception as e:
             return {
-                "status": "failure",
+                "status": IntegrationStatus.FAILURE,
                 "error": f"Error during merge and test: {e}",
             }
 
 
 class PushTempBranchStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
         if ctx.failed_tasks or not ctx.merged_tasks:
             return {"status": ctx.status}
 
@@ -404,7 +449,7 @@ class PushTempBranchStep(IntegrationComponent):
                 cwd=ctx.repository_root,
                 check=True,
             )
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
         except subprocess.CalledProcessError as pe:
             push_error = pe.stderr or ""
             print(
@@ -412,17 +457,17 @@ class PushTempBranchStep(IntegrationComponent):
                 file=sys.stderr,
             )
             return {
-                "status": "failed_to_push_temp_branch",
+                "status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH,
                 "error": push_error,
             }
 
 
 class EnsureIntegrationPrStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
         if (
-            ctx.status == "failed_to_push_temp_branch"
+            ctx.status == IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH
             or ctx.failed_tasks
             or not ctx.merged_tasks
         ):
@@ -436,16 +481,19 @@ class EnsureIntegrationPrStep(IntegrationComponent):
                 forge=ctx.config.forge,
             )
             ctx.integration_pr_number = pr_number
-            return {"status": "success", "integration_pr_number": pr_number}
+            return {
+                "status": IntegrationStatus.SUCCESS,
+                "integration_pr_number": pr_number,
+            }
         except Exception as e:
             print(f"Warning: failed to ensure integration PR: {e}", file=sys.stderr)
-            return {"status": "success", "integration_pr_number": None}
+            return {"status": IntegrationStatus.SUCCESS, "integration_pr_number": None}
 
 
 class SemanticReviewStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
         if (
             ctx.failed_tasks
             or not ctx.merged_tasks
@@ -463,24 +511,33 @@ class SemanticReviewStep(IntegrationComponent):
                     merged_subtask_ids=ctx.merged_tasks,
                 )
                 ctx.semantic_review_dispatched = True
-                return {"status": "success", "semantic_review_dispatched": True}
+                return {
+                    "status": IntegrationStatus.SUCCESS,
+                    "semantic_review_dispatched": True,
+                }
             except Exception as e:
                 print(
                     f"Warning: Failed to dispatch semantic review: {e}",
                     file=sys.stderr,
                 )
-        return {"status": "success", "semantic_review_dispatched": False}
+        return {
+            "status": IntegrationStatus.SUCCESS,
+            "semantic_review_dispatched": False,
+        }
 
 
 class LabelIncludedStep(IntegrationComponent):
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
         if ctx.config.parent_issue_number is not None:
             # #209: parent_issue_number指定時（自動マージ経路）は、
             # AutoMergeChildIntegrationStepがマージ成功直後・クローズ試行前に
             # 既に付与済みのため、ここでは何もしない（二重付与の回避）。
-            return {"status": "success", "newly_included": ctx.newly_included}
+            return {
+                "status": IntegrationStatus.SUCCESS,
+                "newly_included": ctx.newly_included,
+            }
         if (
             ctx.failed_tasks
             or not ctx.merged_tasks
@@ -490,7 +547,10 @@ class LabelIncludedStep(IntegrationComponent):
 
         newly_included = _mark_tasks_included(ctx)
         ctx.newly_included = newly_included
-        return {"status": "success", "newly_included": newly_included}
+        return {
+            "status": IntegrationStatus.SUCCESS,
+            "newly_included": newly_included,
+        }
 
 
 def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
@@ -525,9 +585,9 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     引き続き人間が行う。
     """
 
-    def execute(self, ctx: IntegrationContext) -> dict:
+    def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply or ctx.config.parent_issue_number is None:
-            return {"status": "success"}
+            return {"status": IntegrationStatus.SUCCESS}
         if (
             ctx.failed_tasks
             or not ctx.merged_tasks
@@ -545,7 +605,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             )
             self._comment_on_merge_failure(ctx, e)
             return {
-                "status": "auto_merge_failed",
+                "status": IntegrationStatus.AUTO_MERGE_FAILED,
                 "error": str(e),
                 "auto_merged": False,
             }
@@ -559,7 +619,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
         closed_issues = self._close_merged_child_issues(ctx)
         return {
-            "status": "success",
+            "status": IntegrationStatus.SUCCESS,
             "auto_merged": True,
             "closed_issues": closed_issues,
             "newly_included": newly_included,
@@ -649,7 +709,7 @@ class Integrator:
     def _reclaim_worktree_path(self, path: Path) -> None:
         self._worktree.reclaim(path)
 
-    def run(self) -> dict:
+    def run(self) -> IntegrationReport:
         ctx = IntegrationContext(
             config=self.config,
             repository_root=self.original_root,
