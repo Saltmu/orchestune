@@ -13,6 +13,8 @@ from orchestune.integrator import (
     IntegrationComponent,
     IntegrationContext,
     IntegrationPipeline,
+    IntegrationReport,
+    IntegrationStatus,
     Integrator,
     IntegratorConfig,
     MultiIssueIntegrator,
@@ -96,22 +98,22 @@ class TestIntegrationContext:
 class TestIntegrationPipeline:
     def test_aggregates_step_results_on_success(self):
         class DummyStep1(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
                 ctx.merged_tasks.append("task-1")
-                return {"step1": "ok"}
+                return {"retried_closed_issues": [1]}
 
         class DummyStep2(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
                 ctx.merged_tasks.append("task-2")
-                return {"step2": "ok"}
+                return {"unparsable_done_issues": [7]}
 
         ctx = _context(IntegratorConfig(apply=True))
         res = IntegrationPipeline([DummyStep1(), DummyStep2()]).execute(ctx)
 
         assert res == {
-            "status": "success",
-            "step1": "ok",
-            "step2": "ok",
+            "status": IntegrationStatus.SUCCESS,
+            "retried_closed_issues": [1],
+            "unparsable_done_issues": [7],
             "merged": ["task-1", "task-2"],
             "integration_pr_number": None,
             "semantic_review_dispatched": False,
@@ -121,18 +123,21 @@ class TestIntegrationPipeline:
 
     def test_short_circuits_remaining_steps_on_failure(self):
         class FailStep(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
-                return {"status": "failure", "error": "something wrong"}
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                return {
+                    "status": IntegrationStatus.FAILURE,
+                    "error": "something wrong",
+                }
 
         class DummyStep(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
                 ctx.merged_tasks.append("task-skipped")
-                return {"step": "ok"}
+                return {}
 
         ctx = _context(IntegratorConfig(apply=True))
         res = IntegrationPipeline([FailStep(), DummyStep()]).execute(ctx)
 
-        assert res["status"] == "failure"
+        assert res["status"] == IntegrationStatus.FAILURE
         assert "error" in res
         assert ctx.merged_tasks == []
 
@@ -143,39 +148,48 @@ class TestMultiIssueIntegrator:
             def __init__(self, issue_number: int):
                 self.parent_issue = issue_number
 
-            def execute(self, ctx: IntegrationContext) -> dict:
-                return {"status": "success", "parent_issue": self.parent_issue}
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                return {
+                    "status": IntegrationStatus.SUCCESS,
+                    "merged": [f"parent-{self.parent_issue}"],
+                }
 
         runner = MultiIssueIntegrator([DummyIntegrator(100), DummyIntegrator(200)])
         res = runner.execute(_context(IntegratorConfig(apply=True)))
 
-        assert res["status"] == "composite_success"
-        assert res["details"]["issue_100"] == {"status": "success", "parent_issue": 100}
-        assert res["details"]["issue_200"] == {"status": "success", "parent_issue": 200}
+        assert res["status"] == IntegrationStatus.COMPOSITE_SUCCESS
+        assert res["details"]["issue_100"] == {
+            "status": IntegrationStatus.SUCCESS,
+            "merged": ["parent-100"],
+        }
+        assert res["details"]["issue_200"] == {
+            "status": IntegrationStatus.SUCCESS,
+            "merged": ["parent-200"],
+        }
 
     def test_partial_success_when_one_child_fails(self):
         class SuccessDummy(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
-                return {"status": "success"}
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                return {"status": IntegrationStatus.SUCCESS}
 
         class FailDummy(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
-                return {"status": "failure"}
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                return {"status": IntegrationStatus.FAILURE}
 
         runner = MultiIssueIntegrator([SuccessDummy(), FailDummy()])
         res = runner.execute(_context(IntegratorConfig(apply=True)))
 
-        assert res["status"] == "composite_partial_success"
+        assert res["status"] == IntegrationStatus.COMPOSITE_PARTIAL_SUCCESS
 
     def test_composite_failure_when_all_children_fail(self):
         class FailDummy(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
-                return {"status": "failed_to_push_temp_branch"}
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                return {"status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH}
 
         runner = MultiIssueIntegrator([FailDummy(), FailDummy()])
         res = runner.execute(_context(IntegratorConfig(apply=True)))
 
-        assert res["status"] == "composite_failure"
+        assert res["status"] == IntegrationStatus.COMPOSITE_FAILURE
 
     def test_preserves_injected_forge_identity(self):
         """#313レビュー対応: `copy.deepcopy(ctx)`によって注入済みForgeが
@@ -184,9 +198,9 @@ class TestMultiIssueIntegrator:
         captured_forges = []
 
         class CaptureForgeIntegrator(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> dict:
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
                 captured_forges.append(ctx.forge)
-                return {"status": "success"}
+                return {"status": IntegrationStatus.SUCCESS}
 
         injected_forge = MagicMock()
         runner = MultiIssueIntegrator(
@@ -195,5 +209,5 @@ class TestMultiIssueIntegrator:
         ctx = _context(IntegratorConfig(apply=True, forge=injected_forge))
         res = runner.execute(ctx)
 
-        assert res["status"] == "composite_success"
+        assert res["status"] == IntegrationStatus.COMPOSITE_SUCCESS
         assert captured_forges == [injected_forge, injected_forge]
