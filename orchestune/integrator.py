@@ -5,7 +5,7 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import TypedDict
 
@@ -20,7 +20,7 @@ from orchestune.integrator_worktree import IntegrationWorktree
 from orchestune.models import Task
 
 
-class IntegrationStatus(str, Enum):
+class IntegrationStatus(StrEnum):
     SUCCESS = "success"
     FAILURE = "failure"
     PARTIAL_SUCCESS = "partial_success"
