@@ -13,20 +13,22 @@ from orchestune.dispatch_cycle import (
     CycleContext,
     IssuesByStatus,
     _apply_external_lock_sync,
-    _decide_blocked_promotions,
-    _decide_dual_status_reconciliation,
     _decide_external_lock_sync,
     _determine_candidate_tasks,
     _fetch_issues,
-    _filter_deviation_blocked_candidates,
     _finalize_launch,
     _group_by_status,
     _process_active_worktrees,
-    _reconcile_dual_status_tasks,
-    _self_heal_run_state,
     run_dispatch_cycle,
 )
+from orchestune.dispatch_filters import _filter_deviation_blocked_candidates
 from orchestune.dispatch_locks import ExternalLockScanResult
+from orchestune.dispatch_reconciliation import (
+    _decide_blocked_promotions,
+    _decide_dual_status_reconciliation,
+    _reconcile_dual_status_tasks,
+    _self_heal_run_state,
+)
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import (
     ActiveWorktree,
@@ -603,7 +605,8 @@ class TestSelfHealRunState:
                 return_value=[],
             ) as mock_list,
             patch(
-                "orchestune.dispatch_cycle.recover_run_state", return_value=False
+                "orchestune.dispatch_reconciliation.recover_run_state",
+                return_value=False,
             ) as mock_recover,
         ):
             _self_heal_run_state(run_state, config)
@@ -1299,7 +1302,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
     def test_blocked_promotion_excludes_blocked_recompute(self):
         """status:blocked-recomputeを持つタスクは、通常のblocked昇格判定から除外されること"""
-        from orchestune.dispatch_cycle import _decide_blocked_promotions
+        from orchestune.dispatch_reconciliation import _decide_blocked_promotions
 
         task = _task(
             issue_number=2,

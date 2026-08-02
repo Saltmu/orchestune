@@ -308,8 +308,8 @@ class TestApplyTaskLaunches:
         （再キュー）されないことを検証する。"""
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_cycle import _decide_blocked_promotions
         from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch_reconciliation import _decide_blocked_promotions
         from orchestune.dispatch_targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
