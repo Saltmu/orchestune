@@ -652,14 +652,14 @@ class TestWorktreeHasUncommittedChanges:
     """#193: worktree削除前の未コミット変更確認（安全側フォールバック）。"""
 
     def test_clean_worktree_returns_false(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
             assert worktree_has_uncommitted_changes("worktrees/w1") is False
 
     def test_dirty_worktree_returns_true(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=" M src/foo.py\n", stderr=""
             )
@@ -669,7 +669,7 @@ class TestWorktreeHasUncommittedChanges:
         """存在しないworktreeなどgit statusが失敗する場合はクオータ解放を優先し、
         削除を妨げないようクリーン扱いとする。"""
         with patch(
-            "orchestune.dispatch_gc.subprocess.run",
+            "orchestune.dispatch_gc_git.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             assert worktree_has_uncommitted_changes("worktrees/missing") is False
@@ -682,7 +682,7 @@ class TestBackupWipCommit:
     """
 
     def test_clean_worktree_returns_none(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -691,7 +691,7 @@ class TestBackupWipCommit:
             assert mock_run.call_count == 1
 
     def test_dirty_worktree_commits_and_returns_none(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=" M src/foo.py\n", stderr=""
             )
@@ -704,7 +704,7 @@ class TestBackupWipCommit:
         """dirty確認自体が失敗した場合、cleanと誤判定せずエラーを返す
         （`worktree_has_uncommitted_changes`のfail-open挙動とは異なる）。"""
         with patch(
-            "orchestune.dispatch_gc.subprocess.run",
+            "orchestune.dispatch_gc_git.subprocess.run",
             side_effect=subprocess.CalledProcessError(
                 1, [], stderr="fatal: not a git repository"
             ),
@@ -716,7 +716,7 @@ class TestBackupWipCommit:
     def test_status_check_os_error_is_fail_closed(self):
         """git実行ファイル不在等のOSErrorも、確認不能としてエラーを返す。"""
         with patch(
-            "orchestune.dispatch_gc.subprocess.run",
+            "orchestune.dispatch_gc_git.subprocess.run",
             side_effect=OSError("git executable not found"),
         ):
             error = backup_wip_commit("worktrees/w1", "WIP: backup")
@@ -733,7 +733,7 @@ class TestBackupWipCommit:
                 )
             raise OSError("git executable not found")
 
-        with patch("orchestune.dispatch_gc.subprocess.run", side_effect=run_mock):
+        with patch("orchestune.dispatch_gc_git.subprocess.run", side_effect=run_mock):
             error = backup_wip_commit("worktrees/w1", "WIP: backup")
         assert error is not None
         assert "git executable not found" in error
@@ -743,14 +743,14 @@ class TestWorktreeHasNewCommits:
     """#74: base_branchに対する実コミットの有無確認（空コミット完了の誤判定防止）。"""
 
     def test_returns_true_when_commits_ahead(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="2\n", stderr=""
             )
             assert worktree_has_new_commits("worktrees/w1", "origin/main") is True
 
     def test_returns_false_when_no_commits_ahead(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="0\n", stderr=""
             )
@@ -760,7 +760,7 @@ class TestWorktreeHasNewCommits:
         """#135: 比較不能時（base_branch参照が解決できない等）は「新規コミット無し」
         と同じ安全側（False）にフォールバックし、実体のない完了確定を防ぐ。"""
         with patch(
-            "orchestune.dispatch_gc.subprocess.run",
+            "orchestune.dispatch_gc_git.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             assert worktree_has_new_commits("worktrees/missing", "origin/main") is False
@@ -768,7 +768,7 @@ class TestWorktreeHasNewCommits:
     def test_git_error_logs_warning_to_stderr(self, capsys):
         """#135: 比較失敗時にstderrへ警告を出力し、原因調査を容易にする。"""
         with patch(
-            "orchestune.dispatch_gc.subprocess.run",
+            "orchestune.dispatch_gc_git.subprocess.run",
             side_effect=subprocess.CalledProcessError(
                 1, [], stderr="fatal: bad revision"
             ),
@@ -785,10 +785,10 @@ class TestRemoteBranchCommitChecks:
     def test_fetches_fresh_base_and_returns_no_sha_when_branch_is_merged(self):
         with (
             patch(
-                "orchestune.dispatch_gc.fetch_remote_branch",
+                "orchestune.dispatch_gc_git.fetch_remote_branch",
                 side_effect=("origin/claude/issue-177-task-a", "origin/main"),
             ) as mock_fetch,
-            patch("orchestune.dispatch_gc.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="0\n", stderr=""
@@ -811,10 +811,10 @@ class TestRemoteBranchCommitChecks:
     def test_returns_sha_from_the_verified_remote_snapshot(self):
         with (
             patch(
-                "orchestune.dispatch_gc.fetch_remote_branch",
+                "orchestune.dispatch_gc_git.fetch_remote_branch",
                 side_effect=("origin/claude/issue-177-task-a", "origin/main"),
             ) as mock_fetch,
-            patch("orchestune.dispatch_gc.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
         ):
             mock_run.side_effect = (
                 subprocess.CompletedProcess(
@@ -881,7 +881,7 @@ class TestFinalizeCompletedWorktree:
                 "orchestune.dispatch_gc.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -902,7 +902,7 @@ class TestRemoveWorktree:
     """#193: 完了したworktreeの削除。"""
 
     def test_calls_git_worktree_remove_without_force(self):
-        with patch("orchestune.dispatch_gc.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -913,7 +913,7 @@ class TestRemoveWorktree:
 
     def test_swallows_error_when_already_removed(self):
         with patch(
-            "orchestune.dispatch_gc.subprocess.run",
+            "orchestune.dispatch_gc_git.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             remove_worktree("worktrees/already-gone")  # 例外を送出しないこと
