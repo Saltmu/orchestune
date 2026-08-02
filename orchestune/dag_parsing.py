@@ -49,7 +49,7 @@ def detect_risk_from_values(
     return bool(unique_reasons), unique_reasons
 
 
-def extract_frontmatter(text: str) -> dict[str, Any]:
+def extract_frontmatter_and_body(text: str) -> tuple[dict[str, Any], str]:
     match = _FRONTMATTER_PATTERN.match(text)
     if not match:
         raise ValueError(
@@ -58,7 +58,12 @@ def extract_frontmatter(text: str) -> dict[str, Any]:
     data = yaml.safe_load(match.group(1))
     if not isinstance(data, dict):
         raise ValueError("フロントマターの内容がマッピング形式ではありません")
-    return data
+    body = text[match.end() :].strip()
+    return data, body
+
+
+def extract_frontmatter(text: str) -> dict[str, Any]:
+    return extract_frontmatter_and_body(text)[0]
 
 
 def _parse_subtask_id(raw: dict[str, Any]) -> str:

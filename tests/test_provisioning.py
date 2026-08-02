@@ -313,6 +313,32 @@ class TestProvisionIssuesApply:
         assert parent_call[0] == "[EPIC] Example big rock"
         assert "# Decomposition Plan" in parent_call[1]
 
+    def test_parent_body_extraction_handles_embedded_dashes_in_yaml(
+        self, tmp_path: Path, template_path: Path
+    ):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "Example --- big rock with dashes"\n'
+            "subtasks:\n"
+            '  - id: "task-a"\n'
+            '    description: "d"\n'
+            "---\n"
+            "\n"
+            "# Real Description\n"
+            "This is the actual markdown content.\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        result = provision_issues(path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number is not None
+        parent_call = forge.create_issue_calls[0]
+        assert parent_call[0] == "[EPIC] Example --- big rock with dashes"
+        assert "# Real Description" in parent_call[1]
+        assert "This is the actual markdown content." in parent_call[1]
+        assert "subtasks:" not in parent_call[1]
+
     def test_recovers_orphaned_parent_by_title_before_creating_duplicate(
         self, plan_path: Path, template_path: Path
     ):
