@@ -10,6 +10,7 @@ from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_state import RunState, save_run_state
 from orchestune.dispatch_targets import DispatchHandle, DispatchTarget
 from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord, Task
 
 
@@ -140,6 +141,9 @@ class DummyGitHub:
             for issue in self.issues.values()
             if issue.parent and issue.parent.get("number") == number
         ]
+
+    def get_issue(self, issue_number: int | str) -> IssueRecord | None:
+        return self.issues.get(int(issue_number))
 
     def add_label(self, issue_number: int | str, label: str) -> None:
         num = int(issue_number)
@@ -507,6 +511,19 @@ def test_closed_loop_dag_recomputation_serialization():
     repo = DummyGitRepo()
     dummy_github = DummyGitHub(repo.local_path)
 
+    # #327: parent_issue_number=100の`ensure_parent_branch`ガード検証
+    # （`is_epic_issue`）が本物のGitHub `gh issue view 100`を呼ばないよう、
+    # EPIC形のIssueを明示的に登録する。
+    dummy_github.add_issue(
+        IssueRecord(
+            number=100,
+            title="[EPIC] Concurrent dispatch scenario",
+            body=f"...\n{PARENT_MARKER}",
+            labels=(),
+            created_at="2026-07-07T00:00:00Z",
+        )
+    )
+
     # 1. Register 2 issues (task-1, task-2)
     # They don't overlap initial footprints, so they can run concurrently
     issue_body_1 = "```yaml\nsubtask_id: task-1\nfootprint:\n  - src/main.py\n```\n"
@@ -625,6 +642,7 @@ def test_closed_loop_dag_recomputation_serialization():
             "orchestune.forge.GitHubForge.list_sub_issues",
             dummy_github.list_sub_issues,
         ),
+        patch("orchestune.forge.GitHubForge.get_issue", dummy_github.get_issue),
         patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),

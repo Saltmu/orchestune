@@ -69,6 +69,7 @@ from orchestune.integration_coordinator import (
     IntegrationCoordinator,
     record_pending_not_needed_review,
 )
+from orchestune.issue_parsing import is_epic_issue
 from orchestune.models import IssueRecord, PrRecord
 
 
@@ -513,6 +514,21 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         now = time.time()
 
         if config.parent_issue_number is not None and config.apply:
+            issue = config.resolved_forge.get_issue(config.parent_issue_number)
+            if issue is None:
+                raise RuntimeError(
+                    f"--parent-issue {config.parent_issue_number} does not "
+                    "exist; refusing to create a parent branch for it."
+                )
+            if not is_epic_issue(issue):
+                raise RuntimeError(
+                    f"--parent-issue {config.parent_issue_number} "
+                    f"('{issue.title}') does not look like an EPIC issue "
+                    "created by orchestune provision (expected a '[EPIC] ' "
+                    "title and the decomposition-plan-parent marker in its "
+                    "body); refusing to create/reuse "
+                    f"'parent/issue-{config.parent_issue_number}'."
+                )
             ensure_parent_branch(config.parent_issue_number)
 
         issues = _fetch_issues(config)
