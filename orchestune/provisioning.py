@@ -21,7 +21,10 @@ import yaml
 
 from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
-from orchestune.dag_parsing import extract_frontmatter, parse_decomposition_plan
+from orchestune.dag_parsing import (
+    extract_frontmatter_and_body,
+    parse_decomposition_plan,
+)
 from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.plan_writer import write_issue_numbers
@@ -79,7 +82,7 @@ class ProvisionResult:
 def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
     subtasks = parse_decomposition_plan(path)
     text = Path(path).read_text(encoding="utf-8")
-    raw = extract_frontmatter(text)
+    raw, description = extract_frontmatter_and_body(text)
 
     issue_numbers: dict[str, int] = {}
     for entry in raw.get("subtasks") or []:
@@ -102,9 +105,6 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
         if raw_parent is None or raw_parent == ""
         else validate_issue_number(raw_parent)
     )
-
-    parts = text.split("---", 2)
-    description = parts[2].strip() if len(parts) >= 3 else ""
 
     metadata = PlanMetadata(
         title=str(raw.get("title") or "").strip(),
