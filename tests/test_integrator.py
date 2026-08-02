@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
 from orchestune.integrator import (
+    AutoMergeChildIntegrationStep,
+    EnsureIntegrationPrStep,
     IntegrationComponent,
     IntegrationContext,
     IntegrationPipeline,
@@ -17,9 +19,47 @@ from orchestune.integrator import (
     IntegrationStatus,
     Integrator,
     IntegratorConfig,
+    LabelIncludedStep,
+    MergeAndTestStep,
     MultiIssueIntegrator,
+    PrepareTasksStep,
+    PushTempBranchStep,
+    RetryChildIssueCloseStep,
+    SemanticReviewStep,
+    SetupWorktreeStep,
 )
+from orchestune.integrator_steps import (
+    AutoMergeChildIntegrationStep as ExtractedAutoMergeChildIntegrationStep,
+)
+from orchestune.integrator_steps import (
+    EnsureIntegrationPrStep as ExtractedEnsureIntegrationPrStep,
+)
+from orchestune.integrator_steps import LabelIncludedStep as ExtractedLabelIncludedStep
+from orchestune.integrator_steps import MergeAndTestStep as ExtractedMergeAndTestStep
+from orchestune.integrator_steps import PrepareTasksStep as ExtractedPrepareTasksStep
+from orchestune.integrator_steps import (
+    PushTempBranchStep as ExtractedPushTempBranchStep,
+)
+from orchestune.integrator_steps import (
+    RetryChildIssueCloseStep as ExtractedRetryChildIssueCloseStep,
+)
+from orchestune.integrator_steps import (
+    SemanticReviewStep as ExtractedSemanticReviewStep,
+)
+from orchestune.integrator_steps import SetupWorktreeStep as ExtractedSetupWorktreeStep
 from tests.conftest import IntegratorEnv, make_done_issue
+
+
+def test_legacy_step_exports_reference_extracted_implementations():
+    assert PrepareTasksStep is ExtractedPrepareTasksStep
+    assert RetryChildIssueCloseStep is ExtractedRetryChildIssueCloseStep
+    assert SetupWorktreeStep is ExtractedSetupWorktreeStep
+    assert MergeAndTestStep is ExtractedMergeAndTestStep
+    assert PushTempBranchStep is ExtractedPushTempBranchStep
+    assert EnsureIntegrationPrStep is ExtractedEnsureIntegrationPrStep
+    assert SemanticReviewStep is ExtractedSemanticReviewStep
+    assert LabelIncludedStep is ExtractedLabelIncludedStep
+    assert AutoMergeChildIntegrationStep is ExtractedAutoMergeChildIntegrationStep
 
 
 def _context(config: IntegratorConfig) -> IntegrationContext:
