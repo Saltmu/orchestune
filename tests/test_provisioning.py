@@ -7,10 +7,13 @@ import pytest
 import yaml
 
 from orchestune.dag_models import SubTask
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    PARENT_MARKER,
+    is_epic_issue,
+)
 from orchestune.models import IssueRecord
 from orchestune.provisioning import (
-    _PARENT_MARKER,
     _derive_labels,
     _parent_body,
     _render_issue_body,
@@ -373,13 +376,13 @@ class TestProvisionIssuesApply:
         unrelated = forge.create_issue(
             "[EPIC] Example big rock", "Some unrelated human-written issue."
         )
-        assert _PARENT_MARKER not in forge.issues[unrelated]["body"]
+        assert PARENT_MARKER not in forge.issues[unrelated]["body"]
 
         result = provision_issues(plan_path, forge=forge, template_path=template_path)
 
         assert result.parent_issue_number != unrelated
         assert result.parent_issue_number is not None
-        assert _PARENT_MARKER in forge.issues[result.parent_issue_number]["body"]
+        assert PARENT_MARKER in forge.issues[result.parent_issue_number]["body"]
         epic_issues = [
             entry
             for entry in forge.issues.values()
@@ -437,12 +440,12 @@ class TestProvisionIssuesApply:
         assert forge.sub_issues.get(unrelated, []) == []
         new_parent = result.parent_issue_number
         assert new_parent is not None
-        assert _PARENT_MARKER in forge.issues[new_parent]["body"]
+        assert PARENT_MARKER in forge.issues[new_parent]["body"]
 
     def test_does_not_trust_a_persisted_parent_from_a_different_plan(
         self, plan_path: Path, template_path: Path
     ):
-        """#323 review round 8 (P2): `_PARENT_MARKER` is a single constant
+        """#323 review round 8 (P2): `PARENT_MARKER` is a single constant
         shared by every EPIC this module ever creates, so carrying it alone
         can't distinguish this plan's own parent from an EPIC created for a
         *different* plan (e.g. a colliding issue number in another
@@ -713,6 +716,44 @@ class TestProvisionIssuesApply:
             if entry["title"].startswith("[FEAT] task-b")
         )
         assert set(flaky.blocked_by[task_c_number]) == {task_a_number, task_b_number}
+
+
+class TestIsEpicIssue:
+    """`--parent-issue`検証用: `is_epic_issue`がEPIC構造（タイトル接頭辞+本文
+    マーカー）の有無だけを見て判定することを確認する。"""
+
+    def _issue(self, *, title: str, body: str, state: str = "OPEN") -> IssueRecord:
+        return IssueRecord(
+            number=1,
+            title=title,
+            body=body,
+            labels=(),
+            created_at="",
+            state=state,
+        )
+
+    def test_true_when_title_prefixed_and_marker_present(self):
+        issue = self._issue(title="[EPIC] Some plan", body=f"...\n{PARENT_MARKER}")
+        assert is_epic_issue(issue) is True
+
+    def test_false_when_marker_missing(self):
+        issue = self._issue(title="[EPIC] Some plan", body="no marker here")
+        assert is_epic_issue(issue) is False
+
+    def test_false_when_title_missing_prefix(self):
+        issue = self._issue(title="[BUG] some bug", body=f"...\n{PARENT_MARKER}")
+        assert is_epic_issue(issue) is False
+
+    def test_false_when_neither_present(self):
+        issue = self._issue(title="[BUG] some bug", body="no marker here")
+        assert is_epic_issue(issue) is False
+
+    def test_true_regardless_of_issue_state(self):
+        """完了済み（クローズ済み）EPICへの後続処理を妨げないよう、状態は問わない。"""
+        issue = self._issue(
+            title="[EPIC] Some plan", body=f"...\n{PARENT_MARKER}", state="CLOSED"
+        )
+        assert is_epic_issue(issue) is True
 
 
 class TestProvisionIssuesNoApply:
