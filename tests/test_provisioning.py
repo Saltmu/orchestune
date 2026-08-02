@@ -7,15 +7,17 @@ import pytest
 import yaml
 
 from orchestune.dag_models import SubTask
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    PARENT_MARKER,
+    is_epic_issue,
+)
 from orchestune.models import IssueRecord
 from orchestune.provisioning import (
-    PARENT_MARKER,
     _derive_labels,
     _parent_body,
     _render_issue_body,
     _subtask_id_from_body,
-    is_epic_issue,
     main,
     provision_issues,
 )

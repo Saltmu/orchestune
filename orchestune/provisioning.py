@@ -23,19 +23,9 @@ from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
 from orchestune.dag_parsing import extract_frontmatter, parse_decomposition_plan
 from orchestune.forge import GitHubForge, IssueForge
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
-from orchestune.models import IssueRecord
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, PARENT_MARKER
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.validation import validate_issue_number
-
-# Embedded in every parent (EPIC) issue this module creates, and required
-# (in addition to an exact title match) before an orphan-recovery lookup is
-# allowed to adopt an existing issue as "our" parent: an unrelated issue
-# that coincidentally has the same title has no way to also have this
-# exact literal string in its body. Public: also used by dispatch_cycle.py
-# to validate that a `--parent-issue` number refers to a genuine EPIC before
-# creating a parent branch for it.
-PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
 
 _PLACEHOLDERS = (
     "subtask_id",
@@ -132,17 +122,6 @@ def _parent_body(title: str) -> str:
         f"{title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
         f"\n\n{PARENT_MARKER}"
     )
-
-
-def is_epic_issue(issue: IssueRecord) -> bool:
-    """`issue`がこのモジュールの作るEPIC（親）Issueと構造的に一致するかを判定する。
-
-    `provision_issues`の持続済みparent番号検証は、特定のplanの`metadata.title`との
-    厳密な一致まで要求するが、dispatch実行時（`--parent-issue`検証）にはどのplanの
-    親かという情報がなく番号しか分からないため、「本物のEPICらしい構造を持つか」
-    という緩い判定に留める。
-    """
-    return issue.title.startswith("[EPIC] ") and PARENT_MARKER in issue.body
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
