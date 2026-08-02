@@ -212,10 +212,12 @@ def _local_pr_completion_status(
 
 
 def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
+    """#315レビュー対応: 旧is_completeシグネチャとの互換性を保つ。"""
     assert config.dispatch_target is not None
     try:
         return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
     except TypeError:
+        # `forge`引数なしの旧dispatch_target実装は、引数なしで再試行する。
         return config.dispatch_target.is_complete(handle)
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-import subprocess  # noqa: F401 - legacy patch surface for tests and downstream callers
+import subprocess as subprocess  # compatibility patch surface
 from pathlib import Path
 
 from orchestune.dispatch_worktree import file_lock
@@ -96,6 +96,8 @@ class MultiIssueIntegrator(IntegrationComponent):
 
         for integrator in self.integrators:
             sub_ctx = copy.deepcopy(ctx)
+            # #313レビュー対応: 注入されたForge（可変な内部状態やlock/clientを
+            # 保持しうる）をdeepcopyで複製・破壊しないよう、元の参照を維持する。
             sub_ctx.config.forge = ctx.config.forge
             parent_issue = getattr(integrator, "parent_issue", None)
             key = (

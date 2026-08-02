@@ -77,6 +77,13 @@ __all__ = [
 def _rule_not_needed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
+    """#280: status:not-neededラベル検知による即時完了処理。
+
+    セッションが「対応不要」と判断した場合、コミット・PRを作らないため
+    closingIssuesReferences等の完了シグナルが発生せず、`_rule_completed`
+    （PID/PR存在ベース）は永遠にマッチしない。ラベル検知を最優先の完了
+    シグナルとして扱い、stale判定より先に評価する。
+    """
     if active_task is None or "status:not-needed" not in active_task.status_labels:
         return None
     completion_event = _finalize_not_needed_worktree(
@@ -98,10 +105,18 @@ def _rule_not_needed(
 def _decide_stale_active_entry(
     active: ActiveWorktree, active_task: Task | None
 ) -> dict | None:
+    """GitHubラベルを正として、run_state側のstaleエントリを判定する。"""
     if (
         active_task is not None
         and "status:in-progress" not in active_task.status_labels
     ):
+        # run_stateへの登録(save_run_state)は起動成功直後に、GitHubラベルの
+        # status:in-progress付与はその後に行う順序になっているため、この間で
+        # クラッシュした場合（あるいは完了/エスカレーション処理でラベルだけ
+        # 先に更新されてクラッシュした場合）、GitHub側のラベルは
+        # status:in-progressでなくなっているのにrun_state側にだけ古い
+        # エントリが残ることがある。GitHubラベルを正として、この古い帳簿
+        # エントリを破棄する（ゾンビGCの拡張）。
         return {
             "issue_number": active.issue_number,
             "subtask_id": active_task.subtask_id,

@@ -94,7 +94,19 @@ def _apply_zombie_or_timeout_reclaim(
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
 ) -> dict | None:
-    """Apply one previously decided reclaim while protecting dirty work."""
+    """decide層が判定した回収対象に基づき、安全に副作用を適用する。
+
+    worktreeの存在確認は、decide時点のスナップショットを信用せず、副作用を
+    実行する直前にこの関数内で再評価する。全回収対象の判定（decide）を先に
+    まとめて行ってから1件ずつapplyする都合上、decideからこの関数の実行までの
+    間にworktreeの状態（削除・再作成）が変化し得るため、古いスナップショットを
+    そのまま使うとバックアップ・削除・orphan worktree残存に関する安全策を
+    迂回しかねない。
+
+    WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
+    消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
+    （run_stateは変更せず、次サイクルでの再試行に委ねる）。
+    """
     active = reclaim.active
     reason = reclaim.reason
     if config.apply:
