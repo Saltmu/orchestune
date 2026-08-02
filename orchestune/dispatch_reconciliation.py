@@ -124,7 +124,7 @@ def _self_heal_run_state(
 
     #156: `run_state.json`は複数の親Issue（big rock）にまたがって共有されうる
     ため、`parent_issue_number`指定時のfast pathでスコープが絞られた
-    `Any`は使わず、常にリポジトリ全体のstatus:in-progress Issueを
+    `IssuesByStatus`は使わず、常にリポジトリ全体のstatus:in-progress Issueを
     読み直す。範囲を絞ってしまうと、他の親Issue配下のactive worktreeが
     復元されないまま`run_state.json`が新規保存され、以後永遠に復元機会を
     失うおそれがある。
