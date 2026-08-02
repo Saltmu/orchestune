@@ -464,7 +464,7 @@ class TestAddSubIssue:
             "issue",
             "edit",
             "101",
-            "--set-parent",
+            "--parent",
             "100",
         ]
 
