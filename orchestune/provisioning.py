@@ -24,6 +24,7 @@ from orchestune.dag_models import SubTask
 from orchestune.dag_parsing import extract_frontmatter, parse_decomposition_plan
 from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.validation import validate_issue_number
 
@@ -31,8 +32,10 @@ from orchestune.validation import validate_issue_number
 # (in addition to an exact title match) before an orphan-recovery lookup is
 # allowed to adopt an existing issue as "our" parent: an unrelated issue
 # that coincidentally has the same title has no way to also have this
-# exact literal string in its body.
-_PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
+# exact literal string in its body. Public: also used by dispatch_cycle.py
+# to validate that a `--parent-issue` number refers to a genuine EPIC before
+# creating a parent branch for it.
+PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
 
 _PLACEHOLDERS = (
     "subtask_id",
@@ -127,8 +130,19 @@ def _issue_title(subtask: SubTask) -> str:
 def _parent_body(title: str) -> str:
     return (
         f"{title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-        f"\n\n{_PARENT_MARKER}"
+        f"\n\n{PARENT_MARKER}"
     )
+
+
+def is_epic_issue(issue: IssueRecord) -> bool:
+    """`issue`がこのモジュールの作るEPIC（親）Issueと構造的に一致するかを判定する。
+
+    `provision_issues`の持続済みparent番号検証は、特定のplanの`metadata.title`との
+    厳密な一致まで要求するが、dispatch実行時（`--parent-issue`検証）にはどのplanの
+    親かという情報がなく番号しか分からないため、「本物のEPICらしい構造を持つか」
+    という緩い判定に留める。
+    """
+    return issue.title.startswith("[EPIC] ") and PARENT_MARKER in issue.body
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
@@ -298,7 +312,7 @@ def provision_issues(
         # subtask number is below: it could be stale (e.g. the plan was
         # copied to another repo and that number now belongs to an
         # unrelated issue there), so it's trusted only after confirming it.
-        # `_PARENT_MARKER` alone isn't enough proof: it's a single constant
+        # `PARENT_MARKER` alone isn't enough proof: it's a single constant
         # shared by every EPIC this module ever creates, so it can't tell
         # this plan's own parent apart from an unrelated EPIC created for a
         # *different* plan (e.g. a colliding issue number in another
@@ -308,7 +322,7 @@ def provision_issues(
         if (
             candidate is None
             or candidate.title != parent_title
-            or _PARENT_MARKER not in candidate.body
+            or PARENT_MARKER not in candidate.body
         ):
             parent_issue_number = None
     if parent_issue_number is None:
@@ -322,7 +336,7 @@ def provision_issues(
         # same-titled issue and our own orphaned parent both exist.
         candidates = resolved_forge.find_open_issues_by_exact_title(parent_title)
         marked_candidate = next(
-            (c for c in candidates if _PARENT_MARKER in c.body), None
+            (c for c in candidates if PARENT_MARKER in c.body), None
         )
         if marked_candidate is not None:
             parent_issue_number = marked_candidate.number
