@@ -308,6 +308,11 @@ class TestProvisionIssuesApply:
         titles_in_order = [call[0] for call in forge.create_issue_calls]
         assert any("task-a" in title for title in titles_in_order[:-1])
 
+        # Verify parent issue body includes the markdown description
+        parent_call = forge.create_issue_calls[0]
+        assert parent_call[0] == "[EPIC] Example big rock"
+        assert "# Decomposition Plan" in parent_call[1]
+
     def test_recovers_orphaned_parent_by_title_before_creating_duplicate(
         self, plan_path: Path, template_path: Path
     ):
