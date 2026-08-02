@@ -391,7 +391,7 @@ class GitHubForge:
         """childをparent配下のsub-issueとして紐付ける。"""
         parent = validate_issue_number(parent_issue_number)
         child = validate_issue_number(child_issue_number)
-        self._run(["gh", "issue", "edit", str(child), "--set-parent", str(parent)])
+        self._run(["gh", "issue", "edit", str(child), "--parent", str(parent)])
 
     def set_blocked_by(
         self, issue_number: int | str, blocking_issue_number: int | str
