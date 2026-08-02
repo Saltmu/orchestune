@@ -24,6 +24,18 @@ from orchestune.dispatch_gc import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch_gc_completion import (
+    CompletedWorktreeDecision as ExtractedCompletedWorktreeDecision,
+)
+from orchestune.dispatch_gc_completion import (
+    _finalize_completed_worktree as extracted_finalize_completed_worktree,
+)
+from orchestune.dispatch_gc_zombies import (
+    ZombieOrTimeoutReclaim as ExtractedZombieOrTimeoutReclaim,
+)
+from orchestune.dispatch_gc_zombies import (
+    _collect_zombies_and_timeouts as extracted_collect_zombies_and_timeouts,
+)
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import (
@@ -40,6 +52,16 @@ from orchestune.models import PrRecord
 from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
+
+def test_extracted_gc_symbols_remain_available_from_legacy_module():
+    """#330: 分割後も既存のdispatch_gc importを壊さない。"""
+    from orchestune.dispatch_gc import CompletedWorktreeDecision
+
+    assert CompletedWorktreeDecision is ExtractedCompletedWorktreeDecision
+    assert _finalize_completed_worktree is extracted_finalize_completed_worktree
+    assert ZombieOrTimeoutReclaim is ExtractedZombieOrTimeoutReclaim
+    assert _collect_zombies_and_timeouts is extracted_collect_zombies_and_timeouts
 
 
 def _ctx(**overrides):
@@ -128,7 +150,7 @@ class TestCollectZombiesAndTimeouts:
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
         with (
-            patch("orchestune.dispatch_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             events = _collect_zombies_and_timeouts(run_state, {}, config)
@@ -150,7 +172,7 @@ class TestCollectZombiesAndTimeouts:
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
         with (
-            patch("orchestune.dispatch_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -198,9 +220,11 @@ class TestDecideZombieOrTimeoutReclaims:
         config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
 
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
         ):
@@ -220,9 +244,11 @@ class TestDecideZombieOrTimeoutReclaims:
         config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
 
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
         ):
@@ -237,7 +263,9 @@ class TestDecideZombieOrTimeoutReclaims:
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
-        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+        with patch(
+            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+        ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
@@ -253,7 +281,9 @@ class TestDecideZombieOrTimeoutReclaims:
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
-        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+        with patch(
+            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+        ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
@@ -266,9 +296,11 @@ class TestDecideZombieOrTimeoutReclaims:
         config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
 
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
         ):
@@ -287,7 +319,7 @@ class TestDecideZombieOrTimeoutReclaims:
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(apply=True, zombie_gc=False, task_timeout_seconds=0)
 
-        with patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive:
+        with patch("orchestune.dispatch_gc_zombies.is_process_alive") as mock_is_alive:
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
@@ -301,7 +333,9 @@ class TestDecideZombieOrTimeoutReclaims:
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
-        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+        with patch(
+            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+        ):
             reclaims_with_task = _decide_zombie_or_timeout_reclaims(
                 run_state, {active.issue_number: task}, config, None, now=2_000.0
             )
@@ -317,7 +351,9 @@ class TestDecideZombieOrTimeoutReclaims:
         run_state = RunState(active_worktrees={"custom-key": active})
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
-        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+        with patch(
+            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+        ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
@@ -354,10 +390,12 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc.backup_wip_commit", return_value=None
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
             ) as mock_backup,
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -389,9 +427,11 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -409,9 +449,11 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -429,9 +471,11 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -449,9 +493,15 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
-            patch("orchestune.dispatch_gc.os.kill", side_effect=Exception("boom")),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.os.kill", side_effect=Exception("boom")
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -474,8 +524,10 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -500,11 +552,13 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc.backup_wip_commit",
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
                 return_value="git commit failed",
             ),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -527,9 +581,11 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=False)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -576,7 +632,9 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
-        with patch("orchestune.dispatch_gc.is_process_alive", return_value=True):
+        with patch(
+            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+        ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
@@ -587,9 +645,11 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc.backup_wip_commit", return_value=None
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
             ) as mock_backup,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -614,9 +674,11 @@ class TestApplyZombieOrTimeoutReclaim:
         config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
 
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
         ):
@@ -629,8 +691,10 @@ class TestApplyZombieOrTimeoutReclaim:
         worktree_dir.rmdir()
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -846,14 +910,16 @@ class TestFinalizeCompletedWorktree:
         config = DispatcherConfig(apply=True)
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -874,15 +940,17 @@ class TestFinalizeCompletedWorktree:
         config = DispatcherConfig(apply=True)
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
             ),
             patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
@@ -928,10 +996,12 @@ class TestFinalizeNotNeededWorktree:
         config = DispatcherConfig(apply=True)
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
         ):
@@ -957,10 +1027,12 @@ class TestFinalizeNotNeededWorktree:
         config = DispatcherConfig(apply=True)
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
         ):
@@ -977,10 +1049,12 @@ class TestFinalizeNotNeededWorktree:
         config = DispatcherConfig(apply=False)
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
         ):
@@ -996,10 +1070,10 @@ class TestFinalizeNotNeededWorktree:
         config = DispatcherConfig(apply=True)
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.close_issue"),
         ):
@@ -1027,10 +1101,12 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         dispatch_review = MagicMock()
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
         ):
@@ -1056,7 +1132,7 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         )
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch(
@@ -1077,7 +1153,7 @@ class TestDecideCompletedWorktreeOutcome:
         active = _active()
         task = _task()
         with patch(
-            "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
             return_value=True,
         ):
             decision = _decide_completed_worktree_outcome(active, task)
@@ -1088,11 +1164,11 @@ class TestDecideCompletedWorktreeOutcome:
         task = _task()
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=False,
             ),
         ):
@@ -1105,11 +1181,11 @@ class TestDecideCompletedWorktreeOutcome:
         task = _task()
         with (
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
             ),
         ):
@@ -1121,14 +1197,14 @@ class TestDecideCompletedWorktreeOutcome:
 class TestDecideNotNeededDirtyWorktree:
     def test_true_when_dirty(self):
         with patch(
-            "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
             return_value=True,
         ):
             assert _decide_not_needed_dirty_worktree(_active()) is True
 
     def test_false_when_clean(self):
         with patch(
-            "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
             return_value=False,
         ):
             assert _decide_not_needed_dirty_worktree(_active()) is False
@@ -1168,16 +1244,18 @@ class TestRuleCompleted:
             )
         ]
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+            ),
             patch(
                 "orchestune.forge.GitHubForge.list_prs",
                 return_value=ctx.prs,
             ) as mock_list_prs,
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_remove,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -1212,10 +1290,10 @@ class TestRuleCompleted:
                 create=True,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_remove,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -1237,7 +1315,9 @@ class TestRuleCompleted:
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx()
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=True
+            ),
             patch("orchestune.forge.GitHubForge.list_prs") as mock_list_prs,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
@@ -1261,7 +1341,9 @@ class TestRuleCompleted:
             state="CLOSED",
         )
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+            ),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[stale_pr]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
@@ -1290,13 +1372,15 @@ class TestRuleCompleted:
             state="CLOSED",
         )
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+            ),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[closed_pr]),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -1312,7 +1396,9 @@ class TestRuleCompleted:
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx()
         with (
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+            ),
             patch(
                 "orchestune.forge.GitHubForge.list_prs",
                 side_effect=RuntimeError("temporary GitHub failure"),
@@ -1345,10 +1431,10 @@ class TestRuleCompleted:
                 "orchestune.forge.GitHubForge.list_prs", return_value=[closed_pr]
             ) as mock_list_prs,
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -1672,7 +1758,9 @@ class TestIsWorktreeComplete:
 
         with (
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive") as mock_is_alive,
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive"
+            ) as mock_is_alive,
         ):
             assert _is_worktree_complete(active, config) is False
 
@@ -1732,11 +1820,13 @@ class TestGC:
                 "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=[],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch(
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1803,15 +1893,17 @@ class TestGC:
                 "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=[],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1862,16 +1954,20 @@ class TestGC:
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1925,12 +2021,12 @@ class TestGC:
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -1986,15 +2082,17 @@ class TestGC:
                 "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=[],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_wt,
+            patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (

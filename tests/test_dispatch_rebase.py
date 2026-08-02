@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, call, patch
 
@@ -23,6 +24,20 @@ from orchestune.dispatch_state import (
 )
 from orchestune.models import PrRecord
 from tests.conftest import make_issue
+
+
+@contextmanager
+def _patch_gc_process_alive(*, return_value: bool):
+    """Patch every consumer split from the former dispatch_gc dependency."""
+    with ExitStack() as stack:
+        for target in (
+            "orchestune.dispatch_gc.is_process_alive",
+            "orchestune.dispatch_gc_completion.is_process_alive",
+            "orchestune.dispatch_gc_zombies.is_process_alive",
+        ):
+            stack.enter_context(patch(target, return_value=return_value))
+        yield
+
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -711,7 +726,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
@@ -786,7 +801,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
@@ -868,7 +883,7 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
@@ -974,7 +989,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
@@ -1158,7 +1173,7 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
@@ -1260,7 +1275,7 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
