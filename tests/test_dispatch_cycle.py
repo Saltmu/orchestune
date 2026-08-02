@@ -36,6 +36,7 @@ from orchestune.dispatch_state import (
     load_run_state,
     save_run_state,
 )
+from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord
 from tests.conftest import make_issue
 
@@ -1678,6 +1679,106 @@ class TestRunDispatchCycle:
         assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
 
 
+class TestRunDispatchCycleParentIssueValidation:
+    """#327: `--parent-issue`が本物のEPIC Issueかどうかを`ensure_parent_branch`
+    呼び出し前に検証し、そうでなければ`RuntimeError`で拒否することを確認する。"""
+
+    def _config(self, tmp_path, **overrides):
+        defaults = dict(
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            parent_issue_number=181,
+            apply=True,
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def _issue(self, *, title: str, body: str) -> IssueRecord:
+        return IssueRecord(number=181, title=title, body=body, labels=(), created_at="")
+
+    def test_raises_when_parent_issue_does_not_look_like_an_epic(self, tmp_path):
+        config = self._config(tmp_path)
+        non_epic_issue = self._issue(title="[BUG] some bug", body="no marker here")
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.get_issue", return_value=non_epic_issue
+            ),
+            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+        ):
+            with pytest.raises(RuntimeError, match="181"):
+                run_dispatch_cycle(config)
+
+        mock_ensure.assert_not_called()
+
+    def test_raises_when_parent_issue_does_not_exist(self, tmp_path):
+        config = self._config(tmp_path)
+        with (
+            patch("orchestune.forge.GitHubForge.get_issue", return_value=None),
+            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+        ):
+            with pytest.raises(RuntimeError, match="181"):
+                run_dispatch_cycle(config)
+
+        mock_ensure.assert_not_called()
+
+    def test_raises_when_title_prefixed_but_marker_missing(self, tmp_path):
+        config = self._config(tmp_path)
+        issue = self._issue(title="[EPIC] Some plan", body="no marker here")
+        with (
+            patch("orchestune.forge.GitHubForge.get_issue", return_value=issue),
+            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+        ):
+            with pytest.raises(RuntimeError):
+                run_dispatch_cycle(config)
+
+        mock_ensure.assert_not_called()
+
+    def test_raises_when_marker_present_but_title_missing_prefix(self, tmp_path):
+        config = self._config(tmp_path)
+        issue = self._issue(title="[BUG] some bug", body=f"...\n{PARENT_MARKER}")
+        with (
+            patch("orchestune.forge.GitHubForge.get_issue", return_value=issue),
+            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+        ):
+            with pytest.raises(RuntimeError):
+                run_dispatch_cycle(config)
+
+        mock_ensure.assert_not_called()
+
+    def test_calls_ensure_parent_branch_for_a_genuine_epic(self, tmp_path):
+        config = self._config(tmp_path)
+        epic_issue = self._issue(title="[EPIC] Some plan", body=f"...\n{PARENT_MARKER}")
+        with (
+            patch("orchestune.forge.GitHubForge.get_issue", return_value=epic_issue),
+            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch("orchestune.forge.GitHubForge.list_sub_issues", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+        ):
+            run_dispatch_cycle(config)
+
+        mock_ensure.assert_called_once_with(181)
+
+    def test_does_not_check_when_apply_is_false(self, tmp_path):
+        config = self._config(tmp_path, apply=False)
+        with (
+            patch("orchestune.forge.GitHubForge.get_issue") as mock_get_issue,
+            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch("orchestune.forge.GitHubForge.list_sub_issues", return_value=[]),
+            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+        ):
+            run_dispatch_cycle(config)
+
+        mock_get_issue.assert_not_called()
+        mock_ensure.assert_not_called()
+
+
 class TestRunDispatchCycleBranchNormalization:
     """#194: リモートブランチ名のorigin/プレフィックス正規化。"""
 
@@ -1813,6 +1914,19 @@ class TestRunDispatchCycleFootprintRecompute:
         defaults.update(overrides)
         return DispatcherConfig(**defaults)
 
+    def _epic_issue(self) -> IssueRecord:
+        """#327: `parent_issue_number=181`は本物のEPICではない実在のバグIssue
+        番号（このリポジトリの過去のIncidentに由来）であり、`ensure_parent_branch`
+        呼び出し前の`is_epic_issue`検証が本物のGitHub `gh issue view 181`を
+        呼ばないよう、EPIC形の`IssueRecord`を明示的にスタブする。"""
+        return IssueRecord(
+            number=181,
+            title="[EPIC] Test plan",
+            body=f"...\n{PARENT_MARKER}",
+            labels=(),
+            created_at="",
+        )
+
     def test_significant_deviation_triggers_recompute_and_notify(self, tmp_path):
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
@@ -1847,6 +1961,10 @@ class TestRunDispatchCycleFootprintRecompute:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.get_issue",
+                return_value=self._epic_issue(),
+            ),
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
@@ -1914,6 +2032,10 @@ class TestRunDispatchCycleFootprintRecompute:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.get_issue",
+                return_value=self._epic_issue(),
+            ),
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
@@ -1995,6 +2117,10 @@ class TestRunDispatchCycleFootprintRecompute:
 
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.get_issue",
+                return_value=self._epic_issue(),
+            ),
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
@@ -2087,6 +2213,10 @@ class TestRunDispatchCycleFootprintRecompute:
 
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.get_issue",
+                return_value=self._epic_issue(),
+            ),
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
@@ -2137,6 +2267,10 @@ class TestRunDispatchCycleFootprintRecompute:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.get_issue",
+                return_value=self._epic_issue(),
+            ),
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,

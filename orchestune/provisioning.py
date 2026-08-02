@@ -26,16 +26,9 @@ from orchestune.dag_parsing import (
     parse_decomposition_plan,
 )
 from orchestune.forge import GitHubForge, IssueForge
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, PARENT_MARKER
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.validation import validate_issue_number
-
-# Embedded in every parent (EPIC) issue this module creates, and required
-# (in addition to an exact title match) before an orphan-recovery lookup is
-# allowed to adopt an existing issue as "our" parent: an unrelated issue
-# that coincidentally has the same title has no way to also have this
-# exact literal string in its body.
-_PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
 
 _PLACEHOLDERS = (
     "subtask_id",
@@ -137,7 +130,7 @@ def _parent_body(title: str, description: str = "") -> str:
         body += f"\n\n{description}"
     body += (
         f"\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-        f"\n\n{_PARENT_MARKER}"
+        f"\n\n{PARENT_MARKER}"
     )
     return body
 
@@ -309,7 +302,7 @@ def provision_issues(
         # subtask number is below: it could be stale (e.g. the plan was
         # copied to another repo and that number now belongs to an
         # unrelated issue there), so it's trusted only after confirming it.
-        # `_PARENT_MARKER` alone isn't enough proof: it's a single constant
+        # `PARENT_MARKER` alone isn't enough proof: it's a single constant
         # shared by every EPIC this module ever creates, so it can't tell
         # this plan's own parent apart from an unrelated EPIC created for a
         # *different* plan (e.g. a colliding issue number in another
@@ -319,7 +312,7 @@ def provision_issues(
         if (
             candidate is None
             or candidate.title != parent_title
-            or _PARENT_MARKER not in candidate.body
+            or PARENT_MARKER not in candidate.body
         ):
             parent_issue_number = None
     if parent_issue_number is None:
@@ -333,7 +326,7 @@ def provision_issues(
         # same-titled issue and our own orphaned parent both exist.
         candidates = resolved_forge.find_open_issues_by_exact_title(parent_title)
         marked_candidate = next(
-            (c for c in candidates if _PARENT_MARKER in c.body), None
+            (c for c in candidates if PARENT_MARKER in c.body), None
         )
         if marked_candidate is not None:
             parent_issue_number = marked_candidate.number
