@@ -23,7 +23,7 @@ ALLOWED_L4_DEPENDENTS = {
     "provisioning": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
-    "gh": {"forge"},
+    "gh": {"forge_admin"},
     "git": {"git_cli"},
 }
 _SUBPROCESS_CALLS = frozenset({"run", "call", "Popen", "check_call", "check_output"})

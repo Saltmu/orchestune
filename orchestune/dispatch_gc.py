@@ -1,15 +1,30 @@
-"""ゾンビタスク・タイムアウトタスクのGC回収と、完了worktreeの後片付け処理。"""
+"""Active-worktree GC rule-chain orchestration.
+
+Implementation helpers are re-exported for backward-compatible imports.
+"""
 
 from __future__ import annotations
 
-import os
 import time
-from dataclasses import dataclass, replace
-from datetime import datetime
-from pathlib import Path
+from dataclasses import replace
 
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import apply_human_review_escalation
+from orchestune.dispatch_gc_completion import (
+    CompletedWorktreeDecision,
+    _active_dispatch_handle,
+    _apply_completed_worktree_outcome,
+    _call_is_complete,
+    _cloud_worktree_completion_status,
+    _decide_completed_worktree_outcome,
+    _decide_not_needed_dirty_worktree,
+    _finalize_abandoned_cloud_worktree,
+    _finalize_completed_worktree,
+    _finalize_not_needed_worktree,
+    _is_stale_closed_pr_for_active,
+    _is_worktree_complete,
+    _local_pr_completion_status,
+    _parse_github_timestamp,
+)
 from orchestune.dispatch_gc_git import (
     backup_wip_commit,
     remote_branch_commit_sha_if_ahead,
@@ -17,493 +32,46 @@ from orchestune.dispatch_gc_git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
-from orchestune.dispatch_rules import (
-    ActiveWorktreeRuleOutcome,
-    CycleContext,
-    NotNeededReviewDispatcher,
+from orchestune.dispatch_gc_zombies import (
+    ZombieOrTimeoutReclaim,
+    _apply_zombie_or_timeout_reclaim,
+    _check_zombie_and_timeout,
+    _collect_zombies_and_timeouts,
+    _decide_zombie_or_timeout_reclaims,
 )
+from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
-from orchestune.dispatch_targets import (
-    ClaudeCodeCloudRoutineDispatchTarget,
-    DispatchHandle,
-)
-from orchestune.git_cli import run_git
 from orchestune.models import PrRecord
 from orchestune.process_utils import is_process_alive
 
-
-@dataclass
-class CompletedWorktreeDecision:
-    action: str
-    subtask_id: str = ""
-    commit_sha: str | None = None
-
-
-def _decide_completed_worktree_outcome(
-    active: ActiveWorktree,
-    active_task: Task | None,
-    repository_root: str | Path | None = None,
-) -> CompletedWorktreeDecision:
-    """#193/#74: プロセス終了を検知したactive worktreeへの対応方針を、副作用なし
-    （worktree削除・githubラベル変更を行わない）で判定する。"""
-    subtask_id = active_task.subtask_id if active_task else ""
-
-    if worktree_has_uncommitted_changes(active.worktree_path):
-        # 未コミットの変更が残っている場合は、削除・ラベル遷移を行わず人間の
-        # 確認を待つ（安全側に倒し、作業内容の消失を防ぐ）。
-        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
-
-    if active.external_id is not None:
-        repository_root = repository_root or Path(active.worktree_path).parent
-        commit_sha = remote_branch_commit_sha_if_ahead(
-            repository_root, active.branch, active.base_branch
-        )
-        has_new_commits = commit_sha is not None
-    else:
-        has_new_commits = worktree_has_new_commits(
-            active.worktree_path, active.base_branch
-        )
-        commit_sha = None
-
-    if not has_new_commits:
-        # #74: プロセスは終了しworktreeもcleanだが、base_branchに対して新規コミットが
-        # 1件も無い＝権限拒否等で実際には何も実装されず終了したと考えられる。
-        # ここでstatus:doneを付与すると、依存先タスクが同一サイクル内で実体のない
-        # 完了を根拠に誤ってstatus:queuedへ昇格してしまうため、completed扱いにしない。
-        return CompletedWorktreeDecision(
-            action="completed_no_commits", subtask_id=subtask_id
-        )
-
-    return CompletedWorktreeDecision(
-        action="completed", subtask_id=subtask_id, commit_sha=commit_sha
-    )
-
-
-def _apply_completed_worktree_outcome(
-    active: ActiveWorktree,
-    decision: CompletedWorktreeDecision,
-    config: DispatcherConfig,
-) -> dict:
-    """decide層が判定した方針に基づき、worktree撤去・githubラベル/コメント更新を行う。"""
-    event: dict = {
-        "issue_number": active.issue_number,
-        "worktree_path": active.worktree_path,
-        "action": decision.action,
-    }
-
-    if decision.action == "completion_skipped_dirty_worktree":
-        return event
-
-    if decision.action == "completed_no_commits":
-        if config.apply:
-            remove_worktree(active.worktree_path)
-            apply_human_review_escalation(
-                active.issue_number,
-                ("status:in-progress",),
-                "エージェントプロセスの終了を検知しましたが、ベースブランチ"
-                f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
-                "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
-                "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
-                "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
-                forge=config.resolved_forge,
-            )
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = None
-        return event
-
-    # decision.action == "completed"
-    commit_sha = decision.commit_sha
-    if config.apply:
-        if active.external_id is None:
-            try:
-                res = run_git(
-                    ["rev-parse", "HEAD"], cwd=active.worktree_path, check=True
-                )
-                commit_sha = res.stdout.strip()
-            except Exception:
-                pass
-
-        remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(active.issue_number, "status:done")
-
-    event["subtask_id"] = decision.subtask_id
-    event["commit_sha"] = commit_sha
-    return event
-
-
-def _finalize_completed_worktree(
-    active: ActiveWorktree,
-    active_task: Task | None,
-    config: DispatcherConfig,
-) -> dict:
-    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    decision = _decide_completed_worktree_outcome(
-        active, active_task, config.worktree_root.parent
-    )
-    return _apply_completed_worktree_outcome(active, decision, config)
-
-
-def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
-    """worktreeに未コミットの変更が残っているか（副作用なし）を判定する。"""
-    return worktree_has_uncommitted_changes(active.worktree_path)
-
-
-def _finalize_not_needed_worktree(
-    active: ActiveWorktree,
-    active_task: Task | None,
-    config: DispatcherConfig,
-    dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
-) -> dict:
-    """#280/#282: `status:not-needed`ラベル検知による完了後処理。
-
-    セッションが「既に要件を満たしており対応不要」と判断した場合、コミット・PRを
-    作らないためclosingIssuesReferences等の完了シグナルが一切発生せず、
-    `_finalize_completed_worktree`の通常経路では永遠に完了検知されない。
-    このラベルを検知した時点で即座に完了とみなし、worktree撤去・quota解放を行う。
-
-    クラウドルーチンが利用可能な場合（#282）は、誤った対応不要判定で本来必要な
-    作業が埋もれるリスクを避けるため、即座にクローズせず独立した検証レビューを
-    fireし、その判定結果をポーリングして後続サイクルでクローズする
-    （`process_pending_not_needed_reviews`が担う）。クラウドルーチン未設定
-    （ローカル/テスト環境）では検証レビューを起動できないため、従来通り
-    即座にクローズする。
-    """
-    event: dict = {
-        "issue_number": active.issue_number,
-        "worktree_path": active.worktree_path,
-    }
-
-    # decide: dirty worktreeかどうかの判定は副作用を持たない。
-    if _decide_not_needed_dirty_worktree(active):
-        event["action"] = "completion_skipped_dirty_worktree"
-        return event
-
-    subtask_id = active_task.subtask_id if active_task else ""
-
-    # 以降はact: worktree撤去・githubラベル/クローズ・検証レビューの起動を行う。
-    if config.apply:
-        remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-
-        if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
-            if dispatch_not_needed_review is None:
-                raise RuntimeError("not-needed review dispatcher is not configured")
-            dispatch_not_needed_review(active.issue_number, subtask_id, config)
-            event["action"] = "not_needed_review_dispatched"
-        else:
-            config.resolved_forge.close_issue(
-                active.issue_number,
-                "not planned",
-                comment=(
-                    "対応不要（status:not-needed）と判定されたため、"
-                    "Orchestuneが自動的にクローズしました。"
-                ),
-            )
-            event["action"] = "not_needed"
-    else:
-        event["action"] = "not_needed"
-
-    event["subtask_id"] = subtask_id
-    return event
-
-
-def _check_zombie_and_timeout(
-    active: ActiveWorktree,
-    zombie_enabled: bool,
-    timeout_limit: int,
-    now: float,
-) -> tuple[bool, bool, bool]:
-    """(is_zombie, is_timeout, process_alive) を判定して返す。"""
-    is_zombie = False
-    is_timeout = False
-    process_alive = is_process_alive(active.pid)
-
-    if zombie_enabled:
-        if not process_alive:
-            if os.path.exists(
-                active.worktree_path
-            ) and worktree_has_uncommitted_changes(active.worktree_path):
-                is_zombie = True
-
-    if not is_zombie and active.started_at is not None:
-        if timeout_limit > 0 and now - active.started_at > timeout_limit:
-            is_timeout = True
-
-    return is_zombie, is_timeout, process_alive
-
-
-@dataclass
-class ZombieOrTimeoutReclaim:
-    key: str
-    active: ActiveWorktree
-    subtask_id: str
-    reason: str
-    is_timeout: bool
-    process_alive: bool
-
-
-def _decide_zombie_or_timeout_reclaims(
-    run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-    held_worktree_paths: set[str] | None,
-    now: float,
-) -> list[ZombieOrTimeoutReclaim]:
-    """#233: ゾンビプロセス・タイムアウトの回収対象を、副作用なし
-    （worktree削除・githubラベル変更・os.kill・run_state変更を行わない）で判定する。
-
-    同一サイクルの完了判定でdirty worktreeの人間確認待ちが選ばれた場合、
-    その判定を優先し、該当worktreeは回収しない。
-    """
-    zombie_enabled = getattr(config, "zombie_gc", True)
-    timeout_limit = getattr(config, "task_timeout_seconds", 0)
-    held_worktree_paths = held_worktree_paths or set()
-
-    if not zombie_enabled and timeout_limit <= 0:
-        return []
-
-    reclaims: list[ZombieOrTimeoutReclaim] = []
-    for key, active in run_state.active_worktrees.items():
-        if active.worktree_path in held_worktree_paths:
-            continue
-
-        is_zombie, is_timeout, process_alive = _check_zombie_and_timeout(
-            active, zombie_enabled, timeout_limit, now
-        )
-        if not (is_zombie or is_timeout):
-            continue
-
-        active_task = tasks_by_issue.get(active.issue_number)
-        reclaims.append(
-            ZombieOrTimeoutReclaim(
-                key=key,
-                active=active,
-                subtask_id=active_task.subtask_id if active_task else "",
-                reason="process disappeared" if is_zombie else "timeout exceeded",
-                is_timeout=is_timeout,
-                process_alive=process_alive,
-            )
-        )
-
-    return reclaims
-
-
-def _apply_zombie_or_timeout_reclaim(
-    run_state: RunState,
-    reclaim: ZombieOrTimeoutReclaim,
-    config: DispatcherConfig,
-) -> dict | None:
-    """decide層が判定した回収対象に基づき、WIPバックアップ・プロセスkill・
-    worktree撤去・githubラベル/コメント更新・run_state更新を行う。
-
-    worktreeの存在確認は、decide時点のスナップショットを信用せず、副作用を
-    実行する直前にこの関数内で再評価する。全回収対象の判定（decide）を先に
-    まとめて行ってから1件ずつapplyする都合上、decideからこの関数の実行までの
-    間にworktreeの状態（削除・再作成）が変化し得るため、古いスナップショットを
-    そのまま使うとバックアップ・削除・orphan worktree残存に関する安全策を
-    迂回しかねない。
-
-    WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
-    消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
-    （run_stateは変更せず、次サイクルでの再試行に委ねる）。
-    """
-    active = reclaim.active
-    reason = reclaim.reason
-
-    if config.apply:
-        worktree_exists = os.path.exists(active.worktree_path)
-
-        if worktree_exists:
-            backup_error = backup_wip_commit(
-                active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
-            )
-            if backup_error is not None:
-                config.resolved_forge.add_comment(
-                    active.issue_number,
-                    f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
-                    f"未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
-                    f"エラー詳細:\n```\n{backup_error}\n```",
-                )
-                return None
-
-        if reclaim.is_timeout and active.pid and reclaim.process_alive:
-            try:
-                os.kill(active.pid, 9)
-            except Exception:
-                pass
-
-        if worktree_exists:
-            remove_worktree(active.worktree_path)
-
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(active.issue_number, "status:queued")
-        worktree_note = (
-            "作業ブランチにWIPコミットを退避した上で、"
-            if worktree_exists
-            else "物理worktreeが見つからなかったため、"
-        )
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            f"タスク実行が {reason} のため、GCにより{worktree_note}"
-            "タスクを再キューイング（status:queued）しました。",
-        )
-
-        del run_state.active_worktrees[reclaim.key]
-
-    return {
-        "issue_number": active.issue_number,
-        "subtask_id": reclaim.subtask_id,
-        "action": "gc_reclaimed",
-        "reason": reason,
-    }
-
-
-def _collect_zombies_and_timeouts(
-    run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-    held_worktree_paths: set[str] | None = None,
-) -> list[dict]:
-    """#233: decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    now = time.time()
-    reclaims = _decide_zombie_or_timeout_reclaims(
-        run_state, tasks_by_issue, config, held_worktree_paths, now
-    )
-    events: list[dict] = []
-    for reclaim in reclaims:
-        event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
-        if event is not None:
-            events.append(event)
-    return events
-
-
-def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
-    return DispatchHandle(
-        pid=active.pid,
-        external_id=active.external_id,
-        external_url=active.external_url,
-        branch_name=active.branch,
-        issue_number=active.issue_number,
-        started_at=active.started_at,
-    )
-
-
-def _parse_github_timestamp(value: str) -> float | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def _is_stale_closed_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
-    if pr.state != "CLOSED" or active.started_at is None:
-        return False
-    closed_at = _parse_github_timestamp(pr.closed_at)
-    return closed_at is not None and closed_at < active.started_at
-
-
-def _local_pr_completion_status(
-    active: ActiveWorktree, config: DispatcherConfig
-) -> str:
-    handle = _active_dispatch_handle(active)
-    # `ctx.prs` is typically populated from open PRs for lock/CI scans.  Abandoned
-    # detection must also see closed-unmerged PRs, so query all PR states here.
-    try:
-        candidate_prs = config.resolved_forge.list_prs(state="all")
-    except Exception:
-        return "unknown"
-    matching_prs = [
-        pr
-        for pr in candidate_prs
-        if (
-            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
-            or (
-                handle.issue_number is not None
-                and handle.issue_number in pr.closes_issue_numbers
-            )
-        )
-        and not _is_stale_closed_pr_for_active(pr, active)
-    ]
-    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
-        return "completed"
-    if any(pr.state == "CLOSED" for pr in matching_prs):
-        return "abandoned"
-    return "pending"
-
-
-def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
-    """#315レビュー対応: `is_complete`の旧シグネチャ（`forge`引数なし）を実装した
-    dispatch_targetでもTypeErrorにせず引数無しで再試行して互換性を保つ。"""
-    assert config.dispatch_target is not None
-    try:
-        return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
-    except TypeError:
-        return config.dispatch_target.is_complete(handle)
-
-
-def _cloud_worktree_completion_status(
-    active: ActiveWorktree, config: DispatcherConfig
-) -> str:
-    assert config.dispatch_target is not None
-    handle = _active_dispatch_handle(active)
-    try:
-        status = config.dispatch_target.completion_status(
-            handle, forge=config.resolved_forge
-        )
-    except Exception:
-        return "unknown"
-    if isinstance(status, str):
-        return status
-    return "completed" if _call_is_complete(config, handle) else "pending"
-
-
-def _finalize_abandoned_cloud_worktree(
-    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
-) -> dict:
-    """Requeue a task whose PR was closed without merge, without marking it done."""
-    event = {
-        "issue_number": active.issue_number,
-        "subtask_id": active_task.subtask_id if active_task else "",
-        "worktree_path": active.worktree_path,
-    }
-    if worktree_has_uncommitted_changes(active.worktree_path):
-        event["action"] = "completion_skipped_dirty_worktree"
-        return event
-    if config.apply:
-        remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(active.issue_number, "status:queued")
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
-            "GCによりタスクを再キューイング（status:queued）しました。",
-        )
-    event["action"] = "abandoned_pr_requeued"
-    return event
-
-
-def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
-    """#215: `external_id`が設定されている（ローカルpid以外でディスパッチされた）
-    active worktreeは、設定されたdispatch_targetの`is_complete`に完了判定を委譲する。
-    それ以外（従来通りのローカルsubprocess起動）は`is_process_alive`ベースのまま。"""
-    if active.external_id is not None:
-        assert config.dispatch_target is not None
-        handle = _active_dispatch_handle(active)
-        status = config.dispatch_target.completion_status(
-            handle, forge=config.resolved_forge
-        )
-        if isinstance(status, str):
-            return status == "completed"
-        return _call_is_complete(config, handle)
-    # #198: run_stateを自己修復したローカルTaskはPIDも開始時刻も復元できない。
-    # PIDがないことを完了シグナルと誤認せず、次の整合イベントまで追跡を保留する。
-    if active.started_at is None:
-        return False
-    return not is_process_alive(active.pid)
+__all__ = [
+    "CompletedWorktreeDecision",
+    "ZombieOrTimeoutReclaim",
+    "_active_dispatch_handle",
+    "_apply_completed_worktree_outcome",
+    "_apply_zombie_or_timeout_reclaim",
+    "_call_is_complete",
+    "_check_zombie_and_timeout",
+    "_cloud_worktree_completion_status",
+    "_collect_zombies_and_timeouts",
+    "_decide_completed_worktree_outcome",
+    "_decide_not_needed_dirty_worktree",
+    "_decide_zombie_or_timeout_reclaims",
+    "_finalize_abandoned_cloud_worktree",
+    "_finalize_completed_worktree",
+    "_finalize_not_needed_worktree",
+    "_is_stale_closed_pr_for_active",
+    "_is_worktree_complete",
+    "_local_pr_completion_status",
+    "_parse_github_timestamp",
+    "backup_wip_commit",
+    "is_process_alive",
+    "remote_branch_commit_sha_if_ahead",
+    "remove_worktree",
+    "worktree_has_new_commits",
+    "worktree_has_uncommitted_changes",
+]
 
 
 def _rule_not_needed(
@@ -518,23 +86,15 @@ def _rule_not_needed(
     """
     if active_task is None or "status:not-needed" not in active_task.status_labels:
         return None
-
     completion_event = _finalize_not_needed_worktree(
-        active,
-        active_task,
-        ctx.config,
-        ctx.not_needed_review_dispatcher,
+        active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
     completed_subtask_id = None
-    # #282: 即時クローズ・検証レビューへの委譲のどちらの経路でも、対応不要の
-    # 根拠自体は「mainに既に実装されている」ことなので、Issueクローズの可否とは
-    # 独立に依存関係は解決済みとして扱ってよい。
     if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
         if active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
-
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         completed_subtask_id=completed_subtask_id,
@@ -545,8 +105,7 @@ def _rule_not_needed(
 def _decide_stale_active_entry(
     active: ActiveWorktree, active_task: Task | None
 ) -> dict | None:
-    """githubラベルを正として、run_state側に残った古い帳簿エントリ（stale)かを
-    副作用なしで判定する。staleであればイベントdictを返す。"""
+    """GitHubラベルを正として、run_state側のstaleエントリを判定する。"""
     if (
         active_task is not None
         and "status:in-progress" not in active_task.status_labels
@@ -602,10 +161,8 @@ def _abandoned_worktree_outcome(
 
 
 def _find_recovery_pr(
-    active: ActiveWorktree,
-    config: DispatcherConfig,
+    active: ActiveWorktree, config: DispatcherConfig
 ) -> PrRecord | None:
-    """Find a current task PR across all states; None means retry next cycle."""
     try:
         all_prs = config.resolved_forge.list_prs(state="all")
     except Exception:
@@ -624,9 +181,6 @@ def _rule_completed(
 ) -> ActiveWorktreeRuleOutcome | None:
     completion_active = active
     if active.started_at is None and active.external_id is None:
-        # #198: 自己修復したローカルTaskはPIDを復元できないため、PID消失を
-        # 完了シグナルにできない。後続サイクルで当該IssueをcloseするPRを検出
-        # した場合だけ、そのリモートブランチを検証して完了判定へ進める。
         recovery_pr = _find_recovery_pr(active, ctx.config)
         if recovery_pr is None:
             return None
@@ -657,7 +211,6 @@ def _rule_completed(
         completion_active, active_task, ctx.config
     )
     action = completion_event["action"]
-
     if action == "completed":
         completed_subtask_id = None
         if active_task is not None and active_task.subtask_id:
@@ -682,19 +235,10 @@ def _rule_completed(
             completed_subtask_id=completed_subtask_id,
             terminal=True,
         )
-
     if action == "completed_no_commits":
-        # #74: 実コミットの無い完了は依存解決の対象にしない
-        # (completed_subtask_idsに加えない)が、worktree・ラベルは
-        # dispatch_gc側で既に片付け済みのため、クオータ解放のために
-        # run_state側のエントリは削除する。
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
         return ActiveWorktreeRuleOutcome(
             completion_event=completion_event, terminal=True
         )
-
-    # action == "completion_skipped_dirty_worktree": イベントは記録するが、
-    # このactive worktreeへの他の判定（CHANGES_REQUESTED/自動リベース/
-    # footprint逸脱）は継続せずに人間が変更を確認するまで待つため、terminalにする。
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)

@@ -189,9 +189,9 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 | 層 | モジュール |
 | --- | --- |
 | **L4** エントリポイント — `main()` を持つモジュール | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor`, `provisioning` |
-| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `parent_completion` |
-| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_git`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
-| **L1** アダプタ — `git` / `gh` を実行する唯一のモジュール群 | `forge`, `git_cli` |
+| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
+| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
+| **L1** アダプタ — `git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge_admin`, `forge_issues`, `forge_prs`, `git_cli` |
 | **L0** インフラ — 純粋なDTOと依存を持たないヘルパ | `dag_models`, `dispatch_result`, `json_state`, `models`, `plan_writer`, `process_utils`, `setup_skills`, `validation`, `version` |
 
 純粋なデータ転送モジュール（`models`, `dag_models`, `dispatch_result`）を
@@ -222,7 +222,7 @@ L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」
 
    | コマンド | 実行を許可されるモジュール |
    | --- | --- |
-   | `gh` | `forge` |
+   | `gh` | `forge_admin` |
    | `git` | `git_cli` |
 
    対象はVCS・GitHubクライアントの表面のみです。それ以外の外部プロセス起動は
