@@ -1,0 +1,276 @@
+"""Completion and abandonment handling for dispatcher worktrees."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_escalation import apply_human_review_escalation
+from orchestune.dispatch_gc_git import (
+    remote_branch_commit_sha_if_ahead,
+    remove_worktree,
+    worktree_has_new_commits,
+    worktree_has_uncommitted_changes,
+)
+from orchestune.dispatch_rules import NotNeededReviewDispatcher
+from orchestune.dispatch_scoring import Task
+from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_targets import (
+    ClaudeCodeCloudRoutineDispatchTarget,
+    DispatchHandle,
+)
+from orchestune.git_cli import run_git
+from orchestune.models import PrRecord
+from orchestune.process_utils import is_process_alive
+
+
+@dataclass
+class CompletedWorktreeDecision:
+    action: str
+    subtask_id: str = ""
+    commit_sha: str | None = None
+
+
+def _decide_completed_worktree_outcome(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    repository_root: str | Path | None = None,
+) -> CompletedWorktreeDecision:
+    subtask_id = active_task.subtask_id if active_task else ""
+    if worktree_has_uncommitted_changes(active.worktree_path):
+        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+    if active.external_id is not None:
+        repository_root = repository_root or Path(active.worktree_path).parent
+        commit_sha = remote_branch_commit_sha_if_ahead(
+            repository_root, active.branch, active.base_branch
+        )
+        has_new_commits = commit_sha is not None
+    else:
+        has_new_commits = worktree_has_new_commits(
+            active.worktree_path, active.base_branch
+        )
+        commit_sha = None
+    if not has_new_commits:
+        return CompletedWorktreeDecision(
+            action="completed_no_commits", subtask_id=subtask_id
+        )
+    return CompletedWorktreeDecision(
+        action="completed", subtask_id=subtask_id, commit_sha=commit_sha
+    )
+
+
+def _apply_completed_worktree_outcome(
+    active: ActiveWorktree,
+    decision: CompletedWorktreeDecision,
+    config: DispatcherConfig,
+) -> dict:
+    event: dict = {
+        "issue_number": active.issue_number,
+        "worktree_path": active.worktree_path,
+        "action": decision.action,
+    }
+    if decision.action == "completion_skipped_dirty_worktree":
+        return event
+    if decision.action == "completed_no_commits":
+        if config.apply:
+            remove_worktree(active.worktree_path)
+            apply_human_review_escalation(
+                active.issue_number,
+                ("status:in-progress",),
+                "エージェントプロセスの終了を検知しましたが、ベースブランチ"
+                f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
+                "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
+                "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
+                "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
+                forge=config.resolved_forge,
+            )
+        event["subtask_id"] = decision.subtask_id
+        event["commit_sha"] = None
+        return event
+    commit_sha = decision.commit_sha
+    if config.apply:
+        if active.external_id is None:
+            try:
+                commit_sha = run_git(
+                    ["rev-parse", "HEAD"], cwd=active.worktree_path, check=True
+                ).stdout.strip()
+            except Exception:
+                pass
+        remove_worktree(active.worktree_path)
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(active.issue_number, "status:done")
+    event["subtask_id"] = decision.subtask_id
+    event["commit_sha"] = commit_sha
+    return event
+
+
+def _finalize_completed_worktree(
+    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
+) -> dict:
+    decision = _decide_completed_worktree_outcome(
+        active, active_task, config.worktree_root.parent
+    )
+    return _apply_completed_worktree_outcome(active, decision, config)
+
+
+def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
+    return worktree_has_uncommitted_changes(active.worktree_path)
+
+
+def _finalize_not_needed_worktree(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+    dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
+) -> dict:
+    event: dict = {
+        "issue_number": active.issue_number,
+        "worktree_path": active.worktree_path,
+    }
+    if _decide_not_needed_dirty_worktree(active):
+        event["action"] = "completion_skipped_dirty_worktree"
+        return event
+    subtask_id = active_task.subtask_id if active_task else ""
+    if config.apply:
+        remove_worktree(active.worktree_path)
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
+            if dispatch_not_needed_review is None:
+                raise RuntimeError("not-needed review dispatcher is not configured")
+            dispatch_not_needed_review(active.issue_number, subtask_id, config)
+            event["action"] = "not_needed_review_dispatched"
+        else:
+            config.resolved_forge.close_issue(
+                active.issue_number,
+                "not planned",
+                comment=(
+                    "対応不要（status:not-needed）と判定されたため、"
+                    "Orchestuneが自動的にクローズしました。"
+                ),
+            )
+            event["action"] = "not_needed"
+    else:
+        event["action"] = "not_needed"
+    event["subtask_id"] = subtask_id
+    return event
+
+
+def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
+    return DispatchHandle(
+        pid=active.pid,
+        external_id=active.external_id,
+        external_url=active.external_url,
+        branch_name=active.branch,
+        issue_number=active.issue_number,
+        started_at=active.started_at,
+    )
+
+
+def _parse_github_timestamp(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _is_stale_closed_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
+    if pr.state != "CLOSED" or active.started_at is None:
+        return False
+    closed_at = _parse_github_timestamp(pr.closed_at)
+    return closed_at is not None and closed_at < active.started_at
+
+
+def _local_pr_completion_status(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> str:
+    handle = _active_dispatch_handle(active)
+    try:
+        candidate_prs = config.resolved_forge.list_prs(state="all")
+    except Exception:
+        return "unknown"
+    matching_prs = [
+        pr
+        for pr in candidate_prs
+        if (
+            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
+            or (
+                handle.issue_number is not None
+                and handle.issue_number in pr.closes_issue_numbers
+            )
+        )
+        and not _is_stale_closed_pr_for_active(pr, active)
+    ]
+    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
+        return "completed"
+    if any(pr.state == "CLOSED" for pr in matching_prs):
+        return "abandoned"
+    return "pending"
+
+
+def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
+    """#315レビュー対応: 旧is_completeシグネチャとの互換性を保つ。"""
+    assert config.dispatch_target is not None
+    try:
+        return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
+    except TypeError:
+        # `forge`引数なしの旧dispatch_target実装は、引数なしで再試行する。
+        return config.dispatch_target.is_complete(handle)
+
+
+def _cloud_worktree_completion_status(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> str:
+    assert config.dispatch_target is not None
+    handle = _active_dispatch_handle(active)
+    try:
+        status = config.dispatch_target.completion_status(
+            handle, forge=config.resolved_forge
+        )
+    except Exception:
+        return "unknown"
+    if isinstance(status, str):
+        return status
+    return "completed" if _call_is_complete(config, handle) else "pending"
+
+
+def _finalize_abandoned_cloud_worktree(
+    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
+) -> dict:
+    event = {
+        "issue_number": active.issue_number,
+        "subtask_id": active_task.subtask_id if active_task else "",
+        "worktree_path": active.worktree_path,
+    }
+    if worktree_has_uncommitted_changes(active.worktree_path):
+        event["action"] = "completion_skipped_dirty_worktree"
+        return event
+    if config.apply:
+        remove_worktree(active.worktree_path)
+        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.add_label(active.issue_number, "status:queued")
+        config.resolved_forge.add_comment(
+            active.issue_number,
+            "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
+            "GCによりタスクを再キューイング（status:queued）しました。",
+        )
+    event["action"] = "abandoned_pr_requeued"
+    return event
+
+
+def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    if active.external_id is not None:
+        assert config.dispatch_target is not None
+        handle = _active_dispatch_handle(active)
+        status = config.dispatch_target.completion_status(
+            handle, forge=config.resolved_forge
+        )
+        if isinstance(status, str):
+            return status == "completed"
+        return _call_is_complete(config, handle)
+    if active.started_at is None:
+        return False
+    return not is_process_alive(active.pid)

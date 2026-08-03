@@ -2,6 +2,7 @@ import json
 import subprocess
 import tempfile
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
@@ -39,6 +40,20 @@ from orchestune.dispatch_state import (
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord
 from tests.conftest import make_issue
+
+
+@contextmanager
+def _patch_gc_process_alive(*, return_value: bool):
+    """Patch every consumer split from the former dispatch_gc dependency."""
+    with ExitStack() as stack:
+        for target in (
+            "orchestune.dispatch_gc.is_process_alive",
+            "orchestune.dispatch_gc_completion.is_process_alive",
+            "orchestune.dispatch_gc_zombies.is_process_alive",
+        ):
+            stack.enter_context(patch(target, return_value=return_value))
+        yield
+
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -681,10 +696,7 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=False,
             ),
-            patch(
-                "orchestune.dispatch_gc.is_process_alive",
-                return_value=True,
-            ),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase._decide_rebase_needed",
                 return_value=False,
@@ -798,9 +810,9 @@ class TestProcessActiveWorktrees:
             patch("orchestune.dispatch_cycle._self_heal_run_state"),
             patch("orchestune.dispatch_cycle._build_cycle_context", return_value=ctx),
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             # Completion now also consults the all-state PR list to rule out
@@ -906,10 +918,7 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=False,
             ),
-            patch(
-                "orchestune.dispatch_gc.is_process_alive",
-                return_value=True,
-            ),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase._decide_rebase_needed",
                 return_value=True,
@@ -1006,10 +1015,7 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch_gc._is_worktree_complete",
                 return_value=False,
             ),
-            patch(
-                "orchestune.dispatch_gc.is_process_alive",
-                return_value=True,
-            ),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase._decide_rebase_needed",
                 return_value=False,
@@ -1586,7 +1592,7 @@ class TestRunDispatchCycle:
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -1821,7 +1827,7 @@ class TestRunDispatchCycleBranchNormalization:
                 "orchestune.dispatch_cycle.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
@@ -1970,7 +1976,7 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.dispatch_targets.subprocess.Popen"),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
@@ -2040,7 +2046,7 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
@@ -2126,7 +2132,7 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_cycle._launch_selected_tasks",
                 side_effect=_launch_stub,
@@ -2219,7 +2225,7 @@ class TestRunDispatchCycleFootprintRecompute:
             ),
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_cycle._launch_selected_tasks",
                 side_effect=_launch_stub,
@@ -2275,7 +2281,7 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
@@ -2342,16 +2348,18 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -2404,18 +2412,18 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=False,
             ) as mock_local_commits,
             patch(
-                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                "orchestune.dispatch_gc_completion.remote_branch_commit_sha_if_ahead",
                 return_value="remote-commit",
             ) as mock_remote_commits,
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -2449,17 +2457,17 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                "orchestune.dispatch_gc_completion.remote_branch_commit_sha_if_ahead",
                 return_value=None,
             ),
             patch(
-                "orchestune.dispatch_gc.apply_human_review_escalation"
+                "orchestune.dispatch_gc_completion.apply_human_review_escalation"
             ) as mock_escalate,
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -2488,12 +2496,14 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
@@ -2529,16 +2539,18 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -2581,16 +2593,18 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue]
@@ -2632,16 +2646,16 @@ class TestRunDispatchCycleCompletion:
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
         ):
@@ -2721,12 +2735,14 @@ class TestRunDispatchCycleNotNeeded:
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
             # プロセスは生きたまま・PRも存在しない、という「対応不要」の典型状態
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [not_needed_issue] if label == "status:not-needed" else []
@@ -2763,12 +2779,14 @@ class TestRunDispatchCycleNotNeeded:
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove_worktree,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [not_needed_issue] if label == "status:not-needed" else []
@@ -2965,16 +2983,16 @@ class TestRunDispatchCycleBlockedPromotion:
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            _patch_gc_process_alive(return_value=False),
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.worktree_has_new_commits",
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
         ):
 
             def _list(label, **_):

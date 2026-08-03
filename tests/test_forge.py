@@ -20,6 +20,9 @@ from orchestune.forge import (
     PullRequestForge,
     RepoAdminForge,
 )
+from orchestune.forge_admin import GitHubRepoAdminMixin
+from orchestune.forge_issues import GitHubIssueMixin
+from orchestune.forge_prs import GitHubPullRequestMixin
 from orchestune.models import IssueRecord
 from orchestune.validation import validate_label as _validate_label
 
@@ -286,6 +289,16 @@ class TestBootstrapResult:
 
 
 class TestForgeProtocols:
+    def test_github_forge_composes_focused_implementation_mixins(self):
+        assert issubclass(GitHubForge, GitHubIssueMixin)
+        assert issubclass(GitHubForge, GitHubPullRequestMixin)
+        assert issubclass(GitHubForge, GitHubRepoAdminMixin)
+
+    def test_legacy_facade_resolves_to_extracted_implementations(self):
+        assert GitHubForge.list_issues_by_label is GitHubIssueMixin.list_issues_by_label
+        assert GitHubForge.list_prs is GitHubPullRequestMixin.list_prs
+        assert GitHubForge.ensure_labels is GitHubRepoAdminMixin.ensure_labels
+
     def test_github_forge_implements_each_focused_protocol(self):
         forge = GitHubForge()
 
@@ -326,7 +339,7 @@ class TestForgeProtocols:
             )
         ]
 
-    def test_gh_command_literals_exist_only_in_forge_module(self):
+    def test_gh_command_literals_exist_only_in_focused_forge_modules(self):
         package_root = Path(__file__).parents[1] / "orchestune"
         modules_with_gh_commands: set[str] = set()
 
@@ -339,4 +352,8 @@ class TestForgeProtocols:
                 if isinstance(command, ast.Constant) and command.value == "gh":
                     modules_with_gh_commands.add(path.name)
 
-        assert modules_with_gh_commands == {"forge.py"}
+        assert modules_with_gh_commands == {
+            "forge_admin.py",
+            "forge_issues.py",
+            "forge_prs.py",
+        }

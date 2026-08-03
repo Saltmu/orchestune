@@ -235,14 +235,14 @@ class TestRecoveredActiveTask:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
-                "orchestune.dispatch_gc.worktree_has_uncommitted_changes",
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc.remote_branch_commit_sha_if_ahead",
+                "orchestune.dispatch_gc_completion.remote_branch_commit_sha_if_ahead",
                 return_value="recovered-commit",
             ),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:in-progress" else []
