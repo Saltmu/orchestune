@@ -66,6 +66,31 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ()
 
+    def test_renamed_class_qualified_symbol_is_not_matched_via_unrelated_leaf(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372: `NewParser.parse`のようなクラス修飾シンボルを、
+        無関係な`OldParser.parse`が持つ裸のメソッド名`parse`だけで
+        「見つかった」ことにしてはならない。メソッド名はクラスをまたいで
+        重複しうるため、修飾シンボルは完全一致でのみ検出されるべき。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "class OldParser:\n    def parse(self):\n        pass\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("NewParser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("NewParser.parse",)
+
+    def test_module_qualified_class_symbol_still_matches_via_leaf(self, tmp_path):
+        """クラス名自体を指す修飾シンボル（`pkg.Foo`のような表記）は、
+        クラス名がメソッド名のように重複しうる曖昧さを持たないため、
+        引き続き末尾セグメントでの緩い一致を許容する。"""
+        _write(tmp_path, "pkg/mod.py", "class Foo:\n    pass\n")
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.Foo",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
     def test_bare_method_name_found_without_class_qualification(self, tmp_path):
         _write(
             tmp_path,
