@@ -21,7 +21,10 @@ import yaml
 
 from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
-from orchestune.dag_parsing import extract_frontmatter, parse_decomposition_plan
+from orchestune.dag_parsing import (
+    extract_frontmatter_and_body,
+    parse_decomposition_plan,
+)
 from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, PARENT_MARKER
 from orchestune.plan_writer import write_issue_numbers
@@ -48,6 +51,7 @@ _PLACEHOLDER_PATTERN = re.compile(
 class PlanMetadata:
     title: str
     parent_issue_number: int | None
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,7 +74,8 @@ class ProvisionResult:
 
 def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
     subtasks = parse_decomposition_plan(path)
-    raw = extract_frontmatter(Path(path).read_text(encoding="utf-8"))
+    text = Path(path).read_text(encoding="utf-8")
+    raw, description = extract_frontmatter_and_body(text)
 
     issue_numbers: dict[str, int] = {}
     for entry in raw.get("subtasks") or []:
@@ -93,9 +98,11 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
         if raw_parent is None or raw_parent == ""
         else validate_issue_number(raw_parent)
     )
+
     metadata = PlanMetadata(
         title=str(raw.get("title") or "").strip(),
         parent_issue_number=parent_issue_number,
+        description=description,
     )
     return enriched, metadata
 
@@ -117,11 +124,15 @@ def _issue_title(subtask: SubTask) -> str:
     return f"[FEAT] {subtask.id}: {subtask.description}"
 
 
-def _parent_body(title: str) -> str:
-    return (
-        f"{title}\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+def _parent_body(title: str, description: str = "") -> str:
+    body = f"{title}"
+    if description:
+        body += f"\n\n{description}"
+    body += (
+        f"\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
         f"\n\n{PARENT_MARKER}"
     )
+    return body
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
@@ -321,7 +332,7 @@ def provision_issues(
             parent_issue_number = marked_candidate.number
         else:
             parent_issue_number = resolved_forge.create_issue(
-                parent_title, _parent_body(metadata.title)
+                parent_title, _parent_body(metadata.title, metadata.description)
             )
         write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
 

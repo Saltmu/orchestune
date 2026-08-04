@@ -20,7 +20,8 @@ _RISK_PATH_PATTERNS = (
     re.compile(r"(^|/)auth", re.IGNORECASE),
 )
 _RISK_KEYWORDS = ("subprocess", "auth", "credential")
-_FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+_FRONTMATTER_PATTERN = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*\n?", re.DOTALL)
+_LEADING_BLANK_LINES_PATTERN = re.compile(r"\A(?:[ \t]*\n)+")
 _VALID_PRIORITIES = frozenset(("high", "medium", "low"))
 
 
@@ -49,7 +50,7 @@ def detect_risk_from_values(
     return bool(unique_reasons), unique_reasons
 
 
-def extract_frontmatter(text: str) -> dict[str, Any]:
+def extract_frontmatter_and_body(text: str) -> tuple[dict[str, Any], str]:
     match = _FRONTMATTER_PATTERN.match(text)
     if not match:
         raise ValueError(
@@ -58,7 +59,12 @@ def extract_frontmatter(text: str) -> dict[str, Any]:
     data = yaml.safe_load(match.group(1))
     if not isinstance(data, dict):
         raise ValueError("フロントマターの内容がマッピング形式ではありません")
-    return data
+    body = _LEADING_BLANK_LINES_PATTERN.sub("", text[match.end() :]).rstrip()
+    return data, body
+
+
+def extract_frontmatter(text: str) -> dict[str, Any]:
+    return extract_frontmatter_and_body(text)[0]
 
 
 def _parse_subtask_id(raw: dict[str, Any]) -> str:
