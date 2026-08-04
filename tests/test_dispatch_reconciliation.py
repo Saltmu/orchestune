@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dag import FootprintConflict
+from orchestune.dag_models import FootprintConflict
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_reconciliation import (
     _apply_blocked_promotions,
