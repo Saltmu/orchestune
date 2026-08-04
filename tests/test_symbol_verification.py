@@ -161,6 +161,40 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ()
 
+    def test_multi_segment_module_path_still_matches_top_level_function(self, tmp_path):
+        """レビュー指摘 #372（6巡目）: `src.db.get_connection`のように多段の
+        モジュールパスを頭に付けた記法も、直前セグメント`db`がクラス名らしい
+        命名（CapWords）でなければ、末尾1セグメントでのトップレベル関数照合を
+        許容すべき（3セグメント以上＝`Class.method`と決めつけない）。"""
+        _write(tmp_path, "src/db/connection.py", "def get_connection():\n    pass\n")
+        subtask = _subtask(
+            footprint=("src/db/connection.py",), symbols=("src.db.get_connection",)
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_capitalized_middle_segment_still_blocks_fallback(self, tmp_path):
+        """直前セグメントがクラス名らしい命名（`NewParser`）の場合は、
+        引き続き裸leafへのフォールバックを許可しない（レビュー指摘 #372の
+        5巡目の修正が6巡目でも壊れていないことの確認）。"""
+        _write(tmp_path, "pkg/mod.py", "def parse():\n    pass\n")
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.NewParser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("pkg.NewParser.parse",)
+
+    def test_function_defined_under_except_star_still_matches(self, tmp_path):
+        """レビュー指摘 #372（6巡目）: `except*`（`ast.TryStar`、例外グループ）
+        配下で定義された関数も、`try`/`except`と同様にモジュールスコープの
+        定義として扱われるべき。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "try:\n    pass\nexcept* ValueError:\n    def recover():\n        pass\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.recover",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
     def test_local_variable_inside_function_does_not_satisfy_module_qualified_symbol(
         self, tmp_path
     ):
