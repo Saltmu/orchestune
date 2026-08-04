@@ -17,7 +17,7 @@ def main() -> None:
     sys.argv = [sys.argv[0]] + sys.argv[2:]
 
     if cmd == "dag":
-        from orchestune.dag import main as dag_main
+        from orchestune.dag_cli import main as dag_main
 
         dag_main()
     elif cmd == "dispatch":

@@ -4,17 +4,21 @@ import textwrap
 
 import pytest
 
-from orchestune.dag import (
-    DagCycleError,
-    SubTask,
-    _find_candidate_pairs,
-    _otsuka_ochiai,
+from orchestune.dag_graph import (
     build_dag,
     build_dag_from_plan,
-    build_similarity_edges,
-    normalize_footprint_path,
-    parse_decomposition_plan,
     recompute_dag_for_footprint_change,
+)
+from orchestune.dag_models import DagCycleError, SubTask, normalize_footprint_path
+from orchestune.dag_parsing import parse_decomposition_plan
+from orchestune.dag_similarity import (
+    build_similarity_edges,
+)
+from orchestune.dag_similarity import (
+    find_candidate_pairs as _find_candidate_pairs,
+)
+from orchestune.dag_similarity import (
+    otsuka_ochiai as _otsuka_ochiai,
 )
 
 
@@ -687,7 +691,7 @@ class TestCycleResolution:
 def test_cli_validation_success(tmp_path, capsys):
     import sys
 
-    from orchestune.dag import main
+    from orchestune.dag_cli import main
 
     plan_content = """\
     ---
@@ -720,7 +724,7 @@ def test_cli_validation_json(tmp_path, capsys):
     import json
     import sys
 
-    from orchestune.dag import main
+    from orchestune.dag_cli import main
 
     plan_content = """\
     ---
@@ -749,7 +753,7 @@ def test_cli_validation_json(tmp_path, capsys):
 def test_cli_validation_cycle_failure(tmp_path, capsys):
     import sys
 
-    from orchestune.dag import main
+    from orchestune.dag_cli import main
 
     plan_content = """\
     ---
