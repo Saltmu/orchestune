@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from orchestune.plan_writer import write_issue_numbers
+from orchestune.plan_writer import (
+    _decode_segment_key,
+    _find_matching_brace,
+    _split_flow_top_level,
+    write_issue_numbers,
+)
 
 _PLAN = """\
 ---
@@ -522,3 +527,340 @@ class TestAtomicWrite:
         write_issue_numbers(plan_path, {"task-a": 101})
 
         assert oct(plan_path.stat().st_mode)[-3:] == "644"
+
+    def test_swallows_missing_temp_file_during_cleanup(
+        self, plan_path: Path, monkeypatch
+    ):
+        """When the write itself fails, cleanup removes the leftover temp
+        file; if that temp file is already gone by the time cleanup runs
+        (e.g. a race with an external cleaner), the resulting
+        `FileNotFoundError` must be swallowed so the *original* write
+        failure is still what propagates to the caller."""
+
+        def _failing_fsync(fd):
+            raise OSError("simulated disk failure")
+
+        def _missing_remove(path):
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr(os, "fsync", _failing_fsync)
+        monkeypatch.setattr(os, "remove", _missing_remove)
+
+        with pytest.raises(OSError, match="simulated disk failure"):
+            write_issue_numbers(plan_path, {"task-a": 101})
+
+
+class TestListItemBoundaryValues:
+    """`_iter_list_item_blocks`/`_direct_fields`の走査境界値。"""
+
+    def test_finds_item_after_a_blank_line_before_the_first_entry(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "\n"
+            "  - id: task-a\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "    issue_number: 101" in lines
+
+    def test_handles_a_bare_dash_with_mapping_starting_on_the_next_line(
+        self, tmp_path: Path
+    ):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  -\n"
+            "    id: task-a\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("    id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_bare_dash_skips_a_blank_line_before_the_first_field(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  -\n"
+            "\n"
+            "    id: task-a\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("    id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_skips_a_blank_line_between_an_items_own_fields(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            "\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert "  - id: task-a" in lines
+        id_index = lines.index("  - id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_ignores_a_same_indent_line_that_is_not_a_mapping_key(self, tmp_path: Path):
+        """A nested list value (`- urgent`) sitting at the same column as
+        this item's own `key: value` fields is not itself a `key: value`
+        line and must be skipped rather than mistaken for one."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            "    tags:\n"
+            "    - urgent\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+        assert "    - urgent" in lines
+
+
+class TestDecodedIdBoundaryValues:
+    """`_decoded_id_matches`の異常値・型不一致に対する安全なスキップ。"""
+
+    def test_skips_a_candidate_with_invalid_yaml_in_its_id_value(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - id: "unterminated\n'
+            '    description: "decoy"\n'
+            "  - id: task-b\n"
+            '    description: "real"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_skips_a_candidate_whose_id_decodes_to_a_non_string(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: 123\n"
+            '    description: "decoy"\n'
+            "  - id: task-b\n"
+            '    description: "real"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+
+class TestFlowStyleBoundaryValues:
+    def test_unbalanced_brace_falls_through_to_the_next_item(self, tmp_path: Path):
+        """A flow-style item whose `{` is never closed on its own line
+        can't be a valid flow mapping; `_write_flow_style_issue_number`
+        must decline it (rather than crash) so the search continues to the
+        next, well-formed item."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - {id: task-a\n"
+            "  - id: task-b\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_falls_through_when_flow_mapping_yaml_is_invalid(self, tmp_path: Path):
+        """A flow item whose braces balance but whose inner text is not
+        valid YAML on its own (a bare `1: 2` mapping value with no braces
+        of its own) must be declined rather than crash, falling through to
+        the next item."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - {id: task-a, x: 1: 2}\n"
+            "  - id: task-b\n"
+            '    description: "d"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_falls_through_when_flow_mapping_has_no_id_key(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            '  - {description: "decoy", issue_number: 5}\n'
+            "  - id: task-b\n"
+            '    description: "real"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+    def test_skips_a_flow_candidate_whose_id_decodes_to_a_non_string(
+        self, tmp_path: Path
+    ):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - {id: 123}\n"
+            "  - id: task-b\n"
+            '    description: "real"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-b": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-b")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+
+
+class TestFindMatchingBrace:
+    """`_find_matching_brace`の境界値: エスケープ済み引用符と閉じ括弧欠如。"""
+
+    def test_skips_an_escaped_quote_inside_a_double_quoted_value(self):
+        text = '{id: task-a, description: "a\\"b"}'
+        open_index = text.index("{")
+        close_index = _find_matching_brace(text, open_index)
+        assert close_index == len(text) - 1
+
+    def test_returns_none_when_no_closing_brace_exists(self):
+        text = "{id: task-a"
+        open_index = text.index("{")
+        assert _find_matching_brace(text, open_index) is None
+
+
+class TestDecodeSegmentKey:
+    """`_decode_segment_key`の境界値: 不正YAMLと単一キー以外の結果。"""
+
+    def test_returns_none_for_invalid_yaml(self):
+        assert _decode_segment_key(" x: [1, 2") is None
+
+    def test_returns_none_when_decoded_value_is_not_a_single_key_mapping(self):
+        # An empty segment (e.g. from a trailing comma) decodes to `{}`,
+        # a dict of length 0 rather than exactly one key.
+        assert _decode_segment_key("") is None
+
+
+class TestSplitFlowTopLevel:
+    """`_split_flow_top_level`の境界値: エスケープ済みカンマと空入力。"""
+
+    def test_keeps_an_escaped_quote_inside_a_segment_intact(self):
+        inner = 'id: task-a, description: "a\\"b"'
+        segments = _split_flow_top_level(inner)
+        assert segments == ["id: task-a", ' description: "a\\"b"']
+
+    def test_returns_no_segments_for_empty_input(self):
+        assert _split_flow_top_level("") == []
+
+
+class TestFrontmatterAndSubtasksBoundsErrors:
+    def test_missing_closing_delimiter_raises(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            '---\ntitle: "x"\nsubtasks:\n  - id: task-a\n', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="終端"):
+            write_issue_numbers(path, {"task-a": 1})
+
+    def test_subtasks_list_ends_at_a_following_top_level_key(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "d"\n'
+            "notes: done\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, {"task-a": 101})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        id_index = lines.index("  - id: task-a")
+        assert lines[id_index + 1].strip() == "issue_number: 101"
+        assert "notes: done" in lines
+
+    def test_missing_subtasks_key_raises(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text('---\ntitle: "x"\n---\n', encoding="utf-8")
+        with pytest.raises(ValueError, match="subtasks"):
+            write_issue_numbers(path, {"task-a": 1})
+
+
+class TestWriteParentIssueNumberInsertionBoundaryValues:
+    def test_inserts_at_the_top_when_no_title_line_exists(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text("---\nsubtasks:\n  - id: task-a\n---\n", encoding="utf-8")
+        write_issue_numbers(path, parent_issue_number=7)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert lines[1] == "parent_issue_number: 7"
+        assert lines[2] == "subtasks:"
+
+    def test_inserts_after_title_when_a_field_precedes_it(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            "some_other_field: value\n"
+            'title: "x"\n'
+            "subtasks:\n"
+            "  - id: task-a\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, parent_issue_number=7)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        title_index = lines.index('title: "x"')
+        assert lines[title_index + 1] == "parent_issue_number: 7"
