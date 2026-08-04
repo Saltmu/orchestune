@@ -189,7 +189,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 | 層 | モジュール |
 | --- | --- |
 | **L4** エントリポイント — `main()` を持つモジュール | `bootstrap`, `cli`, `dag_cli`, `dispatcher`, `monitor`, `provisioning` |
-| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
+| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
 | **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
 | **L1** アダプタ — `git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge_admin`, `forge_issues`, `forge_prs`, `git_cli` |
 | **L0** インフラ — 純粋なDTOと依存を持たないヘルパ | `dag_models`, `dispatch_result`, `json_state`, `models`, `plan_writer`, `process_utils`, `setup_skills`, `validation`, `version` |
@@ -202,15 +202,17 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」ことであって、
 「argparse配線しか含まない」ことではありません。`cli` が例外なのは、残り4つへ
 処理を振り分ける役割だからです（ガード側では `ALLOWED_L4_DEPENDENTS` として
-表現されています）。5つのうち2つには、この境界を
-定める前から存在するコードが残っています: `dispatcher` はオーケストレーションの
-ヘルパ、`monitor` は自前のステータススナップショット構築を抱えています。
-これは既知の残滓であり、新たに増やしてよいという意味ではありません。新規の
-コードは、その振る舞いを所有する層に置いてください。かつては`dag`も3つ目の
-残滓でした — `dag_*`パッケージ全体を再エクスポートする互換ファサードです。
-これは既に解消済みで、呼び出し側は具体的な`dag_*`モジュールを直接import
-するようになり、実際に`main()`を持つ`dag_cli`が本来のL4エントリポイント
-として扱われています。
+表現されています）。5つのうち1つには、この境界を
+定める前から存在するコードが残っています: `monitor` は自前のステータス
+スナップショット構築を抱えています。これは既知の残滓であり、新たに増やして
+よいという意味ではありません。新規のコードは、その振る舞いを所有する層に
+置いてください。かつては`dag`と`dispatcher`も残滓でした。`dag`は
+`dag_*`パッケージ全体を再エクスポートする互換ファサードでしたが、これは
+既に解消済みで、呼び出し側は具体的な`dag_*`モジュールを直接importするように
+なり、実際に`main()`を持つ`dag_cli`が本来のL4エントリポイントとして扱われて
+います。`dispatcher`はdispatch cycle後のベストエフォート後処理オーケストレー
+ションを直接抱えていましたが、これも`dispatch_postcycle`（L3）へ切り出し済み
+で、`dispatcher`には引数解析・設定読み込み・`main()`のみが残っています。
 
 ### 5.2 CIで機械的に検証される不変条件
 
