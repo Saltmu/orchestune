@@ -1,5 +1,8 @@
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 
 def test_create_skill_link_copies_on_windows_privilege_error(tmp_path):
@@ -410,8 +413,29 @@ def _make_source_and_home(tmp_path):
     return mock_home, mock_source, skills_dir
 
 
+def _create_symlink_or_skip(link_path: Path, target_path: Path) -> None:
+    """Create a directory symlink for test setup, skipping the test if the
+    host lacks the privilege to do so (e.g. Windows without Developer Mode
+    or elevation). This is the same condition `_create_skill_link`'s
+    production code already tolerates via a copy fallback; the tests that
+    use this helper specifically exercise the existing-symlink branches of
+    `_link_one_skill`, which requires an actual symlink to already exist."""
+    try:
+        link_path.symlink_to(target_path, target_is_directory=True)
+    except OSError as e:
+        if sys.platform == "win32" and getattr(e, "winerror", None) == 1314:
+            pytest.skip("No symlink privilege on this Windows host")
+        raise
+
+
 def test_setup_skills_skips_relinking_when_symlink_already_correct(tmp_path, capsys):
-    """既存のsymlinkが既に正しいsrcを指している場合、貼り直さずスキップする。"""
+    """再実行時、既に正しい参照先を指している場合は貼り直さずスキップする。
+
+    symlinkが使える環境では"already correctly linked"、Windowsでprivilegeが
+    無く`_create_skill_link`がcopyへフォールバックする環境では
+    "already present as a copy"となる — どちらも `setup_skills` がここで
+    保証すべき「再実行は安全に無害化される（no-op）」という同じ不変条件の
+    表れであり、後者もこのテストにとって正当な成功結果とみなす。"""
     from orchestune.setup_skills import setup_skills
 
     mock_home, mock_source, skills_dir = _make_source_and_home(tmp_path)
@@ -428,7 +452,10 @@ def test_setup_skills_skips_relinking_when_symlink_already_correct(tmp_path, cap
 
     captured = capsys.readouterr()
     assert second_exit_code == 0
-    assert "already correctly linked" in captured.out
+    assert (
+        "already correctly linked" in captured.out
+        or "already present as a copy" in captured.out
+    )
 
 
 def test_setup_skills_relinks_when_symlink_points_elsewhere(tmp_path, capsys):
@@ -442,7 +469,7 @@ def test_setup_skills_relinks_when_symlink_points_elsewhere(tmp_path, capsys):
     claude_skills = mock_home / ".claude" / "skills"
     claude_skills.mkdir(parents=True)
     stale_link = claude_skills / "orchestune"
-    stale_link.symlink_to(stale_target, target_is_directory=True)
+    _create_symlink_or_skip(stale_link, stale_target)
 
     with (
         patch("pathlib.Path.home", return_value=mock_home),
@@ -466,7 +493,7 @@ def test_link_one_skill_recovers_when_readlink_raises(tmp_path, capsys):
     dest_skill = tmp_path / "dest"
     other_target = tmp_path / "other_target"
     other_target.mkdir()
-    dest_skill.symlink_to(other_target, target_is_directory=True)
+    _create_symlink_or_skip(dest_skill, other_target)
 
     with patch(
         "pathlib.Path.readlink", side_effect=OSError("simulated readlink failure")
@@ -490,7 +517,7 @@ def test_link_one_skill_returns_false_when_stale_link_removal_fails(tmp_path, ca
     dest_skill = tmp_path / "dest"
     other_target = tmp_path / "other_target"
     other_target.mkdir()
-    dest_skill.symlink_to(other_target, target_is_directory=True)
+    _create_symlink_or_skip(dest_skill, other_target)
 
     with (
         patch(
