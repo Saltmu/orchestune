@@ -1,0 +1,454 @@
+"""dispatch_gc内の完了ワークツリー処理（dispatch_gc_completion）テスト。
+
+`tests/test_dispatch_gc.py`の肥大化解消のため分割している（#345）。
+Zombie・Timeout回収は`test_dispatch_gc_zombies.py`、gitプリミティブや
+`dispatch_gc.py`自身のルール・エンドツーエンド統合テストは
+`test_dispatch_gc.py`に残している。
+"""
+
+import subprocess
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_gc_completion import (
+    _decide_completed_worktree_outcome,
+    _decide_not_needed_dirty_worktree,
+    _finalize_completed_worktree,
+    _finalize_not_needed_worktree,
+    _is_worktree_complete,
+    _local_pr_completion_status,
+)
+from orchestune.dispatch_scoring import Task
+from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_targets import (
+    ClaudeCodeCloudRoutineDispatchTarget,
+    CodexCloudDispatchTarget,
+)
+from orchestune.models import PrRecord
+
+tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
+
+def _active(**overrides):
+    defaults = dict(
+        issue_number=280,
+        branch="claude/issue-280-task-a",
+        worktree_path="worktrees/w1",
+        pid=111,
+        started_at=1_699_999_000.0,
+        declared_footprint=("src/foo.py",),
+    )
+    defaults.update(overrides)
+    return ActiveWorktree(**defaults)
+
+
+def _task(**overrides):
+    defaults = dict(
+        issue_number=280,
+        subtask_id="task-a",
+        footprint=("src/foo.py",),
+        symbols=(),
+        risk=False,
+        priority="medium",
+        progress_partial=False,
+        status_labels=("status:not-needed",),
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    defaults.update(overrides)
+    return Task(**defaults)
+
+
+class TestFinalizeCompletedWorktree:
+    """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
+
+    def test_no_new_commits_is_not_treated_as_completed(self):
+        """#74再現: worktreeはcleanだがbase_branchに対して新規コミットが0件の場合、
+        status:doneを付与せず、依存先タスクの誤昇格を防ぐためcompleted以外のアクションにする。"""
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] != "completed"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
+        mock_add_comment.assert_called_once()
+        assert mock_add_comment.call_args.args[0] == 280
+
+    def test_new_commits_present_is_treated_as_completed(self):
+        """base_branchに対する実コミットがあれば従来通りcompleted+status:doneとする。"""
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="deadbeef\n", stderr=""
+            )
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] == "completed"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:done")
+        assert event["commit_sha"] == "deadbeef"
+
+
+class TestFinalizeNotNeededWorktree:
+    """#280: status:not-neededラベル検知による完全自動クローズ。"""
+
+    def test_apply_removes_worktree_and_closes_issue(self):
+        active = _active()
+        task = _task()
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
+        ):
+            event = _finalize_not_needed_worktree(active, task, config)
+
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_close_issue.assert_called_once()
+        close_args = mock_close_issue.call_args.args
+        assert close_args[0] == 280
+        assert close_args[1] == "not planned"
+        assert event == {
+            "issue_number": 280,
+            "worktree_path": "worktrees/w1",
+            "action": "not_needed",
+            "subtask_id": "task-a",
+        }
+
+    def test_dirty_worktree_is_not_closed(self):
+        """未コミットの作業が残っている場合は、安全側に倒しクローズを見送る。"""
+        active = _active()
+        task = _task()
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
+        ):
+            event = _finalize_not_needed_worktree(active, task, config)
+
+        mock_remove_worktree.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_close_issue.assert_not_called()
+        assert event["action"] == "completion_skipped_dirty_worktree"
+
+    def test_dry_run_does_not_call_github_or_mutate(self):
+        active = _active()
+        task = _task()
+        config = DispatcherConfig(apply=False)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
+        ):
+            event = _finalize_not_needed_worktree(active, task, config)
+
+        mock_remove_worktree.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_close_issue.assert_not_called()
+        assert event["action"] == "not_needed"
+
+    def test_none_task_defaults_subtask_id_to_empty_string(self):
+        active = _active()
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.close_issue"),
+        ):
+            event = _finalize_not_needed_worktree(active, None, config)
+        assert event["subtask_id"] == ""
+
+
+class TestFinalizeNotNeededWorktreeCloudRoutineReview:
+    """#282: クラウドルーチン利用可能時は即時クローズせず独立検証レビューへ委譲する。"""
+
+    def _cloud_config(self, **overrides):
+        defaults = dict(
+            apply=True,
+            dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def test_dispatches_review_instead_of_closing(self, tmp_path):
+        active = _active()
+        task = _task()
+        config = self._cloud_config(
+            not_needed_review_state_path=tmp_path / "state.json"
+        )
+        dispatch_review = MagicMock()
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
+        ):
+            event = _finalize_not_needed_worktree(
+                active,
+                task,
+                config,
+                dispatch_not_needed_review=dispatch_review,
+            )
+
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_close_issue.assert_not_called()
+        dispatch_review.assert_called_once_with(280, "task-a", config)
+        assert event["action"] == "not_needed_review_dispatched"
+        assert event["subtask_id"] == "task-a"
+
+    def test_dirty_worktree_does_not_dispatch_review(self, tmp_path):
+        active = _active()
+        task = _task()
+        config = self._cloud_config(
+            not_needed_review_state_path=tmp_path / "state.json"
+        )
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.integration_coordinator.ClaudeCodeCloudRoutineDispatchTarget.fire_text"
+            ) as mock_fire_text,
+        ):
+            event = _finalize_not_needed_worktree(active, task, config)
+
+        mock_fire_text.assert_not_called()
+        assert event["action"] == "completion_skipped_dirty_worktree"
+
+
+class TestDecideCompletedWorktreeOutcome:
+    """decide層: worktree_has_uncommitted_changes/worktree_has_new_commitsの
+    読み取りのみで方針を判定し、github/worktreeへの書き込みは行わない。"""
+
+    def test_dirty_worktree_is_skipped(self):
+        active = _active()
+        task = _task()
+        with patch(
+            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+            return_value=True,
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+        assert decision.action == "completion_skipped_dirty_worktree"
+
+    def test_no_new_commits_is_completed_no_commits(self):
+        active = _active()
+        task = _task()
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+        assert decision.action == "completed_no_commits"
+        assert decision.subtask_id == "task-a"
+
+    def test_clean_with_new_commits_is_completed(self):
+        active = _active()
+        task = _task()
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+        assert decision.action == "completed"
+        assert decision.subtask_id == "task-a"
+
+
+class TestDecideNotNeededDirtyWorktree:
+    def test_true_when_dirty(self):
+        with patch(
+            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+            return_value=True,
+        ):
+            assert _decide_not_needed_dirty_worktree(_active()) is True
+
+    def test_false_when_clean(self):
+        with patch(
+            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+            return_value=False,
+        ):
+            assert _decide_not_needed_dirty_worktree(_active()) is False
+
+
+class TestIsWorktreeComplete:
+    """#239: external_id経由の完了判定に、issue_numberが正しく引き渡されること。"""
+
+    def test_passes_issue_number_to_dispatch_target_handle(self, tmp_path):
+        fake_target = MagicMock()
+        fake_target.completion_status.return_value = "completed"
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=fake_target,
+        )
+        active = ActiveWorktree(
+            issue_number=218,
+            branch="claude/issue-218-review-history-backend-api",
+            worktree_path=str(tmp_path / "w1"),
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="session_1",
+            external_url="https://claude.ai/code/session_1",
+        )
+
+        result = _is_worktree_complete(active, config)
+
+        assert result is True
+        handle = fake_target.completion_status.call_args.args[0]
+        assert handle.issue_number == 218
+        assert handle.branch_name == "claude/issue-218-review-history-backend-api"
+
+    def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123")
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=target,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=4242,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="codex-cloud:claude/issue-1-task-a",
+        )
+
+        with (
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive"
+            ) as mock_is_alive,
+        ):
+            assert _is_worktree_complete(active, config) is False
+
+        mock_is_alive.assert_not_called()
+
+    def test_recovered_local_active_worktree_waits_for_pid_reconciliation(
+        self, tmp_path
+    ):
+        config = DispatcherConfig(run_state_path=tmp_path / "run_state.json")
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "missing-worktree"),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        assert _is_worktree_complete(active, config) is False
+
+
+class TestLocalPrCompletionStatusWithFakeForge:
+    """#292: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
+    `DispatcherConfig(forge=...)`への注入だけでテストが書けることを示す。"""
+
+    def test_uses_injected_fake_forge_instead_of_patching(self):
+        fake_forge = MagicMock()
+        fake_forge.list_prs.return_value = [
+            PrRecord(
+                number=1,
+                head_ref="claude/issue-1-task-1",
+                changed_files=(),
+                state="MERGED",
+            )
+        ]
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-1",
+            worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
+            pid=123,
+            started_at=1700000000.0,
+            declared_footprint=(),
+        )
+
+        status = _local_pr_completion_status(active, config)
+
+        assert status == "completed"
+        fake_forge.list_prs.assert_called_once_with(state="all")
