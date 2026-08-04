@@ -1,12 +1,19 @@
+"""ステータス集計ドメインロジック（status_snapshot.py）のテスト。
+
+`tests/test_monitor.py`から、CLI配線（引数解析・`--watch`ループ）とは独立した
+ドメインロジック本体のテストを、`status_snapshot`モジュールの新設（アーキ
+テクチャ層L2への切り出し）に合わせて分離している。`main()`のCLIレベルの
+テストは`test_monitor_cli.py`に残す。
+"""
+
 import os
-import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-import orchestune.monitor as monitor_module
+import orchestune.status_snapshot as status_snapshot_module
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
-from orchestune.monitor import (
+from orchestune.status_snapshot import (
     MonitorState,
     StatusSnapshot,
     WorktreeStatus,
@@ -17,7 +24,6 @@ from orchestune.monitor import (
     _read_log_tail,
     build_status_snapshot,
     format_status_report,
-    main,
 )
 
 
@@ -83,7 +89,7 @@ class TestReadLogTail:
         # #134レビュー: 末尾を毎回ファイル全体読み込みではなく、末尾からチャンク単位
         # で逆向きに読む実装に変更したため、チャンク境界をまたぐケース（マルチバイト
         # 文字を含む）でも正しく末尾行を取得できることを確認する。
-        monkeypatch.setattr(monitor_module, "_TAIL_CHUNK_SIZE", 8)
+        monkeypatch.setattr(status_snapshot_module, "_TAIL_CHUNK_SIZE", 8)
         log_path = tmp_path / "task.log"
         log_path.write_text(
             "\n".join(f"行{i}" for i in range(20)) + "\n", encoding="utf-8"
@@ -556,186 +562,3 @@ class TestFormatStatusReport:
         )
         assert "最終dispatchサイクル" in report
         assert "未記録" in report
-
-
-class TestMain:
-    def test_one_shot_mode_prints_report_and_returns_zero(self, tmp_path, capsys):
-        run_state_path = tmp_path / "run_state.json"
-        state = RunState(active_worktrees={"133": _active()})
-        save_run_state(state, run_state_path)
-
-        exit_code = main(
-            [
-                "--run-state-path",
-                str(run_state_path),
-                "--log-dir",
-                str(tmp_path / "logs"),
-            ]
-        )
-
-        captured = capsys.readouterr()
-        assert exit_code == 0
-        assert "#133" in captured.out
-
-    def test_one_shot_mode_no_active_worktrees(self, tmp_path, capsys):
-        exit_code = main(
-            [
-                "--run-state-path",
-                str(tmp_path / "run_state.json"),
-                "--log-dir",
-                str(tmp_path / "logs"),
-            ]
-        )
-
-        captured = capsys.readouterr()
-        assert exit_code == 0
-        assert "現在アクティブなディスパッチはありません" in captured.out
-
-    def test_watch_mode_loops_until_keyboard_interrupt(
-        self, tmp_path, capsys, monkeypatch
-    ):
-        run_state_path = tmp_path / "run_state.json"
-        state = RunState(active_worktrees={"133": _active()})
-        save_run_state(state, run_state_path)
-
-        sleep_mock = Mock(side_effect=[None, KeyboardInterrupt])
-        monkeypatch.setattr(time, "sleep", sleep_mock)
-
-        exit_code = main(
-            [
-                "--run-state-path",
-                str(run_state_path),
-                "--log-dir",
-                str(tmp_path / "logs"),
-                "--watch",
-                "--interval",
-                "1",
-            ]
-        )
-
-        captured = capsys.readouterr()
-        assert exit_code == 0
-        assert captured.out.count("#133") == 2
-        assert sleep_mock.call_count == 2
-
-    def test_watch_mode_reuses_label_cache_across_iterations(
-        self, tmp_path, monkeypatch, _stub_get_issue_labels
-    ):
-        run_state_path = tmp_path / "run_state.json"
-        state = RunState(active_worktrees={"133": _active()})
-        save_run_state(state, run_state_path)
-
-        sleep_mock = Mock(side_effect=[None, KeyboardInterrupt])
-        monkeypatch.setattr(time, "sleep", sleep_mock)
-
-        main(
-            [
-                "--run-state-path",
-                str(run_state_path),
-                "--log-dir",
-                str(tmp_path / "logs"),
-                "--watch",
-                "--interval",
-                "1",
-            ]
-        )
-
-        # #137: watchループ間でラベルキャッシュを共有し、interval(1秒)ごとに
-        # activeなIssue数だけgh呼び出しが増え続けないことを保証する。
-        assert _stub_get_issue_labels.call_count == 1
-
-    def test_interval_zero_is_rejected(self, tmp_path, capsys):
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "--run-state-path",
-                    str(tmp_path / "run_state.json"),
-                    "--log-dir",
-                    str(tmp_path / "logs"),
-                    "--watch",
-                    "--interval",
-                    "0",
-                ]
-            )
-        assert exc_info.value.code == 2
-
-    def test_interval_negative_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "--run-state-path",
-                    str(tmp_path / "run_state.json"),
-                    "--log-dir",
-                    str(tmp_path / "logs"),
-                    "--watch",
-                    "--interval",
-                    "-1",
-                ]
-            )
-        assert exc_info.value.code == 2
-
-    def test_tail_lines_negative_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "--run-state-path",
-                    str(tmp_path / "run_state.json"),
-                    "--log-dir",
-                    str(tmp_path / "logs"),
-                    "--tail-lines",
-                    "-1",
-                ]
-            )
-        assert exc_info.value.code == 2
-
-    def test_interval_non_integer_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "--run-state-path",
-                    str(tmp_path / "run_state.json"),
-                    "--log-dir",
-                    str(tmp_path / "logs"),
-                    "--watch",
-                    "--interval",
-                    "abc",
-                ]
-            )
-        assert exc_info.value.code == 2
-
-    def test_tail_lines_non_integer_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "--run-state-path",
-                    str(tmp_path / "run_state.json"),
-                    "--log-dir",
-                    str(tmp_path / "logs"),
-                    "--tail-lines",
-                    "abc",
-                ]
-            )
-        assert exc_info.value.code == 2
-
-    def test_tail_lines_zero_shows_no_log_tail(self, tmp_path, capsys):
-        run_state_path = tmp_path / "run_state.json"
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
-        (log_dir / "claude-issue-133-monitor-cli.log").write_text("hello\nworld\n")
-        save_run_state(RunState(active_worktrees={"133": _active()}), run_state_path)
-
-        exit_code = main(
-            [
-                "--run-state-path",
-                str(run_state_path),
-                "--log-dir",
-                str(log_dir),
-                "--tail-lines",
-                "0",
-            ]
-        )
-
-        captured = capsys.readouterr()
-        assert exit_code == 0
-        assert "hello" not in captured.out
-        assert "world" not in captured.out
