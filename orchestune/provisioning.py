@@ -28,6 +28,7 @@ from orchestune.dag_parsing import (
 from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, PARENT_MARKER
 from orchestune.plan_writer import write_issue_numbers
+from orchestune.symbol_verification import find_missing_symbols
 from orchestune.validation import validate_issue_number
 
 _PLACEHOLDERS = (
@@ -177,6 +178,30 @@ def _render_issue_body(subtask: SubTask, template: str) -> str:
     return _PLACEHOLDER_PATTERN.sub(lambda match: values[match.group(1)], template)
 
 
+def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
+    """#359: `subtask.symbols`のうち現在のコードベースに見つからないものが
+    あれば、Issue本文末尾に注記を追加する。
+
+    未検出は「陳腐化している（リファクタで改名・移動された）」と「まだ
+    存在しない（このsubtaskで新規追加する）」のどちらもありうるため
+    （`find_missing_symbols`のdocstring参照）、注記は断定せず中立な
+    確認依頼として書く。
+    """
+    missing = find_missing_symbols(subtask, repo_root)
+    if not missing:
+        return body
+
+    bullet_list = "\n".join(f"- `{symbol}`" for symbol in missing)
+    warning = (
+        "\n\n---\n\n"
+        "⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
+        "見つかりませんでした。このsubtaskで新規追加する予定であれば問題ありません"
+        "が、リファクタによる改名・移動で古い名称が残っている可能性もあるため、"
+        f"着手前にコードを確認してください。\n{bullet_list}"
+    )
+    return body + warning
+
+
 def _subtask_id_from_body(body: str) -> str | None:
     """Extract `subtask_id` from a Footprint YAML fence the same way
     `issue_parsing.parse_task_from_issue` does, so IDs containing `:`/`#`
@@ -245,14 +270,18 @@ def _index_sub_issues_by_subtask_id(
 
 
 def _preview_only(
-    subtasks: list[SubTask], dag_order: list[str], template: str
+    subtasks: list[SubTask], dag_order: list[str], template: str, repo_root: Path
 ) -> ProvisionResult:
     by_id = {subtask.id: subtask for subtask in subtasks}
     previews = tuple(
         IssuePreview(
             subtask_id=subtask_id,
             title=_issue_title(by_id[subtask_id]),
-            body=_render_issue_body(by_id[subtask_id], template),
+            body=_append_symbol_warning(
+                _render_issue_body(by_id[subtask_id], template),
+                by_id[subtask_id],
+                repo_root,
+            ),
             labels=_derive_labels(by_id[subtask_id], dependencies_done=False),
             already_has_issue=by_id[subtask_id].issue_number is not None,
         )
@@ -272,6 +301,7 @@ def provision_issues(
     forge: IssueForge | None = None,
     apply: bool = True,
     template_path: str | Path = ".github/issue_template.md",
+    repo_root: str | Path | None = None,
 ) -> ProvisionResult:
     """Provision GitHub Issues for every subtask in an approved decomposition plan.
 
@@ -279,7 +309,15 @@ def provision_issues(
     `subtask_id` found in an existing sub-issue's body) short-circuits
     re-creation, and every resolved number is written back to `plan_path`
     immediately, before moving on to the next subtask.
+
+    `repo_root` (default: cwd) is where each subtask's `footprint` paths are
+    resolved from when checking whether its `symbols` still exist in the
+    codebase (#359); a mismatch appends a warning to the rendered Issue body
+    rather than blocking provisioning, since the check can't tell a stale
+    `symbols` list apart from a footprint file that legitimately doesn't
+    exist yet.
     """
+    resolved_repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
     subtasks, metadata = _load_plan(plan_path)
     if not metadata.title:
         raise ValueError(
@@ -291,7 +329,9 @@ def provision_issues(
     _validate_template_identity_marker(template, template_path)
 
     if not apply:
-        return _preview_only(subtasks, dag.topological_order, template)
+        return _preview_only(
+            subtasks, dag.topological_order, template, resolved_repo_root
+        )
 
     resolved_forge = forge or GitHubForge()
 
@@ -375,7 +415,9 @@ def provision_issues(
                 dependencies_done.get(dep, False) for dep in subtask.depends_on
             )
             labels = _derive_labels(subtask, dependencies_done=all_deps_done)
-            body = _render_issue_body(subtask, template)
+            body = _append_symbol_warning(
+                _render_issue_body(subtask, template), subtask, resolved_repo_root
+            )
             number = resolved_forge.create_issue(
                 _issue_title(subtask), body, labels=labels
             )

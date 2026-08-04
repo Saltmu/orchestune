@@ -805,6 +805,124 @@ class TestProvisionIssuesNoApply:
         assert "status:blocked" in result.previews[1].labels
 
 
+class TestSymbolVerificationWarning:
+    """#359: symbolsが実コードに存在しない場合、Issue本文に注記を追加する。"""
+
+    def _plan(self, symbols: str) -> str:
+        return (
+            "---\n"
+            'title: "Example big rock"\n'
+            "parent_issue_number: null\n"
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "Implement feature XX"\n'
+            "    footprint: [src/foo.py]\n"
+            f"    symbols: [{symbols}]\n"
+            "    depends_on: []\n"
+            "    issue_number: null\n"
+            "---\n"
+            "\n"
+            "# Decomposition Plan\n"
+        )
+
+    def test_missing_symbol_appends_warning_on_create(
+        self, tmp_path: Path, template_path: Path
+    ):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "foo.py").write_text(
+            "def actual_function():\n    pass\n", encoding="utf-8"
+        )
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan("renamed_away_function"), encoding="utf-8")
+
+        forge = FakeForge()
+        provision_issues(
+            plan_path,
+            forge=forge,
+            template_path=template_path,
+            repo_root=tmp_path,
+        )
+
+        subtask_body = next(
+            body for title, body, _ in forge.create_issue_calls if "task-a" in title
+        )
+        assert "symbols未検出" in subtask_body
+        assert "renamed_away_function" in subtask_body
+        # レビュー指摘(#372): 「見つからない=リファクタで陳腐化した」と
+        # 断定せず、新規追加の可能性にも触れる中立な文言であることを確認。
+        assert "新規追加する予定であれば問題ありません" in subtask_body
+
+    def test_existing_symbol_does_not_append_warning(
+        self, tmp_path: Path, template_path: Path
+    ):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "foo.py").write_text(
+            "def actual_function():\n    pass\n", encoding="utf-8"
+        )
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan("actual_function"), encoding="utf-8")
+
+        forge = FakeForge()
+        provision_issues(
+            plan_path,
+            forge=forge,
+            template_path=template_path,
+            repo_root=tmp_path,
+        )
+
+        subtask_body = next(
+            body for title, body, _ in forge.create_issue_calls if "task-a" in title
+        )
+        assert "symbols未検出" not in subtask_body
+
+    def test_missing_symbol_appends_warning_in_no_apply_preview(
+        self, tmp_path: Path, template_path: Path
+    ):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "foo.py").write_text(
+            "def actual_function():\n    pass\n", encoding="utf-8"
+        )
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan("renamed_away_function"), encoding="utf-8")
+
+        result = provision_issues(
+            plan_path,
+            apply=False,
+            template_path=template_path,
+            repo_root=tmp_path,
+        )
+
+        assert "symbols未検出" in result.previews[0].body
+
+    def test_footprint_file_not_yet_existing_skips_warning(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """新規作成予定のfootprintファイルのみのsubtaskでは、検証材料が
+        無いためfalse positiveを避けて注記を付けない。"""
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan("brand_new_function"), encoding="utf-8")
+
+        forge = FakeForge()
+        provision_issues(
+            plan_path,
+            forge=forge,
+            template_path=template_path,
+            repo_root=tmp_path,
+        )
+
+        subtask_body = next(
+            body for title, body, _ in forge.create_issue_calls if "task-a" in title
+        )
+        assert "symbols未検出" not in subtask_body
+
+    def test_repo_root_defaults_to_cwd_without_crashing(
+        self, plan_path: Path, template_path: Path
+    ):
+        forge = FakeForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert result.applied is True
+
+
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
         self, plan_path: Path, template_path: Path, capsys
