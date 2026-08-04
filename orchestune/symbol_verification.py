@@ -111,15 +111,17 @@ def _looks_like_class_qualifier(segment: str) -> bool:
     """`segment`がクラス名らしい命名規則（PEP8のCapWords）に従っているかを返す。
 
     Pythonの命名規則ではクラス名は`CapWords`、モジュール/パッケージ名は
-    `lower_snake_case`が慣習（PEP8）。3セグメント以上の修飾シンボルが
-    `module.Class.method`（クラス修飾）と`pkg.subpkg.function`（多段
-    モジュールパス）のどちらの意図かを区別する材料が他に無いため、この
+    `lower_snake_case`が慣習（PEP8）。2セグメント以上の修飾シンボルが
+    `Class.method`（クラス修飾）と`pkg.function`/`pkg.subpkg.function`
+    （モジュールパス）のどちらの意図かを区別する材料が他に無いため、この
     慣習をヒューリスティックとして利用する。絶対的な保証ではないが、
     "無関係なクラスの同名メソッドに誤って一致する"リスクと"多段モジュール
     パスのトップレベル関数を見逃す"リスクの両方を抑える妥協点として採用
-    している。
+    している。`_PrivateClass`のようなPEP8の非公開クラス命名（先頭
+    アンダースコア）もクラス名として認識できるよう、大文字判定の前に
+    先頭のアンダースコアを取り除く。
     """
-    return segment[:1].isupper()
+    return segment.lstrip("_")[:1].isupper()
 
 
 def _symbol_matches(
@@ -138,22 +140,23 @@ def _symbol_matches(
        うえで`Class.method`まで書く3セグメント以上の表記を許容するため。
     3. 末尾1セグメントが`top_level_names`（モジュール直下の関数・クラス・
        代入の名前。メソッドやネストしたローカル変数は含まない）にあるか。
-       ただし、2セグメント以上先頭側の直前セグメント（`Class.method`の
-       `Class`に相当する位置）がクラス名らしい命名（`_looks_like_class_qualifier`）
-       の場合はこの段階を行わない — 段階2の`Class.method`照合が外れた
-       時点で「別のクラスの同名メソッド」という解釈しか残らず、ここで
-       裸のleafへ緩めると無関係な同名トップレベル関数に誤って一致して
-       しまうため（例: `pkg.NewParser.parse`）。一方、`src.db.get_connection`
-       のような多段モジュールパスでは直前セグメント`db`がクラス名らしく
-       ないため、この段階でトップレベル関数`get_connection`と正しく照合
-       できる。
+       ただし、直前セグメント（`Class.method`の`Class`に相当する位置。
+       2セグメントの`NewParser.parse`でも3セグメント以上の
+       `pkg.NewParser.parse`でも同じ位置）がクラス名らしい命名
+       （`_looks_like_class_qualifier`）の場合はこの段階を行わない —
+       段階2の`Class.method`照合が外れた時点で「別のクラスの同名メソッド」
+       という解釈しか残らず、ここで裸のleafへ緩めると無関係な同名
+       トップレベル関数に誤って一致してしまうため。一方、
+       `src.db.get_connection`のような多段モジュールパスでは直前セグメント
+       `db`がクラス名らしくないため、この段階でトップレベル関数
+       `get_connection`と正しく照合できる。
     """
     if symbol in defined_names:
         return True
     parts = symbol.split(".")
     if len(parts) >= 2 and ".".join(parts[-2:]) in defined_names:
         return True
-    if len(parts) >= 3 and _looks_like_class_qualifier(parts[-2]):
+    if len(parts) >= 2 and _looks_like_class_qualifier(parts[-2]):
         return False
     return len(parts) >= 2 and parts[-1] in top_level_names
 
