@@ -176,7 +176,7 @@ from its own layer or from any layer below it, never from a layer above.
 | --- | --- |
 | **L4** entrypoints — the modules that expose a `main()` | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor`, `provisioning` |
 | **L3** workflows — dispatch cycle and integration pipelines | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
-| **L2** domain — DAG construction, scoring, dispatch mechanics | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
+| **L2** domain — DAG construction, scoring, dispatch mechanics | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state`, `status_snapshot` |
 | **L1** adapters — the only modules that run `git` or `gh` | `forge`, `forge_admin`, `forge_issues`, `forge_prs`, `git_cli` |
 | **L0** infra — pure DTOs and dependency-free helpers | `dag_models`, `dispatch_result`, `json_state`, `models`, `plan_writer`, `process_utils`, `setup_skills`, `validation`, `version` |
 
@@ -187,11 +187,14 @@ that dependency point upward.
 
 L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
 "contains only argparse wiring". `cli` is the exception because it dispatches to
-the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. Three of the five still carry code that predates this
+the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. Two of the five still carry code that predates this
 boundary: `dag` re-exports the whole `dag_*` package as a compatibility facade,
-`dispatcher` holds orchestration helpers, and `monitor` builds its own status
-snapshots. That is a known remnant, not a licence to add more — new code
-belongs in the layer that owns the behaviour.
+and `dispatcher` holds orchestration helpers. That is a known remnant, not a
+licence to add more — new code belongs in the layer that owns the behaviour.
+`monitor` used to be a third: it built its own status snapshots
+(`MonitorState`/`build_status_snapshot`/`format_status_report` and friends)
+directly. That has since moved to `status_snapshot` (L2), leaving `monitor`
+with only argument parsing, the `--watch` loop, and `main()`.
 
 ### 5.2 Invariants enforced by CI
 

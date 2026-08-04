@@ -190,7 +190,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 | --- | --- |
 | **L4** エントリポイント — `main()` を持つモジュール | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor`, `provisioning` |
 | **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
-| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
+| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state`, `status_snapshot` |
 | **L1** アダプタ — `git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge_admin`, `forge_issues`, `forge_prs`, `git_cli` |
 | **L0** インフラ — 純粋なDTOと依存を持たないヘルパ | `dag_models`, `dispatch_result`, `json_state`, `models`, `plan_writer`, `process_utils`, `setup_skills`, `validation`, `version` |
 
@@ -202,12 +202,16 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」ことであって、
 「argparse配線しか含まない」ことではありません。`cli` が例外なのは、残り4つへ
 処理を振り分ける役割だからです（ガード側では `ALLOWED_L4_DEPENDENTS` として
-表現されています）。5つのうち3つには、この境界を
+表現されています）。5つのうち2つには、この境界を
 定める前から存在するコードが残っています: `dag` は `dag_*` パッケージ全体を
 再エクスポートする互換ファサード、`dispatcher` はオーケストレーションの
-ヘルパ、`monitor` は自前のステータススナップショット構築を抱えています。
-これは既知の残滓であり、新たに増やしてよいという意味ではありません。新規の
-コードは、その振る舞いを所有する層に置いてください。
+ヘルパを抱えています。これは既知の残滓であり、新たに増やしてよいという
+意味ではありません。新規のコードは、その振る舞いを所有する層に置いて
+ください。`monitor` はかつて3つ目の残滓でした — 自前のステータス
+スナップショット構築（`MonitorState`/`build_status_snapshot`/
+`format_status_report`等）を直接抱えていました。これは`status_snapshot`
+（L2）へ切り出し済みで、`monitor`には引数解析・`--watch`ループ・`main()`
+のみが残っています。
 
 ### 5.2 CIで機械的に検証される不変条件
 
