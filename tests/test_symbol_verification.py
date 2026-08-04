@@ -103,6 +103,41 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ()
 
+    def test_module_qualified_class_method_symbol_matches_via_trailing_pair(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（3巡目）: `pkg.Parser.parse`のように、モジュール/
+        サブシステム名を頭に付けたうえで`Class.method`まで書く3セグメント
+        表記も、末尾2セグメント（`Parser.parse`）が実在すれば検出できる
+        べき。裸のメソッド名`parse`だけの緩い一致に頼らないため、無関係な
+        クラスの同名メソッドとは引き続き混同しない。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "class Parser:\n    def parse(self):\n        pass\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.Parser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_local_variable_inside_function_does_not_satisfy_module_qualified_symbol(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（3巡目）: 関数・メソッド内のローカル代入
+        （例: `def helper(): get_connection = ...`）は、モジュール直下の
+        代入ではないため、`db.get_connection`のようなモジュール修飾記法の
+        緩い一致の根拠にしてはならない。"""
+        _write(
+            tmp_path,
+            "src/db/connection.py",
+            "def helper():\n    get_connection = lambda: None\n    return get_connection\n",
+        )
+        subtask = _subtask(
+            footprint=("src/db/connection.py",), symbols=("db.get_connection",)
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ("db.get_connection",)
+
     def test_module_qualified_class_symbol_still_matches_via_leaf(self, tmp_path):
         """クラス名自体を指す修飾シンボル（`pkg.Foo`のような表記）は、
         クラス名がメソッド名のように重複しうる曖昧さを持たないため、
