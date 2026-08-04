@@ -16,12 +16,46 @@ from pathlib import Path
 from orchestune.dag_models import SubTask
 
 
+def _module_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
+    """`statements`（モジュール直下のstatement列）を、関数・クラスの境界では
+    止まりつつ`if`/`try`/`with`/`for`/`while`の内側までは平坦化して返す。
+
+    Pythonでは`if`/`try`/`with`/ループの中で書かれた代入・def・classも
+    モジュールスコープに束縛される（`try: import X as Y except: import Z as Y`
+    のような条件付き定義は典型例）。単純に`tree.body`の直接の子だけを見ると、
+    こうした複合文の中身を見落とす（レビュー指摘 #372）。関数・クラス定義は
+    それ自体で新しいスコープを作るため、その中へは再帰しない。
+    """
+    flattened: list[ast.stmt] = []
+    for stmt in statements:
+        flattened.append(stmt)
+        if isinstance(stmt, ast.If):
+            flattened.extend(_module_scope_statements(stmt.body))
+            flattened.extend(_module_scope_statements(stmt.orelse))
+        elif isinstance(stmt, ast.Try):
+            flattened.extend(_module_scope_statements(stmt.body))
+            for handler in stmt.handlers:
+                flattened.extend(_module_scope_statements(handler.body))
+            flattened.extend(_module_scope_statements(stmt.orelse))
+            flattened.extend(_module_scope_statements(stmt.finalbody))
+        elif isinstance(stmt, ast.With | ast.AsyncWith):
+            flattened.extend(_module_scope_statements(stmt.body))
+        elif isinstance(stmt, ast.For | ast.AsyncFor | ast.While):
+            flattened.extend(_module_scope_statements(stmt.body))
+            flattened.extend(_module_scope_statements(stmt.orelse))
+    return flattened
+
+
 def _collect_all_names(tree: ast.Module) -> set[str]:
-    """`symbol`との完全一致判定に使う識別子集合を返す（裸の関数名・クラス名・
-    `ClassName.method`限定名・トップレベル代入名 + メソッドの裸名）。
+    """`symbol`との完全一致判定に使う識別子集合を返す（クラス名・
+    `ClassName.method`限定名 + トップレベル識別子全て）。
 
     ネストした関数定義（クロージャのヘルパ等）も対象に含めるため、
-    `ast.walk`で全ノードを走査する。
+    クラス・メソッドの収集には`ast.walk`で全ノードを走査する。ただし
+    トップレベル代入は`_collect_top_level_names`が返すモジュールスコープ
+    限定の集合をそのまま取り込む — 関数・メソッド内のローカル変数を
+    「定義済み識別子」として拾ってしまうと、実在しないbareシンボルが
+    無関係なローカル変数と一致して見逃されてしまう（レビュー指摘 #372）。
     """
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -33,12 +67,7 @@ def _collect_all_names(tree: ast.Module) -> set[str]:
                     names.add(f"{node.name}.{child.name}")
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             names.add(node.name)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
+    names |= _collect_top_level_names(tree)
     return names
 
 
@@ -47,15 +76,14 @@ def _collect_top_level_names(tree: ast.Module) -> set[str]:
     末尾セグメントだけで緩く照合する際の候補集合を返す。
 
     `ast.walk`は木全体をフラットに走査してしまいスコープ情報を失うため、
-    これだけは`tree.body`（モジュール直下のstatementのみ）を走査する:
-    レビュー指摘 #372で2件見つかった通り、`ast.walk`ベースの判定は
-    (1) クラスメソッドの裸名を関数と取り違える、(2) 関数・メソッドの
-    ローカル変数をモジュールレベルの代入と取り違える、という2種類の
-    スコープ混同を引き起こす。`tree.body`はモジュール直下のstatementのみを
-    列挙するため、そのいずれのクラスの混同も起こらない。
+    これだけは`_module_scope_statements(tree.body)`（モジュールスコープの
+    statementのみ、`if`/`try`/`with`/ループの中身まで含む）を走査する:
+    レビュー指摘 #372で複数件見つかった通り、`ast.walk`ベースの判定は
+    クラスメソッドの裸名や関数・メソッドのローカル変数をモジュールレベルの
+    定義と取り違える。
     """
     top_level_names: set[str] = set()
-    for node in tree.body:
+    for node in _module_scope_statements(tree.body):
         if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
             top_level_names.add(node.name)
         elif isinstance(node, ast.Assign):
@@ -109,7 +137,11 @@ def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, 
     footprintに実在する`.py`ファイルが1つも無い場合（新規作成予定の
     footprintのみのsubtask等）は検証材料が無いため空タプルを返す —
     「存在しない」と機械的に断定してfalse positiveを出すよりは、
-    判定を保留する方が安全なため。
+    判定を保留する方が安全なため。footprint中の一部のファイルだけが
+    パース不能（構文エラー等）だった場合も同様に空タプルを返す:
+    パースできたファイルだけを基準に判定すると、パースできなかった
+    ファイル側で定義されていたはずのシンボルまで「見つからない」と
+    誤検出してしまう（レビュー指摘 #372）。
 
     **既存ファイルへの新規追加との区別はしない**: `docs/en/usage.md`が
     `symbols`を「このsubtaskが定義または変更するシンボル」と定義している
@@ -126,6 +158,7 @@ def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, 
     defined_names: set[str] = set()
     top_level_names: set[str] = set()
     any_file_checked = False
+    any_file_unparseable = False
 
     for relative_path in subtask.footprint:
         if not relative_path.endswith(".py"):
@@ -136,13 +169,14 @@ def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, 
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError):
+            any_file_unparseable = True
             continue
         any_file_checked = True
         file_names, file_top_level_names = _collect_defined_names(tree)
         defined_names |= file_names
         top_level_names |= file_top_level_names
 
-    if not any_file_checked:
+    if not any_file_checked or any_file_unparseable:
         return ()
 
     return tuple(

@@ -138,6 +138,64 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ("db.get_connection",)
 
+    def test_local_variable_inside_function_does_not_satisfy_bare_symbol(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（4巡目）: バレ（ドット無し）のシンボル判定でも、
+        関数・メソッド内のローカル代入を「定義済み」として拾ってはならない。"""
+        _write(
+            tmp_path,
+            "src/db/connection.py",
+            "def helper():\n    get_connection = lambda: None\n    return get_connection\n",
+        )
+        subtask = _subtask(
+            footprint=("src/db/connection.py",), symbols=("get_connection",)
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ("get_connection",)
+
+    def test_module_scope_assignment_under_if_still_matches(self, tmp_path):
+        """レビュー指摘 #372（4巡目）: `if`/`try`/`with`等の中で書かれた
+        モジュールスコープの代入・def・classも、それ自体は新しいスコープを
+        作らないため、緩い一致の候補に含める必要がある
+        （例: `try: import X as impl except ImportError: import Y as impl`）。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "import sys\n\nif sys.version_info >= (3, 12):\n    enabled = True\nelse:\n    enabled = False\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("mod.enabled",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_module_scope_function_under_try_still_matches(self, tmp_path):
+        """`try`ブロック内で条件付きに定義された関数も、モジュールスコープの
+        定義として扱われるべき。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "try:\n    def load_config():\n        pass\nexcept ImportError:\n    def load_config():\n        pass\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.load_config",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_unparseable_sibling_footprint_file_defers_the_whole_subtask(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（4巡目）: footprintの一部だけがパース不能な
+        場合、パースできたファイルだけを基準に「見つからない」と判定して
+        はならない — パースできなかったファイル側にそのシンボルが定義
+        されている可能性を排除できないため、判定全体を保留する。"""
+        _write(tmp_path, "pkg/good.py", "def unrelated():\n    pass\n")
+        _write(tmp_path, "pkg/broken.py", "def this is not valid python(\n")
+        subtask = _subtask(
+            footprint=("pkg/good.py", "pkg/broken.py"),
+            symbols=("defined_only_in_broken_py",),
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
     def test_module_qualified_class_symbol_still_matches_via_leaf(self, tmp_path):
         """クラス名自体を指す修飾シンボル（`pkg.Foo`のような表記）は、
         クラス名がメソッド名のように重複しうる曖昧さを持たないため、
