@@ -54,6 +54,18 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ()
 
+    def test_module_qualified_name_matches_via_leaf_segment(self, tmp_path):
+        """docs/en/usage.md・skills/orchestune/SKILL.mdは`db.get_connection`
+        のような「(モジュール/サブシステム名).symbol」記法を例示している。
+        この接頭辞はASTでは追跡しないPython外の自由記述ラベルのため、
+        末尾セグメントでの一致も許容する（レビュー指摘 #372）。"""
+        _write(tmp_path, "src/db/connection.py", "def get_connection():\n    pass\n")
+        subtask = _subtask(
+            footprint=("src/db/connection.py",), symbols=("db.get_connection",)
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
     def test_bare_method_name_found_without_class_qualification(self, tmp_path):
         _write(
             tmp_path,
