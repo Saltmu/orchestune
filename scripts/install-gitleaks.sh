@@ -58,7 +58,14 @@ if [ -z "$expected_checksum" ]; then
   exit 1
 fi
 
-actual_checksum="$(sha256sum "${tmp_dir}/${archive}" | awk '{print $1}')"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_checksum="$(sha256sum "${tmp_dir}/${archive}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual_checksum="$(shasum -a 256 "${tmp_dir}/${archive}" | awk '{print $1}')"
+else
+  echo "ERROR: Neither sha256sum nor shasum is available to verify the download." >&2
+  exit 1
+fi
 if [ "$expected_checksum" != "$actual_checksum" ]; then
   echo "ERROR: Checksum mismatch for ${archive}." >&2
   echo "  expected: ${expected_checksum}" >&2
