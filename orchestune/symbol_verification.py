@@ -16,60 +16,60 @@ from pathlib import Path
 from orchestune.dag_models import SubTask
 
 
-def _collect_defined_names(tree: ast.AST) -> tuple[set[str], set[str]]:
-    """モジュール内で定義されている識別子集合を`(全識別子, トップレベル識別子)`で返す。
-
-    「全識別子」は`symbol`との完全一致判定に使う（裸の関数名・クラス名・
+def _collect_all_names(tree: ast.Module) -> set[str]:
+    """`symbol`との完全一致判定に使う識別子集合を返す（裸の関数名・クラス名・
     `ClassName.method`限定名・トップレベル代入名 + メソッドの裸名）。
+
     ネストした関数定義（クロージャのヘルパ等）も対象に含めるため、
     `ast.walk`で全ノードを走査する。
-
-    「トップレベル識別子」は、クラスのメソッドを除いた集合（関数・クラス・
-    トップレベル代入の名前のみ）。`_symbol_matches`が「モジュール修飾記法」
-    （`db.get_connection`等）を末尾セグメントだけで緩く照合する際の候補を
-    これに限定する。メソッド名はクラスをまたいで重複しうるため、全識別子
-    セットをそのまま候補にすると、無関係なクラスの同名メソッドの存在有無で
-    判定が揺れてしまう（レビュー指摘 #372 二段階）:
-    1回目の修正でメソッド名を「ブロックリスト」として使ったところ、今度は
-    正しいトップレベル関数と同名のメソッドが別クラスにたまたま存在するだけで
-    誤ってfalse positiveになる逆方向の不具合を生んだため、「メソッド名を除外
-    する」のではなく「トップレベル識別子のみを候補にする」ポジティブリスト
-    方式に変更した。
     """
     names: set[str] = set()
-    top_level_names: set[str] = set()
-    # `ast.walk` yields every node in the tree flat, including each method's
-    # own FunctionDef — so a method node would independently satisfy the
-    # bare `isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)` check
-    # below unless excluded by identity first. `tree` keeps every node in
-    # `method_node_ids` alive for the remainder of this call, so reusing
-    # `id()` as a stand-in for object identity is safe here.
-    method_node_ids: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             names.add(node.name)
-            top_level_names.add(node.name)
             for child in node.body:
                 if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     names.add(child.name)
                     names.add(f"{node.name}.{child.name}")
-                    method_node_ids.add(id(child))
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            if id(node) in method_node_ids:
-                continue
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             names.add(node.name)
-            top_level_names.add(node.name)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     names.add(target.id)
-                    top_level_names.add(target.id)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
+    return names
+
+
+def _collect_top_level_names(tree: ast.Module) -> set[str]:
+    """`_symbol_matches`が「モジュール修飾記法」（`db.get_connection`等）を
+    末尾セグメントだけで緩く照合する際の候補集合を返す。
+
+    `ast.walk`は木全体をフラットに走査してしまいスコープ情報を失うため、
+    これだけは`tree.body`（モジュール直下のstatementのみ）を走査する:
+    レビュー指摘 #372で2件見つかった通り、`ast.walk`ベースの判定は
+    (1) クラスメソッドの裸名を関数と取り違える、(2) 関数・メソッドの
+    ローカル変数をモジュールレベルの代入と取り違える、という2種類の
+    スコープ混同を引き起こす。`tree.body`はモジュール直下のstatementのみを
+    列挙するため、そのいずれのクラスの混同も起こらない。
+    """
+    top_level_names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            top_level_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    top_level_names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             top_level_names.add(node.target.id)
-    return names, top_level_names
+    return top_level_names
+
+
+def _collect_defined_names(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """モジュール内で定義されている識別子集合を`(全識別子, トップレベル識別子)`で返す。"""
+    return _collect_all_names(tree), _collect_top_level_names(tree)
 
 
 def _symbol_matches(
@@ -80,19 +80,26 @@ def _symbol_matches(
     `docs/en/usage.md`・`skills/orchestune/SKILL.md`はいずれも`db.get_connection`
     や`foo.Foo`のような「(モジュール/サブシステム名).symbol」記法を例示して
     いる。この接頭辞はPythonの実際のimportパスとは限らない自由記述の
-    ラベルであり、AST側では追跡していないため、完全一致に加えて最後の
-    ドット区切りセグメントを`top_level_names`（クラスのメソッドを除いた
-    関数・クラス・トップレベル代入の名前）と照合する。
+    ラベルであり、AST側では追跡していないため、以下の順で緩く照合する:
 
-    メソッド名（クラス直下の関数）は`top_level_names`に含めていないため、
-    `NewParser.parse`のような修飾シンボルが、無関係な`OldParser.parse`の
-    裸名`parse`だけで「見つかった」ことにはならない — メソッドを指す
-    修飾シンボルは完全一致（`symbol in defined_names`）でのみ検出される。
+    1. 完全一致（`symbol in defined_names`）。
+    2. 末尾2セグメント（`Class.method`部分）が`defined_names`にあるか。
+       `pkg.Parser.parse`のように、モジュール/サブシステム名を頭に付けた
+       うえで`Class.method`まで書く3セグメント表記を許容するため。
+    3. 末尾1セグメントが`top_level_names`（モジュール直下の関数・クラス・
+       代入の名前。メソッドやネストしたローカル変数は含まない）にあるか。
+
+    メソッド名はクラスをまたいで重複しうるため、末尾1セグメントだけの
+    緩い照合を`top_level_names`（メソッドを含まない）に限定している。
+    これにより、`NewParser.parse`のような修飾シンボルが、無関係な
+    `OldParser.parse`の裸名`parse`だけで「見つかった」ことにはならない。
     """
     if symbol in defined_names:
         return True
-    leaf = symbol.rsplit(".", 1)[-1]
-    return leaf in top_level_names
+    parts = symbol.split(".")
+    if len(parts) >= 2 and ".".join(parts[-2:]) in defined_names:
+        return True
+    return parts[-1] in top_level_names
 
 
 def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, ...]:
