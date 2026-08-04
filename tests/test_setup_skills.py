@@ -1,5 +1,8 @@
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 
 def test_create_skill_link_copies_on_windows_privilege_error(tmp_path):
@@ -391,3 +394,209 @@ def test_setup_skills_dynamic_discovery(tmp_path):
     assert (mock_home / ".claude" / "skills" / "skill-b" / "SKILL.md").is_file()
     assert not (mock_home / ".claude" / "skills" / "local-ci-developer").exists()
     assert not (mock_home / ".claude" / "skills" / "ignored-folder").exists()
+
+
+def _make_source_and_home(tmp_path):
+    """Common fixture-ish setup: a home dir with `.claude/` present, and a
+    skills source dir containing a single `orchestune` skill."""
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+
+    return mock_home, mock_source, skills_dir
+
+
+def _create_symlink_or_skip(link_path: Path, target_path: Path) -> None:
+    """Create a directory symlink for test setup, skipping the test if the
+    host lacks the privilege to do so (e.g. Windows without Developer Mode
+    or elevation). This is the same condition `_create_skill_link`'s
+    production code already tolerates via a copy fallback; the tests that
+    use this helper specifically exercise the existing-symlink branches of
+    `_link_one_skill`, which requires an actual symlink to already exist."""
+    try:
+        link_path.symlink_to(target_path, target_is_directory=True)
+    except OSError as e:
+        if sys.platform == "win32" and getattr(e, "winerror", None) == 1314:
+            pytest.skip("No symlink privilege on this Windows host")
+        raise
+
+
+def test_setup_skills_skips_relinking_when_symlink_already_correct(tmp_path, capsys):
+    """再実行時、既に正しい参照先を指している場合は貼り直さずスキップする。
+
+    symlinkが使える環境では"already correctly linked"、Windowsでprivilegeが
+    無く`_create_skill_link`がcopyへフォールバックする環境では
+    "already present as a copy"となる — どちらも `setup_skills` がここで
+    保証すべき「再実行は安全に無害化される（no-op）」という同じ不変条件の
+    表れであり、後者もこのテストにとって正当な成功結果とみなす。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home, mock_source, skills_dir = _make_source_and_home(tmp_path)
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        first_exit_code = setup_skills()
+        assert first_exit_code == 0
+        capsys.readouterr()  # discard the first run's output
+
+        second_exit_code = setup_skills()
+
+    captured = capsys.readouterr()
+    assert second_exit_code == 0
+    assert (
+        "already correctly linked" in captured.out
+        or "already present as a copy" in captured.out
+    )
+
+
+def test_setup_skills_relinks_when_symlink_points_elsewhere(tmp_path, capsys):
+    """既存のsymlinkが別のsrcを指している場合、正しいsrcへ貼り直す。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home, mock_source, skills_dir = _make_source_and_home(tmp_path)
+
+    stale_target = tmp_path / "stale_skill_source"
+    stale_target.mkdir()
+    claude_skills = mock_home / ".claude" / "skills"
+    claude_skills.mkdir(parents=True)
+    stale_link = claude_skills / "orchestune"
+    _create_symlink_or_skip(stale_link, stale_target)
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills()
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Updating link" in captured.out
+    assert stale_link.resolve() == (skills_dir / "orchestune").resolve()
+
+
+def test_link_one_skill_recovers_when_readlink_raises(tmp_path, capsys):
+    """既存linkのreadlink/resolveが失敗しても、除去して張り直すフォールバックで
+    復旧できることを検証する。"""
+    from orchestune.setup_skills import _link_one_skill
+
+    src_skill = tmp_path / "source"
+    src_skill.mkdir()
+    dest_skill = tmp_path / "dest"
+    other_target = tmp_path / "other_target"
+    other_target.mkdir()
+    _create_symlink_or_skip(dest_skill, other_target)
+
+    with patch(
+        "pathlib.Path.readlink", side_effect=OSError("simulated readlink failure")
+    ):
+        result = _link_one_skill(src_skill, dest_skill, "orchestune")
+
+    captured = capsys.readouterr()
+    assert result is True
+    assert "Warning: Failed to resolve existing link" in captured.out
+    assert "Successfully linked" in captured.out
+    assert dest_skill.resolve() == src_skill.resolve()
+
+
+def test_link_one_skill_returns_false_when_stale_link_removal_fails(tmp_path, capsys):
+    """readlinkの失敗に加え、フォールバックのunlinkも失敗した場合は、
+    エラーを報告して失敗として扱う。"""
+    from orchestune.setup_skills import _link_one_skill
+
+    src_skill = tmp_path / "source"
+    src_skill.mkdir()
+    dest_skill = tmp_path / "dest"
+    other_target = tmp_path / "other_target"
+    other_target.mkdir()
+    _create_symlink_or_skip(dest_skill, other_target)
+
+    with (
+        patch(
+            "pathlib.Path.readlink", side_effect=OSError("simulated readlink failure")
+        ),
+        patch("pathlib.Path.unlink", side_effect=OSError("simulated unlink failure")),
+    ):
+        result = _link_one_skill(src_skill, dest_skill, "orchestune")
+
+    captured = capsys.readouterr()
+    assert result is False
+    assert "Error: Failed to remove stale link" in captured.err
+
+
+def test_link_one_skill_reports_copy_success_message(tmp_path, capsys):
+    """`_create_skill_link`が'copied'（Windowsのsymlink権限不足フォールバック）
+    を返した場合、コピー完了メッセージが表示されることを検証する。"""
+    from orchestune.setup_skills import _link_one_skill
+
+    src_skill = tmp_path / "source"
+    src_skill.mkdir()
+    dest_skill = tmp_path / "dest"
+
+    with patch("orchestune.setup_skills._create_skill_link", return_value="copied"):
+        result = _link_one_skill(src_skill, dest_skill, "orchestune")
+
+    captured = capsys.readouterr()
+    assert result is True
+    assert "Successfully copied" in captured.out
+    assert "symlink privilege is not available" in captured.out
+
+
+def test_setup_for_assistant_skips_missing_skill_source(tmp_path, capsys):
+    """`skills_to_link`に、実際にはskills_dir配下に存在しないスキル名が
+    含まれる場合、警告を出してスキップし、成功/失敗カウントに含めない。"""
+    from orchestune.setup_skills import _setup_for_assistant
+
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "real-skill").mkdir()
+    (skills_dir / "real-skill" / "SKILL.md").touch()
+
+    target_dir = tmp_path / "target"
+
+    result = _setup_for_assistant(
+        "Claude Code",
+        tmp_path,
+        target_dir,
+        skills_dir,
+        ["real-skill", "missing-skill"],
+    )
+
+    captured = capsys.readouterr()
+    assert result == (1, 0)
+    assert "Skill source 'missing-skill' not found" in captured.out
+    assert (target_dir / "real-skill" / "SKILL.md").is_file()
+    assert not (target_dir / "missing-skill").exists()
+
+
+def test_setup_skills_returns_1_when_skills_dir_not_found(tmp_path, capsys):
+    """`get_skills_source_dir`がFileNotFoundErrorを送出した場合、
+    `setup_skills`自体がそれを捕捉してエラーメッセージを表示し、
+    終了コード1を返すことを検証する。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_cwd = tmp_path / "other_dir"
+    mock_cwd.mkdir()
+
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
+    with (
+        patch("pathlib.Path.cwd", return_value=mock_cwd),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        exit_code = setup_skills()
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "Could not locate the 'skills' directory" in captured.err
