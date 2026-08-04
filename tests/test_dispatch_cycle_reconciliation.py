@@ -665,7 +665,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=["src/unexpected.py"],
             ),  # 逸脱ありとする
             patch(
-                "orchestune.dag.recompute_dag_for_footprint_change",
+                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
                 side_effect=ValueError("DAG error"),
             ),  # DAG計算エラー
         ):

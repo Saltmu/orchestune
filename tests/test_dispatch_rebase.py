@@ -10,7 +10,7 @@ import subprocess
 from contextlib import ExitStack, contextmanager
 from unittest.mock import ANY, MagicMock, patch
 
-from orchestune.dag import FootprintConflict
+from orchestune.dag_models import FootprintConflict
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_rebase import notify_force_serial, notify_recompute
