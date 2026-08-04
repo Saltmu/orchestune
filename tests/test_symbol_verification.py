@@ -120,6 +120,47 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ()
 
+    def test_stale_class_method_symbol_not_matched_via_unrelated_top_level_function(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（5巡目）: `pkg.NewParser.parse`のような3セグメント
+        修飾シンボルは、末尾2セグメント（`NewParser.parse`）の照合で明確に
+        `Class.method`の意図と分かるため、それが外れた時点で無関係な
+        トップレベル関数`parse`への裸leaf一致にフォールバックしてはならない。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "def parse():\n    pass\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.NewParser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("pkg.NewParser.parse",)
+
+    def test_class_method_under_class_level_if_still_matches(self, tmp_path):
+        """レビュー指摘 #372（5巡目）: `class Parser: if FEATURE: def parse():
+        ...`のようにクラス直下の`if`配下で条件付きに定義されたメソッドも、
+        `Class.method`限定名として検出できるべき。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "FEATURE = True\n\n\nclass Parser:\n    if FEATURE:\n        def parse(self):\n            pass\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("Parser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_module_scope_assignment_under_match_case_still_matches(self, tmp_path):
+        """レビュー指摘 #372（5巡目）: モジュール直下の`match`文のcase内で
+        定義された名前も、モジュールスコープの束縛として扱われるべき。"""
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            "import sys\n\nmatch sys.platform:\n    case _:\n        enabled = True\n",
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.enabled",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
     def test_local_variable_inside_function_does_not_satisfy_module_qualified_symbol(
         self, tmp_path
     ):
