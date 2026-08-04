@@ -13,11 +13,11 @@ DOCS_ROOT = Path(__file__).parents[1] / "docs"
 DOC_LANGUAGES = ("en", "ja")
 PACKAGE_NAME = "orchestune"
 L4_MODULES = frozenset(
-    {"cli", "dispatcher", "dag", "monitor", "bootstrap", "provisioning"}
+    {"cli", "dispatcher", "dag_cli", "monitor", "bootstrap", "provisioning"}
 )
 ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
-    "dag": frozenset({"cli"}),
+    "dag_cli": frozenset({"cli"}),
     "dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
     "provisioning": frozenset({"cli"}),
