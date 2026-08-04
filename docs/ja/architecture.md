@@ -188,9 +188,9 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 | 層 | モジュール |
 | --- | --- |
-| **L4** エントリポイント — `main()` を持つモジュール | `bootstrap`, `cli`, `dag`, `dispatcher`, `monitor`, `provisioning` |
-| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
-| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_cli`, `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state`, `status_snapshot` |
+| **L4** エントリポイント — `main()` を持つモジュール | `bootstrap`, `cli`, `dag_cli`, `dispatcher`, `monitor`, `provisioning` |
+| **L3** ワークフロー — ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
+| **L2** ドメイン — DAG構築・スコアリング・ディスパッチ機構 | `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state`, `status_snapshot` |
 | **L1** アダプタ — `git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge_admin`, `forge_issues`, `forge_prs`, `git_cli` |
 | **L0** インフラ — 純粋なDTOと依存を持たないヘルパ | `dag_models`, `dispatch_result`, `json_state`, `models`, `plan_writer`, `process_utils`, `setup_skills`, `validation`, `version` |
 
@@ -202,16 +202,20 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」ことであって、
 「argparse配線しか含まない」ことではありません。`cli` が例外なのは、残り4つへ
 処理を振り分ける役割だからです（ガード側では `ALLOWED_L4_DEPENDENTS` として
-表現されています）。5つのうち2つには、この境界を
-定める前から存在するコードが残っています: `dag` は `dag_*` パッケージ全体を
-再エクスポートする互換ファサード、`dispatcher` はオーケストレーションの
-ヘルパを抱えています。これは既知の残滓であり、新たに増やしてよいという
-意味ではありません。新規のコードは、その振る舞いを所有する層に置いて
-ください。`monitor` はかつて3つ目の残滓でした — 自前のステータス
-スナップショット構築（`MonitorState`/`build_status_snapshot`/
-`format_status_report`等）を直接抱えていました。これは`status_snapshot`
-（L2）へ切り出し済みで、`monitor`には引数解析・`--watch`ループ・`main()`
-のみが残っています。
+表現されています）。境界を定める前から存在するコードは、現時点ではすべて
+解消済みです。かつては`dag`・`dispatcher`・`monitor`の3つに残滓が残って
+いました。`dag`は`dag_*`パッケージ全体を再エクスポートする互換ファサード
+でしたが、呼び出し側は具体的な`dag_*`モジュールを直接importするようになり、
+実際に`main()`を持つ`dag_cli`が本来のL4エントリポイントとして扱われて
+います。`dispatcher`はdispatch cycle後のベストエフォート後処理オーケスト
+レーションを直接抱えていましたが、`dispatch_postcycle`（L3）へ切り出し済み
+で、`dispatcher`には引数解析・設定読み込み・`main()`のみが残っています。
+`monitor`は自前のステータススナップショット構築（`MonitorState`/
+`build_status_snapshot`/`format_status_report`等）を直接抱えていましたが、
+`status_snapshot`（L2）へ切り出し済みで、`monitor`には引数解析・
+`--watch`ループ・`main()`のみが残っています。これは新規のコードを
+その振る舞いを所有する層に置かなくてよいという意味ではなく、境界は
+引き続きこの節と`tests/test_architecture.py`で機械的に検証されます。
 
 ### 5.2 CIで機械的に検証される不変条件
 
