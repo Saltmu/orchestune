@@ -846,8 +846,11 @@ class TestSymbolVerificationWarning:
         subtask_body = next(
             body for title, body, _ in forge.create_issue_calls if "task-a" in title
         )
-        assert "symbols不整合の可能性" in subtask_body
+        assert "symbols未検出" in subtask_body
         assert "renamed_away_function" in subtask_body
+        # レビュー指摘(#372): 「見つからない=リファクタで陳腐化した」と
+        # 断定せず、新規追加の可能性にも触れる中立な文言であることを確認。
+        assert "新規追加する予定であれば問題ありません" in subtask_body
 
     def test_existing_symbol_does_not_append_warning(
         self, tmp_path: Path, template_path: Path
@@ -870,7 +873,7 @@ class TestSymbolVerificationWarning:
         subtask_body = next(
             body for title, body, _ in forge.create_issue_calls if "task-a" in title
         )
-        assert "symbols不整合の可能性" not in subtask_body
+        assert "symbols未検出" not in subtask_body
 
     def test_missing_symbol_appends_warning_in_no_apply_preview(
         self, tmp_path: Path, template_path: Path
@@ -889,7 +892,7 @@ class TestSymbolVerificationWarning:
             repo_root=tmp_path,
         )
 
-        assert "symbols不整合の可能性" in result.previews[0].body
+        assert "symbols未検出" in result.previews[0].body
 
     def test_footprint_file_not_yet_existing_skips_warning(
         self, tmp_path: Path, template_path: Path
@@ -910,7 +913,7 @@ class TestSymbolVerificationWarning:
         subtask_body = next(
             body for title, body, _ in forge.create_issue_calls if "task-a" in title
         )
-        assert "symbols不整合の可能性" not in subtask_body
+        assert "symbols未検出" not in subtask_body
 
     def test_repo_root_defaults_to_cwd_without_crashing(
         self, plan_path: Path, template_path: Path

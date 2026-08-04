@@ -180,7 +180,12 @@ def _render_issue_body(subtask: SubTask, template: str) -> str:
 
 def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
     """#359: `subtask.symbols`のうち現在のコードベースに見つからないものが
-    あれば、Issue本文末尾に注記を追加する（リファクタによる乖離の検知）。
+    あれば、Issue本文末尾に注記を追加する。
+
+    未検出は「陳腐化している（リファクタで改名・移動された）」と「まだ
+    存在しない（このsubtaskで新規追加する）」のどちらもありうるため
+    （`find_missing_symbols`のdocstring参照）、注記は断定せず中立な
+    確認依頼として書く。
     """
     missing = find_missing_symbols(subtask, repo_root)
     if not missing:
@@ -189,9 +194,10 @@ def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
     bullet_list = "\n".join(f"- `{symbol}`" for symbol in missing)
     warning = (
         "\n\n---\n\n"
-        "⚠️ **symbols不整合の可能性**: 以下のシンボルは、Footprintに列挙された"
-        "ファイル内に見つかりませんでした。リファクタによる改名・移動の"
-        f"可能性があるため、着手前にコードを確認してください。\n{bullet_list}"
+        "⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
+        "見つかりませんでした。このsubtaskで新規追加する予定であれば問題ありません"
+        "が、リファクタによる改名・移動で古い名称が残っている可能性もあるため、"
+        f"着手前にコードを確認してください。\n{bullet_list}"
     )
     return body + warning
 
