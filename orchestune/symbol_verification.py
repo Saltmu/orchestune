@@ -36,7 +36,7 @@ def _flatten_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
         if isinstance(stmt, ast.If):
             flattened.extend(_flatten_scope_statements(stmt.body))
             flattened.extend(_flatten_scope_statements(stmt.orelse))
-        elif isinstance(stmt, ast.Try):
+        elif isinstance(stmt, ast.Try | ast.TryStar):
             flattened.extend(_flatten_scope_statements(stmt.body))
             for handler in stmt.handlers:
                 flattened.extend(_flatten_scope_statements(handler.body))
@@ -107,6 +107,21 @@ def _collect_defined_names(tree: ast.Module) -> tuple[set[str], set[str]]:
     return _collect_all_names(tree), _collect_top_level_names(tree)
 
 
+def _looks_like_class_qualifier(segment: str) -> bool:
+    """`segment`がクラス名らしい命名規則（PEP8のCapWords）に従っているかを返す。
+
+    Pythonの命名規則ではクラス名は`CapWords`、モジュール/パッケージ名は
+    `lower_snake_case`が慣習（PEP8）。3セグメント以上の修飾シンボルが
+    `module.Class.method`（クラス修飾）と`pkg.subpkg.function`（多段
+    モジュールパス）のどちらの意図かを区別する材料が他に無いため、この
+    慣習をヒューリスティックとして利用する。絶対的な保証ではないが、
+    "無関係なクラスの同名メソッドに誤って一致する"リスクと"多段モジュール
+    パスのトップレベル関数を見逃す"リスクの両方を抑える妥協点として採用
+    している。
+    """
+    return segment[:1].isupper()
+
+
 def _symbol_matches(
     symbol: str, defined_names: set[str], top_level_names: set[str]
 ) -> bool:
@@ -120,28 +135,27 @@ def _symbol_matches(
     1. 完全一致（`symbol in defined_names`）。
     2. 末尾2セグメント（`Class.method`部分）が`defined_names`にあるか。
        `pkg.Parser.parse`のように、モジュール/サブシステム名を頭に付けた
-       うえで`Class.method`まで書く3セグメント表記を許容するため。
-    3. ちょうど2セグメントの場合のみ、末尾1セグメントが`top_level_names`
-       （モジュール直下の関数・クラス・代入の名前。メソッドやネストした
-       ローカル変数は含まない）にあるか。
-
-    段階3を2セグメントに限定しているのは、3セグメント以上の記法
-    （`pkg.NewParser.parse`）は明らかに`Class.method`を指す意図であり、
-    段階2の`Class.method`照合が外れた時点で「別のクラスの同名メソッド」
-    という解釈は成立しないため — ここでさらに裸のleafへ緩めてしまうと、
-    無関係な同名トップレベル関数（`def parse(): ...`）に誤って一致して
-    しまう。2セグメントの場合にだけ許すのは、`db.get_connection`のような
-    documentedな「(モジュール名).symbol」記法との曖昧性を残すためであり、
-    メソッド名はそもそも`top_level_names`に含めていないため、
-    `NewParser.parse`のような2セグメント修飾シンボルが、無関係な
-    `OldParser.parse`の裸名`parse`だけで「見つかった」ことにもならない。
+       うえで`Class.method`まで書く3セグメント以上の表記を許容するため。
+    3. 末尾1セグメントが`top_level_names`（モジュール直下の関数・クラス・
+       代入の名前。メソッドやネストしたローカル変数は含まない）にあるか。
+       ただし、2セグメント以上先頭側の直前セグメント（`Class.method`の
+       `Class`に相当する位置）がクラス名らしい命名（`_looks_like_class_qualifier`）
+       の場合はこの段階を行わない — 段階2の`Class.method`照合が外れた
+       時点で「別のクラスの同名メソッド」という解釈しか残らず、ここで
+       裸のleafへ緩めると無関係な同名トップレベル関数に誤って一致して
+       しまうため（例: `pkg.NewParser.parse`）。一方、`src.db.get_connection`
+       のような多段モジュールパスでは直前セグメント`db`がクラス名らしく
+       ないため、この段階でトップレベル関数`get_connection`と正しく照合
+       できる。
     """
     if symbol in defined_names:
         return True
     parts = symbol.split(".")
     if len(parts) >= 2 and ".".join(parts[-2:]) in defined_names:
         return True
-    return len(parts) == 2 and parts[-1] in top_level_names
+    if len(parts) >= 3 and _looks_like_class_qualifier(parts[-2]):
+        return False
+    return len(parts) >= 2 and parts[-1] in top_level_names
 
 
 def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, ...]:
