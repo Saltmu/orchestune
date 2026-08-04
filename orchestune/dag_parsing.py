@@ -20,7 +20,8 @@ _RISK_PATH_PATTERNS = (
     re.compile(r"(^|/)auth", re.IGNORECASE),
 )
 _RISK_KEYWORDS = ("subprocess", "auth", "credential")
-_FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+_FRONTMATTER_PATTERN = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*\n?", re.DOTALL)
+_LEADING_BLANK_LINES_PATTERN = re.compile(r"\A(?:[ \t]*\n)+")
 _VALID_PRIORITIES = frozenset(("high", "medium", "low"))
 
 
@@ -58,7 +59,7 @@ def extract_frontmatter_and_body(text: str) -> tuple[dict[str, Any], str]:
     data = yaml.safe_load(match.group(1))
     if not isinstance(data, dict):
         raise ValueError("フロントマターの内容がマッピング形式ではありません")
-    body = text[match.end() :].strip()
+    body = _LEADING_BLANK_LINES_PATTERN.sub("", text[match.end() :]).rstrip()
     return data, body
 
 

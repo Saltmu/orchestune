@@ -342,6 +342,33 @@ class TestProvisionIssuesApply:
         assert "This is the actual markdown content." in parent_call[1]
         assert "subtasks:" not in parent_call[1]
 
+    def test_parent_body_extraction_preserves_indented_code_block(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#352 review (P2): the closing `---` delimiter's trailing `\\s*`
+        must not swallow the leading indentation of a Markdown body that
+        opens with an indented code block."""
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            "---\n"
+            'title: "Example big rock"\n'
+            "subtasks:\n"
+            '  - id: "task-a"\n'
+            '    description: "d"\n'
+            "---\n"
+            "\n"
+            '    print("hello")\n'
+            "\n"
+            "Regular paragraph.\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        result = provision_issues(path, forge=forge, template_path=template_path)
+
+        assert result.parent_issue_number is not None
+        parent_call = forge.create_issue_calls[0]
+        assert '    print("hello")' in parent_call[1]
+
     def test_recovers_orphaned_parent_by_title_before_creating_duplicate(
         self, plan_path: Path, template_path: Path
     ):
