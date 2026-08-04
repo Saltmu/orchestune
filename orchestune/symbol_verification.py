@@ -16,13 +16,17 @@ from pathlib import Path
 from orchestune.dag_models import SubTask
 
 
-def _module_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
-    """`statements`（モジュール直下のstatement列）を、関数・クラスの境界では
-    止まりつつ`if`/`try`/`with`/`for`/`while`の内側までは平坦化して返す。
+def _flatten_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
+    """`statements`を、関数・クラスの境界では止まりつつ`if`/`try`/`with`/
+    `for`/`while`/`match`の内側までは平坦化して返す。
 
-    Pythonでは`if`/`try`/`with`/ループの中で書かれた代入・def・classも
-    モジュールスコープに束縛される（`try: import X as Y except: import Z as Y`
-    のような条件付き定義は典型例）。単純に`tree.body`の直接の子だけを見ると、
+    このstatement列自身が属するスコープ（モジュール直下、またはクラス
+    直下）がどちらであっても使える: `if`/`try`/`with`/ループ/`match`は、
+    モジュールスコープでもクラススコープでも、その中で書かれた代入・def・
+    classを、それを囲むブロックと同じスコープへそのまま束縛する
+    （`try: import X as Y except: import Z as Y`のような条件付き定義や、
+    `class Parser: if FEATURE: def parse(self): ...`のような条件付き
+    メソッド定義が典型例）。単純に`statements`の直接の子だけを見ると、
     こうした複合文の中身を見落とす（レビュー指摘 #372）。関数・クラス定義は
     それ自体で新しいスコープを作るため、その中へは再帰しない。
     """
@@ -30,19 +34,22 @@ def _module_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
     for stmt in statements:
         flattened.append(stmt)
         if isinstance(stmt, ast.If):
-            flattened.extend(_module_scope_statements(stmt.body))
-            flattened.extend(_module_scope_statements(stmt.orelse))
+            flattened.extend(_flatten_scope_statements(stmt.body))
+            flattened.extend(_flatten_scope_statements(stmt.orelse))
         elif isinstance(stmt, ast.Try):
-            flattened.extend(_module_scope_statements(stmt.body))
+            flattened.extend(_flatten_scope_statements(stmt.body))
             for handler in stmt.handlers:
-                flattened.extend(_module_scope_statements(handler.body))
-            flattened.extend(_module_scope_statements(stmt.orelse))
-            flattened.extend(_module_scope_statements(stmt.finalbody))
+                flattened.extend(_flatten_scope_statements(handler.body))
+            flattened.extend(_flatten_scope_statements(stmt.orelse))
+            flattened.extend(_flatten_scope_statements(stmt.finalbody))
         elif isinstance(stmt, ast.With | ast.AsyncWith):
-            flattened.extend(_module_scope_statements(stmt.body))
+            flattened.extend(_flatten_scope_statements(stmt.body))
         elif isinstance(stmt, ast.For | ast.AsyncFor | ast.While):
-            flattened.extend(_module_scope_statements(stmt.body))
-            flattened.extend(_module_scope_statements(stmt.orelse))
+            flattened.extend(_flatten_scope_statements(stmt.body))
+            flattened.extend(_flatten_scope_statements(stmt.orelse))
+        elif isinstance(stmt, ast.Match):
+            for case in stmt.cases:
+                flattened.extend(_flatten_scope_statements(case.body))
     return flattened
 
 
@@ -61,7 +68,7 @@ def _collect_all_names(tree: ast.Module) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             names.add(node.name)
-            for child in node.body:
+            for child in _flatten_scope_statements(node.body):
                 if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     names.add(child.name)
                     names.add(f"{node.name}.{child.name}")
@@ -76,14 +83,14 @@ def _collect_top_level_names(tree: ast.Module) -> set[str]:
     末尾セグメントだけで緩く照合する際の候補集合を返す。
 
     `ast.walk`は木全体をフラットに走査してしまいスコープ情報を失うため、
-    これだけは`_module_scope_statements(tree.body)`（モジュールスコープの
-    statementのみ、`if`/`try`/`with`/ループの中身まで含む）を走査する:
-    レビュー指摘 #372で複数件見つかった通り、`ast.walk`ベースの判定は
+    これだけは`_flatten_scope_statements(tree.body)`（モジュールスコープの
+    statementのみ、`if`/`try`/`with`/ループ/`match`の中身まで含む）を走査
+    する: レビュー指摘 #372で複数件見つかった通り、`ast.walk`ベースの判定は
     クラスメソッドの裸名や関数・メソッドのローカル変数をモジュールレベルの
     定義と取り違える。
     """
     top_level_names: set[str] = set()
-    for node in _module_scope_statements(tree.body):
+    for node in _flatten_scope_statements(tree.body):
         if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
             top_level_names.add(node.name)
         elif isinstance(node, ast.Assign):
@@ -114,20 +121,27 @@ def _symbol_matches(
     2. 末尾2セグメント（`Class.method`部分）が`defined_names`にあるか。
        `pkg.Parser.parse`のように、モジュール/サブシステム名を頭に付けた
        うえで`Class.method`まで書く3セグメント表記を許容するため。
-    3. 末尾1セグメントが`top_level_names`（モジュール直下の関数・クラス・
-       代入の名前。メソッドやネストしたローカル変数は含まない）にあるか。
+    3. ちょうど2セグメントの場合のみ、末尾1セグメントが`top_level_names`
+       （モジュール直下の関数・クラス・代入の名前。メソッドやネストした
+       ローカル変数は含まない）にあるか。
 
-    メソッド名はクラスをまたいで重複しうるため、末尾1セグメントだけの
-    緩い照合を`top_level_names`（メソッドを含まない）に限定している。
-    これにより、`NewParser.parse`のような修飾シンボルが、無関係な
-    `OldParser.parse`の裸名`parse`だけで「見つかった」ことにはならない。
+    段階3を2セグメントに限定しているのは、3セグメント以上の記法
+    （`pkg.NewParser.parse`）は明らかに`Class.method`を指す意図であり、
+    段階2の`Class.method`照合が外れた時点で「別のクラスの同名メソッド」
+    という解釈は成立しないため — ここでさらに裸のleafへ緩めてしまうと、
+    無関係な同名トップレベル関数（`def parse(): ...`）に誤って一致して
+    しまう。2セグメントの場合にだけ許すのは、`db.get_connection`のような
+    documentedな「(モジュール名).symbol」記法との曖昧性を残すためであり、
+    メソッド名はそもそも`top_level_names`に含めていないため、
+    `NewParser.parse`のような2セグメント修飾シンボルが、無関係な
+    `OldParser.parse`の裸名`parse`だけで「見つかった」ことにもならない。
     """
     if symbol in defined_names:
         return True
     parts = symbol.split(".")
     if len(parts) >= 2 and ".".join(parts[-2:]) in defined_names:
         return True
-    return parts[-1] in top_level_names
+    return len(parts) == 2 and parts[-1] in top_level_names
 
 
 def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, ...]:
