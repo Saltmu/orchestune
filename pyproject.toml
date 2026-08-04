@@ -16,7 +16,7 @@ pyyaml = "^6.0.3"
 [tool.poetry.scripts]
 orchestune = "orchestune.cli:main"
 orchestune-dispatch = "orchestune.dispatcher:main"
-orchestune-dag = "orchestune.dag:main"
+orchestune-dag = "orchestune.dag_cli:main"
 
 
 [tool.poetry.group.dev.dependencies]
