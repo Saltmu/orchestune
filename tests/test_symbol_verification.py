@@ -82,6 +82,27 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ("NewParser.parse",)
 
+    def test_module_qualified_symbol_not_poisoned_by_unrelated_same_named_method(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（2巡目）: `db.get_connection`が正しいトップレベル
+        関数`get_connection`を指していても、無関係な別クラスがたまたま同名の
+        メソッド`get_connection`を持っているだけでfalse positiveになっては
+        ならない（メソッド名をブロックリストとして使う実装だと壊れる）。"""
+        _write(
+            tmp_path,
+            "src/db/connection.py",
+            "def get_connection():\n    pass\n\n\n"
+            "class ConnectionPool:\n"
+            "    def get_connection(self):\n"
+            "        pass\n",
+        )
+        subtask = _subtask(
+            footprint=("src/db/connection.py",), symbols=("db.get_connection",)
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
     def test_module_qualified_class_symbol_still_matches_via_leaf(self, tmp_path):
         """クラス名自体を指す修飾シンボル（`pkg.Foo`のような表記）は、
         クラス名がメソッド名のように重複しうる曖昧さを持たないため、
