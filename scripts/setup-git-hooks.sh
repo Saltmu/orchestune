@@ -8,6 +8,11 @@ echo "Setting up Git hooks..."
 
 # Make sure local-ci.sh is executable
 chmod +x scripts/local-ci.sh
+chmod +x scripts/install-gitleaks.sh
+
+# Proactively install gitleaks so the pre-push hook's local CI run doesn't
+# fail on first use. Non-fatal: local-ci.sh retries this automatically.
+./scripts/install-gitleaks.sh || echo "WARNING: gitleaks auto-install failed; local-ci.sh will retry on push."
 
 # Create the pre-commit hook
 PRE_COMMIT_HOOK=".git/hooks/pre-commit"

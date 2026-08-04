@@ -6,6 +6,14 @@ Set-Location $ProjectRoot
 
 Write-Host "Setting up Git hooks (PowerShell)..."
 
+# Proactively install gitleaks so the pre-push hook's local CI run doesn't
+# fail on first use. Non-fatal: local-ci.ps1 retries this automatically.
+try {
+    & (Join-Path $PSScriptRoot "install-gitleaks.ps1")
+} catch {
+    Write-Warning "gitleaks auto-install failed; local-ci.ps1 will retry on push. ($_)"
+}
+
 $HooksDir = Join-Path $ProjectRoot ".git\hooks"
 if (-not (Test-Path $HooksDir)) {
     New-Item -ItemType Directory -Path $HooksDir -Force | Out-Null

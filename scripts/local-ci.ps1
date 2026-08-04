@@ -28,11 +28,23 @@ poetry run pytest -n 0 --cov=orchestune --cov-fail-under=90
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[5/5] Scanning for secrets and local paths (gitleaks)..."
+$GitleaksInstallDir = if ($env:GITLEAKS_INSTALL_DIR) { $env:GITLEAKS_INSTALL_DIR } else { Join-Path $HOME ".local\bin" }
+$env:PATH = "$GitleaksInstallDir;$env:PATH"
+
+if (-not (Get-Command gitleaks -ErrorAction SilentlyContinue)) {
+    Write-Host "gitleaks not found; attempting automatic installation..."
+    try {
+        & (Join-Path $PSScriptRoot "install-gitleaks.ps1")
+    } catch {
+        Write-Warning "Automatic gitleaks installation failed: $_"
+    }
+}
+
 if (Get-Command gitleaks -ErrorAction SilentlyContinue) {
     gitleaks detect --source . --redact -v
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
-    Write-Host "ERROR: gitleaks is not installed locally." -ForegroundColor Red
+    Write-Host "ERROR: gitleaks is not installed locally and automatic installation failed." -ForegroundColor Red
     Write-Host "Install it before pushing: https://github.com/gitleaks/gitleaks#installing" -ForegroundColor Red
     exit 1
 }

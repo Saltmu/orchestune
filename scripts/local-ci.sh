@@ -21,10 +21,18 @@ echo "[4/5] Running tests with coverage (pytest)..."
 poetry run pytest -n auto --cov=orchestune --cov-fail-under=90
 
 echo "[5/5] Scanning for secrets and local paths (gitleaks)..."
+GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
+export PATH="${GITLEAKS_INSTALL_DIR}:${PATH}"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks not found; attempting automatic installation..."
+  ./scripts/install-gitleaks.sh || true
+fi
+
 if command -v gitleaks >/dev/null 2>&1; then
   gitleaks detect --source . --redact -v
 else
-  echo "ERROR: gitleaks is not installed locally." >&2
+  echo "ERROR: gitleaks is not installed locally and automatic installation failed." >&2
   echo "Install it before pushing: https://github.com/gitleaks/gitleaks#installing" >&2
   exit 1
 fi
