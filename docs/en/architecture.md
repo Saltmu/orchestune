@@ -176,7 +176,7 @@ from its own layer or from any layer below it, never from a layer above.
 | --- | --- |
 | **L4** entrypoints — the modules that expose a `main()` | `bootstrap`, `cli`, `dag_cli`, `dispatcher`, `monitor`, `provisioning` |
 | **L3** workflows — dispatch cycle and integration pipelines | `dispatch_cycle`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion` |
-| **L2** domain — DAG construction, scoring, dispatch mechanics | `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state` |
+| **L2** domain — DAG construction, scoring, dispatch mechanics | `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `not_needed_review_state`, `status_snapshot` |
 | **L1** adapters — the only modules that run `git` or `gh` | `forge`, `forge_admin`, `forge_issues`, `forge_prs`, `git_cli` |
 | **L0** infra — pure DTOs and dependency-free helpers | `dag_models`, `dispatch_result`, `json_state`, `models`, `plan_writer`, `process_utils`, `setup_skills`, `validation`, `version` |
 
@@ -187,16 +187,21 @@ that dependency point upward.
 
 L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
 "contains only argparse wiring". `cli` is the exception because it dispatches to
-the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. One of the five still carries code that predates this
-boundary: `monitor` builds its own status snapshots. That is a known remnant,
-not a licence to add more — new code belongs in the layer that owns the
-behaviour. `dag` and `dispatcher` used to be the other two. `dag` was a
-compatibility facade re-exporting the whole `dag_*` package; it has since been
-removed — callers now import the concrete `dag_*` module directly, and
-`dag_cli` (the module that actually owns `main()`) is the real L4 entrypoint.
-`dispatcher` held the dispatch cycle's best-effort post-cycle orchestration
-directly; that has since moved to `dispatch_postcycle` (L3), leaving
-`dispatcher` with only argument parsing, config loading, and `main()`.
+the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. All code
+that predated this boundary has since been resolved. Three modules — `dag`,
+`dispatcher`, and `monitor` — used to carry such code. `dag` was a
+compatibility facade re-exporting the whole `dag_*` package; callers now
+import the concrete `dag_*` module directly, and `dag_cli` (the module that
+actually owns `main()`) is the real L4 entrypoint. `dispatcher` held the
+dispatch cycle's best-effort post-cycle orchestration directly; that has
+moved to `dispatch_postcycle` (L3), leaving `dispatcher` with only argument
+parsing, config loading, and `main()`. `monitor` built its own status
+snapshots (`MonitorState`/`build_status_snapshot`/`format_status_report` and
+friends) directly; that has moved to `status_snapshot` (L2), leaving
+`monitor` with only argument parsing, the `--watch` loop, and `main()`. This
+is not a licence to skip the layering going forward — new code still belongs
+in the layer that owns the behaviour, and this section and
+`tests/test_architecture.py` keep enforcing it mechanically.
 
 ### 5.2 Invariants enforced by CI
 
