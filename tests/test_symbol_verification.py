@@ -195,6 +195,29 @@ class TestFindMissingSymbols:
 
         assert find_missing_symbols(subtask, tmp_path) == ()
 
+    def test_two_segment_capitalized_qualifier_blocks_fallback_to_unrelated_function(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（7巡目）: クラスが完全に削除され、無関係な
+        トップレベル関数`parse`だけが残っているケースでも、2セグメントの
+        `NewParser.parse`はクラス修飾の意図が明確なため、そのトップレベル
+        関数への裸leaf一致にフォールバックしてはならない。"""
+        _write(tmp_path, "pkg/mod.py", "def parse():\n    pass\n")
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("NewParser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("NewParser.parse",)
+
+    def test_private_class_qualifier_with_leading_underscore_blocks_fallback(
+        self, tmp_path
+    ):
+        """レビュー指摘 #372（7巡目）: `_NewParser`のようなPEP8の非公開クラス
+        命名（先頭アンダースコア + CapWords）も、クラス名らしいと認識でき、
+        無関係なトップレベル関数への裸leaf一致にフォールバックしない。"""
+        _write(tmp_path, "pkg/mod.py", "def parse():\n    pass\n")
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg._NewParser.parse",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("pkg._NewParser.parse",)
+
     def test_local_variable_inside_function_does_not_satisfy_module_qualified_symbol(
         self, tmp_path
     ):
