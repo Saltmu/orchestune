@@ -335,27 +335,35 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply or ctx.config.parent_issue_number is None:
             return {"status": IntegrationStatus.SUCCESS}
-        if (
-            ctx.failed_tasks
-            or not ctx.merged_tasks
-            or ctx.integration_pr_number is None
-        ):
+        if ctx.failed_tasks or not ctx.merged_tasks:
             return {"status": ctx.status}
 
-        try:
-            ctx.forge.merge_pull_request(ctx.integration_pr_number)
-        except Exception as error:
-            print(
-                "Warning: Failed to auto-merge integration PR "
-                f"#{ctx.integration_pr_number}: {error}",
-                file=sys.stderr,
-            )
-            self._comment_on_merge_failure(ctx, error)
-            return {
-                "status": IntegrationStatus.AUTO_MERGE_FAILED,
-                "error": str(error),
-                "auto_merged": False,
-            }
+        if ctx.integration_pr_number is None:
+            # #373: 前サイクルで`merge_pull_request`は成功していたが、その
+            # 直後（ラベル付与前）にプロセスがクラッシュしたケースの回復経路。
+            # 今サイクルの一時ブランチは既にbase_branchへ統合済みのため差分
+            # 無しでPR作成に失敗する。全対象ブランチの先端が実際にbase_branch
+            # へ含まれていることを確認できた場合に限り、マージ済みとして
+            # ラベル付与・クローズだけを再試行する。1件でも未検証ならfail
+            # closedで何もしない（PR作成が一時的なAPI障害等で失敗しただけの
+            # ケースを誤って完了扱いしないため）。
+            if not self._verify_already_integrated(ctx):
+                return {"status": ctx.status}
+        else:
+            try:
+                ctx.forge.merge_pull_request(ctx.integration_pr_number)
+            except Exception as error:
+                print(
+                    "Warning: Failed to auto-merge integration PR "
+                    f"#{ctx.integration_pr_number}: {error}",
+                    file=sys.stderr,
+                )
+                self._comment_on_merge_failure(ctx, error)
+                return {
+                    "status": IntegrationStatus.AUTO_MERGE_FAILED,
+                    "error": str(error),
+                    "auto_merged": False,
+                }
 
         newly_included = _mark_tasks_included(ctx)
         ctx.newly_included = newly_included
@@ -363,10 +371,37 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         closed_issues = self._close_merged_child_issues(ctx)
         return {
             "status": IntegrationStatus.SUCCESS,
-            "auto_merged": True,
+            "auto_merged": ctx.integration_pr_number is not None,
             "closed_issues": closed_issues,
             "newly_included": newly_included,
         }
+
+    def _verify_already_integrated(self, ctx: IntegrationContext) -> bool:
+        """`ctx.merged_tasks`の全ブランチが実際に`base_branch`へ含まれている
+        ことを確認できた場合のみ`True`を返す（1件でも未検証ならfail closed）。"""
+        base_branch_name = ctx.base_branch.removeprefix("origin/")
+        task_by_subtask_id = {
+            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
+        }
+        for subtask_id in ctx.merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is None:
+                return False
+            branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+            try:
+                if not ctx.forge.is_current_branch_tip_merged_into(
+                    branch_name, base_branch_name
+                ):
+                    return False
+            except Exception as error:
+                print(
+                    "Warning: Failed to verify whether "
+                    f"{branch_name} was already integrated into "
+                    f"{base_branch_name}: {error}",
+                    file=sys.stderr,
+                )
+                return False
+        return True
 
     def _comment_on_merge_failure(
         self, ctx: IntegrationContext, error: Exception
