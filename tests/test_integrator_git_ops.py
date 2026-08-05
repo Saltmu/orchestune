@@ -153,9 +153,9 @@ class TestRunCiVenvDetection:
         assert str((repo_root / ".venv" / "bin").resolve()) in env["PATH"]
 
     def test_climbs_to_workspace_venv_in_monorepo_layout(self, tmp_path):
-        # original_rootが`tools/orchestune`配下にある場合、リポジトリ直下に
-        # venvが見つからなければ3階層上のワークスペースルートのvenvへフォール
-        # バックする。
+        # original_rootが`tools/orchestune`のようにネストして配置されて
+        # おり、リポジトリ直下にvenvが見つからない場合、`.venv`を持つ最初の
+        # 祖先ディレクトリ（ここではワークスペースルート）へフォールバックする。
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         orig_root = tmp_path / "workspace" / "tools" / "orchestune"
@@ -174,6 +174,55 @@ class TestRunCiVenvDetection:
         ]
         env = ci_calls[0].kwargs["env"]
         assert env["VIRTUAL_ENV"] == str(workspace_venv.resolve())
+
+    def test_finds_ancestor_venv_regardless_of_path_name_or_depth(self, tmp_path):
+        # #376 Reproducer: 旧実装は"tools/orchestune"という固定文字列一致と
+        # ちょうど3階層上という決め打ちの深さに依存しており、それ以外の
+        # パス名・ネスト深さのmonorepo配置ではvenvを発見できなかった。
+        # 一般化された祖先探索は、パス名やネストの深さに関わらず`.venv`を
+        # 持つ最も近い祖先を見つけられなければならない。
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        monorepo_root = tmp_path / "my-monorepo"
+        monorepo_venv = monorepo_root / ".venv"
+        (monorepo_venv / "bin").mkdir(parents=True)
+        orig_root = monorepo_root / "packages" / "sub" / "deeply" / "nested"
+        orig_root.mkdir(parents=True)
+
+        merger = self._merger(repo_root, orig_root)
+
+        with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
+            passed, _ = merger.run_ci_with_flaky_check()
+
+        assert passed
+        ci_calls = [
+            c for c in run.call_args_list if "./scripts/local-ci.sh" in c.args[0]
+        ]
+        env = ci_calls[0].kwargs["env"]
+        assert env["VIRTUAL_ENV"] == str(monorepo_venv.resolve())
+
+    def test_prefers_nearest_ancestor_venv_over_a_farther_one(self, tmp_path):
+        # 複数の祖先にvenvが存在する場合、最も近いものを優先する。
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        far_venv = tmp_path / ".venv"
+        (far_venv / "bin").mkdir(parents=True)
+        near_venv = tmp_path / "workspace" / ".venv"
+        (near_venv / "bin").mkdir(parents=True)
+        orig_root = tmp_path / "workspace" / "nested"
+        orig_root.mkdir(parents=True)
+
+        merger = self._merger(repo_root, orig_root)
+
+        with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
+            passed, _ = merger.run_ci_with_flaky_check()
+
+        assert passed
+        ci_calls = [
+            c for c in run.call_args_list if "./scripts/local-ci.sh" in c.args[0]
+        ]
+        env = ci_calls[0].kwargs["env"]
+        assert env["VIRTUAL_ENV"] == str(near_venv.resolve())
 
     def test_sets_virtual_env_without_extending_path_when_bin_missing(self, tmp_path):
         repo_root = tmp_path / "repo"
@@ -198,9 +247,9 @@ class TestRunCiVenvDetection:
     def test_monorepo_layout_without_any_existing_venv_leaves_virtual_env_untouched(
         self, tmp_path
     ):
-        # "tools/orchestune"配下という条件には合致するが、ワークスペース直下にも
-        # venvが存在しない場合は、どのvenvも見つからずVIRTUAL_ENVは（呼び出し元の
-        # 環境から引き継いだ値のまま）変更されない。
+        # ネストして配置されているが、祖先のどこにもvenvが存在しない場合は
+        # どのvenvも見つからずVIRTUAL_ENVは（呼び出し元の環境から引き継いだ
+        # 値のまま）変更されない。
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         orig_root = tmp_path / "workspace" / "tools" / "orchestune"
