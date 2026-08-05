@@ -663,6 +663,44 @@ depends_on:
         assert eligible_tasks == [task2]
         assert base_branches == {2: "claude/issue-1-gh-native-dep"}
 
+    def test_excludes_task_that_still_has_status_in_progress(self):
+        # #381レビュー対応(Codex P2): stacked launch成功時のtransition_status_label
+        # がadd(status:in-progress)後のremove(status:blocked)に失敗すると、
+        # Issueがstatus:blocked/status:in-progressを同時に持つ中断状態のまま
+        # 残りうる。稼働中セッションを新たなstack候補として二重に扱わないよう
+        # 除外しなければならない。
+        issue2 = IssueRecord(
+            number=2,
+            title="Task 2",
+            body="",
+            labels=("status:blocked", "status:in-progress"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        task1 = _task(1, subtask_id="dep-task")
+        dual_status_task = Task(
+            issue_number=2,
+            subtask_id="task-2",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked", "status:in-progress"),
+            created_at="2026-01-01T00:00:00Z",
+            depends_on=("dep-task",),
+            yaml_error=False,
+        )
+
+        eligible_tasks, _ = _get_stack_eligible_tasks(
+            blocked_issues=[issue2],
+            tasks_by_issue={1: task1, 2: dual_status_task},
+            done_subtask_ids=set(),
+            ci_passed_pr_subtask_ids={"dep-task"},
+            subtask_branch_map={"dep-task": "claude/issue-1-dep-task"},
+        )
+
+        assert eligible_tasks == []
+
     def test_respects_unpassed_native_blocked_by_even_if_yaml_dep_passed(self):
         """GitHub blocked_byの依存先がCI未通過の場合、YAMLの依存先がCI通過していても
         スタッキング対象外となることを検証する。"""

@@ -37,6 +37,17 @@ def _get_stack_eligible_tasks(
         if not task.subtask_id or not task.depends_on:
             continue
 
+        # #381レビュー対応(Codex P2): stacked launch成功時のtransition_status_labelが
+        # add(status:in-progress)後のremove(status:blocked)に失敗すると、Issueが
+        # status:blocked/status:in-progressを同時に持つ中断状態のまま残りうる。
+        # status:in-progressは「実際にactive_worktreesへ実起動済み」の確定
+        # シグナルであり、この状態のIssueを新たなstack候補として扱うと、稼働中
+        # セッションが既に開いたPRを重複起動と誤認しstatus:blocked-human-review
+        # へ誤ってエスカレーションしうる。status:in-progressの除去が完了する
+        # まで候補から除外する。
+        if "status:in-progress" in task.status_labels:
+            continue
+
         # GitHub native blocked_by のうちの一部がマップ未存在で task.depends_on から欠落している場合は
         # 未解決の blocker が存在するため fail closed (スタッキング対象外) とする
         if issue.blocked_by and len(task.depends_on) < len(issue.blocked_by):
