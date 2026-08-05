@@ -135,6 +135,63 @@ class TestEnsureIntegrationPrIdentity:
         assert pr_number == 77
         mock_create_pr.assert_not_called()
 
+    @patch("orchestune.forge.GitHubForge.update_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    def test_reused_pr_is_updated_with_current_merged_tasks(
+        self, mock_create_pr, mock_open_prs, mock_update_pr
+    ):
+        # #375: 複数サイクルにまたがって同じPRへタスクが追加統合される場合、
+        # 再利用時にタイトル・本文を最新のmerged_tasksへ同期する。
+        mock_open_prs.return_value = [
+            PrRecord(
+                number=77,
+                head_ref="integration/temp-parent-issue-100",
+                changed_files=(),
+                base_ref="parent/issue-100",
+                is_cross_repository=False,
+            )
+        ]
+
+        pr_number = ensure_integration_pr(
+            "integration/temp-parent-issue-100",
+            "origin/parent/issue-100",
+            ["task-a", "task-b"],
+        )
+
+        assert pr_number == 77
+        mock_create_pr.assert_not_called()
+        mock_update_pr.assert_called_once()
+        assert mock_update_pr.call_args.args[0] == 77
+        assert "task-a, task-b" in mock_update_pr.call_args.kwargs["title"]
+        assert "task-a, task-b" in mock_update_pr.call_args.kwargs["body"]
+
+    @patch("orchestune.forge.GitHubForge.update_pull_request")
+    @patch("orchestune.forge.GitHubForge.list_open_prs")
+    @patch("orchestune.forge.GitHubForge.create_pull_request")
+    def test_reuse_survives_update_failure(
+        self, mock_create_pr, mock_open_prs, mock_update_pr
+    ):
+        # タイトル・本文の更新自体が一時障害で失敗しても、有効なPRの再利用は
+        # 諦めない（番号は返し、警告のみ出す）。
+        mock_open_prs.return_value = [
+            PrRecord(
+                number=77,
+                head_ref="integration/temp-parent-issue-100",
+                changed_files=(),
+                base_ref="parent/issue-100",
+                is_cross_repository=False,
+            )
+        ]
+        mock_update_pr.side_effect = RuntimeError("transient API failure")
+
+        pr_number = ensure_integration_pr(
+            "integration/temp-parent-issue-100", "origin/parent/issue-100", ["task-a"]
+        )
+
+        assert pr_number == 77
+        mock_create_pr.assert_not_called()
+
     @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch("orchestune.forge.GitHubForge.create_pull_request")
     def test_does_not_reuse_cross_repository_pr_with_same_head_name(

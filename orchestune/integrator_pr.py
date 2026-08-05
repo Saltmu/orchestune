@@ -35,13 +35,6 @@ def ensure_integration_pr(
     forge = forge or GitHubForge()
     try:
         base = base_branch.removeprefix("origin/")
-        existing = [
-            pr
-            for pr in forge.list_open_prs()
-            if _is_reusable_integration_pr(pr, temp_branch, base)
-        ]
-        if existing:
-            return existing[0].number
         if base.startswith("parent/"):
             merge_note = (
                 "このPRはOrchestune Integratorが自動的にマージし、"
@@ -49,15 +42,39 @@ def ensure_integration_pr(
             )
         else:
             merge_note = "最終マージは人間が行ってください。"
+        title = f"Integrate completed tasks ({', '.join(merged_tasks)})"
+        body = (
+            "Orchestune Integrator が仮マージCI通過後に作成した統合PRです。\n"
+            f"統合済みタスク: {', '.join(merged_tasks)}\n\n"
+            f"{merge_note}"
+        )
+
+        existing = [
+            pr
+            for pr in forge.list_open_prs()
+            if _is_reusable_integration_pr(pr, temp_branch, base)
+        ]
+        if existing:
+            pr_number = existing[0].number
+            # #375: 複数サイクルにまたがって同じPRへタスクが追加統合される
+            # ことがあるため、再利用時もタイトル・本文を最新のmerged_tasksへ
+            # 同期する。更新自体が失敗しても、PRそのものは既に有効なので
+            # 再利用を諦めない（警告のみ出し番号は返す）。
+            try:
+                forge.update_pull_request(pr_number, title=title, body=body)
+            except Exception as update_error:
+                print(
+                    f"Warning: Failed to update integration PR #{pr_number}: "
+                    f"{update_error}",
+                    file=sys.stderr,
+                )
+            return pr_number
+
         return forge.create_pull_request(
             head=temp_branch,
             base=base,
-            title=f"Integrate completed tasks ({', '.join(merged_tasks)})",
-            body=(
-                "Orchestune Integrator が仮マージCI通過後に作成した統合PRです。\n"
-                f"統合済みタスク: {', '.join(merged_tasks)}\n\n"
-                f"{merge_note}"
-            ),
+            title=title,
+            body=body,
         )
     except Exception as e:
         print(f"Warning: Failed to ensure integration PR: {e}", file=sys.stderr)
