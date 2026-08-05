@@ -409,6 +409,51 @@ class TestRuleCompleted:
         mock_add_label.assert_called_once_with(280, "status:queued")
         mock_add_comment.assert_called_once()
 
+    def test_abandoned_requeue_adds_queued_before_removing_in_progress(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        active = _active(pid=123, started_at=1_699_999_000.0)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        ctx.prs = [
+            PrRecord(
+                number=210,
+                head_ref=active.branch,
+                changed_files=(),
+                closes_issue_numbers=(active.issue_number,),
+                state="CLOSED",
+            )
+        ]
+        call_order: list[tuple[str, str]] = []
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+            ),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=ctx.prs),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _rule_completed(ctx, "1", active, task)
+
+        assert call_order == [
+            ("add", "status:queued"),
+            ("remove", "status:in-progress"),
+        ]
+
     def test_closed_unmerged_cloud_pr_is_requeued_without_completing_dependency(
         self,
     ):

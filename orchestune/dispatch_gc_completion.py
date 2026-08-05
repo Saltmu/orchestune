@@ -14,6 +14,7 @@ from orchestune.dispatch_gc_git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_rules import NotNeededReviewDispatcher
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree
@@ -99,8 +100,12 @@ def _apply_completed_worktree_outcome(
             except Exception:
                 pass
         remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(active.issue_number, "status:done")
+        transition_status_label(
+            config.resolved_forge,
+            active.issue_number,
+            "status:done",
+            ("status:in-progress",),
+        )
     event["subtask_id"] = decision.subtask_id
     event["commit_sha"] = commit_sha
     return event
@@ -250,8 +255,12 @@ def _finalize_abandoned_cloud_worktree(
         return event
     if config.apply:
         remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(active.issue_number, "status:queued")
+        transition_status_label(
+            config.resolved_forge,
+            active.issue_number,
+            "status:queued",
+            ("status:in-progress",),
+        )
         config.resolved_forge.add_comment(
             active.issue_number,
             "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"

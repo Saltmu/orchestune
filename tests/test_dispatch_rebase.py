@@ -131,6 +131,40 @@ class TestNotifyRecompute:
         mock_add_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:blocked-recompute")
 
+    def test_adds_blocked_labels_before_removing_queued(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        conflict = FootprintConflict(
+            subtask_id="task-a",
+            other_subtask_id="task-b",
+            similarity=0.5,
+            blocked_subtask_id="task-b",
+        )
+        call_order: list[tuple[str, str]] = []
+        with (
+            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+        ):
+            notify_recompute(
+                conflict,
+                "作業内容の要約",
+                parent_issue_number=181,
+                apply=True,
+                issue_number_by_subtask_id={"task-a": 1, "task-b": 2},
+            )
+        assert call_order == [
+            ("add", "status:blocked"),
+            ("remove", "status:queued"),
+            ("add", "status:blocked-recompute"),
+        ]
+
 
 class TestNotifyForceSerial:
     """#200: リトライ上限超過時の強制直列化フォールバック通知。"""

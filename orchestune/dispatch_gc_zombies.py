@@ -12,6 +12,7 @@ from orchestune.dispatch_gc_git import (
     remove_worktree,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.process_utils import is_process_alive
@@ -130,8 +131,12 @@ def _apply_zombie_or_timeout_reclaim(
                 pass
         if worktree_exists:
             remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(active.issue_number, "status:queued")
+        transition_status_label(
+            config.resolved_forge,
+            active.issue_number,
+            "status:queued",
+            ("status:in-progress",),
+        )
         worktree_note = (
             "作業ブランチにWIPコミットを退避した上で、"
             if worktree_exists

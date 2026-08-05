@@ -378,6 +378,130 @@ class TestApplyTaskLaunches:
         assert bad_task not in promotable
 
 
+class TestApplyTaskLaunchesLabelOrdering:
+    """#381: ラベル遷移はadd→removeの順で行われなければならない。remove→addの
+    順だと、途中でプロセスがクラッシュした場合にIssueがどのstatus:*ラベルも
+    持たない状態になり、以降のどのサイクルからも発見できなくなる。"""
+
+    def test_success_path_adds_in_progress_before_removing_queued(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = _task(1, subtask_id="task-1")
+        plans = [TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, 1000.0, config)
+
+        assert call_order == [
+            ("add", "status:in-progress"),
+            ("remove", "status:queued"),
+        ]
+
+    def test_failure_path_adds_new_status_before_removing_queued(self, tmp_path):
+        from unittest.mock import patch
+
+        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        bad_task = _task(1, subtask_id="invalid task@")
+        plans = [
+            TaskLaunchPlan(
+                bad_task, "claude/issue-1-invalid task@", None, "origin/main"
+            )
+        ]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_task_launches(plans, run_state, 1000.0, config)
+
+        assert call_order == [
+            ("add", "status:blocked-human-review"),
+            ("remove", "status:queued"),
+        ]
+
+
+class TestApplyYamlErrorBlockingLabelOrdering:
+    def test_adds_blocked_before_removing_queued(self, tmp_path):
+        from unittest.mock import patch
+
+        from orchestune.dispatch_launch import _apply_yaml_error_blocking
+
+        task = _task(1, subtask_id="task-1", yaml_error=True)
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_yaml_error_blocking([task], config)
+
+        assert call_order == [("add", "status:blocked"), ("remove", "status:queued")]
+
+
 class TestApplyTaskLaunchesRunStatePersistence:
     """#225レビュー対応: 起動ループ中の中間save_run_state呼び出しがconfig.window_seconds/
     open_prsを反映していないと、launch_historyの誤刈り込みやcompleted_worktreesの
