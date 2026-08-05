@@ -61,6 +61,22 @@ class GitHubPullRequestMixin:
         url = stdout.strip().splitlines()[-1]
         return int(url.rstrip("/").rsplit("/", 1)[-1])
 
+    def update_pull_request(self, pr_number: int | str, title: str, body: str) -> None:
+        number = validate_issue_number(pr_number)
+        self._run(
+            [
+                "gh",
+                "pr",
+                "edit",
+                str(number),
+                "--title",
+                title,
+                "--body-file",
+                "-",
+            ],
+            input_text=body,
+        )
+
     def is_branch_merged_into(self, head: str, base: str) -> bool:
         validate_ref_name(head)
         validate_ref_name(base)
