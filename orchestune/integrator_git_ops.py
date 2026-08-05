@@ -109,6 +109,17 @@ class IntegrationMerger:
         except (subprocess.CalledProcessError, OSError):
             pass
 
+    @staticmethod
+    def _find_ancestor_venv(start: Path) -> Path | None:
+        """#376: `start`の祖先ディレクトリを遡り、`.venv`を持つ最初の祖先を
+        返す。monorepo内でこのパッケージがネストして配置されている場合でも、
+        固定の文字列一致やネストの深さに依存せず実際のvenvを見つけられる。"""
+        for ancestor in start.parents:
+            candidate = ancestor / ".venv"
+            if candidate.exists():
+                return candidate
+        return None
+
     def run_ci_with_flaky_check(self) -> tuple[bool, str]:
         # #208: 丸ごとの再実行はしない。既知のflakyテストは呼び出し先の
         # pytest-rerunfailures（quarantineリストに基づく個別リトライ）が
@@ -154,10 +165,8 @@ class IntegrationMerger:
             venv_path = self.repository_root / ".venv"
             if not venv_path.exists():
                 venv_path = self.original_root / ".venv"
-                if "tools/orchestune" in str(venv_path):
-                    parent_venv = venv_path.parent.parent.parent / ".venv"
-                    if parent_venv.exists():
-                        venv_path = parent_venv
+                if not venv_path.exists():
+                    venv_path = self._find_ancestor_venv(self.original_root)
 
         if venv_path and venv_path.exists():
             env["VIRTUAL_ENV"] = str(venv_path.resolve())
