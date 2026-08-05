@@ -388,6 +388,108 @@ class TestFetchFailure:
         )
 
 
+class _UnexpectedGitFailure(RuntimeError):
+    """#374: subprocess.CalledProcessError/OSError以外の想定外例外を模す
+    ための、他の例外型と衝突しない専用の例外。"""
+
+
+class TestUnexpectedException:
+    """#374: merge_and_test_tasks内で想定外の例外（subprocess.CalledProcessError
+    以外）が発生しても、それ以前/以降に処理したタスクの結果や、GitHub側の副作用
+    （ラベル・コメント）とのズレを生まないことを検証する。"""
+
+    def test_is_contained_and_recorded_as_failure_without_blocking_other_tasks(
+        self, integrator_env: IntegratorEnv
+    ):
+        issue_a = make_done_issue(1, subtask_id="task-1")
+        issue_b = make_done_issue(2, subtask_id="task-2")
+        integrator_env.set_done_issues(issue_a, issue_b, done=[issue_a, issue_b])
+
+        def handler(args):
+            if (
+                "merge" in args
+                and "--no-ff" in args
+                and any(_TASK_1_BRANCH in a for a in args)
+            ):
+                raise _UnexpectedGitFailure("disk I/O error")
+            return None
+
+        integrator_env.stub_git(handler)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "partial_success"
+        assert res["merged"] == ["task-2"]
+        assert res["failed"] == ["task-1"]
+
+        # task-1の失敗によるGitHub側の副作用（差し戻し）が、レポート内容と
+        # 一貫して実行されている。
+        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.add_label.assert_called_with(1, "status:queued")
+        comment_body = integrator_env.add_comment.call_args[0][1]
+        assert "Unexpected error during merge/test" in comment_body
+
+        # task-1のクラッシュ相当の失敗が、後続task-2の正常な統合を巻き添えにしない。
+        merge_calls = integrator_env.calls_with("merge", "--no-ff")
+        assert any(_TASK_1_BRANCH in a for c in merge_calls for a in c.args[0])
+        assert any("claude/issue-2-task-2" in a for a in merge_calls[-1].args[0])
+
+    def test_rolls_back_to_pre_merge_sha_when_ci_step_raises_unexpectedly(
+        self, integrator_env: IntegratorEnv
+    ):
+        # `git merge`自体は成功しCI検証の段階で想定外の例外が発生した場合でも、
+        # merge前のHEADへロールバックし、未検証のコミットを後続タスクへ
+        # 持ち越さないことを確認する。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        pre_merge_sha = "cafefeed1234"
+
+        def handler(args):
+            if "rev-parse" in args:
+                return _ok(args, f"{pre_merge_sha}\n")
+            if _is_ci(args):
+                raise _UnexpectedGitFailure("out of memory")
+            return None
+
+        integrator_env.stub_git(handler)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "failure"
+        assert res["failed"] == ["task-1"]
+        reset_calls = integrator_env.calls_with("reset")
+        assert len(reset_calls) == 1
+        assert pre_merge_sha in reset_calls[0].args[0]
+
+    def test_fails_closed_when_recording_the_failure_itself_also_raises(
+        self, integrator_env: IntegratorEnv
+    ):
+        # handle_failure（GitHub側の差し戻し）自体が例外を送出しても、
+        # その後続タスクの処理・全体のレポート作成は継続されなければならない。
+        issue_a = make_done_issue(1, subtask_id="task-1")
+        issue_b = make_done_issue(2, subtask_id="task-2")
+        integrator_env.set_done_issues(issue_a, issue_b, done=[issue_a, issue_b])
+        integrator_env.add_label.side_effect = _UnexpectedGitFailure("GitHub API down")
+
+        def handler(args):
+            if (
+                "merge" in args
+                and "--no-ff" in args
+                and any(_TASK_1_BRANCH in a for a in args)
+            ):
+                raise _UnexpectedGitFailure("disk I/O error")
+            return None
+
+        integrator_env.stub_git(handler)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "partial_success"
+        assert res["merged"] == ["task-2"]
+        assert res["failed"] == ["task-1"]
+        assert "task-1" in res["failed_reasons"]
+        assert "Unexpected error during merge/test" in res["failed_reasons"]["task-1"]
+
+
 class TestCiEnvironment:
     def test_ci_command_receives_the_project_virtualenv(
         self, integrator_env: IntegratorEnv
