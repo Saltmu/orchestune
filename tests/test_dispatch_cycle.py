@@ -218,6 +218,57 @@ class TestDetermineCandidateTasksExcludesDualStatus:
 
         assert [t.issue_number for t in candidate_tasks] == [2]
 
+    def test_excludes_queued_candidate_that_still_has_status_in_progress(self):
+        # #381レビュー対応(Codex P2): transition_status_labelはadd(status:
+        # in-progress)をremove(status:queued)より先に行うため、removeが
+        # 失敗/クラッシュするとIssueがstatus:queued/status:in-progressを
+        # 同時に持つ中断状態のまま残りうる（launch成功時等）。これを通常の
+        # 起動候補として扱うと、稼働中セッションが既に開いたPRを重複起動と
+        # 誤認しstatus:blocked-human-reviewへ誤ってエスカレーションしうる。
+        dual_status_task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            status_labels=("status:in-progress", "status:queued"),
+        )
+        normal_task = _task(
+            issue_number=2,
+            subtask_id="task-b",
+            status_labels=("status:queued",),
+        )
+        issues = IssuesByStatus(
+            queued=[
+                _issue(1, labels=("status:in-progress", "status:queued")),
+                _issue(2, labels=("status:queued",)),
+            ],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+        ctx = _ctx(tasks_by_issue={1: dual_status_task, 2: normal_task})
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
+
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.get_label_actor",
+                return_value="some-user",
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.get_actor_permission",
+                return_value="write",
+            ),
+        ):
+            candidate_tasks, _ = _determine_candidate_tasks(
+                ctx,
+                issues,
+                lock_result,
+                completed_subtask_ids=set(),
+                any_forced_serial=False,
+            )
+
+        assert [t.issue_number for t in candidate_tasks] == [2]
+
 
 class TestGroupByStatus:
     """#156: list_sub_issuesが返す親Issue配下の全Issueを、list_issues_by_label
