@@ -106,6 +106,8 @@ class TestAutoMergeChildIntegration:
         assert res.get("closed_issues") is None
 
     def test_no_auto_merge_when_pr_creation_failed(self, integrator_env: IntegratorEnv):
+        # is_current_branch_tip_merged_into はデフォルトでFalse（integrator_env
+        # フィクスチャ側の既定値）なので、実際にはまだ統合済みでないケース。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.create_pull_request.side_effect = RuntimeError("no commits")
 
@@ -115,6 +117,55 @@ class TestAutoMergeChildIntegration:
         assert res["integration_pr_number"] is None
         integrator_env.merge_pull_request.assert_not_called()
         integrator_env.close_issue.assert_not_called()
+        integrator_env.add_label.assert_not_called()
+        assert res.get("auto_merged") is None
+
+    def test_recovers_label_and_close_when_pr_creation_failed_but_already_merged(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #373: 前サイクルで`merge_pull_request`自体は成功していたが、その直後
+        # （ラベル付与前）にプロセスがクラッシュしたケースを模す。今サイクルの
+        # 一時ブランチは既にbase_branchへ統合済みのため差分無しでPR作成に失敗
+        # する（`integration_pr_number is None`）が、対象ブランチの先端が
+        # 実際にはbase_branchへ既に含まれていることを`is_current_branch_tip_
+        # merged_into`で確認できる場合は、`merge_pull_request`を再度呼ばずに
+        # ラベル付与・クローズだけを再試行できなければならない。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.create_pull_request.side_effect = RuntimeError("no commits")
+        integrator_env.is_current_branch_tip_merged_into.return_value = True
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] == "success"
+        assert res["integration_pr_number"] is None
+        integrator_env.merge_pull_request.assert_not_called()
+        integrator_env.is_current_branch_tip_merged_into.assert_called_once_with(
+            "claude/issue-1-task-1", "parent/issue-100"
+        )
+        integrator_env.add_label.assert_called_once_with(1, "integration:included")
+        integrator_env.close_issue.assert_called_once_with(1, "completed", comment=ANY)
+        assert res["auto_merged"] is False
+        assert res["closed_issues"] == [1]
+        assert res["newly_included"] == ["task-1"]
+
+    def test_verification_exception_fails_closed_when_pr_creation_failed(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #373: 統合済みかどうかの確認自体がAPI障害等で失敗した場合は、
+        # 誤ってラベル付与・クローズしてしまわないようfail closedで何もしない。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.create_pull_request.side_effect = RuntimeError("no commits")
+        integrator_env.is_current_branch_tip_merged_into.side_effect = RuntimeError(
+            "API unavailable"
+        )
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] == "success"
+        integrator_env.merge_pull_request.assert_not_called()
+        integrator_env.add_label.assert_not_called()
+        integrator_env.close_issue.assert_not_called()
+        assert res.get("auto_merged") is None
 
     def test_merge_failure_leaves_pr_open_and_skips_closing(
         self, integrator_env: IntegratorEnv
