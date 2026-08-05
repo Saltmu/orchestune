@@ -62,10 +62,14 @@ def _decide_completed_worktree_outcome(
     )
 
 
+_STALE_PRIMARY_STATUS_LABELS = ("status:in-progress", "status:queued", "status:blocked")
+
+
 def _apply_completed_worktree_outcome(
     active: ActiveWorktree,
     decision: CompletedWorktreeDecision,
     config: DispatcherConfig,
+    active_task: Task | None = None,
 ) -> dict:
     event: dict = {
         "issue_number": active.issue_number,
@@ -100,11 +104,31 @@ def _apply_completed_worktree_outcome(
             except Exception:
                 pass
         remove_worktree(active.worktree_path)
+        # #381レビュー対応(Codex P2): launch成功時のtransition_status_labelが
+        # add(status:in-progress)後のremove(status:queued/status:blocked)に
+        # 失敗すると、Issueにこれらの旧ラベルが取り残されたまま完了する
+        # ことがある。ここでstatus:in-progressだけを除去すると、Issueは
+        # status:done + 取り残されたstatus:queued（または status:blocked）
+        # を同時に持つことになる。前者の組み合わせは
+        # `_reconcile_dual_status_tasks`が「Integratorのロールバック
+        # (#254)」と誤認してstatus:doneを除去してしまい、完了済みタスクが
+        # 再キューイングされ二重実行されうる。完了確定時点で判明している
+        # 一次status:*ラベルはまとめて除去し、Issueをstatus:doneのみへ
+        # 確実に収束させる。
+        stale_labels = (
+            tuple(
+                label
+                for label in _STALE_PRIMARY_STATUS_LABELS
+                if label in active_task.status_labels
+            )
+            if active_task is not None
+            else ("status:in-progress",)
+        )
         transition_status_label(
             config.resolved_forge,
             active.issue_number,
             "status:done",
-            ("status:in-progress",),
+            stale_labels,
         )
     event["subtask_id"] = decision.subtask_id
     event["commit_sha"] = commit_sha
@@ -117,7 +141,7 @@ def _finalize_completed_worktree(
     decision = _decide_completed_worktree_outcome(
         active, active_task, config.worktree_root.parent
     )
-    return _apply_completed_worktree_outcome(active, decision, config)
+    return _apply_completed_worktree_outcome(active, decision, config, active_task)
 
 
 def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
