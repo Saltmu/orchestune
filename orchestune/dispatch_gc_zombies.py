@@ -12,7 +12,10 @@ from orchestune.dispatch_gc_git import (
     remove_worktree,
     worktree_has_uncommitted_changes,
 )
-from orchestune.dispatch_labels import transition_status_label
+from orchestune.dispatch_labels import (
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.process_utils import is_process_alive
@@ -50,6 +53,7 @@ class ZombieOrTimeoutReclaim:
     reason: str
     is_timeout: bool
     process_alive: bool
+    status_labels: tuple[str, ...] = ("status:in-progress",)
 
 
 def _decide_zombie_or_timeout_reclaims(
@@ -85,6 +89,11 @@ def _decide_zombie_or_timeout_reclaims(
                 reason="process disappeared" if is_zombie else "timeout exceeded",
                 is_timeout=is_timeout,
                 process_alive=process_alive,
+                status_labels=(
+                    active_task.status_labels
+                    if active_task is not None
+                    else ("status:in-progress",)
+                ),
             )
         )
     return reclaims
@@ -131,22 +140,46 @@ def _apply_zombie_or_timeout_reclaim(
                 pass
         if worktree_exists:
             remove_worktree(active.worktree_path)
-        transition_status_label(
-            config.resolved_forge,
-            active.issue_number,
-            "status:queued",
-            ("status:in-progress",),
-        )
         worktree_note = (
             "作業ブランチにWIPコミットを退避した上で、"
             if worktree_exists
             else "物理worktreeが見つからなかったため、"
         )
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            f"タスク実行が {reason} のため、GCにより{worktree_note}"
-            "タスクを再キューイング（status:queued）しました。",
+        already_escalated = any(
+            label in reclaim.status_labels for label in TERMINAL_ESCALATION_LABELS
         )
+        if already_escalated:
+            # 中断した以前の遷移でstatus:blocked-human-review/
+            # status:manual-merge-requiredが既に付与されている場合、
+            # status:queuedへ書き換えると人間の確認要求を握りつぶして
+            # 自動的に再起動してしまう。物理的な後始末のみ行い、
+            # ラベルには一切触れない。
+            config.resolved_forge.add_comment(
+                active.issue_number,
+                f"タスク実行が {reason} のため、GCにより{worktree_note}"
+                "後始末しました。既に人間の確認が必要な状態のため、"
+                "status:*ラベルは変更していません。",
+            )
+        else:
+            # #381レビュー対応(Codex P2): stacked launch等の中断した遷移で
+            # status:blockedが取り残されている場合も併せて除去し、
+            # status:queuedへ確実に収束させる。
+            stale_labels = tuple(
+                label
+                for label in ("status:in-progress", "status:blocked")
+                if label in reclaim.status_labels
+            )
+            transition_status_label(
+                config.resolved_forge,
+                active.issue_number,
+                "status:queued",
+                stale_labels,
+            )
+            config.resolved_forge.add_comment(
+                active.issue_number,
+                f"タスク実行が {reason} のため、GCにより{worktree_note}"
+                "タスクを再キューイング（status:queued）しました。",
+            )
         del run_state.active_worktrees[reclaim.key]
 
     return {
