@@ -6,6 +6,19 @@ from collections.abc import Iterable
 
 from orchestune.forge import Forge
 
+#: 一次status:*ラベル（他のプライマリラベルと排他的に遷移すべきもの）。
+#: 中断した`transition_status_label`呼び出しの取り残しを一括除去する際に使う。
+PRIMARY_STATUS_LABELS = ("status:in-progress", "status:queued", "status:blocked")
+
+#: 人間の確認・手動対応を明示的に要求している終端エスカレーション状態。
+#: GCなどの自動処理がこれらを検知した場合、status:queuedへの書き換えのような
+#: 自動requeueでラベルを上書きしてはならない（人間の確認を経ないまま
+#: 自動的に再起動されてしまうため）。
+TERMINAL_ESCALATION_LABELS = (
+    "status:blocked-human-review",
+    "status:manual-merge-required",
+)
+
 
 def transition_status_label(
     forge: Forge,

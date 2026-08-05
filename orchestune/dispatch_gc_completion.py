@@ -14,7 +14,11 @@ from orchestune.dispatch_gc_git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
-from orchestune.dispatch_labels import transition_status_label
+from orchestune.dispatch_labels import (
+    PRIMARY_STATUS_LABELS,
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.dispatch_rules import NotNeededReviewDispatcher
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree
@@ -60,9 +64,6 @@ def _decide_completed_worktree_outcome(
     return CompletedWorktreeDecision(
         action="completed", subtask_id=subtask_id, commit_sha=commit_sha
     )
-
-
-_STALE_PRIMARY_STATUS_LABELS = ("status:in-progress", "status:queued", "status:blocked")
 
 
 def _apply_completed_worktree_outcome(
@@ -118,7 +119,7 @@ def _apply_completed_worktree_outcome(
         stale_labels = (
             tuple(
                 label
-                for label in _STALE_PRIMARY_STATUS_LABELS
+                for label in PRIMARY_STATUS_LABELS
                 if label in active_task.status_labels
             )
             if active_task is not None
@@ -279,17 +280,35 @@ def _finalize_abandoned_cloud_worktree(
         return event
     if config.apply:
         remove_worktree(active.worktree_path)
-        transition_status_label(
-            config.resolved_forge,
-            active.issue_number,
-            "status:queued",
-            ("status:in-progress",),
+        status_labels = (
+            active_task.status_labels if active_task else ("status:in-progress",)
         )
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
-            "GCによりタスクを再キューイング（status:queued）しました。",
-        )
+        # #381レビュー対応(Codex P2): 中断した以前の遷移でstatus:blocked-human-review
+        # /status:manual-merge-requiredが既に付与されている場合、status:queuedへの
+        # 書き換えは人間の確認要求を握りつぶしてしまう。その場合はラベルに触れない。
+        if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
+            config.resolved_forge.add_comment(
+                active.issue_number,
+                "タスクのPRがマージされずにクローズされたためworktreeを回収しました。"
+                "既に人間の確認が必要な状態のため、status:*ラベルは変更していません。",
+            )
+        else:
+            # stacked launch等の中断した遷移でstatus:blockedが取り残されている
+            # 場合も併せて除去し、status:queuedへ確実に収束させる。
+            stale_labels = tuple(
+                label for label in PRIMARY_STATUS_LABELS if label in status_labels
+            )
+            transition_status_label(
+                config.resolved_forge,
+                active.issue_number,
+                "status:queued",
+                stale_labels,
+            )
+            config.resolved_forge.add_comment(
+                active.issue_number,
+                "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
+                "GCによりタスクを再キューイング（status:queued）しました。",
+            )
     event["action"] = "abandoned_pr_requeued"
     return event
 
