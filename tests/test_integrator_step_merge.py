@@ -511,9 +511,6 @@ class TestCiEnvironment:
         env = ci_calls[0].kwargs["env"]
 
         expected_venv = integrator.original_root / ".venv"
-        if "tools/orchestune" in str(expected_venv):
-            expected_venv = expected_venv.parent.parent.parent / ".venv"
-
         assert env["VIRTUAL_ENV"] == str(expected_venv.resolve())
         assert env["PATH"].startswith(str(expected_venv / "bin"))
 

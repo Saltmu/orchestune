@@ -583,6 +583,30 @@ class TestCreatePullRequest:
         gh_run.assert_not_called()
 
 
+class TestUpdatePullRequest:
+    def test_edits_title_and_body_via_stdin(self, forge: GitHubForge, gh_run):
+        forge.update_pull_request(
+            315, title="Integrate completed tasks (task-a)", body="body text"
+        )
+
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "pr",
+            "edit",
+            "315",
+            "--title",
+            "Integrate completed tasks (task-a)",
+            "--body-file",
+            "-",
+        ]
+        assert gh_run.call_args.kwargs.get("input") == "body text"
+
+    def test_rejects_invalid_pr_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.update_pull_request("not-a-number", title="t", body="b")
+        gh_run.assert_not_called()
+
+
 class TestMergePullRequest:
     def test_merges_with_merge_commit(self, forge: GitHubForge, gh_run):
         forge.merge_pull_request(315)
