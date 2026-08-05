@@ -327,6 +327,38 @@ class TestApplyZombieOrTimeoutReclaim:
             "reason": "process disappeared",
         }
 
+    def test_reclaim_adds_queued_before_removing_in_progress(self, tmp_path):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        active = _active(worktree_path=str(tmp_path))
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active)
+        config = DispatcherConfig(apply=True)
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill"),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        assert call_order == [
+            ("add", "status:queued"),
+            ("remove", "status:in-progress"),
+        ]
+
     def test_timeout_apply_kills_alive_process(self, tmp_path):
         active = _active(pid=111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})

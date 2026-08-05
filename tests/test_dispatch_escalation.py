@@ -81,6 +81,28 @@ class TestApplyHumanReviewEscalation:
         mock_add.assert_called_once_with(1, "status:blocked-human-review")
         mock_comment.assert_called_once_with(1, "理由")
 
+    def test_adds_human_review_label_before_removing_old_labels(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        call_order: list[tuple[str, str]] = []
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            apply_human_review_escalation(1, ("status:in-progress",), "理由")
+
+        assert call_order == [
+            ("add", "status:blocked-human-review"),
+            ("remove", "status:in-progress"),
+        ]
+
     def test_removes_both_queued_and_blocked_when_both_present(self):
         with (
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,

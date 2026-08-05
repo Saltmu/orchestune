@@ -126,6 +126,43 @@ class TestFinalizeCompletedWorktree:
         mock_add_label.assert_called_once_with(280, "status:done")
         assert event["commit_sha"] == "deadbeef"
 
+    def test_completed_adds_done_before_removing_in_progress(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True)
+        call_order: list[tuple[str, str]] = []
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="deadbeef\n", stderr=""
+            )
+            _finalize_completed_worktree(active, task, config)
+
+        assert call_order == [
+            ("add", "status:done"),
+            ("remove", "status:in-progress"),
+        ]
+
 
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""
