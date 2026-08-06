@@ -376,8 +376,10 @@ def _apply_auto_rebase(
             )
 
         assert config.dispatch_target is not None
+        # #384: rebaseで書き換え済みの履歴を安全に再pushできるよう、
+        # force_push=Trueを明示的に渡す（初回起動時のみのforce無しpushと区別する）。
         handle = config.dispatch_target.launch(
-            active_task, active.branch, Path(active.worktree_path)
+            active_task, active.branch, Path(active.worktree_path), force_push=True
         )
         active.pid = handle.pid
         active.external_id = handle.external_id
@@ -396,10 +398,19 @@ def _apply_auto_rebase(
             "status:manual-merge-required",
         )
 
-        msg = "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n"
+        # #384: cmd_args[0]は"git"（rebaseとpushで共通）のため、cmd全体を見て
+        # push失敗をコンフリクトと誤判定しないよう区別する。
         cmd_args = getattr(e, "cmd", [])
         if cmd_args and "local-ci.sh" in cmd_args[0]:
             msg = "自動リベース後のローカルCI実行に失敗しました。手動で修正を行ってください。\n"
+        elif cmd_args and "push" in cmd_args:
+            msg = (
+                "自動リベース後のブランチpushに失敗しました"
+                "（rebase自体はコンフリクトなく成功しています）。"
+                "手動でpushと後続の対応を行ってください。\n"
+            )
+        else:
+            msg = "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n"
 
         config.resolved_forge.add_comment(
             active.issue_number,
