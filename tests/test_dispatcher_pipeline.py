@@ -160,7 +160,10 @@ class TestAppendEventLog:
 
 
 class TestRecoveredActiveTask:
-    def test_run_cycle_keeps_recovered_local_task_in_progress(self, tmp_path):
+    def test_run_cycle_reclaims_recovered_task_without_pr_or_worktree(self, tmp_path):
+        """#383: PRが見つからないまま自己修復されたエントリ（started_at=None、
+        物理worktreeも不在）は、同一サイクル内のゾンビGCにより即座に回収され、
+        status:queuedへ再キューイングされること（無期限のクオータ占有を防ぐ）。"""
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -176,6 +179,7 @@ class TestRecoveredActiveTask:
             patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment"),
             patch(
                 "orchestune.git_cli.subprocess.run",
                 return_value=MagicMock(stdout=""),
@@ -190,11 +194,10 @@ class TestRecoveredActiveTask:
 
             report = run_dispatch_cycle(config)
 
-        restored = load_run_state(config.run_state_path).active_worktrees["1"]
-        assert restored.started_at is None
-        assert report.completion_events == []
-        mock_add_label.assert_not_called()
-        mock_remove_label.assert_not_called()
+        assert "1" not in load_run_state(config.run_state_path).active_worktrees
+        assert [e["action"] for e in report.completion_events] == ["gc_reclaimed"]
+        mock_remove_label.assert_called_once_with(1, "status:in-progress")
+        mock_add_label.assert_called_once_with(1, "status:queued")
 
     def test_next_cycle_completes_recovered_task_when_closing_pr_appears(
         self, tmp_path

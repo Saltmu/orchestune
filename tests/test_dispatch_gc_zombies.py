@@ -49,24 +49,34 @@ def _task(**overrides):
 
 
 class TestCollectZombiesAndTimeouts:
-    def test_unknown_start_time_is_not_timed_out(self, tmp_path):
+    def test_unknown_start_time_without_worktree_is_reclaimed_as_zombie(self, tmp_path):
+        """#383: 対応PR未検出のまま自己修復されたエントリ（pid=None,
+        started_at=None, 物理worktree不在）は、タイムアウト判定は発火しない
+        ものの、ゾンビ相当として回収されクオータを解放すること。"""
         active = _active(
             started_at=None,
             worktree_path=str(tmp_path / "missing-worktree"),
             pid=None,
         )
         run_state = RunState(active_worktrees={"280": active})
+        task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(apply=True, task_timeout_seconds=60)
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
-            events = _collect_zombies_and_timeouts(run_state, {}, config)
+            events = _collect_zombies_and_timeouts(
+                run_state, {active.issue_number: task}, config
+            )
 
-        assert events == []
-        assert run_state.active_worktrees == {"280": active}
-        mock_remove_label.assert_not_called()
+        assert len(events) == 1
+        assert events[0]["reason"] == "process disappeared"
+        assert run_state.active_worktrees == {}
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        mock_add_label.assert_called_once_with(280, "status:queued")
 
     def test_timeout_without_physical_worktree_requeues_issue(self, tmp_path):
         """#198: run_stateを削除するGC回収は、worktreeの有無にかかわらず
@@ -198,6 +208,32 @@ class TestDecideZombieOrTimeoutReclaims:
             )
 
         assert reclaims == []
+
+    def test_self_healed_entry_without_worktree_or_start_time_is_reclaimed(
+        self, tmp_path
+    ):
+        """#383: run_state自己修復で対応PRが見つからず復元されたエントリ
+        （pid=None, started_at=None, 物理worktree不在）は、通常のゾンビ判定
+        （worktree実在+dirty）にもタイムアウト判定（started_at必須）にも
+        永久に該当できずクオータを占有し続けていた。プロセス不在・worktree
+        不在・開始時刻不明が揃った場合はゾンビ相当として回収されること。"""
+        active = _active(
+            worktree_path=str(tmp_path / "missing-worktree"),
+            pid=None,
+            started_at=None,
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True, zombie_gc=True, task_timeout_seconds=0)
+
+        reclaims = _decide_zombie_or_timeout_reclaims(
+            run_state, {}, config, None, now=2_000.0
+        )
+
+        assert len(reclaims) == 1
+        reclaim = reclaims[0]
+        assert reclaim.reason == "process disappeared"
+        assert reclaim.is_timeout is False
+        assert reclaim.process_alive is False
 
     def test_held_worktree_path_is_excluded(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
