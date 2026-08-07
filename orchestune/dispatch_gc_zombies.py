@@ -110,6 +110,15 @@ def _apply_zombie_or_timeout_reclaim(
     active = reclaim.active
     reason = reclaim.reason
     if config.apply:
+        # #385: タイムアウトかつプロセス生存中の場合、対象プロセスがまだ
+        # worktreeへ書き込み中の可能性がある。WIPバックアップより先に停止させ
+        # ないと、書き込み途中の不整合なスナップショットやgit操作のロック
+        # 競合を招きうる（ゾンビ判定はプロセスが既に停止済みのため無関係）。
+        if reclaim.is_timeout and active.pid and reclaim.process_alive:
+            try:
+                os.kill(active.pid, 9)
+            except Exception:
+                pass
         worktree_exists = os.path.exists(active.worktree_path)
         if worktree_exists:
             backup_error = backup_wip_commit(
@@ -123,11 +132,6 @@ def _apply_zombie_or_timeout_reclaim(
                     f"エラー詳細:\n```\n{backup_error}\n```",
                 )
                 return None
-        if reclaim.is_timeout and active.pid and reclaim.process_alive:
-            try:
-                os.kill(active.pid, 9)
-            except Exception:
-                pass
         if worktree_exists:
             remove_worktree(active.worktree_path)
         config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
