@@ -349,6 +349,42 @@ class TestApplyZombieOrTimeoutReclaim:
 
         mock_kill.assert_called_once_with(111, 9)
 
+    def test_timeout_apply_kills_process_before_backing_up_wip(self, tmp_path):
+        """#385: タイムアウトかつプロセス生存中のケースでは、対象プロセスが
+        まだworktreeへ書き込み中である可能性があるため、WIPバックアップより
+        先にプロセスを停止（os.kill）しなければならない。順序が逆だと、
+        書き込み途中の不整合なスナップショットやgit操作のロック競合を招く。"""
+        active = _active(pid=111, worktree_path=str(tmp_path))
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active, reason="timeout exceeded", is_timeout=True, process_alive=True
+        )
+        config = DispatcherConfig(apply=True)
+
+        call_order: list[str] = []
+
+        def fake_kill(pid, sig):
+            call_order.append("kill")
+
+        def fake_backup(worktree_path, message):
+            call_order.append("backup")
+            return None
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                side_effect=fake_backup,
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill", side_effect=fake_kill),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        assert call_order == ["kill", "backup"]
+
     def test_timeout_apply_skips_kill_when_process_already_dead(self, tmp_path):
         active = _active(pid=111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
