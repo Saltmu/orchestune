@@ -3,12 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
+from orchestune.dag_models import (
+    compile_extra_ignore_patterns,
+    extract_dag_ignore_patterns,
+)
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_postcycle import (
@@ -190,6 +195,21 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
     parser.error(f"invalid dispatcher config: {message}")
 
 
+# orchestune.toml / pyproject.toml の [tool.orchestune] は本来dispatcher専用の
+# 設定名前空間だが、orchestune-dag CLI（dag_cli.py）も同じファイル・セクションから
+# dag_ignore_patterns を読み込む（#398）。dispatcherの未知キー検知に巻き込まれて
+# `orchestune-dispatch` がクラッシュしないよう、他ツール由来と判明しているキーは
+# ここで明示的に無視する（dispatcher自身の設定としては使用しない）。
+_NON_DISPATCHER_CONFIG_KEYS = frozenset({"dag_ignore_patterns"})
+
+
+def _normalize_config_key(key: str) -> str:
+    normalized_key = key.replace("-", "_")
+    if normalized_key == "parent_issue_number":
+        return "parent_issue"
+    return normalized_key
+
+
 def _config_defaults(
     parser: argparse.ArgumentParser, config_data: dict[str, Any]
 ) -> dict[str, Any]:
@@ -213,9 +233,9 @@ def _config_defaults(
     defaults: dict[str, Any] = {}
 
     for key, value in config_data.items():
-        normalized_key = key.replace("-", "_")
-        if normalized_key == "parent_issue_number":
-            normalized_key = "parent_issue"
+        normalized_key = _normalize_config_key(key)
+        if normalized_key in _NON_DISPATCHER_CONFIG_KEYS:
+            continue
         action = actions.get(normalized_key)
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")
@@ -256,6 +276,13 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
     if config_data:
         parser.set_defaults(**_config_defaults(parser, config_data))
 
+    try:
+        dag_ignore_patterns = compile_extra_ignore_patterns(
+            extract_dag_ignore_patterns(config_data)
+        )
+    except (ValueError, re.error) as e:
+        _config_error(parser, str(e))
+
     args = parser.parse_args(argv)
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
         os.environ
@@ -287,6 +314,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             zombie_gc=args.zombie_gc,
             not_needed_review_state_path=args.not_needed_review_state_path,
             ci_command=shlex.split(args.ci_command) if args.ci_command else None,
+            dag_ignore_patterns=dag_ignore_patterns,
         )
     except ValueError as e:
         _config_error(parser, str(e))

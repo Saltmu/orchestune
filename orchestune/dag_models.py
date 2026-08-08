@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,29 @@ _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)config\.py$"),
     re.compile(r"(^|/)settings\.py$"),
 )
+
+
+def compile_extra_ignore_patterns(
+    patterns: Iterable[str],
+) -> tuple[re.Pattern[str], ...]:
+    """Compile user-supplied regex strings for use as extra ignore patterns.
+
+    Raises re.error if any pattern is not a valid regular expression.
+    """
+    return tuple(re.compile(pattern) for pattern in patterns)
+
+
+def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
+    """Validate and return the `dag_ignore_patterns` list from a loaded config dict.
+
+    Shared by orchestune-dag (dag_cli.py) and orchestune-dispatch
+    (dispatcher.py), which may both read this setting from the same
+    orchestune.toml / pyproject.toml `[tool.orchestune]` table.
+    """
+    patterns = config.get("dag_ignore_patterns", [])
+    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+        raise ValueError("'dag_ignore_patterns' must be a list of strings")
+    return patterns
 
 
 def normalize_footprint_path(path: str) -> str:
@@ -50,9 +74,14 @@ def normalize_footprint_path(path: str) -> str:
     return normalized
 
 
-def is_ignored_footprint(path: str) -> bool:
+def is_ignored_footprint(
+    path: str, extra_patterns: Iterable[re.Pattern[str]] = ()
+) -> bool:
     normalized = normalize_footprint_path(path)
-    return any(pattern.search(normalized) for pattern in _IGNORED_FOOTPRINT_PATTERNS)
+    return any(
+        pattern.search(normalized)
+        for pattern in (*_IGNORED_FOOTPRINT_PATTERNS, *extra_patterns)
+    )
 
 
 class DagCycleError(ValueError):
@@ -81,9 +110,17 @@ class SubTask:
         normalized = tuple(normalize_footprint_path(p) for p in self.footprint)
         object.__setattr__(self, "footprint", normalized)
 
-    def touch_set(self) -> frozenset[str]:
+    def touch_set(
+        self, extra_ignored_patterns: Iterable[re.Pattern[str]] = ()
+    ) -> frozenset[str]:
+        # is_ignored_footprintをself.footprintの各パスに対して複数回呼ぶため、
+        # ジェネレータ等の使い捨てiterableが渡されると2件目以降が空になる問題を
+        # 避けてtupleへ実体化する。
+        extra_ignored_patterns = tuple(extra_ignored_patterns)
         footprint = frozenset(
-            path for path in self.footprint if not is_ignored_footprint(path)
+            path
+            for path in self.footprint
+            if not is_ignored_footprint(path, extra_ignored_patterns)
         )
         return footprint | frozenset(self.symbols)
 

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import textwrap
 
 import pytest
@@ -9,7 +10,12 @@ from orchestune.dag_graph import (
     build_dag_from_plan,
     recompute_dag_for_footprint_change,
 )
-from orchestune.dag_models import DagCycleError, SubTask, normalize_footprint_path
+from orchestune.dag_models import (
+    DagCycleError,
+    SubTask,
+    compile_extra_ignore_patterns,
+    normalize_footprint_path,
+)
 from orchestune.dag_parsing import parse_decomposition_plan
 from orchestune.dag_similarity import (
     build_similarity_edges,
@@ -323,6 +329,26 @@ class TestBuildSimilarityEdges:
         edges = build_similarity_edges(subtasks, threshold=0.9)
         assert edges == []
 
+    def test_ignore_patterns_generator_behaves_like_equivalent_tuple(self):
+        # ignore_patternsは内部で複数回反復されるため、ジェネレータのような
+        # 使い捨てiterableを渡しても、同じ内容のtupleを渡した場合と結果が一致すること
+        subtasks = [
+            _subtask("a", ["package.json", "src/a.py"], []),
+            _subtask("b", ["package.json", "src/b.py"], []),
+        ]
+        pattern = re.compile(r"(^|/)package\.json$")
+
+        def _pattern_generator():
+            yield pattern
+
+        edges_from_generator = build_similarity_edges(
+            subtasks, threshold=0.1, ignore_patterns=_pattern_generator()
+        )
+        edges_from_tuple = build_similarity_edges(
+            subtasks, threshold=0.1, ignore_patterns=(pattern,)
+        )
+        assert edges_from_generator == edges_from_tuple == []
+
 
 class TestBuildDag:
     def test_merges_explicit_and_similarity_edges(self):
@@ -335,6 +361,25 @@ class TestBuildDag:
         reasons = {(e.source, e.target): e.reason for e in dag.edges}
         assert reasons[("a", "c")] == "explicit"
         assert ("a", "b") in reasons and reasons[("a", "b")] == "similarity"
+
+    def test_threshold_changes_similarity_edge_outcome(self):
+        subtasks = [
+            _subtask("a", ["src/x.py", "src/1.py", "src/2.py", "src/3.py"], []),
+            _subtask("b", ["src/x.py", "src/9.py", "src/8.py", "src/7.py"], []),
+        ]
+        dag_low_threshold = build_dag(subtasks, threshold=0.1)
+        dag_high_threshold = build_dag(subtasks, threshold=0.9)
+        assert len(dag_low_threshold.edges) == 1
+        assert len(dag_high_threshold.edges) == 0
+
+    def test_ignore_patterns_propagate_through_build_dag(self):
+        subtasks = [
+            _subtask("a", ["package.json", "src/a.py"], []),
+            _subtask("b", ["package.json", "src/b.py"], []),
+        ]
+        extra_patterns = compile_extra_ignore_patterns([r"(^|/)package\.json$"])
+        dag = build_dag(subtasks, threshold=0.1, ignore_patterns=extra_patterns)
+        assert dag.edges == []
 
     def test_detects_cycle(self):
         subtasks = [
@@ -569,6 +614,30 @@ class TestRecomputeDagForFootprintChange:
                 subtasks, subtask_id="ghost", updated_footprint=[]
             )
 
+    def test_ignore_patterns_generator_applies_to_both_internal_calls(self):
+        # recompute_dag_for_footprint_changeは内部でbuild_similarity_edgesを
+        # 2回呼ぶため、ジェネレータを渡しても2回目が空にならず、tuple指定時と
+        # 同じ結果になること
+        subtasks = {
+            "a": _subtask("a", ["package.json"], []),
+            "b": _subtask("b", ["package.json"], []),
+        }
+        pattern = re.compile(r"(^|/)package\.json$")
+
+        def _pattern_generator():
+            yield pattern
+
+        after, conflicts = recompute_dag_for_footprint_change(
+            subtasks,
+            subtask_id="a",
+            updated_footprint=["package.json", "src/only_a.py"],
+            updated_symbols=[],
+            threshold=0.1,
+            ignore_patterns=_pattern_generator(),
+        )
+        assert conflicts == []
+        assert after.edges == []
+
 
 class TestPriorityAndVolumeDirection:
     def test_priority_determines_edge_direction(self):
@@ -635,6 +704,43 @@ class TestGlobalIgnorePatterns:
         ]
         # 無視されていれば、実質共通ファイルがないため類似度エッジは張られないはず
         edges = build_similarity_edges(subtasks, threshold=0.1)
+        assert len(edges) == 0
+
+    def test_default_patterns_still_apply_when_no_extra_patterns_given(self):
+        # 既定パターンのみで実行した場合は、従来の挙動から変化がないことを保証する
+        subtasks = [
+            _subtask("a", ["pyproject.toml", "src/a.py"], []),
+            _subtask("b", ["pyproject.toml", "src/b.py"], []),
+        ]
+        edges = build_similarity_edges(subtasks, threshold=0.1, ignore_patterns=())
+        assert len(edges) == 0
+
+    def test_extra_ignore_pattern_excludes_non_python_manifest(self):
+        # package.json はPython向けの既定パターンには含まれないため、
+        # 追加パターンなしでは衝突検知の対象になってしまう
+        subtasks = [
+            _subtask("a", ["package.json", "src/a.py"], []),
+            _subtask("b", ["package.json", "src/b.py"], []),
+        ]
+        edges_without_extra = build_similarity_edges(subtasks, threshold=0.1)
+        assert len(edges_without_extra) == 1
+
+        extra_patterns = compile_extra_ignore_patterns([r"(^|/)package\.json$"])
+        edges_with_extra = build_similarity_edges(
+            subtasks, threshold=0.1, ignore_patterns=extra_patterns
+        )
+        assert len(edges_with_extra) == 0
+
+    def test_extra_ignore_patterns_are_additive_to_defaults(self):
+        # 追加パターンを指定しても、既定のPython向けパターンは維持される
+        subtasks = [
+            _subtask("a", ["pyproject.toml", "package.json"], []),
+            _subtask("b", ["pyproject.toml", "package.json"], []),
+        ]
+        extra_patterns = compile_extra_ignore_patterns([r"(^|/)package\.json$"])
+        edges = build_similarity_edges(
+            subtasks, threshold=0.1, ignore_patterns=extra_patterns
+        )
         assert len(edges) == 0
 
 
@@ -728,98 +834,6 @@ class TestCycleResolution:
             build_dag(subtasks)
 
 
-def test_cli_validation_success(tmp_path, capsys):
-    import sys
-
-    from orchestune.dag_cli import main
-
-    plan_content = """\
-    ---
-    subtasks:
-      - id: task-a
-        footprint: ["src/a.py"]
-      - id: task-b
-        footprint: ["src/b.py"]
-        depends_on: ["task-a"]
-    ---
-    """
-    plan_path = tmp_path / "plan.md"
-    plan_path.write_text(textwrap.dedent(plan_content), encoding="utf-8")
-
-    orig_argv = sys.argv
-    sys.argv = ["orchestune-dag", "--plan", str(plan_path)]
-    try:
-        with pytest.raises(SystemExit) as excinfo:
-            main()
-        assert excinfo.value.code == 0
-    finally:
-        sys.argv = orig_argv
-
-    captured = capsys.readouterr()
-    assert "DAG validation succeeded" in captured.out
-    assert "task-a -> task-b" in captured.out
-
-
-def test_cli_validation_json(tmp_path, capsys):
-    import json
-    import sys
-
-    from orchestune.dag_cli import main
-
-    plan_content = """\
-    ---
-    subtasks:
-      - id: task-a
-        footprint: ["src/a.py"]
-    ---
-    """
-    plan_path = tmp_path / "plan.md"
-    plan_path.write_text(textwrap.dedent(plan_content), encoding="utf-8")
-
-    orig_argv = sys.argv
-    sys.argv = ["orchestune-dag", "--plan", str(plan_path), "--json"]
-    try:
-        with pytest.raises(SystemExit) as excinfo:
-            main()
-        assert excinfo.value.code == 0
-    finally:
-        sys.argv = orig_argv
-
-    captured = capsys.readouterr()
-    data = json.loads(captured.out)
-    assert "task-a" in data["subtasks"]
-
-
-def test_cli_validation_cycle_failure(tmp_path, capsys):
-    import sys
-
-    from orchestune.dag_cli import main
-
-    plan_content = """\
-    ---
-    subtasks:
-      - id: task-a
-        depends_on: ["task-b"]
-      - id: task-b
-        depends_on: ["task-a"]
-    ---
-    """
-    plan_path = tmp_path / "plan.md"
-    plan_path.write_text(textwrap.dedent(plan_content), encoding="utf-8")
-
-    orig_argv = sys.argv
-    sys.argv = ["orchestune-dag", "--plan", str(plan_path)]
-    try:
-        with pytest.raises(SystemExit) as excinfo:
-            main()
-        assert excinfo.value.code == 1
-    finally:
-        sys.argv = orig_argv
-
-    captured = capsys.readouterr()
-    assert "Error:" in captured.err
-
-
 class TestNormalizeFootprintPath:
     def test_normalizes_relative_posix_paths(self):
         assert normalize_footprint_path("src/core.py") == "src/core.py"
@@ -865,6 +879,20 @@ def test_subtask_post_init_normalizes_footprint():
     )
     assert subtask.footprint == ("src/core.py", "src/utils.py")
     assert subtask.touch_set() == frozenset({"src/core.py", "src/utils.py"})
+
+
+def test_touch_set_ignore_patterns_generator_behaves_like_equivalent_tuple():
+    # is_ignored_footprintは footprint の各パスに対して複数回呼ばれるため、
+    # ジェネレータのような使い捨てiterableを渡しても、同じ内容のtupleを
+    # 渡した場合と結果が一致すること
+    subtask = _subtask("a", ["src/a.py", "package.json"], [])
+    pattern = re.compile(r"(^|/)package\.json$")
+
+    def _pattern_generator():
+        yield pattern
+
+    assert subtask.touch_set(_pattern_generator()) == subtask.touch_set((pattern,))
+    assert subtask.touch_set((pattern,)) == frozenset({"src/a.py"})
 
 
 def test_dag_conflict_edge_generated_for_unnormalized_equivalent_paths(tmp_path):

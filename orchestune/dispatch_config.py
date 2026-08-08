@@ -7,6 +7,7 @@ dispatch_cycle.py経由の循環importを避けるため独立モジュールと
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +39,12 @@ class DispatcherConfig:
     # にフォールバックする。導入先リポジトリのCIエントリーポイントに合わせて
     # 明示的に設定することを推奨する（セットアップガイドの「導入要件」参照）。
     ci_command: list[str] | None = None
+    # #398/#404: orchestune-dag CLIと同じorchestune.toml/[tool.orchestune]の
+    # dag_ignore_patternsから読み込んだ追加の無視パターン。DAG再計算
+    # （_decide_footprint_deviation_outcome/_collect_active_conflict_subtask_ids）
+    # にも一貫して適用し、初回検証で無視されたファイルが実行中の再計算で
+    # 誤って競合として検知されないようにする。
+    dag_ignore_patterns: tuple[re.Pattern[str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.dispatch_target is None:
