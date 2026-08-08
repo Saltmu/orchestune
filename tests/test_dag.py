@@ -678,6 +678,46 @@ class TestCycleResolution:
         # 警告ログが出力されていること
         assert "循環参照を検出したため、類似度エッジを自動解消しました" in caplog.text
 
+    def test_resolves_cycle_warning_is_added_to_dag_result(self):
+        # Issue #395: 循環解消で捨てられたエッジの警告が DagResult.warnings に反映されること
+        subtasks = [
+            SubTask("a", "", ("src/shared.py",), (), (), False, (), "medium"),
+            SubTask("b", "", ("src/shared.py",), (), ("a",), False, (), "high"),
+            SubTask("c", "", ("src/shared.py",), (), (), False, (), "high"),
+        ]
+        # c -> a (similarity 1.0) is the weakest because priority of 'a' is medium, 'c' is high. Wait, direction is c->a ?
+        # Actually let's use the exact same subtasks as the previous test to reliably trigger the warning.
+        subtasks = [
+            SubTask("a", "", ("src/a.py",), ("c_shared",), (), False, (), "medium"),
+            SubTask(
+                "b",
+                "",
+                ("src/b.py", "src/bc1.py", "src/bc2.py"),
+                ("bc_shared",),
+                ("a",),
+                False,
+                (),
+                "high",
+            ),
+            SubTask(
+                "c",
+                "",
+                ("src/c.py", "src/bc1.py", "src/bc2.py"),
+                ("bc_shared", "c_shared"),
+                (),
+                False,
+                (),
+                "high",
+            ),
+        ]
+        dag = build_dag(subtasks, threshold=0.1)
+
+        # Check that the warning is included in DagResult.warnings
+        assert any(
+            "循環参照を検出したため、類似度エッジを自動解消しました: c -> a" in w
+            for w in dag.warnings
+        )
+
     def test_does_not_resolve_explicit_only_cycles(self):
         # 明示的な依存関係のみで循環が発生した場合、自動解消できずに例外を投げること
         subtasks = [
