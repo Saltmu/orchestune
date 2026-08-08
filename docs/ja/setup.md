@@ -4,6 +4,24 @@ Orchestuneのインストール方法、各種AIアシスタント（Claude Code
 
 ---
 
+## 0. 導入要件（Prerequisites）
+
+Orchestuneは「エージェントが標準開発ワークフローに従って実装し、CIが通ればそのまま自動マージされる」ことを前提に設計されています。導入先のリポジトリが以下を満たしていない場合、期待通りのトレーサビリティ・品質は得られません。導入前に必ず確認してください。
+
+1. **(a) エージェント規律を定義したファイルが存在すること**
+   `AGENTS.md` / `CLAUDE.md` など、対象リポジトリでエージェントに遵守させたい開発ワークフロー（TDD、Issue起票、PR作成規約等）を明文化したファイルを用意してください。Orchestuneディスパッチャーが送るエージェントへの指示は「標準開発ワークフローに従って実装してください」という一文のみで、その実体の定義は導入先リポジトリ側の責務です。ゼロから用意する場合は、下記2章の `orchestune setup --with-workflow-skill` で汎用テンプレートを配置できます。
+2. **(b) 自動マージを任せられる厚さの品質ゲート（CI）が存在すること**
+   Orchestuneの子タスクレベルには人間によるレビューゲートが存在せず、CIの合否が事実上唯一の品質ゲートになります（詳細は[Architecture & Design](architecture.md)を参照）。スモークテスト程度のCIしかないリポジトリに導入すると、無レビューのまま自動マージされるコードの品質を担保できません。
+3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
+   Integratorが統合ブランチ上で実行するCIコマンドの既定値は `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値）です。導入先リポジトリのCIエントリーポイントが異なる場合（例: `make ci`、`npm run ci`）は、`orchestune dispatch --ci-command "..."` または `orchestune.toml`/`pyproject.toml` の `[tool.orchestune]` セクションで `ci_command` を明示的に設定してください。
+
+```toml
+# orchestune.toml の例
+ci-command = "make ci"
+```
+
+---
+
 ## 1. インストール方法
 
 OrchestuneはPython 3.12以上、Poetry、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。
@@ -40,6 +58,18 @@ AIエージェントに `orchestune` / `orchestune-dispatch` / `local-ci-develop
 ```bash
 orchestune setup
 ```
+
+#### `--with-workflow-skill`: 汎用ワークフロースキルのプロジェクトローカル配置
+
+上記の「0. 導入要件」(a)にある、エージェント規律を定義したファイルをゼロから用意したい場合は、`--with-workflow-skill` オプションを付けて実行します。
+
+```bash
+orchestune setup --with-workflow-skill
+```
+
+- `skills/workflow-template/SKILL.md`（`local-ci-developer` からPython/Poetry固有のコマンドを一般化したテンプレート）を、検出されたアシスタントごとに**プロジェクトローカル**な `.claude/skills/`・`.codex/skills/`・`.gemini/config/skills/` 配下へ**実体コピー**します（シンボリックリンクではありません。コピー元はOrchestuneパッケージ内にしか存在せず、対象プロジェクト内には存在しないため）。
+- `workflow-template` は `local-ci-developer` と同様、この規律がプロジェクト固有であるべきという理由からグローバル自動リンクの対象外です。オプションを付けない通常の `orchestune setup` の挙動には影響しません。
+- 配置後、テンプレート内の `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` プレースホルダーを、対象プロジェクトの実際のコマンドに置き換えてから使用してください（`<CI_ENTRYPOINT>` は上記(c)の `ci_command` 設定と一致させることを推奨します）。フォルダ名・スキル名も自由に変更できます。
 
 ### 方法B: 手動セットアップ（プロジェクト単位またはグローバル）
 
