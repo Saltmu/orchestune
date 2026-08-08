@@ -15,6 +15,7 @@ import sys
 from collections.abc import Callable
 
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle import CycleReport
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
 from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.forge import Forge, ForgeAuthError
@@ -168,6 +169,83 @@ def _run_semantic_integrator(
         auth_error_message="authentication failed while running Integrator",
         failure_message="Integrator failed to run",
         evaluate_report=evaluate_report,
+    )
+
+
+def _format_event_log_comment(report: CycleReport) -> str:
+    lines = ["## 🤖 Orchestune Dispatch Cycle Report\n"]
+    lines.append(f"Quota slots available: **{report.quota_slots_available}**\n")
+
+    if report.selected:
+        lines.append("### 🚀 選定タスク（Selected）")
+        for task in report.selected:
+            lines.append(f"- Issue #{task.issue_number}（`{task.subtask_id}`）")
+        lines.append("")
+
+    if report.deviation_events:
+        lines.append("### ⚠️ footprint逸脱イベント（Deviation）")
+        for event in report.deviation_events:
+            lines.append(f"- `{event}`")
+        lines.append("")
+
+    if report.completion_events:
+        lines.append("### ✅ 完了イベント（Completion）")
+        for event in report.completion_events:
+            lines.append(f"- `{event}`")
+        lines.append("")
+
+    if report.promotion_events:
+        lines.append("### ⬆️ 昇格イベント（Promotion）")
+        for event in report.promotion_events:
+            lines.append(f"- `{event}`")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _post_event_log_comment(
+    config: DispatcherConfig,
+    report: CycleReport,
+    auth_error: ForgeAuthError | None = None,
+) -> PhaseResult:
+    """#396: ディスパッチサイクルの意思決定ログを親Issueへコメント投稿する。
+
+    `events.jsonl`はgitignore対象でCI環境では実行のたびに揮発するため、
+    恒久的なトレーサビリティを補完する。GitHub Actions artifactは
+    Actions固有機能でありローカル実行・Codex Cloud等では成立しないため、
+    Orchestuneが全実行環境で共通して前提にできる`gh`（`Forge.add_comment`）
+    経由で親Issueへ投稿する方式を採る（#396のコメント参照）。
+    ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
+
+    頻繁なディスパッチサイクルで親Issueが空コメントに埋め尽くされるのを
+    防ぐため、選定・逸脱・完了・昇格のいずれのイベントも無いサイクルでは
+    投稿をスキップする。
+    """
+
+    def work() -> dict:
+        if config.parent_issue_number is None:
+            return {"posted": False, "reason": "no parent issue configured"}
+
+        has_events = bool(
+            report.selected
+            or report.deviation_events
+            or report.completion_events
+            or report.promotion_events
+        )
+        if not has_events:
+            return {"posted": False, "reason": "no events in this cycle"}
+
+        body = _format_event_log_comment(report)
+        config.resolved_forge.add_comment(config.parent_issue_number, body)
+        return {"posted": True, "issue_number": config.parent_issue_number}
+
+    return _run_best_effort_phase(
+        phase_name="post_event_log_comment",
+        report_label="Event Log Comment Report",
+        work=work,
+        auth_error=auth_error,
+        auth_error_message="authentication failed while posting event log comment",
+        failure_message="failed to post event log comment to parent issue",
     )
 
 

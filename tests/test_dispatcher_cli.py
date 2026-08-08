@@ -493,6 +493,7 @@ class TestDispatcherConfigLoading:
             error_message="fatal-error",
         )
         r3 = PhaseResult("process_parent_completion", PhaseStatus.SUCCESS)
+        r4 = PhaseResult("post_event_log_comment", PhaseStatus.SUCCESS)
 
         # ケース1: すべて成功
         with (
@@ -506,6 +507,7 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._run_semantic_integrator", return_value=r2),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
+            patch("orchestune.dispatcher._post_event_log_comment", return_value=r4),
         ):
             code = main(
                 ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
@@ -514,7 +516,7 @@ class TestDispatcherConfigLoading:
             assert code == 0
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
-            assert len(out["post_cycle_results"]) == 3
+            assert len(out["post_cycle_results"]) == 4
             assert out["post_cycle_results"][0]["status"] == "success"
 
         # ケース2: RETRYABLE_FAILURE
@@ -532,6 +534,7 @@ class TestDispatcherConfigLoading:
                 return_value=r2_retryable,
             ),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
+            patch("orchestune.dispatcher._post_event_log_comment", return_value=r4),
         ):
             code = main(
                 ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
@@ -556,6 +559,7 @@ class TestDispatcherConfigLoading:
                 "orchestune.dispatcher._run_semantic_integrator", return_value=r2_fatal
             ),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
+            patch("orchestune.dispatcher._post_event_log_comment", return_value=r4),
         ):
             code = main(
                 ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
@@ -583,10 +587,78 @@ class TestDispatcherConfigLoading:
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
-            assert len(out["post_cycle_results"]) == 3
+            assert len(out["post_cycle_results"]) == 4
             for res in out["post_cycle_results"]:
                 assert res["status"] == "fatal_failure"
                 assert "main-auth-failed" in res["error_message"]
+
+    def test_post_event_log_comment_not_called_without_parent_issue(self, tmp_path):
+        """#396: `--parent-issue`未指定時は`_post_event_log_comment`自体が
+        呼ばれない（投稿先の単一Issueが定まらないため、既存挙動と同じガード）。"""
+        with (
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+            patch(
+                "orchestune.dispatcher._poll_pending_not_needed_reviews",
+                return_value=PhaseResult(
+                    "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatcher._run_semantic_integrator",
+                return_value=PhaseResult(
+                    "run_semantic_integrator", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch("orchestune.dispatcher._post_event_log_comment") as mock_post,
+        ):
+            code = main(["--apply", "--allow-unsafe-agent-execution"], cwd=tmp_path)
+
+        assert code == 0
+        mock_post.assert_not_called()
+
+    def test_post_event_log_comment_receives_cycle_report(self, tmp_path):
+        """#396: `run_dispatch_cycle`が返した`CycleReport`が、そのまま
+        `_post_event_log_comment`へ渡されること。"""
+        cycle_report = self._empty_report()
+        with (
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=cycle_report,
+            ),
+            patch(
+                "orchestune.dispatcher._poll_pending_not_needed_reviews",
+                return_value=PhaseResult(
+                    "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatcher._run_semantic_integrator",
+                return_value=PhaseResult(
+                    "run_semantic_integrator", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatcher._process_parent_completion",
+                return_value=PhaseResult(
+                    "process_parent_completion", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatcher._post_event_log_comment",
+                return_value=PhaseResult("post_event_log_comment", PhaseStatus.SUCCESS),
+            ) as mock_post,
+        ):
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
+
+        assert code == 0
+        mock_post.assert_called_once()
+        assert mock_post.call_args.args[1] is cycle_report
 
     def test_custom_window_seconds_preserves_launch_history_quota(self, tmp_path):
         now = time.time()
