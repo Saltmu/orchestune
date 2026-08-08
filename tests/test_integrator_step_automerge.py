@@ -205,6 +205,37 @@ class TestAutoMergeChildIntegration:
         assert integrator_env.close_issue.call_count == 2
         assert res["closed_issues"] == [2]
 
+    def test_deletes_remote_branches_after_successful_merge(
+        self, integrator_env: IntegratorEnv
+    ):
+        issue = make_done_issue(1, subtask_id="task-1")
+        integrator_env.set_done_issues(issue)
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] == "success"
+        # 子ブランチと一時ブランチの削除が呼び出されていることを検証
+        integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+        integrator_env.delete_branch.assert_any_call(
+            "integration/temp-parent-issue-100"
+        )
+        assert integrator_env.delete_branch.call_count == 2
+
+    def test_continues_even_if_branch_deletion_raises_exception(
+        self, integrator_env: IntegratorEnv
+    ):
+        issue = make_done_issue(1, subtask_id="task-1")
+        integrator_env.set_done_issues(issue)
+        # 削除処理で例外が発生するように設定
+        integrator_env.delete_branch.side_effect = RuntimeError("API error")
+
+        res = Integrator(_child_config()).run()
+
+        # 削除失敗時も全体のステータスは成功すること
+        assert res["status"] == "success"
+        assert res["closed_issues"] == [1]
+        integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+
 
 class TestRetryChildIssueCloseStep:
     """#170レビュー対応: マージ成功が確定した信頼できるシグナルである

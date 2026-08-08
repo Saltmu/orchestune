@@ -365,6 +365,30 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     "auto_merged": False,
                 }
 
+        # 不要になったリモートブランチをクリーンアップ
+        task_by_subtask_id = {
+            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
+        }
+        branches_to_delete = []
+        for subtask_id in ctx.merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is not None:
+                branches_to_delete.append(
+                    f"claude/issue-{task.issue_number}-{task.subtask_id}"
+                )
+        if ctx.temp_branch:
+            branches_to_delete.append(ctx.temp_branch)
+
+        for branch_name in branches_to_delete:
+            try:
+                if ctx.forge.branch_exists(branch_name):
+                    ctx.forge.delete_branch(branch_name)
+            except Exception as error:
+                print(
+                    f"Warning: Failed to delete remote branch '{branch_name}': {error}",
+                    file=sys.stderr,
+                )
+
         newly_included = _mark_tasks_included(ctx)
         ctx.newly_included = newly_included
 

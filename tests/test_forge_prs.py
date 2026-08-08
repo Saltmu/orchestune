@@ -179,6 +179,35 @@ class TestBranchExists:
             forge.branch_exists("parent/issue-100")
 
 
+class TestDeleteBranch:
+    def test_succeeds_when_branch_deleted(self, forge: GitHubForge, gh_run):
+        gh_run.stdout("")
+
+        forge.delete_branch("claude/issue-1-task-1")
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "api",
+            "--method",
+            "DELETE",
+            "repos/{owner}/{repo}/git/refs/heads/claude%2Fissue-1-task-1",
+        ]
+
+    def test_ignores_404(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr="gh: Reference does not exist (HTTP 404)"
+        )
+
+        forge.delete_branch("claude/issue-1-task-1")
+
+    def test_propagates_non_404_failures(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr="gh: rate limit exceeded"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.delete_branch("claude/issue-1-task-1")
+
+
 class TestListPrsQuery:
     def test_can_include_all_pr_states(self, forge: GitHubForge, gh_run):
         gh_run.stdout("[]")
