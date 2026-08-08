@@ -202,6 +202,35 @@ class TestConfigDefaults:
         with pytest.raises(SystemExit):
             _config_defaults(parser, {"zombie-gc": "invalid"})
 
+    def test_dag_ignore_patterns_key_is_ignored_not_rejected(self):
+        """#398/#404レビュー指摘: orchestune-dag CLIが同じ設定ファイル
+        （orchestune.toml/[tool.orchestune]）から読む`dag_ignore_patterns`は
+        dispatcher自身の引数ではないため、他のtypoと違って"unknown key"には
+        せず無視して処理を継続できること。"""
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        defaults = _config_defaults(
+            parser,
+            {
+                "dag_ignore_patterns": ["(^|/)package.json$"],
+                "max-concurrent": 3,
+            },
+        )
+        assert "dag_ignore_patterns" not in defaults
+        assert defaults["max_concurrent"] == 3
+
+    def test_unrelated_unknown_key_is_still_rejected(self):
+        """`dag_ignore_patterns`の許容リストがdispatcher自身の設定の
+        typo検知（意図的な仕様）を無効化しないこと。"""
+        import pytest
+
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"max-concurent": 5})
+
 
 class TestMainDispatchTargetAutoDetection:
     """#121: --dispatch-target未指定時、mainが実行環境に応じた実ディスパッチ先を
@@ -304,6 +333,31 @@ class TestDispatcherConfigLoading:
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 5
         assert config_arg.run_state_path == Path("custom_state.json")
+
+    def test_orchestune_toml_with_dag_ignore_patterns_does_not_crash_dispatcher(
+        self, tmp_path
+    ):
+        """#398/#404レビュー指摘の再現・回帰防止: orchestune-dag向けの
+        `dag_ignore_patterns`が同じ`orchestune.toml`に存在しても、
+        `orchestune-dispatch`本体はクラッシュせず通常どおり動作すること。"""
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n" 'dag_ignore_patterns = ["(^|/)package.json$"]\n',
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert mock_run.called
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.max_concurrent == 5
 
     def test_load_config_from_pyproject_toml(self, tmp_path):
         config_path = tmp_path / "pyproject.toml"

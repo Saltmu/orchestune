@@ -286,6 +286,10 @@ def recompute_dag_for_footprint_change(
     if subtask_id not in subtasks:
         raise KeyError(f"未知のサブタスクIDです: {subtask_id}")
 
+    # build_similarity_edgesを2回呼ぶため、使い捨てiterable（ジェネレータ等）が
+    # 渡された場合に2回目が空になる問題を避けてtupleへ実体化する。
+    ignore_patterns = tuple(ignore_patterns)
+
     previous_pairs = {
         frozenset((edge.source, edge.target))
         for edge in build_similarity_edges(

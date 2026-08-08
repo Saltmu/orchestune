@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -110,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             if args.threshold is not None
             else DEFAULT_SIMILARITY_THRESHOLD
         )
+        if not math.isfinite(threshold):
+            raise ValueError(f"--threshold must be a finite number, got {threshold}")
         dag = build_dag_from_plan(
             args.plan,
             threshold=threshold,

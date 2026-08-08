@@ -150,6 +150,22 @@ class TestThresholdFlag:
         )
         assert high_threshold_data["edges"] == []
 
+    @pytest.mark.parametrize("bad_threshold", ["nan", "inf", "-inf"])
+    def test_non_finite_threshold_is_rejected(self, tmp_path, capsys, bad_threshold):
+        # NaNは`score > threshold`が常にFalseになり全エッジが黙って抑制され、
+        # infも意味のある類似度域外のため、明示的にエラーとして拒否する
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+
+        _run_cli(
+            ["--plan", str(plan_path), f"--threshold={bad_threshold}"],
+            expected_exit_code=1,
+        )
+
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "finite" in captured.err
+
 
 class TestIgnorePatternsConfig:
     _PLAN = """\

@@ -190,6 +190,21 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
     parser.error(f"invalid dispatcher config: {message}")
 
 
+# orchestune.toml / pyproject.toml の [tool.orchestune] は本来dispatcher専用の
+# 設定名前空間だが、orchestune-dag CLI（dag_cli.py）も同じファイル・セクションから
+# dag_ignore_patterns を読み込む（#398）。dispatcherの未知キー検知に巻き込まれて
+# `orchestune-dispatch` がクラッシュしないよう、他ツール由来と判明しているキーは
+# ここで明示的に無視する（dispatcher自身の設定としては使用しない）。
+_NON_DISPATCHER_CONFIG_KEYS = frozenset({"dag_ignore_patterns"})
+
+
+def _normalize_config_key(key: str) -> str:
+    normalized_key = key.replace("-", "_")
+    if normalized_key == "parent_issue_number":
+        return "parent_issue"
+    return normalized_key
+
+
 def _config_defaults(
     parser: argparse.ArgumentParser, config_data: dict[str, Any]
 ) -> dict[str, Any]:
@@ -213,9 +228,9 @@ def _config_defaults(
     defaults: dict[str, Any] = {}
 
     for key, value in config_data.items():
-        normalized_key = key.replace("-", "_")
-        if normalized_key == "parent_issue_number":
-            normalized_key = "parent_issue"
+        normalized_key = _normalize_config_key(key)
+        if normalized_key in _NON_DISPATCHER_CONFIG_KEYS:
+            continue
         action = actions.get(normalized_key)
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")

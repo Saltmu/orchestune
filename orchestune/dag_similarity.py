@@ -140,6 +140,9 @@ def build_similarity_edges(
     ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> list[DagEdge]:
     """Infer dependency edges for candidate pairs above the similarity threshold."""
+    # ignore_patternsは複数回反復されるため、ジェネレータ等の使い捨てiterableが
+    # 渡された場合に2回目以降の反復が空になる問題を避けてtupleへ実体化する。
+    ignore_patterns = tuple(ignore_patterns)
     by_id = {subtask.id: subtask for subtask in subtasks}
     weights = _idf_weights(subtasks, ignore_patterns)
     edges: list[DagEdge] = []

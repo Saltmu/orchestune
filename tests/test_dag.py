@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import textwrap
 
 import pytest
@@ -328,6 +329,26 @@ class TestBuildSimilarityEdges:
         edges = build_similarity_edges(subtasks, threshold=0.9)
         assert edges == []
 
+    def test_ignore_patterns_generator_behaves_like_equivalent_tuple(self):
+        # ignore_patternsは内部で複数回反復されるため、ジェネレータのような
+        # 使い捨てiterableを渡しても、同じ内容のtupleを渡した場合と結果が一致すること
+        subtasks = [
+            _subtask("a", ["package.json", "src/a.py"], []),
+            _subtask("b", ["package.json", "src/b.py"], []),
+        ]
+        pattern = re.compile(r"(^|/)package\.json$")
+
+        def _pattern_generator():
+            yield pattern
+
+        edges_from_generator = build_similarity_edges(
+            subtasks, threshold=0.1, ignore_patterns=_pattern_generator()
+        )
+        edges_from_tuple = build_similarity_edges(
+            subtasks, threshold=0.1, ignore_patterns=(pattern,)
+        )
+        assert edges_from_generator == edges_from_tuple == []
+
 
 class TestBuildDag:
     def test_merges_explicit_and_similarity_edges(self):
@@ -592,6 +613,30 @@ class TestRecomputeDagForFootprintChange:
             recompute_dag_for_footprint_change(
                 subtasks, subtask_id="ghost", updated_footprint=[]
             )
+
+    def test_ignore_patterns_generator_applies_to_both_internal_calls(self):
+        # recompute_dag_for_footprint_changeは内部でbuild_similarity_edgesを
+        # 2回呼ぶため、ジェネレータを渡しても2回目が空にならず、tuple指定時と
+        # 同じ結果になること
+        subtasks = {
+            "a": _subtask("a", ["package.json"], []),
+            "b": _subtask("b", ["package.json"], []),
+        }
+        pattern = re.compile(r"(^|/)package\.json$")
+
+        def _pattern_generator():
+            yield pattern
+
+        after, conflicts = recompute_dag_for_footprint_change(
+            subtasks,
+            subtask_id="a",
+            updated_footprint=["package.json", "src/only_a.py"],
+            updated_symbols=[],
+            threshold=0.1,
+            ignore_patterns=_pattern_generator(),
+        )
+        assert conflicts == []
+        assert after.edges == []
 
 
 class TestPriorityAndVolumeDirection:
