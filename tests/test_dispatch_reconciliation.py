@@ -309,6 +309,31 @@ class TestApplyBlockedPromotions:
         mock_add.assert_called_once_with(5, "status:queued")
         assert events == [{"issue_number": 5, "subtask_id": "task-e"}]
 
+    def test_adds_queued_before_removing_blocked(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        task = _task(issue_number=5, subtask_id="task-e")
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+        ):
+            _apply_blocked_promotions([task], config)
+
+        assert call_order == [("add", "status:queued"), ("remove", "status:blocked")]
+
 
 class TestPromoteBlockedTasks:
     def test_decide_and_apply_are_wired_together(self):
@@ -536,6 +561,52 @@ class TestHandleBlockedRecomputeRecovery:
         ]
         mock_add.assert_called_once_with(1, "status:queued")
         assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+
+    def test_adds_queued_before_removing_blocked(self):
+        # #381: status:blocked-recompute除去後もstatus:blockedが併存する間は
+        # 安全だが、最終的にstatus:queuedへ遷移する際は、途中でクラッシュ
+        # してもIssueが必ずいずれかのstatus:*ラベルを持ち続けるよう、
+        # addがremove(status:blocked)より先に呼ばれなければならない。
+        task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            depends_on=("task-x",),
+            status_labels=(),
+        )
+        run_state = RunState(active_worktrees={})
+        ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids={"task-x"})
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+        ):
+            _handle_blocked_recompute_recovery(
+                _IssuesStub(
+                    [_issue(1, labels=("status:blocked-recompute", "status:blocked"))]
+                ),
+                run_state,
+                ctx,
+                set(),
+                config,
+            )
+
+        assert call_order == [
+            ("remove", "status:blocked-recompute"),
+            ("add", "status:queued"),
+            ("remove", "status:blocked"),
+        ]
 
     def test_stays_blocked_when_dependency_still_pending(self):
         task = _task(

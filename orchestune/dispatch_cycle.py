@@ -440,6 +440,17 @@ def _determine_candidate_tasks(
         # 完了する（_reconcile_dual_status_tasksが対応する）まで起動候補
         # から除外する。
         and "status:done" not in ctx.tasks_by_issue[issue.number].status_labels
+        # #381レビュー対応(Codex P2): transition_status_labelはadd(新ラベル)を
+        # remove(旧ラベル)より先に行うため、removeが失敗/クラッシュすると
+        # Issueがstatus:queued/status:in-progressを同時に持つ中断状態のまま
+        # 残りうる（launch成功時・abandoned PR再キュー・GC回収の各経路）。
+        # status:in-progressは「実際にactive_worktreesへ実起動済み」の確定
+        # シグナルであり、この状態のIssueを新規の起動候補として扱うと、
+        # 稼働中セッションが既に開いたPRを重複起動と誤認し
+        # status:blocked-human-reviewへ誤ってエスカレーションしてしまう
+        # （#382: エスカレーション自体もrun_stateの後始末を伴わない）。
+        # status:in-progressの除去が完了するまで起動候補から除外する。
+        and "status:in-progress" not in ctx.tasks_by_issue[issue.number].status_labels
     ]
 
     # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、

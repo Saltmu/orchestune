@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
@@ -27,10 +28,12 @@ def apply_human_review_escalation(
     は呼び出し側の責務とし、この関数自体は常に無条件で実行する。
     """
     forge = forge or GitHubForge()
-    for label in _REMOVABLE_STATUS_LABELS:
-        if label in current_status_labels:
-            forge.remove_label(issue_number, label)
-    forge.add_label(issue_number, "status:blocked-human-review")
+    transition_status_label(
+        forge,
+        issue_number,
+        "status:blocked-human-review",
+        (label for label in _REMOVABLE_STATUS_LABELS if label in current_status_labels),
+    )
     forge.add_comment(issue_number, comment)
 
 

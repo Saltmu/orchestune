@@ -5,6 +5,7 @@ from typing import Any
 
 from orchestune.dag_graph import recompute_dag_for_footprint_change
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_locks import check_footprint_deviation
 from orchestune.dispatch_rebase import SubTask, _build_subtasks_for_recompute
 from orchestune.dispatch_recovery import recover_run_state
@@ -92,8 +93,12 @@ def _apply_blocked_promotions(
     events: list[dict] = []
     for task in promotable:
         if config.apply:
-            config.resolved_forge.remove_label(task.issue_number, "status:blocked")
-            config.resolved_forge.add_label(task.issue_number, "status:queued")
+            transition_status_label(
+                config.resolved_forge,
+                task.issue_number,
+                "status:queued",
+                ("status:blocked",),
+            )
         events.append(
             {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
         )
@@ -218,8 +223,12 @@ def _handle_blocked_recompute_recovery(
 
             if not has_pending_deps:
                 if config.apply:
-                    config.resolved_forge.remove_label(issue.number, "status:blocked")
-                    config.resolved_forge.add_label(issue.number, "status:queued")
+                    transition_status_label(
+                        config.resolved_forge,
+                        issue.number,
+                        "status:queued",
+                        ("status:blocked",),
+                    )
                 recompute_resolved_promoted_events.append(
                     {"issue_number": issue.number, "subtask_id": task.subtask_id}
                 )

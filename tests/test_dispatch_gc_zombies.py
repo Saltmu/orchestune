@@ -327,6 +327,95 @@ class TestApplyZombieOrTimeoutReclaim:
             "reason": "process disappeared",
         }
 
+    def test_reclaim_adds_queued_before_removing_in_progress(self, tmp_path):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        active = _active(worktree_path=str(tmp_path))
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active)
+        config = DispatcherConfig(apply=True)
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill"),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        assert call_order == [
+            ("add", "status:queued"),
+            ("remove", "status:in-progress"),
+        ]
+
+    def test_removes_stale_blocked_label_alongside_in_progress(self, tmp_path):
+        # #381レビュー対応(Codex P2): stacked launch中断で取り残された
+        # status:blockedも併せて除去し、status:queuedへ確実に収束させる。
+        active = _active(worktree_path=str(tmp_path))
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active, status_labels=("status:blocked", "status:in-progress")
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill"),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        mock_remove_label.assert_any_call(280, "status:in-progress")
+        mock_remove_label.assert_any_call(280, "status:blocked")
+        assert mock_remove_label.call_count == 2
+
+    def test_does_not_overwrite_terminal_escalation_label(self, tmp_path):
+        # 中断した以前の遷移でstatus:manual-merge-requiredが既に付与されている
+        # 場合、status:queuedへの書き換えは人間の確認要求を握りつぶしてしまう
+        # ため、ラベルには一切触れてはならない。
+        active = _active(worktree_path=str(tmp_path))
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(
+            active,
+            status_labels=("status:manual-merge-required", "status:in-progress"),
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill"),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_comment.assert_called_once()
+        assert event is not None
+        assert event["action"] == "gc_reclaimed"
+
     def test_timeout_apply_kills_alive_process(self, tmp_path):
         active = _active(pid=111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})

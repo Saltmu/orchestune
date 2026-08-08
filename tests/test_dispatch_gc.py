@@ -17,10 +17,12 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_gc import (
     ZombieOrTimeoutReclaim,
+    _apply_stale_active_entry_discard,
     _collect_zombies_and_timeouts,
     _decide_stale_active_entry,
     _finalize_completed_worktree,
     _rule_completed,
+    _rule_stale_entry,
     backup_wip_commit,
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
@@ -363,6 +365,150 @@ class TestDecideStaleActiveEntry:
         assert event["action"] == "stale_active_entry_discarded"
 
 
+class TestApplyStaleActiveEntryDiscard:
+    """#382: 帳簿(run_state)破棄の前に、実際に稼働中かもしれない物理
+    worktree・プロセスの後始末を行うことを検証する。"""
+
+    def test_kills_live_process_and_removes_worktree(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=12345)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc.backup_wip_commit", return_value=None
+            ) as mock_backup,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+        ):
+            discarded = _apply_stale_active_entry_discard(
+                run_state, "280", active, "test reason", config
+            )
+
+        assert discarded is True
+        mock_backup.assert_called_once_with(
+            str(tmp_path), "WIP: backup by Orchestune GC (stale active entry)"
+        )
+        mock_kill.assert_called_once_with(12345, 9)
+        mock_remove.assert_called_once_with(str(tmp_path))
+        assert run_state.active_worktrees == {}
+
+    def test_dead_process_skips_kill_but_still_removes_worktree(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=12345)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+        ):
+            discarded = _apply_stale_active_entry_discard(
+                run_state, "280", active, "test reason", config
+            )
+
+        assert discarded is True
+        mock_kill.assert_not_called()
+        mock_remove.assert_called_once_with(str(tmp_path))
+        assert run_state.active_worktrees == {}
+
+    def test_missing_worktree_skips_backup_and_removal(self):
+        active = _active(worktree_path="worktrees/does-not-exist", pid=12345)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+        ):
+            discarded = _apply_stale_active_entry_discard(
+                run_state, "280", active, "test reason", config
+            )
+
+        assert discarded is True
+        mock_backup.assert_not_called()
+        mock_remove.assert_not_called()
+        # プロセスが生存中なら、worktreeの有無に関わらず停止は行う。
+        mock_kill.assert_called_once_with(12345, 9)
+        assert run_state.active_worktrees == {}
+
+    def test_backup_failure_skips_discard_and_preserves_entry(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=12345)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+        ):
+            discarded = _apply_stale_active_entry_discard(
+                run_state, "280", active, "test reason", config
+            )
+
+        assert discarded is False
+        mock_kill.assert_not_called()
+        mock_remove.assert_not_called()
+        mock_comment.assert_called_once()
+        assert "test reason" in mock_comment.call_args.args[1]
+        # バックアップ失敗時は帳簿を温存し、次サイクルでの再試行に委ねる。
+        assert run_state.active_worktrees == {"280": active}
+
+    def test_dry_run_does_not_touch_anything(self, tmp_path):
+        active = _active(worktree_path=str(tmp_path), pid=12345)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(apply=False)
+
+        with (
+            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+        ):
+            discarded = _apply_stale_active_entry_discard(
+                run_state, "280", active, "test reason", config
+            )
+
+        assert discarded is True
+        mock_backup.assert_not_called()
+        mock_kill.assert_not_called()
+        mock_remove.assert_not_called()
+        assert run_state.active_worktrees == {"280": active}
+
+
+class TestRuleStaleEntry:
+    def test_backup_failure_defers_terminal_outcome_to_next_cycle(self, tmp_path):
+        # #382 Reproducer: WIPバックアップ失敗時は、破棄処理をスキップして
+        # このサイクルではNoneを返し（terminalな完了イベントを発行しない）、
+        # run_stateのエントリも温存して次サイクルでの再試行に委ねる。
+        active = _active(worktree_path=str(tmp_path), pid=12345)
+        task = _task(status_labels=("status:blocked",))
+        run_state = RunState(active_worktrees={"280": active})
+        ctx = _ctx(run_state=run_state)
+        ctx.config.apply = True
+
+        with (
+            patch(
+                "orchestune.dispatch_gc.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            outcome = _rule_stale_entry(ctx, "280", active, task)
+
+        assert outcome is None
+        assert run_state.active_worktrees == {"280": active}
+
+
 class TestRuleCompleted:
     def test_closed_unmerged_local_pr_is_requeued_without_completing_dependency(self):
         active = _active(pid=123, started_at=1_699_999_000.0)
@@ -408,6 +554,51 @@ class TestRuleCompleted:
         mock_remove_label.assert_called_once_with(280, "status:in-progress")
         mock_add_label.assert_called_once_with(280, "status:queued")
         mock_add_comment.assert_called_once()
+
+    def test_abandoned_requeue_adds_queued_before_removing_in_progress(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        active = _active(pid=123, started_at=1_699_999_000.0)
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        ctx.prs = [
+            PrRecord(
+                number=210,
+                head_ref=active.branch,
+                changed_files=(),
+                closes_issue_numbers=(active.issue_number,),
+                state="CLOSED",
+            )
+        ]
+        call_order: list[tuple[str, str]] = []
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+            ),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=ctx.prs),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _rule_completed(ctx, "1", active, task)
+
+        assert call_order == [
+            ("add", "status:queued"),
+            ("remove", "status:in-progress"),
+        ]
 
     def test_closed_unmerged_cloud_pr_is_requeued_without_completing_dependency(
         self,

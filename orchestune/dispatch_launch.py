@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from orchestune.dispatch_escalation import apply_human_review_escalation
+from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
@@ -34,6 +35,17 @@ def _get_stack_eligible_tasks(
     for issue in blocked_issues:
         task = tasks_by_issue.get(issue.number) or parse_task_from_issue(issue)
         if not task.subtask_id or not task.depends_on:
+            continue
+
+        # #381レビュー対応(Codex P2): stacked launch成功時のtransition_status_labelが
+        # add(status:in-progress)後のremove(status:blocked)に失敗すると、Issueが
+        # status:blocked/status:in-progressを同時に持つ中断状態のまま残りうる。
+        # status:in-progressは「実際にactive_worktreesへ実起動済み」の確定
+        # シグナルであり、この状態のIssueを新たなstack候補として扱うと、稼働中
+        # セッションが既に開いたPRを重複起動と誤認しstatus:blocked-human-review
+        # へ誤ってエスカレーションしうる。status:in-progressの除去が完了する
+        # まで候補から除外する。
+        if "status:in-progress" in task.status_labels:
             continue
 
         # GitHub native blocked_by のうちの一部がマップ未存在で task.depends_on から欠落している場合は
@@ -201,8 +213,12 @@ def _apply_yaml_error_blocking(
     yaml_error_tasks: list[Task], config: DispatcherConfig
 ) -> None:
     for task in yaml_error_tasks:
-        config.resolved_forge.remove_label(task.issue_number, "status:queued")
-        config.resolved_forge.add_label(task.issue_number, "status:blocked")
+        transition_status_label(
+            config.resolved_forge,
+            task.issue_number,
+            "status:blocked",
+            ("status:queued",),
+        )
         config.resolved_forge.add_comment(
             task.issue_number,
             "YAMLのパースに失敗したため、タスクをブロックしました。フォーマットを確認してください。",
@@ -270,14 +286,17 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_launch,
         )
         if not launch.launched:
-            if "status:queued" in task.status_labels:
-                config.resolved_forge.remove_label(task.issue_number, "status:queued")
-            if "status:blocked" in task.status_labels:
-                config.resolved_forge.remove_label(task.issue_number, "status:blocked")
-
+            old_labels = tuple(
+                label
+                for label in ("status:queued", "status:blocked")
+                if label in task.status_labels
+            )
             if launch.validation_error:
-                config.resolved_forge.add_label(
-                    task.issue_number, "status:blocked-human-review"
+                transition_status_label(
+                    config.resolved_forge,
+                    task.issue_number,
+                    "status:blocked-human-review",
+                    old_labels,
                 )
                 config.resolved_forge.add_comment(
                     task.issue_number,
@@ -285,7 +304,12 @@ def _apply_task_launches(
                     f"エラー内容:\n```\n{launch.error_message}\n```",
                 )
             else:
-                config.resolved_forge.add_label(task.issue_number, "status:blocked")
+                transition_status_label(
+                    config.resolved_forge,
+                    task.issue_number,
+                    "status:blocked",
+                    old_labels,
+                )
                 config.resolved_forge.add_comment(
                     task.issue_number,
                     f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
@@ -324,11 +348,19 @@ def _apply_task_launches(
             open_prs=open_prs,
         )
 
-        if "status:queued" in task.status_labels:
-            config.resolved_forge.remove_label(task.issue_number, "status:queued")
-        if "status:blocked" in task.status_labels:
-            config.resolved_forge.remove_label(task.issue_number, "status:blocked")
-        config.resolved_forge.add_label(task.issue_number, "status:in-progress")
+        # #381: status:in-progressを先にadd、旧ラベルは後でremoveする。この順序
+        # なら、ラベル更新の途中でクラッシュしてもIssueは必ずいずれかの
+        # status:*ラベルを持ち続ける。
+        transition_status_label(
+            config.resolved_forge,
+            task.issue_number,
+            "status:in-progress",
+            (
+                label
+                for label in ("status:queued", "status:blocked")
+                if label in task.status_labels
+            ),
+        )
         actually_selected.append(task)
 
     save_run_state(

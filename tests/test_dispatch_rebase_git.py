@@ -168,6 +168,53 @@ class TestApplyAutoRebase:
         assert active.base_branch == "origin/main"
 
     @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
+    )
+    def test_failure_adds_manual_merge_before_removing_in_progress(
+        self, mock_resolve, mock_run, mock_kill
+    ):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        import subprocess
+
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+        mock_run.side_effect = subprocess.CalledProcessError(1, ["git", "rebase"])
+
+        from unittest.mock import MagicMock
+
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            apply=True,
+        )
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        assert call_order == [
+            ("add", "status:manual-merge-required"),
+            ("remove", "status:in-progress"),
+        ]
+
+    @patch("orchestune.dispatch_rebase.os.kill")
     @patch("orchestune.dispatch_rebase.dispatch_gc.backup_wip_commit")
     @patch("orchestune.dispatch_rebase.subprocess.run")
     @patch(
@@ -261,3 +308,46 @@ class TestApplyAutoRebase:
         )
         assert "1" not in run_state.active_worktrees
         assert active.base_branch == "origin/main"
+
+    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.dispatch_gc.backup_wip_commit")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    def test_backup_failure_adds_manual_merge_before_removing_in_progress(
+        self, mock_run, mock_backup, mock_kill
+    ):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+        mock_backup.return_value = "fatal: unable to write new index file"
+
+        from unittest.mock import MagicMock
+
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            apply=True,
+        )
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        assert call_order == [
+            ("add", "status:manual-merge-required"),
+            ("remove", "status:in-progress"),
+        ]
