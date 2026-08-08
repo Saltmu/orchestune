@@ -27,9 +27,14 @@ poetry install
 
 ## テストの実行
 
-`pytest`を使用して、ユニットテストとカバレッジ測定を実行します。
+`pytest`を使用して、ユニットテストを実行します。
 ```bash
 poetry run pytest
+```
+
+ローカルの開発ループを軽くするため、デフォルトの`pytest`実行にはカバレッジ計装を含めていません。カバレッジを確認する場合は、以下のように明示的にオプションを指定してください（`local-ci.sh`もこのオプション付きで実行します）。
+```bash
+poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
 ## ローカルCIスクリプト
