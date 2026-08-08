@@ -457,7 +457,10 @@ class TestDispatcherConfigLoading:
             patch("orchestune.dispatcher._run_semantic_integrator", return_value=r2),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 0
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
@@ -480,7 +483,10 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 2
             out = json.loads(capsys.readouterr().out)
             assert out["post_cycle_results"][1]["status"] == "retryable_failure"
@@ -501,7 +507,10 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert out["post_cycle_results"][1]["status"] == "fatal_failure"
@@ -517,7 +526,10 @@ class TestDispatcherConfigLoading:
                 side_effect=ForgeAuthError("main-auth-failed"),
             ),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
@@ -567,3 +579,43 @@ class TestDispatcherConfigLoading:
             report = run_dispatch_cycle(config)
             # 48時間窓で2回に達しているため起動不可
             assert len(report.selected) == 0
+
+    def test_unsafe_cli_without_allow_unsafe_option_in_main_raises_config_error(
+        self, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--dispatch-target", "claude-cli"], cwd=tmp_path)
+        assert excinfo.value.code == 2
+        err = capsys.readouterr().err
+        assert "invalid dispatcher config" in err
+        assert "完全権限実行となります" in err
+
+    def test_unsafe_cli_with_allow_unsafe_option_in_main_succeeds(self, tmp_path):
+        with patch(
+            "orchestune.dispatcher.run_dispatch_cycle",
+            return_value=self._empty_report(),
+        ):
+            code = main(
+                [
+                    "--dispatch-target",
+                    "claude-cli",
+                    "--allow-unsafe-agent-execution",
+                    "--no-apply",
+                ],
+                cwd=tmp_path,
+            )
+            assert code == 0
+
+    def test_unsafe_cli_with_allow_unsafe_option_in_orchestune_toml_succeeds(
+        self, tmp_path
+    ):
+        orchestune_toml = tmp_path / "orchestune.toml"
+        orchestune_toml.write_text(
+            "allow_unsafe_agent_execution = true\n", encoding="utf-8"
+        )
+        with patch(
+            "orchestune.dispatcher.run_dispatch_cycle",
+            return_value=self._empty_report(),
+        ):
+            code = main(["--dispatch-target", "claude-cli", "--no-apply"], cwd=tmp_path)
+            assert code == 0

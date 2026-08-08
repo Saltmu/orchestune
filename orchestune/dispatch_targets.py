@@ -510,6 +510,8 @@ def build_dispatch_target(
     log_dir: str | Path,
     local_cmd: str | None = None,
     codex_cloud_env: str | None = None,
+    *,
+    allow_unsafe_agent_execution: bool = False,
 ) -> DispatchTarget:
     """#215: CLI引数・環境変数からディスパッチターゲットを組み立てる。
 
@@ -520,6 +522,26 @@ def build_dispatch_target(
     `codex`）を検出し、見つかったCLIを指定した場合と同じ挙動にフォールスルーする。
     いずれも見つからない場合も同様に警告を出し、ダミー動作へフォールバックする。
     """
+    is_unsafe_target = dispatch_target_name in {"claude-cli", "agy-cli", "codex-cli"}
+    if dispatch_target_name == "auto":
+        detected = detect_installed_local_cli()
+        if detected is not None:
+            dispatch_target_name = f"{detected}-cli"
+            is_unsafe_target = True
+        else:
+            print(
+                "警告: PATH上にclaude/agy/codexのいずれのCLIも見つかりませんでした。"
+                "ローカルのダミー起動にフォールバックします。",
+                file=sys.stderr,
+            )
+
+    if is_unsafe_target and not allow_unsafe_agent_execution:
+        raise ValueError(
+            f"設定エラー: `{dispatch_target_name}` によるローカル無人実行は、承認やサンドボックスのバイパスを伴う完全権限実行となります。\n"
+            "この実行を許可するには、信頼できる実行環境であることを確認の上、明示的に `--allow-unsafe-agent-execution` オプションを指定するか、"
+            "設定ファイル（orchestune.toml 等）で `allow_unsafe_agent_execution = true` を設定してください。"
+        )
+
     if dispatch_target_name == "cloud-routine":
         resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
         resolved_token = routine_token or os.environ.get(ROUTINE_TOKEN_ENV_VAR)
@@ -540,16 +562,6 @@ def build_dispatch_target(
             "ディスパッチはできません。ローカルのダミー起動にフォールバックします。",
             file=sys.stderr,
         )
-    if dispatch_target_name == "auto":
-        detected = detect_installed_local_cli()
-        if detected is not None:
-            dispatch_target_name = f"{detected}-cli"
-        else:
-            print(
-                "警告: PATH上にclaude/agy/codexのいずれのCLIも見つかりませんでした。"
-                "ローカルのダミー起動にフォールバックします。",
-                file=sys.stderr,
-            )
     if dispatch_target_name == "claude-cli":
         return LocalProcessDispatchTarget(
             log_dir=log_dir, local_cmd=local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE
