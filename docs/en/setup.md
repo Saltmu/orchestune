@@ -145,4 +145,13 @@ orchestune dispatch --dispatch-target codex-cli
 orchestune dispatch --dispatch-target auto
 ```
 
-These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt — the subtask's dedicated `git worktree` is the safety boundary, the same pattern used by cloud-based agent orchestrators. There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
+These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --sandbox --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
+
+> [!IMPORTANT]
+> **Trust Model and Security Risks**
+> 
+> These local CLI targets run with full permissions, bypassing interactive approvals and sandboxes. To prevent accidental unrestricted execution, you must explicitly opt in by passing the `--allow-unsafe-agent-execution` flag or setting `allow_unsafe_agent_execution = true` in your configuration file (e.g., `orchestune.toml`). If this option is not specified, Orchestune will fail to start (fail-closed).
+> 
+> Note that a dedicated `git worktree` is only a boundary for isolating source code changes; it is **not** an OS-level security boundary (sandbox). An agent process running with bypassed permissions can access anything the host user has access to, including your home directory, credentials, other repositories, and network resources. For untrusted codebases/issues, or when running in shared/production environments, we strongly recommend wrapping Orchestune in a secure container or VM isolation layer.
+
+There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
