@@ -210,7 +210,7 @@ def _config_defaults(
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")
 
-        if normalized_key in {"apply", "zombie_gc"}:
+        if normalized_key in {"apply", "zombie_gc", "allow_unsafe_agent_execution"}:
             if not isinstance(value, bool):
                 _config_error(parser, f"{key!r} must be a boolean")
         elif normalized_key in path_keys:

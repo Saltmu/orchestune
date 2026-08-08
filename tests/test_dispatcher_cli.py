@@ -605,3 +605,17 @@ class TestDispatcherConfigLoading:
                 cwd=tmp_path,
             )
             assert code == 0
+
+    def test_unsafe_cli_with_allow_unsafe_option_in_orchestune_toml_succeeds(
+        self, tmp_path
+    ):
+        orchestune_toml = tmp_path / "orchestune.toml"
+        orchestune_toml.write_text(
+            "allow_unsafe_agent_execution = true\n", encoding="utf-8"
+        )
+        with patch(
+            "orchestune.dispatcher.run_dispatch_cycle",
+            return_value=self._empty_report(),
+        ):
+            code = main(["--dispatch-target", "claude-cli", "--no-apply"], cwd=tmp_path)
+            assert code == 0
