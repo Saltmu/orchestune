@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
@@ -217,10 +218,13 @@ def build_dag(
     subtasks: list[SubTask],
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     repo_root: str | Path | None = None,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> DagResult:
     """Build a validated DAG from explicit and inferred dependencies."""
     explicit_edges = _collect_explicit_edges(subtasks)
-    similarity_edges = build_similarity_edges(subtasks, threshold=threshold)
+    similarity_edges = build_similarity_edges(
+        subtasks, threshold=threshold, ignore_patterns=ignore_patterns
+    )
     return _assemble_dag(
         subtasks,
         _merge_explicit_and_similarity(explicit_edges, similarity_edges),
@@ -232,11 +236,13 @@ def build_dag_from_plan(
     path: str | Path,
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     repo_root: str | Path | None = None,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> dict[str, Any]:
     return build_dag(
         parse_decomposition_plan(path),
         threshold=threshold,
         repo_root=repo_root,
+        ignore_patterns=ignore_patterns,
     ).to_dict()
 
 
@@ -274,6 +280,7 @@ def recompute_dag_for_footprint_change(
     updated_footprint: Iterable[str] | None = None,
     updated_symbols: Iterable[str] | None = None,
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> tuple[DagResult, list[FootprintConflict]]:
     """Recompute the DAG after a running subtask changes its touch set."""
     if subtask_id not in subtasks:
@@ -281,7 +288,11 @@ def recompute_dag_for_footprint_change(
 
     previous_pairs = {
         frozenset((edge.source, edge.target))
-        for edge in build_similarity_edges(list(subtasks.values()), threshold=threshold)
+        for edge in build_similarity_edges(
+            list(subtasks.values()),
+            threshold=threshold,
+            ignore_patterns=ignore_patterns,
+        )
     }
     updated_subtasks = dict(subtasks)
     updated_subtasks[subtask_id] = _updated_subtask(
@@ -295,7 +306,9 @@ def recompute_dag_for_footprint_change(
 
     conflicts: list[FootprintConflict] = []
     final_similarity_edges: list[DagEdge] = []
-    for edge in build_similarity_edges(subtask_list, threshold=threshold):
+    for edge in build_similarity_edges(
+        subtask_list, threshold=threshold, ignore_patterns=ignore_patterns
+    ):
         pair = frozenset((edge.source, edge.target))
         if (edge.source, edge.target) in explicit_pairs or (
             edge.target,

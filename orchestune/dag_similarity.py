@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Iterable
 
 from orchestune.dag_models import DagEdge, SubTask
 
@@ -20,19 +22,23 @@ def otsuka_ochiai(set_a: frozenset[str], set_b: frozenset[str]) -> float:
     return intersection / math.sqrt(len(set_a) * len(set_b))
 
 
-def _document_frequencies(subtasks: list[SubTask]) -> dict[str, int]:
+def _document_frequencies(
+    subtasks: list[SubTask], ignore_patterns: Iterable[re.Pattern[str]] = ()
+) -> dict[str, int]:
     frequencies: dict[str, int] = {}
     for subtask in subtasks:
-        for item in subtask.touch_set():
+        for item in subtask.touch_set(ignore_patterns):
             frequencies[item] = frequencies.get(item, 0) + 1
     return frequencies
 
 
-def _idf_weights(subtasks: list[SubTask]) -> dict[str, float]:
+def _idf_weights(
+    subtasks: list[SubTask], ignore_patterns: Iterable[re.Pattern[str]] = ()
+) -> dict[str, float]:
     count = len(subtasks)
     return {
         item: math.log((count + 1) / (frequency + 1)) + 1.0
-        for item, frequency in _document_frequencies(subtasks).items()
+        for item, frequency in _document_frequencies(subtasks, ignore_patterns).items()
     }
 
 
@@ -45,9 +51,10 @@ def _weighted_otsuka_ochiai(
     subtask_a: SubTask,
     subtask_b: SubTask,
     weights: dict[str, float],
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> float:
-    set_a = subtask_a.touch_set()
-    set_b = subtask_b.touch_set()
+    set_a = subtask_a.touch_set(ignore_patterns)
+    set_b = subtask_b.touch_set(ignore_patterns)
     shared = set_a & set_b
     if not shared:
         return 0.0
@@ -68,11 +75,13 @@ def _weighted_otsuka_ochiai(
     return weighted_intersection / (norm_a * norm_b)
 
 
-def find_candidate_pairs(subtasks: list[SubTask]) -> set[tuple[str, str]]:
+def find_candidate_pairs(
+    subtasks: list[SubTask], ignore_patterns: Iterable[re.Pattern[str]] = ()
+) -> set[tuple[str, str]]:
     """Find only subtask pairs that share at least one touch-set item."""
     inverted_index: dict[str, list[str]] = {}
     for subtask in subtasks:
-        for item in subtask.touch_set():
+        for item in subtask.touch_set(ignore_patterns):
             inverted_index.setdefault(item, []).append(subtask.id)
 
     candidates: set[tuple[str, str]] = set()
@@ -128,15 +137,16 @@ def _determine_edge_direction(
 def build_similarity_edges(
     subtasks: list[SubTask],
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> list[DagEdge]:
     """Infer dependency edges for candidate pairs above the similarity threshold."""
     by_id = {subtask.id: subtask for subtask in subtasks}
-    weights = _idf_weights(subtasks)
+    weights = _idf_weights(subtasks, ignore_patterns)
     edges: list[DagEdge] = []
-    for first_id, second_id in sorted(find_candidate_pairs(subtasks)):
+    for first_id, second_id in sorted(find_candidate_pairs(subtasks, ignore_patterns)):
         first = by_id[first_id]
         second = by_id[second_id]
-        score = _weighted_otsuka_ochiai(first, second, weights)
+        score = _weighted_otsuka_ochiai(first, second, weights, ignore_patterns)
         if score > threshold:
             edges.append(_determine_edge_direction(first, second, score))
     return edges
