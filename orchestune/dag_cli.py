@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from orchestune.dag_graph import build_dag_from_plan
@@ -51,7 +52,12 @@ def _print_text_result(dag: dict[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     try:
-        dag = build_dag_from_plan(args.plan)
+        # footprintはリポジトリルートからの相対パスとして定義されているため、
+        # 呼び出し元のcwdではなく--planファイル自身の位置を基点にする
+        # （cwdが--planの置き場所と異なる場合、実在するファイルまで
+        # 「見つからない」と誤検出してしまうため）。
+        repo_root = Path(args.plan).resolve().parent
+        dag = build_dag_from_plan(args.plan, repo_root=repo_root)
         if args.json:
             print(json.dumps(dag, indent=2))
         else:
