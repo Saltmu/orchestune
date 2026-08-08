@@ -26,6 +26,8 @@ Orchestuneは、**Agentic AI開発向けのスキル**（Claude Code、Antigravi
 
 ## インストール方法
 
+👉 導入前に、対象リポジトリが満たすべき前提条件（エージェント規律の定義・CIの厚さ・`ci_command`設定）を[セットアップガイドの「0. 導入要件」](docs/ja/setup.md#0-導入要件prerequisites)で確認してください。
+
 Python 3.12以上、Poetry、GitHub CLIがインストールされていることを確認してください。
 
 ```bash

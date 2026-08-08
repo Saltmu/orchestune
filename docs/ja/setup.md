@@ -4,6 +4,24 @@ Orchestuneのインストール方法、各種AIアシスタント（Claude Code
 
 ---
 
+## 0. 導入要件（Prerequisites）
+
+Orchestuneは「エージェントが標準開発ワークフローに従って実装し、CIが通ればそのまま自動マージされる」ことを前提に設計されています。導入先のリポジトリが以下を満たしていない場合、期待通りのトレーサビリティ・品質は得られません。導入前に必ず確認してください。
+
+1. **(a) エージェント規律を定義したファイルが存在すること**
+   `AGENTS.md` / `CLAUDE.md` など、対象リポジトリでエージェントに遵守させたい開発ワークフロー（TDD、Issue起票、PR作成規約等）を明文化したファイルを用意してください。Orchestuneディスパッチャーが送るエージェントへの指示は「標準開発ワークフローに従って実装してください」という一文のみで、その実体の定義は導入先リポジトリ側の責務です。ゼロから用意する場合は、下記2章の `orchestune setup --with-workflow-skill` で汎用テンプレートを配置できます。
+2. **(b) 自動マージを任せられる厚さの品質ゲート（CI）が存在すること**
+   Orchestuneの子タスクレベルには人間によるレビューゲートが存在せず、CIの合否が事実上唯一の品質ゲートになります（詳細は[Architecture & Design](architecture.md)を参照）。スモークテスト程度のCIしかないリポジトリに導入すると、無レビューのまま自動マージされるコードの品質を担保できません。
+3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
+   Integratorが統合ブランチ上で実行するCIコマンドの既定値は `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値）です。導入先リポジトリのCIエントリーポイントが異なる場合（例: `make ci`、`npm run ci`）は、`orchestune dispatch --ci-command "..."` または `orchestune.toml`/`pyproject.toml` の `[tool.orchestune]` セクションで `ci_command` を明示的に設定してください。
+
+```toml
+# orchestune.toml の例
+ci-command = "make ci"
+```
+
+---
+
 ## 1. インストール方法
 
 OrchestuneはPython 3.12以上、Poetry、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。

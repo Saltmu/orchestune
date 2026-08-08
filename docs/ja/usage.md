@@ -160,6 +160,7 @@ orchestune-dispatch
 | `--codex-cloud-env <id>` | - | `--dispatch-target codex-cloud` で利用する Codex Cloud environment ID。未指定時は `ORCHESTUNE_CODEX_CLOUD_ENV` 環境変数を使用。 |
 | `--local-cmd <template>` | - | `--dispatch-target local` の際に、ローカルのCLI（`agy` など）へディスパッチするためのコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`（例: `agy --issue {issue_number}`）。指定しない場合はデフォルトのダミー起動コマンドが使われます。`--dispatch-target claude-cli`/`agy-cli`/`codex-cli`（`auto`がこれらに解決した場合を含む）使用時は省略可能で、指定した場合は組み込みプリセットを上書きします。 |
 | `--parent-issue <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。起票される子Issueがすべてこの親Issueに紐付けられます。 |
+| `--ci-command <cmd>` | `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値） | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文のシェル風文字列。例: `'make ci'`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください（[セットアップガイドの「導入要件」](../ja/setup.md#0-導入要件prerequisites)参照）。`orchestune.toml`/`pyproject.toml`の`[tool.orchestune]`セクションでは`ci-command`キーとして指定できます。 |
 | `--deviation-buffer-lines <int>` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
 | `--max-launches-per-window <int>` | `1` | 指定した時間窓（`--window-seconds`）内で最大何回エージェントを起動できるかを制限する、APIバースト制御用オプション。 |
 | `--window-seconds <int>` | `3600` | バースト制限を適用する時間窓の秒数（デフォルトは1時間）。 |

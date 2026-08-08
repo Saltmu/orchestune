@@ -173,6 +173,169 @@ def test_setup_skills_occupied_by_unrelated_path_counts_as_failure(tmp_path, cap
     assert exit_code == 1
 
 
+def test_setup_skills_without_flag_does_not_copy_workflow_template(tmp_path):
+    """#394: `--with-workflow-skill`を指定しない限り、workflow-templateは
+    プロジェクトローカルへコピーされない（後方互換）。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    (skills_dir / "workflow-template").mkdir()
+    (skills_dir / "workflow-template" / "SKILL.md").touch()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        setup_skills()
+
+    assert not (mock_source / ".claude" / "skills" / "workflow-template").exists()
+    # workflow-templateはグローバル自動リンクの対象からも除外される
+    assert not (mock_home / ".claude" / "skills" / "workflow-template").exists()
+
+
+def test_setup_skills_with_workflow_skill_copies_project_local(tmp_path):
+    """#394: `--with-workflow-skill`指定時、検出済みアシスタントそれぞれの
+    プロジェクトローカルなスキルディレクトリへworkflow-templateが実体コピー
+    される（シンボリックリンクではない: コピー元は対象プロジェクト内には
+    存在しないため）。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+    (mock_home / ".codex").mkdir()
+    (mock_home / ".gemini").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    (skills_dir / "workflow-template").mkdir()
+    (skills_dir / "workflow-template" / "SKILL.md").write_text(
+        "template contents", encoding="utf-8"
+    )
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    assert exit_code == 0
+    claude_target = mock_source / ".claude" / "skills" / "workflow-template"
+    codex_target = mock_source / ".codex" / "skills" / "workflow-template"
+    gemini_target = mock_source / ".gemini" / "config" / "skills" / "workflow-template"
+
+    for target in (claude_target, codex_target, gemini_target):
+        assert target.is_dir()
+        assert not target.is_symlink()
+        assert (target / "SKILL.md").read_text(encoding="utf-8") == "template contents"
+
+
+def test_setup_skills_with_workflow_skill_only_targets_detected_assistants(tmp_path):
+    """#394: ホームディレクトリが存在しないアシスタントへは
+    プロジェクトローカルコピーも作成しない。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+    # .codex/.geminiは作成しない
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    (skills_dir / "workflow-template").mkdir()
+    (skills_dir / "workflow-template" / "SKILL.md").touch()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        setup_skills(with_workflow_skill=True)
+
+    assert (mock_source / ".claude" / "skills" / "workflow-template").is_dir()
+    assert not (mock_source / ".codex" / "skills").exists()
+    assert not (mock_source / ".gemini").exists()
+
+
+def test_setup_skills_with_workflow_skill_idempotent_when_already_present(
+    tmp_path, capsys
+):
+    """#394: 既にプロジェクトローカルへ配置済みの場合はスキップとして成功扱い。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    (skills_dir / "workflow-template").mkdir()
+    (skills_dir / "workflow-template" / "SKILL.md").touch()
+
+    existing = mock_source / ".claude" / "skills" / "workflow-template"
+    existing.mkdir(parents=True)
+    (existing / "SKILL.md").touch()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Skipped" in captured.out
+
+
+def test_setup_skills_with_workflow_skill_missing_source_warns(tmp_path, capsys):
+    """#394: パッケージ側にworkflow-templateが同梱されていない場合でも
+    クラッシュせず警告のみで継続する。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    # workflow-templateディレクトリを作成しない
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Warning" in captured.err
+    assert not (mock_source / ".claude" / "skills" / "workflow-template").exists()
+
+
 def test_get_skills_source_dir_fallback_parent(tmp_path):
     from orchestune.setup_skills import get_skills_source_dir
 

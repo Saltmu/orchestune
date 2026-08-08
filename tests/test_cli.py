@@ -84,6 +84,41 @@ def test_cli_setup_exits_1_when_setup_skills_fails():
     assert exc_info.value.code == 1
 
 
+def test_cli_setup_with_workflow_skill_flag_passed_through():
+    """#394: `--with-workflow-skill`フラグがsetup_skills()へ伝播すること。"""
+    from orchestune.cli import main
+
+    test_args = ["orchestune", "setup", "--with-workflow-skill"]
+    with (
+        patch("sys.argv", test_args),
+        patch(
+            "orchestune.setup_skills.setup_skills", return_value=0
+        ) as mock_setup_skills,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_setup_skills.assert_called_once_with(with_workflow_skill=True)
+
+
+def test_cli_setup_without_flag_defaults_to_false():
+    """#394: フラグ未指定時は`with_workflow_skill=False`で呼ばれる（後方互換）。"""
+    from orchestune.cli import main
+
+    test_args = ["orchestune", "setup"]
+    with (
+        patch("sys.argv", test_args),
+        patch(
+            "orchestune.setup_skills.setup_skills", return_value=0
+        ) as mock_setup_skills,
+        pytest.raises(SystemExit),
+    ):
+        main()
+
+    mock_setup_skills.assert_called_once_with(with_workflow_skill=False)
+
+
 def test_cli_no_args_exits(capsys):
     from orchestune.cli import main
 

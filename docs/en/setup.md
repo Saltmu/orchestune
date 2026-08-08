@@ -4,6 +4,24 @@ This guide describes how to install Orchestune, register its skills with various
 
 ---
 
+## 0. Prerequisites
+
+Orchestune is designed around the assumption that an agent implements according to a standard development workflow, and that a passing CI run is sufficient for automatic merge. If the target repository does not meet the following prerequisites, you will not get the traceability and quality guarantees Orchestune is built for. Confirm these before adopting Orchestune.
+
+1. **(a) A file defining the agent's development discipline must exist**
+   Provide a file such as `AGENTS.md` / `CLAUDE.md` that documents the development workflow you want agents to follow in this repository (TDD, Issue filing, PR conventions, etc.). The instruction the Orchestune dispatcher sends to an agent is a single line — "implement this following the standard development workflow" — and the actual definition of that workflow is the target repository's responsibility. If you are starting from scratch, `orchestune setup --with-workflow-skill` (see Section 2 below) can drop in a generic template.
+2. **(b) A quality gate (CI) thorough enough to be trusted with automatic merging**
+   Orchestune has no human review gate at the child-task level; a passing CI run is effectively the only quality gate (see [Architecture & Design](architecture.md) for details). Adopting Orchestune in a repository with only smoke-test-level CI means unreviewed code gets merged automatically without any real quality guarantee.
+3. **(c) `ci_command` must be set to your repository's own CI entrypoint**
+   The CI command the Integrator runs on the integration branch defaults to `./scripts/local-ci.sh`, which is specific to Orchestune's own repository. If your repository's CI entrypoint differs (e.g. `make ci`, `npm run ci`), set `ci_command` explicitly via `orchestune dispatch --ci-command "..."` or the `[tool.orchestune]` section of `orchestune.toml` / `pyproject.toml`.
+
+```toml
+# Example orchestune.toml
+ci-command = "make ci"
+```
+
+---
+
 ## 1. Installation
 
 Orchestune requires Python 3.12+, Poetry, and the GitHub CLI (`gh auth status` must be authenticated).

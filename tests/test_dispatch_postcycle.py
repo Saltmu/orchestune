@@ -230,6 +230,43 @@ class TestRunSemanticIntegrator:
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.enable_semantic_review is False
 
+    def test_propagates_ci_command_from_dispatcher_config(self, tmp_path):
+        """#394: `DispatcherConfig.ci_command`が`IntegratorConfig.ci_command`
+        へそのまま伝播すること。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+            ci_command=["make", "ci"],
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": "success", "ok": True}
+        with patch(
+            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.ci_command == ["make", "ci"]
+
+    def test_ci_command_none_when_unset(self, tmp_path):
+        """#394: `DispatcherConfig.ci_command`未設定時は`IntegratorConfig.ci_command`
+        も`None`のままで、Integrator側の既定値フォールバックに委ねる。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": "success", "ok": True}
+        with patch(
+            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.ci_command is None
+
     def test_returns_none_and_warns_on_failure(self, capsys):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",

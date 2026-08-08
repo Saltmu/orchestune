@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 import tomllib
 from pathlib import Path
@@ -137,6 +138,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--allow-unsafe-agent-execution",
         action="store_true",
         help="ローカルCLI（claude/agy/codex）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
+    )
+    parser.add_argument(
+        "--ci-command",
+        default=None,
+        help="#394: Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の"
+        "シェル風文字列。例: './scripts/local-ci.sh' や 'make ci'）。"
+        "未指定時はOrchestune自身のリポジトリ固有の既定値"
+        "（./scripts/local-ci.sh）にフォールバックする。",
     )
     return parser
 
@@ -276,6 +285,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             task_timeout_seconds=args.task_timeout_seconds,
             zombie_gc=args.zombie_gc,
             not_needed_review_state_path=args.not_needed_review_state_path,
+            ci_command=shlex.split(args.ci_command) if args.ci_command else None,
         )
     except ValueError as e:
         _config_error(parser, str(e))

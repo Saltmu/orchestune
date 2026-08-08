@@ -360,6 +360,56 @@ class TestDispatcherConfigLoading:
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 3
 
+    def test_ci_command_cli_flag_is_split_into_argv_list(self, tmp_path):
+        """#394: `--ci-command`はshlex構文の文字列として受け取り、
+        `DispatcherConfig.ci_command`にはargvリストとして渡ること。"""
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(
+                ["--no-apply", "--ci-command", "make ci"],
+                cwd=tmp_path,
+            )
+
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.ci_command == ["make", "ci"]
+
+    def test_ci_command_unset_defaults_to_none(self, tmp_path):
+        """#394: `--ci-command`未指定時は`DispatcherConfig.ci_command`が
+        `None`のままで、Integrator側の既定値フォールバックに委ねる（後方互換）。"""
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.ci_command is None
+
+    def test_ci_command_loaded_from_orchestune_toml(self, tmp_path):
+        """#394: `orchestune.toml`の`ci-command`からも設定できること。"""
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text('ci-command = "npm run ci"\n', encoding="utf-8")
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.ci_command == ["npm", "run", "ci"]
+
     @pytest.mark.parametrize(
         ("config", "expected_error"),
         [

@@ -2,7 +2,8 @@ import shutil
 import sys
 from pathlib import Path
 
-SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer"}
+SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer", "workflow-template"}
+WORKFLOW_TEMPLATE_SKILL_NAME = "workflow-template"
 
 
 def _create_skill_link(src_skill: Path, dest_skill: Path) -> str:
@@ -135,8 +136,50 @@ def _setup_for_assistant(
     return (success_count, failure_count)
 
 
-def setup_skills() -> int:
+def _copy_workflow_template_skill(
+    src_skill: Path, dest_skill: Path, skill_name: str
+) -> bool:
+    """`workflow-template`スキルをプロジェクトローカルへ実体コピーする。
+
+    シンボリックリンクではなく実体コピーにする: コピー元はOrchestuneパッケージ内
+    にしか存在せず、対象プロジェクト内には存在しないため（`_link_one_skill`が
+    前提とする「同一マシン上のOrchestuneソースを指すリンク」が成立しない）。
+    Returns True on success/already-ok.
+    """
+    if dest_skill.exists():
+        if (dest_skill / "SKILL.md").is_file():
+            print(f"  Skipped '{skill_name}' (already present at {dest_skill})")
+            return True
+        print(
+            f"  Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
+            "and does not look like a valid skill installation.",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        dest_skill.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_skill, dest_skill)
+        print(f"  Successfully copied '{skill_name}' to {dest_skill}")
+        return True
+    except Exception as e:
+        print(
+            f"  Error: Failed to copy '{skill_name}' to {dest_skill}: {e}",
+            file=sys.stderr,
+        )
+        return False
+
+
+def setup_skills(with_workflow_skill: bool = False) -> int:
     """Set up skill links for detected AI assistants.
+
+    `with_workflow_skill=True`は、`WORKFLOW_TEMPLATE_SKILL_NAME`（#394）を
+    グローバルスキルディレクトリではなく、カレントディレクトリ（対象
+    プロジェクトのルート）を基点にしたプロジェクトローカルなスキル
+    ディレクトリへ実体コピーする。`local-ci-developer`と同様、この
+    スキルが定義する規律（テストコマンド等）はプロジェクト固有であるべき
+    ため、他の全プロジェクトへ波及するグローバルリンクの対象外
+    （`SKILLS_EXCLUDED_FROM_SETUP`）にしている。
 
     Returns an exit code: 0 on full success (or nothing to do), 1 if any
     required skill link could not be created/verified.
@@ -181,6 +224,39 @@ def setup_skills() -> int:
         assistant_success, assistant_failure = result
         success_count += assistant_success
         failure_count += assistant_failure
+
+    if with_workflow_skill:
+        src_workflow_skill = skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
+        if not src_workflow_skill.is_dir():
+            print(
+                f"  Warning: workflow template skill source not found in {skills_dir}, "
+                "skipping --with-workflow-skill.",
+                file=sys.stderr,
+            )
+        else:
+            project_dir = Path.cwd()
+            project_skill_dirs = {
+                "Claude Code": (
+                    home / ".claude",
+                    project_dir / ".claude" / "skills",
+                ),
+                "Codex CLI": (home / ".codex", project_dir / ".codex" / "skills"),
+                "Antigravity": (
+                    home / ".gemini",
+                    project_dir / ".gemini" / "config" / "skills",
+                ),
+            }
+            for base_dir, project_skills_dir in project_skill_dirs.values():
+                if not base_dir.is_dir():
+                    continue
+                assistants_detected = True
+                dest_skill = project_skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
+                if _copy_workflow_template_skill(
+                    src_workflow_skill, dest_skill, WORKFLOW_TEMPLATE_SKILL_NAME
+                ):
+                    success_count += 1
+                else:
+                    failure_count += 1
 
     if not assistants_detected:
         print(

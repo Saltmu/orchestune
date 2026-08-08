@@ -31,7 +31,8 @@ def main() -> None:
     elif cmd == "setup":
         from orchestune.setup_skills import setup_skills
 
-        sys.exit(setup_skills())
+        with_workflow_skill = "--with-workflow-skill" in sys.argv[1:]
+        sys.exit(setup_skills(with_workflow_skill=with_workflow_skill))
     elif cmd == "bootstrap":
         from orchestune.bootstrap import main as bootstrap_main
 

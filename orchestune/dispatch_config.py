@@ -33,6 +33,11 @@ class DispatcherConfig:
     zombie_gc: bool = True
     # #282: status:not-needed判定の独立検証レビュー（保留分）の永続化先。
     not_needed_review_state_path: Path = Path("not_needed_review_state.json")
+    # #394: Integratorが統合ブランチ上で実行するCIコマンド。未指定（None）の場合、
+    # IntegratorはOrchestune自身のリポジトリ固有の既定値（./scripts/local-ci.sh）
+    # にフォールバックする。導入先リポジトリのCIエントリーポイントに合わせて
+    # 明示的に設定することを推奨する（セットアップガイドの「導入要件」参照）。
+    ci_command: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.dispatch_target is None:
