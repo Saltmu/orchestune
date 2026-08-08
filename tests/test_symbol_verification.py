@@ -3,7 +3,10 @@
 from pathlib import Path
 
 from orchestune.dag_models import SubTask
-from orchestune.symbol_verification import find_missing_symbols
+from orchestune.symbol_verification import (
+    find_missing_footprint_paths,
+    find_missing_symbols,
+)
 
 
 def _subtask(footprint: tuple[str, ...] = (), symbols: tuple[str, ...] = ()) -> SubTask:
@@ -391,3 +394,43 @@ class TestFindMissingSymbols:
         subtask = _subtask(footprint=("pkg/broken.py",), symbols=("anything",))
 
         assert find_missing_symbols(subtask, tmp_path) == ()
+
+
+class TestFindMissingFootprintPaths:
+    def test_existing_file_is_not_reported(self, tmp_path):
+        _write(tmp_path, "pkg/mod.py", "x = 1\n")
+        subtask = _subtask(footprint=("pkg/mod.py",))
+
+        assert find_missing_footprint_paths(subtask, tmp_path) == ()
+
+    def test_missing_file_is_reported(self, tmp_path):
+        subtask = _subtask(footprint=("pkg/does_not_exist.py",))
+
+        assert find_missing_footprint_paths(subtask, tmp_path) == (
+            "pkg/does_not_exist.py",
+        )
+
+    def test_mixed_existing_and_missing_paths(self, tmp_path):
+        _write(tmp_path, "pkg/mod.py", "x = 1\n")
+        subtask = _subtask(footprint=("pkg/mod.py", "pkg/ghost.py"))
+
+        assert find_missing_footprint_paths(subtask, tmp_path) == ("pkg/ghost.py",)
+
+    def test_all_paths_missing_are_all_reported(self, tmp_path):
+        subtask = _subtask(footprint=("totally/made/up/path.py", "another/ghost.py"))
+
+        assert find_missing_footprint_paths(subtask, tmp_path) == (
+            "totally/made/up/path.py",
+            "another/ghost.py",
+        )
+
+    def test_directory_is_not_treated_as_a_file(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        subtask = _subtask(footprint=("pkg",))
+
+        assert find_missing_footprint_paths(subtask, tmp_path) == ("pkg",)
+
+    def test_empty_footprint_returns_empty(self, tmp_path):
+        subtask = _subtask(footprint=())
+
+        assert find_missing_footprint_paths(subtask, tmp_path) == ()

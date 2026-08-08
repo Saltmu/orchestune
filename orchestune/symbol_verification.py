@@ -161,6 +161,21 @@ def _symbol_matches(
     return len(parts) >= 2 and parts[-1] in top_level_names
 
 
+def find_missing_footprint_paths(
+    subtask: SubTask, repo_root: str | Path
+) -> tuple[str, ...]:
+    """`subtask.footprint`のうち、`repo_root`上に実在しないパスを返す。
+
+    `find_missing_symbols`と異なり、検証材料の有無で判定を保留すること
+    はしない: パスの実在は常にファイルシステムへの問い合わせだけで判定
+    できるため、footprintが全て未作成のパスであっても、それがそのまま
+    検出結果になる（新規ファイル作成を意図した記載は正当なので、呼び出し
+    側ではエラーではなく警告として扱うこと）。
+    """
+    repo_root = Path(repo_root)
+    return tuple(path for path in subtask.footprint if not (repo_root / path).is_file())
+
+
 def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, ...]:
     """`subtask.symbols`のうち、`subtask.footprint`のPythonファイル群に
     実在しないものを返す。

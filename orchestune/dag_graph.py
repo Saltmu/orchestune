@@ -21,6 +21,10 @@ from orchestune.dag_similarity import (
     DEFAULT_SIMILARITY_THRESHOLD,
     build_similarity_edges,
 )
+from orchestune.symbol_verification import (
+    find_missing_footprint_paths,
+    find_missing_symbols,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,24 +148,61 @@ def _resolve_cycles_if_possible(
     return resolved
 
 
-def _assemble_dag(subtasks: list[SubTask], edges: list[DagEdge]) -> DagResult:
+def _footprint_and_symbol_warnings(
+    subtasks: list[SubTask], repo_root: str | Path
+) -> list[str]:
+    """footprint/symbolsが`repo_root`上の実コードに実在するかを警告として返す。
+
+    存在しないパス・シンボルはブロッキングエラーにはしない: footprintは
+    このsubtaskがこれから新規作成するファイルを含みうるため、未検出＝
+    誤りとは断定できない（`find_missing_footprint_paths`/`find_missing_symbols`
+    のdocstring参照）。
+    """
+    warnings: list[str] = []
+    for subtask in subtasks:
+        missing_paths = find_missing_footprint_paths(subtask, repo_root)
+        if missing_paths:
+            warnings.append(
+                f"{subtask.id}: footprintに実在しないパスがあります"
+                "（新規作成予定でなければfootprintの記載漏れを確認してください）: "
+                f"{', '.join(missing_paths)}"
+            )
+        missing_symbols = find_missing_symbols(subtask, repo_root)
+        if missing_symbols:
+            warnings.append(
+                f"{subtask.id}: symbolsが実コードベースに見つかりません"
+                "（このsubtaskで新規追加予定でなければ確認してください）: "
+                f"{', '.join(missing_symbols)}"
+            )
+    return warnings
+
+
+def _assemble_dag(
+    subtasks: list[SubTask],
+    edges: list[DagEdge],
+    repo_root: str | Path | None = None,
+) -> DagResult:
     node_ids = [subtask.id for subtask in subtasks]
     resolved_edges = _resolve_cycles_if_possible(node_ids, edges)
     topological_order = _topological_sort(node_ids, resolved_edges)
     targets = {edge.target for edge in resolved_edges}
+    warnings = find_unowned_shared_contract_hotspots(subtasks, resolved_edges)
+    if repo_root is not None:
+        warnings = [*warnings, *_footprint_and_symbol_warnings(subtasks, repo_root)]
     return DagResult(
         subtasks={subtask.id: subtask for subtask in subtasks},
         edges=resolved_edges,
         topological_order=topological_order,
         parallel_leaves=sorted(node for node in node_ids if node not in targets),
         risky_subtask_ids=sorted(subtask.id for subtask in subtasks if subtask.risk),
-        warnings=tuple(find_unowned_shared_contract_hotspots(subtasks, resolved_edges)),
+        warnings=tuple(warnings),
     )
 
 
 def build_dag(
     subtasks: list[SubTask],
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    repo_root: str | Path | None = None,
 ) -> DagResult:
     """Build a validated DAG from explicit and inferred dependencies."""
     explicit_edges = _collect_explicit_edges(subtasks)
@@ -169,16 +210,19 @@ def build_dag(
     return _assemble_dag(
         subtasks,
         _merge_explicit_and_similarity(explicit_edges, similarity_edges),
+        repo_root=repo_root,
     )
 
 
 def build_dag_from_plan(
     path: str | Path,
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
     return build_dag(
         parse_decomposition_plan(path),
         threshold=threshold,
+        repo_root=repo_root,
     ).to_dict()
 
 

@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from orchestune.dag_graph import build_dag_from_plan
@@ -51,7 +52,7 @@ def _print_text_result(dag: dict[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     try:
-        dag = build_dag_from_plan(args.plan)
+        dag = build_dag_from_plan(args.plan, repo_root=Path.cwd())
         if args.json:
             print(json.dumps(dag, indent=2))
         else:
