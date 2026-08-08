@@ -5,15 +5,12 @@
 通知処理・エンドツーエンド統合テストは`test_dispatch_rebase.py`に残している。
 """
 
-import tempfile
 from pathlib import Path
 from unittest.mock import call, patch
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):
@@ -98,7 +95,9 @@ class TestApplyAutoRebase:
     @patch(
         "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
     )
-    def test_updates_base_branch_on_success(self, mock_resolve, mock_run, mock_kill):
+    def test_updates_base_branch_on_success(
+        self, mock_resolve, mock_run, mock_kill, tmp_path
+    ):
         from orchestune.dispatch_rebase import _apply_auto_rebase
 
         active = _active(base_branch="origin/main")
@@ -116,6 +115,7 @@ class TestApplyAutoRebase:
             pid=222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
@@ -139,7 +139,7 @@ class TestApplyAutoRebase:
         "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
     )
     def test_push_failure_after_successful_rebase_is_reported_distinctly(
-        self, mock_resolve, mock_run, mock_kill
+        self, mock_resolve, mock_run, mock_kill, tmp_path
     ):
         """#384: rebase自体は成功した後のpush失敗（non-fast-forward等）は、
         「コンフリクト」ではなくpush失敗として原因をIssueへ正しく報告すること。"""
@@ -169,6 +169,7 @@ class TestApplyAutoRebase:
             ],
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
@@ -193,7 +194,7 @@ class TestApplyAutoRebase:
         "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
     )
     def test_keeps_original_base_branch_on_failure(
-        self, mock_resolve, mock_run, mock_kill
+        self, mock_resolve, mock_run, mock_kill, tmp_path
     ):
         import subprocess
 
@@ -210,6 +211,7 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
@@ -232,7 +234,7 @@ class TestApplyAutoRebase:
         "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
     )
     def test_failure_adds_manual_merge_before_removing_in_progress(
-        self, mock_resolve, mock_run, mock_kill
+        self, mock_resolve, mock_run, mock_kill, tmp_path
     ):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
@@ -248,6 +250,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=MagicMock(),
@@ -280,7 +283,7 @@ class TestApplyAutoRebase:
         "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
     )
     def test_backs_up_wip_before_rebase_when_dirty(
-        self, mock_resolve, mock_run, mock_backup, mock_kill
+        self, mock_resolve, mock_run, mock_backup, mock_kill, tmp_path
     ):
         """#213: dirtyなworktreeでは、rebaseを試みる前にWIP退避が呼ばれること。"""
         from orchestune.dispatch_rebase import _apply_auto_rebase
@@ -299,6 +302,7 @@ class TestApplyAutoRebase:
             pid=222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
@@ -323,7 +327,7 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch_rebase.dispatch_gc.backup_wip_commit")
     @patch("orchestune.dispatch_rebase.subprocess.run")
     def test_backup_failure_skips_rebase_and_escalates_to_manual_merge(
-        self, mock_run, mock_backup, mock_kill
+        self, mock_run, mock_backup, mock_kill, tmp_path
     ):
         """#213: WIP退避自体が失敗した場合、rebaseを試みずmanual-merge-requiredへ
         エスカレーションし、未コミット作業の消失を防ぐ。"""
@@ -339,6 +343,7 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=mock_target,
@@ -372,7 +377,7 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch_rebase.dispatch_gc.backup_wip_commit")
     @patch("orchestune.dispatch_rebase.subprocess.run")
     def test_backup_failure_adds_manual_merge_before_removing_in_progress(
-        self, mock_run, mock_backup, mock_kill
+        self, mock_run, mock_backup, mock_kill, tmp_path
     ):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
@@ -386,6 +391,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=MagicMock(),

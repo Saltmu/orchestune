@@ -1,5 +1,3 @@
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -11,8 +9,6 @@ from orchestune.dispatch_recovery import (
 )
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _issue_with_footprint(
@@ -89,7 +85,7 @@ class TestParseSubtaskInfoFromIssue:
 class TestDecideMissingActiveWorktrees:
     """decide層: githubのread-only呼び出し以外の副作用なしで復元計画のみを算出する。"""
 
-    def test_no_missing_issues_returns_empty_without_calling_github(self):
+    def test_no_missing_issues_returns_empty_without_calling_github(self, tmp_path):
         run_state = RunState(active_worktrees={"1": None})  # type: ignore[arg-type]
         issue = _issue_with_footprint(1, subtask_id="task-a")
         with patch("orchestune.forge.GitHubForge.list_open_prs") as mock_prs:
@@ -97,6 +93,7 @@ class TestDecideMissingActiveWorktrees:
                 run_state,
                 [issue],
                 DispatcherConfig(
+                    events_log_path=tmp_path / "events.jsonl",
                     run_state_path=tmp_path / "run_state.json",
                     worktree_root=tmp_path / "worktrees",
                 ),
@@ -104,12 +101,13 @@ class TestDecideMissingActiveWorktrees:
         assert result == []
         mock_prs.assert_not_called()
 
-    def test_missing_issue_without_pr_decides_synthetic_branch(self):
+    def test_missing_issue_without_pr_decides_synthetic_branch(self, tmp_path):
         run_state = RunState(active_worktrees={})
         issue = _issue_with_footprint(
             101, subtask_id="task-a", footprint=["src/foo.py"]
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -126,7 +124,7 @@ class TestDecideMissingActiveWorktrees:
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
 
-    def test_restored_old_issue_has_unknown_start_time(self):
+    def test_restored_old_issue_has_unknown_start_time(self, tmp_path):
         """#198: Issue作成日時はdispatch開始日時ではないため、復元Taskの
         timeout基準に使ってはならない。"""
         run_state = RunState(active_worktrees={})
@@ -136,6 +134,7 @@ class TestDecideMissingActiveWorktrees:
             created_at="2020-01-01T00:00:00+00:00",
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -145,7 +144,7 @@ class TestDecideMissingActiveWorktrees:
 
         assert result[0][2].started_at is None
 
-    def test_restored_cloud_task_has_unknown_start_time(self):
+    def test_restored_cloud_task_has_unknown_start_time(self, tmp_path):
         """PRに紐付くクラウドTaskでも、PRメタデータから実行開始時刻は復元できない。"""
         run_state = RunState(active_worktrees={})
         issue = _issue_with_footprint(
@@ -160,6 +159,7 @@ class TestDecideMissingActiveWorktrees:
             closes_issue_numbers=(101,),
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -173,6 +173,7 @@ class TestDecideMissingActiveWorktrees:
 
     def test_missing_issue_base_branch_uses_own_parent_not_multiple_parent_config(
         self,
+        tmp_path,
     ):
         """#182: 自己修復はリポジトリ全体のin-progress Issueを対象にするため、
         `config.parent_issue_number`（現在のdispatcher起動時の親）ではなく、
@@ -185,6 +186,7 @@ class TestDecideMissingActiveWorktrees:
             201, subtask_id="task-b", parent={"number": 200}
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -201,7 +203,7 @@ class TestDecideMissingActiveWorktrees:
         assert active_by_key["101"].base_branch == "parent/issue-100"
         assert active_by_key["201"].base_branch == "parent/issue-200"
 
-    def test_yaml_dependency_restores_open_dependency_pr_as_base_branch(self):
+    def test_yaml_dependency_restores_open_dependency_pr_as_base_branch(self, tmp_path):
         """#305: GitHub MCP起票でnative blocked_byが空でも、Footprint YAMLの
         depends_onから依存PRのhead branchを復元する。"""
         run_state = RunState(active_worktrees={})
@@ -218,6 +220,7 @@ class TestDecideMissingActiveWorktrees:
             closes_issue_numbers=(101,),
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -235,7 +238,7 @@ class TestDecideMissingActiveWorktrees:
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
 
-    def test_native_blocked_by_takes_precedence_over_yaml_dependency(self):
+    def test_native_blocked_by_takes_precedence_over_yaml_dependency(self, tmp_path):
         run_state = RunState(active_worktrees={})
         yaml_dependency = _issue_with_footprint(101, subtask_id="task-a")
         native_dependency = _issue_with_footprint(103, subtask_id="task-c")
@@ -258,6 +261,7 @@ class TestDecideMissingActiveWorktrees:
             closes_issue_numbers=(103,),
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -275,7 +279,7 @@ class TestDecideMissingActiveWorktrees:
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["102"].base_branch == "claude/issue-103-task-c"
 
-    def test_unresolved_yaml_dependency_keeps_parent_base_branch(self):
+    def test_unresolved_yaml_dependency_keeps_parent_base_branch(self, tmp_path):
         run_state = RunState(active_worktrees={})
         dependent = _issue_with_footprint(
             102,
@@ -284,6 +288,7 @@ class TestDecideMissingActiveWorktrees:
             parent={"number": 100},
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )

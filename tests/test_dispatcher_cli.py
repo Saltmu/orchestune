@@ -256,7 +256,15 @@ class TestMainDispatchTargetAutoDetection:
                 return_value=self._empty_report(),
             ),
         ):
-            main(["--no-apply", "--run-state-path", str(tmp_path / "rs.json")])
+            main(
+                [
+                    "--no-apply",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ]
+            )
 
         assert mock_build.call_args.args[0] == "auto"
 
@@ -269,7 +277,15 @@ class TestMainDispatchTargetAutoDetection:
                 return_value=self._empty_report(),
             ),
         ):
-            main(["--no-apply", "--run-state-path", str(tmp_path / "rs.json")])
+            main(
+                [
+                    "--no-apply",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ]
+            )
 
         assert mock_build.call_args.args[0] == "cloud-routine"
 
@@ -291,6 +307,8 @@ class TestMainDispatchTargetAutoDetection:
                     "local",
                     "--run-state-path",
                     str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
                 ]
             )
 
@@ -314,7 +332,8 @@ class TestDispatcherConfigLoading:
         config_path.write_text(
             "max-concurrent = 5\n"
             "dispatch-target = 'local'\n"
-            "run-state-path = 'custom_state.json'\n",
+            "run-state-path = 'custom_state.json'\n"
+            "events-log-path = 'custom_events.jsonl'\n",
             encoding="utf-8",
         )
 
@@ -364,7 +383,8 @@ class TestDispatcherConfigLoading:
         config_path.write_text(
             "[tool.orchestune]\n"
             "max-concurrent = 7\n"
-            "dispatch-target = 'claude-cli'\n",
+            "dispatch-target = 'claude-cli'\n"
+            "events-log-path = 'custom_events.jsonl'\n",
             encoding="utf-8",
         )
 
@@ -404,6 +424,8 @@ class TestDispatcherConfigLoading:
                     "3",
                     "--dispatch-target",
                     "claude-cli",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -425,7 +447,13 @@ class TestDispatcherConfigLoading:
             ) as mock_run,
         ):
             main(
-                ["--no-apply", "--ci-command", "make ci"],
+                [
+                    "--no-apply",
+                    "--ci-command",
+                    "make ci",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
 
@@ -442,7 +470,14 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(
+                [
+                    "--no-apply",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
 
         config_arg = mock_run.call_args.args[0]
         assert config_arg.ci_command is None
@@ -450,7 +485,10 @@ class TestDispatcherConfigLoading:
     def test_ci_command_loaded_from_orchestune_toml(self, tmp_path):
         """#394: `orchestune.toml`の`ci-command`からも設定できること。"""
         config_path = tmp_path / "orchestune.toml"
-        config_path.write_text('ci-command = "npm run ci"\n', encoding="utf-8")
+        config_path.write_text(
+            'ci-command = "npm run ci"\nevents-log-path = "custom_events.jsonl"\n',
+            encoding="utf-8",
+        )
 
         with (
             patch("orchestune.dispatcher.build_dispatch_target"),
@@ -459,7 +497,14 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(
+                [
+                    "--no-apply",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
 
         config_arg = mock_run.call_args.args[0]
         assert config_arg.ci_command == ["npm", "run", "ci"]
@@ -518,7 +563,8 @@ class TestDispatcherConfigLoading:
     )
     def test_accepts_each_dispatch_target(self, tmp_path, dispatch_target):
         (tmp_path / "orchestune.toml").write_text(
-            f"dispatch-target = '{dispatch_target}'\n", encoding="utf-8"
+            f"dispatch-target = '{dispatch_target}'\nevents-log-path = 'custom_events.jsonl'\n",
+            encoding="utf-8",
         )
 
         with (
@@ -564,7 +610,14 @@ class TestDispatcherConfigLoading:
             patch("orchestune.dispatcher._post_event_log_comment", return_value=r4),
         ):
             code = main(
-                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
             assert code == 0
@@ -591,7 +644,14 @@ class TestDispatcherConfigLoading:
             patch("orchestune.dispatcher._post_event_log_comment", return_value=r4),
         ):
             code = main(
-                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
             assert code == 2
@@ -616,7 +676,14 @@ class TestDispatcherConfigLoading:
             patch("orchestune.dispatcher._post_event_log_comment", return_value=r4),
         ):
             code = main(
-                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
             assert code == 1
@@ -635,7 +702,14 @@ class TestDispatcherConfigLoading:
             ),
         ):
             code = main(
-                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
             assert code == 1
@@ -668,7 +742,15 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._post_event_log_comment") as mock_post,
         ):
-            code = main(["--apply", "--allow-unsafe-agent-execution"], cwd=tmp_path)
+            code = main(
+                [
+                    "--apply",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
 
         assert code == 0
         mock_post.assert_not_called()
@@ -706,7 +788,14 @@ class TestDispatcherConfigLoading:
             ) as mock_post,
         ):
             code = main(
-                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
 
@@ -777,6 +866,8 @@ class TestDispatcherConfigLoading:
                     "claude-cli",
                     "--allow-unsafe-agent-execution",
                     "--no-apply",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -793,5 +884,14 @@ class TestDispatcherConfigLoading:
             "orchestune.dispatcher.run_dispatch_cycle",
             return_value=self._empty_report(),
         ):
-            code = main(["--dispatch-target", "claude-cli", "--no-apply"], cwd=tmp_path)
+            code = main(
+                [
+                    "--dispatch-target",
+                    "claude-cli",
+                    "--no-apply",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
             assert code == 0

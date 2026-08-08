@@ -105,6 +105,7 @@ def _ctx(**overrides):
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         ),
@@ -318,8 +319,9 @@ class TestFetchIssues:
     """#156: parent_issue_number指定時はlist_sub_issues経由のfast pathを、
     未指定時は従来通りlist_issues_by_labelを使う。"""
 
-    def test_uses_list_sub_issues_when_parent_issue_number_is_set(self):
+    def test_uses_list_sub_issues_when_parent_issue_number_is_set(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -339,8 +341,9 @@ class TestFetchIssues:
         mock_sub_issues.assert_called_once_with(100)
         assert [i.number for i in result.queued] == [1]
 
-    def test_uses_list_issues_by_label_when_parent_issue_number_is_none(self):
+    def test_uses_list_issues_by_label_when_parent_issue_number_is_none(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -363,12 +366,13 @@ class TestFetchIssuesWithFakeForge:
     """#292: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
     `DispatcherConfig(forge=...)`への注入だけでテストが書けることを示す。"""
 
-    def test_uses_injected_fake_forge_instead_of_patching(self):
+    def test_uses_injected_fake_forge_instead_of_patching(self, tmp_path):
         fake_forge = MagicMock()
         fake_forge.list_sub_issues.return_value = [
             _sub_issue(1, labels=("status:queued",))
         ]
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -390,6 +394,7 @@ class TestFinalizeLaunch:
         self, tmp_path
     ):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             window_seconds=172800,
@@ -414,6 +419,7 @@ class TestFinalizeLaunch:
 class TestRunDispatchCycle:
     def test_dry_run_makes_no_write_calls(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -509,6 +515,7 @@ class TestRunDispatchCycle:
 
     def test_dry_run_does_not_update_last_reconciled_at(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -539,6 +546,7 @@ class TestRunDispatchCycle:
             run_state_path,
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -569,6 +577,7 @@ class TestRunDispatchCycle:
         list_sub_issuesの実装（github.py）側の責務のためここでは検証しない。
         """
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -598,6 +607,7 @@ class TestRunDispatchCycle:
 
     def test_run_dispatch_cycle_resolves_depends_on_from_blocked_by(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -658,6 +668,7 @@ class TestRunDispatchCycleParentIssueValidation:
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             parent_issue_number=181,
+            events_log_path=tmp_path / "events.jsonl",
             apply=True,
         )
         defaults.update(overrides)
@@ -793,6 +804,7 @@ class TestRunDispatchCycleActorVerification:
 
     def test_dry_run_excludes_unauthorized_actor_without_writes(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,

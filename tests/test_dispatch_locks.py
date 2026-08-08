@@ -588,7 +588,7 @@ class TestSyncExternalLocks:
     @patch("orchestune.forge.GitHubForge.remove_label")
     @patch("orchestune.forge.GitHubForge.add_label")
     def test_sync_external_locks_unlocks_without_requeue_for_done_tasks(
-        self, mock_add_label, mock_remove_label, mock_list_branches
+        self, mock_add_label, mock_remove_label, mock_list_branches, tmp_path
     ):
         mock_list_branches.return_value = []
 
@@ -605,7 +605,7 @@ class TestSyncExternalLocks:
         )
 
         run_state = RunState(active_worktrees={})
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         res = _sync_external_locks(
             tasks_by_issue={1: done_task},

@@ -6,9 +6,7 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 """
 
 import subprocess
-import tempfile
 from contextlib import ExitStack, contextmanager
-from pathlib import Path
 from unittest.mock import ANY, patch
 
 import pytest
@@ -31,8 +29,6 @@ from orchestune.dispatch_state import (
 )
 from orchestune.models import IssueRecord
 from tests.conftest import make_issue
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):
@@ -140,13 +136,14 @@ class TestDualStatusReconciliation:
 
         assert [t.issue_number for t in result] == [1]
 
-    def test_apply_removes_status_done_for_dual_status_tasks(self):
+    def test_apply_removes_status_done_for_dual_status_tasks(self, tmp_path):
         dual_status_task = _task(
             issue_number=1,
             subtask_id="task-a",
             status_labels=("status:done", "status:queued"),
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -158,13 +155,14 @@ class TestDualStatusReconciliation:
         mock_remove.assert_called_once_with(1, "status:done")
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
 
-    def test_dry_run_does_not_call_github(self):
+    def test_dry_run_does_not_call_github(self, tmp_path):
         dual_status_task = _task(
             issue_number=1,
             subtask_id="task-a",
             status_labels=("status:done", "status:queued"),
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=False,
@@ -210,6 +208,7 @@ class TestSelfHealRunState:
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -223,6 +222,7 @@ class TestSelfHealRunState:
 
     def test_noop_when_not_apply(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=False,
@@ -238,6 +238,7 @@ class TestSelfHealRunState:
         self, tmp_path
     ):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -269,6 +270,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -361,6 +363,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -434,6 +437,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -573,6 +577,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
