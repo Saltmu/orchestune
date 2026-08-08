@@ -172,8 +172,9 @@ class TestRunSemanticIntegrator:
     """#150: Integrator実行と、クラウドルーチン利用時のみ意味的レビューを
     有効化する分岐（ベストエフォート）。"""
 
-    def test_enables_semantic_review_for_cloud_routine_target(self):
+    def test_enables_semantic_review_for_cloud_routine_target(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
@@ -197,8 +198,9 @@ class TestRunSemanticIntegrator:
         assert integrator_config.enable_semantic_review is True
         mock_coordinator_cls.assert_called_once_with(config.dispatch_target)
 
-    def test_disables_semantic_review_when_flag_off(self):
+    def test_disables_semantic_review_when_flag_off(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
@@ -217,6 +219,7 @@ class TestRunSemanticIntegrator:
 
     def test_disables_semantic_review_for_non_cloud_routine_target(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
@@ -237,6 +240,7 @@ class TestRunSemanticIntegrator:
         """#394: `DispatcherConfig.ci_command`が`IntegratorConfig.ci_command`
         へそのまま伝播すること。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
@@ -256,6 +260,7 @@ class TestRunSemanticIntegrator:
         """#394: `DispatcherConfig.ci_command`未設定時は`IntegratorConfig.ci_command`
         も`None`のままで、Integrator側の既定値フォールバックに委ねる。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
@@ -270,8 +275,9 @@ class TestRunSemanticIntegrator:
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.ci_command is None
 
-    def test_returns_none_and_warns_on_failure(self, capsys):
+    def test_returns_none_and_warns_on_failure(self, capsys, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -286,8 +292,9 @@ class TestRunSemanticIntegrator:
         assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
 
-    def test_returns_retryable_failure_when_report_has_failed_tasks(self):
+    def test_returns_retryable_failure_when_report_has_failed_tasks(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -314,12 +321,13 @@ class TestRunSemanticIntegrator:
         ],
     )
     def test_returns_retryable_failure_for_pipeline_error_statuses_without_failed_key(
-        self, error_status
+        self, error_status, tmp_path
     ):
         """#207: パイプラインが早期returnするエラーステータスは`failed`キーを
         伴わないため、ホワイトリスト方式（success/no_done_tasks以外は失敗）で
         判定されなければならない。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -336,8 +344,9 @@ class TestRunSemanticIntegrator:
         assert result.report == {"status": error_status, "error": "boom"}
 
     @pytest.mark.parametrize("success_status", ["success", "no_done_tasks"])
-    def test_returns_success_for_whitelisted_statuses(self, success_status):
+    def test_returns_success_for_whitelisted_statuses(self, success_status, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -352,8 +361,9 @@ class TestRunSemanticIntegrator:
         assert result.status == PhaseStatus.SUCCESS
         assert result.retryable is False
 
-    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+    def test_returns_fatal_failure_on_forge_auth_error(self, capsys, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -373,8 +383,9 @@ class TestRunSemanticIntegrator:
 class TestProcessParentCompletion:
     """#170: 親Issue完了検知（best-effort）の配線を確認する。"""
 
-    def test_returns_report_on_success(self):
+    def test_returns_report_on_success(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -394,8 +405,9 @@ class TestProcessParentCompletion:
         }
         mock_process.assert_called_once_with(100, True, forge=ANY)
 
-    def test_returns_none_and_warns_on_failure(self, capsys):
+    def test_returns_none_and_warns_on_failure(self, capsys, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -413,8 +425,9 @@ class TestProcessParentCompletion:
         assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
 
-    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+    def test_returns_fatal_failure_on_forge_auth_error(self, capsys, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,

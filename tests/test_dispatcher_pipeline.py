@@ -165,6 +165,7 @@ class TestRecoveredActiveTask:
         物理worktreeも不在）は、同一サイクル内のゾンビGCにより即座に回収され、
         status:queuedへ再キューイングされること（無期限のクオータ占有を防ぐ）。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
@@ -203,6 +204,7 @@ class TestRecoveredActiveTask:
         self, tmp_path
     ):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
@@ -259,6 +261,7 @@ class TestDispatcherLocking:
     @pytest.mark.uses_real_file_lock
     def test_run_dispatch_cycle_raises_runtime_error_if_locked(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
         )

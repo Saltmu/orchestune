@@ -307,10 +307,15 @@ class TestForgeProtocols:
         assert isinstance(forge, RepoAdminForge)
         assert isinstance(forge, Forge)
 
-    def test_dispatcher_config_creates_default_github_forge(self):
-        assert isinstance(DispatcherConfig().forge, GitHubForge)
+    def test_dispatcher_config_creates_default_github_forge(self, tmp_path):
+        assert isinstance(
+            DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
+            ).forge,
+            GitHubForge,
+        )
 
-    def test_dispatcher_config_accepts_fake_forge_without_mock_patch(self):
+    def test_dispatcher_config_accepts_fake_forge_without_mock_patch(self, tmp_path):
         class FakeForge(GitHubForge):
             def list_issues_by_label(
                 self, label: str, state: str = "open", limit: int = 1000
@@ -326,7 +331,9 @@ class TestForgeProtocols:
                 ]
 
         fake_forge = FakeForge()
-        config = DispatcherConfig(forge=fake_forge)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", forge=fake_forge
+        )
 
         assert config.forge is fake_forge
         assert config.forge.list_issues_by_label("status:queued") == [

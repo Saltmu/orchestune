@@ -28,6 +28,7 @@ def _ctx(**overrides):
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         ),
@@ -67,9 +68,10 @@ class TestDecideYamlErrorTasks:
 class TestDecideTaskLaunchPlan:
     """decide層: githubやworktreeへの副作用なしで起動計画のみを算出する。"""
 
-    def test_uses_stack_base_branch_when_available(self):
+    def test_uses_stack_base_branch_when_available(self, tmp_path):
         task = _task(1)
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -79,9 +81,10 @@ class TestDecideTaskLaunchPlan:
         assert plans[0].base_branch_for_launch == "claude/issue-0-task-0"
         assert plans[0].base_branch_for_state == "claude/issue-0-task-0"
 
-    def test_falls_back_to_origin_main_without_parent(self):
+    def test_falls_back_to_origin_main_without_parent(self, tmp_path):
         task = _task(1)
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -89,9 +92,10 @@ class TestDecideTaskLaunchPlan:
         assert plans[0].base_branch_for_launch is None
         assert plans[0].base_branch_for_state == "origin/main"
 
-    def test_uses_parent_branch_when_configured(self):
+    def test_uses_parent_branch_when_configured(self, tmp_path):
         task = _task(1)
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=99,
@@ -224,6 +228,7 @@ class TestApplyTaskLaunches:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
@@ -275,6 +280,7 @@ class TestApplyTaskLaunches:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
@@ -341,6 +347,7 @@ class TestApplyTaskLaunches:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
@@ -398,6 +405,7 @@ class TestApplyTaskLaunchesLabelOrdering:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
@@ -446,6 +454,7 @@ class TestApplyTaskLaunchesLabelOrdering:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
@@ -481,6 +490,7 @@ class TestApplyYamlErrorBlockingLabelOrdering:
 
         task = _task(1, subtask_id="task-1", yaml_error=True)
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -530,6 +540,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,
@@ -572,6 +583,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             dispatch_target=dispatch_target,

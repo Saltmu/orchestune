@@ -70,6 +70,7 @@ def _ctx(**overrides):
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         ),
@@ -241,6 +242,7 @@ class TestProcessActiveWorktrees:
         task = _task()
         run_state = RunState(active_worktrees={"1": active})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=False,
@@ -291,7 +293,7 @@ class TestProcessActiveWorktrees:
         ]
         assert run_state.active_worktrees == {"1": active}
 
-    def test_not_needed_label_takes_precedence_over_stale_entry(self):
+    def test_not_needed_label_takes_precedence_over_stale_entry(self, tmp_path):
         active = _active(issue_number=1)
         task = _task(
             issue_number=1,
@@ -302,6 +304,7 @@ class TestProcessActiveWorktrees:
             run_state=run_state,
             tasks_by_issue={1: task},
             config=DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
                 apply=True,
@@ -331,7 +334,7 @@ class TestProcessActiveWorktrees:
         assert completed_subtask_ids == {task.subtask_id}
         assert "1" not in ctx.run_state.active_worktrees
 
-    def test_auto_rebase_failure_discards_active_entry(self):
+    def test_auto_rebase_failure_discards_active_entry(self, tmp_path):
         active = _active(
             branch="feature",
             worktree_path="worktrees/w1",
@@ -349,6 +352,7 @@ class TestProcessActiveWorktrees:
             ci_passed_pr_subtask_ids={"task-parent"},
             subtask_branch_map={"task-parent": "parent-branch"},
             config=DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
                 apply=True,
@@ -398,7 +402,7 @@ class TestProcessActiveWorktrees:
             "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n対象の依存元ブランチ: parent-branch",
         )
 
-    def test_forced_serial_persists_with_early_termination_rules(self):
+    def test_forced_serial_persists_with_early_termination_rules(self, tmp_path):
         active = _active(
             issue_number=1,
             forced_serial=True,
@@ -412,6 +416,7 @@ class TestProcessActiveWorktrees:
             run_state=run_state,
             tasks_by_issue={1: task},
             config=DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
                 apply=True,
@@ -449,6 +454,7 @@ class TestProcessActiveWorktrees:
             run_state=run_state_two,
             tasks_by_issue={1: task_early, 2: task_keep},
             config=DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
                 apply=True,

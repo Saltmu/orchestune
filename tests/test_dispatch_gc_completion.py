@@ -64,12 +64,12 @@ def _task(**overrides):
 class TestFinalizeCompletedWorktree:
     """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
 
-    def test_no_new_commits_is_not_treated_as_completed(self):
+    def test_no_new_commits_is_not_treated_as_completed(self, tmp_path):
         """#74再現: worktreeはcleanだがbase_branchに対して新規コミットが0件の場合、
         status:doneを付与せず、依存先タスクの誤昇格を防ぐためcompleted以外のアクションにする。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -95,11 +95,11 @@ class TestFinalizeCompletedWorktree:
         mock_add_comment.assert_called_once()
         assert mock_add_comment.call_args.args[0] == 280
 
-    def test_new_commits_present_is_treated_as_completed(self):
+    def test_new_commits_present_is_treated_as_completed(self, tmp_path):
         """base_branchに対する実コミットがあれば従来通りcompleted+status:doneとする。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -127,7 +127,7 @@ class TestFinalizeCompletedWorktree:
         mock_add_label.assert_called_once_with(280, "status:done")
         assert event["commit_sha"] == "deadbeef"
 
-    def test_completed_also_removes_stale_queued_label(self):
+    def test_completed_also_removes_stale_queued_label(self, tmp_path):
         # #381レビュー対応(Codex P2): launch成功時のtransition_status_labelが
         # add(status:in-progress)後のremove(status:queued)に失敗すると、
         # Issueにstatus:queuedが取り残されたまま完了しうる。ここで
@@ -138,7 +138,7 @@ class TestFinalizeCompletedWorktree:
         # 判明している一次status:*ラベルはまとめて除去しなければならない。
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:queued", "status:in-progress"))
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -164,12 +164,12 @@ class TestFinalizeCompletedWorktree:
         mock_remove_label.assert_any_call(280, "status:queued")
         assert mock_remove_label.call_count == 2
 
-    def test_completed_adds_done_before_removing_in_progress(self):
+    def test_completed_adds_done_before_removing_in_progress(self, tmp_path):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         call_order: list[tuple[str, str]] = []
         with (
             patch(
@@ -207,12 +207,12 @@ class TestFinalizeAbandonedCloudWorktree:
     再キューイングが、中断した以前の遷移で取り残された一次status:*ラベルを
     正しく後始末することを検証する。"""
 
-    def test_removes_stale_blocked_label_alongside_in_progress(self):
+    def test_removes_stale_blocked_label_alongside_in_progress(self, tmp_path):
         # stacked launch中断で取り残されたstatus:blockedも併せて除去し、
         # status:queuedへ確実に収束させなければならない。
         active = _active()
         task = _task(status_labels=("status:blocked", "status:in-progress"))
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
             patch(
@@ -232,7 +232,7 @@ class TestFinalizeAbandonedCloudWorktree:
         mock_remove_label.assert_any_call(280, "status:blocked")
         assert mock_remove_label.call_count == 2
 
-    def test_does_not_overwrite_terminal_escalation_label(self):
+    def test_does_not_overwrite_terminal_escalation_label(self, tmp_path):
         # 中断した以前の遷移でstatus:blocked-human-reviewが既に付与されている
         # 場合、status:queuedへの書き換えは人間の確認要求を握りつぶして
         # しまうため、ラベルには一切触れてはならない。
@@ -240,7 +240,7 @@ class TestFinalizeAbandonedCloudWorktree:
         task = _task(
             status_labels=("status:blocked-human-review", "status:in-progress")
         )
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
             patch(
@@ -263,10 +263,10 @@ class TestFinalizeAbandonedCloudWorktree:
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""
 
-    def test_apply_removes_worktree_and_closes_issue(self):
+    def test_apply_removes_worktree_and_closes_issue(self, tmp_path):
         active = _active()
         task = _task()
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -293,11 +293,11 @@ class TestFinalizeNotNeededWorktree:
             "subtask_id": "task-a",
         }
 
-    def test_dirty_worktree_is_not_closed(self):
+    def test_dirty_worktree_is_not_closed(self, tmp_path):
         """未コミットの作業が残っている場合は、安全側に倒しクローズを見送る。"""
         active = _active()
         task = _task()
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -316,10 +316,12 @@ class TestFinalizeNotNeededWorktree:
         mock_close_issue.assert_not_called()
         assert event["action"] == "completion_skipped_dirty_worktree"
 
-    def test_dry_run_does_not_call_github_or_mutate(self):
+    def test_dry_run_does_not_call_github_or_mutate(self, tmp_path):
         active = _active()
         task = _task()
-        config = DispatcherConfig(apply=False)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=False
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -338,9 +340,9 @@ class TestFinalizeNotNeededWorktree:
         mock_close_issue.assert_not_called()
         assert event["action"] == "not_needed"
 
-    def test_none_task_defaults_subtask_id_to_empty_string(self):
+    def test_none_task_defaults_subtask_id_to_empty_string(self, tmp_path):
         active = _active()
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -490,6 +492,7 @@ class TestIsWorktreeComplete:
         fake_target = MagicMock()
         fake_target.completion_status.return_value = "completed"
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=fake_target,
         )
@@ -514,6 +517,7 @@ class TestIsWorktreeComplete:
     def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123")
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=target,
         )
@@ -540,7 +544,10 @@ class TestIsWorktreeComplete:
     def test_recovered_local_active_worktree_waits_for_pid_reconciliation(
         self, tmp_path
     ):
-        config = DispatcherConfig(run_state_path=tmp_path / "run_state.json")
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+        )
         active = ActiveWorktree(
             issue_number=1,
             branch="claude/issue-1-task-a",
@@ -557,7 +564,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
     """#292: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
     `DispatcherConfig(forge=...)`への注入だけでテストが書けることを示す。"""
 
-    def test_uses_injected_fake_forge_instead_of_patching(self):
+    def test_uses_injected_fake_forge_instead_of_patching(self, tmp_path):
         fake_forge = MagicMock()
         fake_forge.list_prs.return_value = [
             PrRecord(
@@ -568,6 +575,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             )
         ]
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             forge=fake_forge,

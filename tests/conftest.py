@@ -6,6 +6,7 @@ import contextlib
 import subprocess
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -280,3 +281,28 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
         ),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _guard_events_log_path():
+    """Ensure tests do not create or modify 'events.jsonl' in the repository root."""
+    root_events_log = Path(__file__).resolve().parent.parent / "events.jsonl"
+    exists_before = root_events_log.exists()
+    mtime_before = root_events_log.stat().st_mtime if exists_before else None
+    size_before = root_events_log.stat().st_size if exists_before else None
+
+    yield
+
+    exists_after = root_events_log.exists()
+    mtime_after = root_events_log.stat().st_mtime if exists_after else None
+    size_after = root_events_log.stat().st_size if exists_after else None
+
+    if not exists_before and exists_after:
+        pytest.fail(
+            "Test created 'events.jsonl' in the repository root instead of using tmp_path."
+        )
+    elif exists_before and exists_after:
+        if mtime_before != mtime_after or size_before != size_after:
+            pytest.fail(
+                "Test modified 'events.jsonl' in the repository root instead of using tmp_path."
+            )
