@@ -33,7 +33,6 @@ class DispatcherConfig:
     zombie_gc: bool = True
     # #282: status:not-needed判定の独立検証レビュー（保留分）の永続化先。
     not_needed_review_state_path: Path = Path("not_needed_review_state.json")
-    allow_unsafe_agent_execution: bool = False
 
     def __post_init__(self) -> None:
         if self.dispatch_target is None:

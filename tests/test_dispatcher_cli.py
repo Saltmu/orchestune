@@ -579,3 +579,29 @@ class TestDispatcherConfigLoading:
             report = run_dispatch_cycle(config)
             # 48時間窓で2回に達しているため起動不可
             assert len(report.selected) == 0
+
+    def test_unsafe_cli_without_allow_unsafe_option_in_main_raises_config_error(
+        self, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--dispatch-target", "claude-cli"], cwd=tmp_path)
+        assert excinfo.value.code == 2
+        err = capsys.readouterr().err
+        assert "invalid dispatcher config" in err
+        assert "完全権限実行となります" in err
+
+    def test_unsafe_cli_with_allow_unsafe_option_in_main_succeeds(self, tmp_path):
+        with patch(
+            "orchestune.dispatcher.run_dispatch_cycle",
+            return_value=self._empty_report(),
+        ):
+            code = main(
+                [
+                    "--dispatch-target",
+                    "claude-cli",
+                    "--allow-unsafe-agent-execution",
+                    "--no-apply",
+                ],
+                cwd=tmp_path,
+            )
+            assert code == 0
