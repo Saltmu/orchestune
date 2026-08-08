@@ -15,9 +15,11 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle import CycleReport
 from orchestune.dispatch_postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
+    _post_event_log_comment,
     _process_parent_completion,
     _run_best_effort_phase,
     _run_semantic_integrator,
@@ -28,6 +30,7 @@ from orchestune.dispatch_targets import (
     LocalProcessDispatchTarget,
 )
 from orchestune.forge import ForgeAuthError
+from orchestune.models import Task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -419,6 +422,259 @@ class TestProcessParentCompletion:
         )
         result = _process_parent_completion(
             config, auth_error=ForgeAuthError("auth-failed")
+        )
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.FATAL_FAILURE
+        assert result.retryable is False
+        assert "auth-failed" in result.error_message
+        assert "auth-failed" in capsys.readouterr().err
+
+
+class TestPostEventLogComment:
+    """#396: ディスパッチサイクルの意思決定ログを親Issueへコメント投稿する。
+
+    当初はGitHub Actions artifactへのアップロードを想定していたが、
+    ローカル実行・Codex Cloud等Actions以外の環境では成立しないため、
+    全実行環境で共通の`gh`（Forge.add_comment）経由で親Issueへ投稿する
+    方式に変更した（issue #396のコメント参照）。ベストエフォート処理。
+    """
+
+    def _report_with_events(self) -> CycleReport:
+        return CycleReport(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[{"subtask_id": "a", "reason": "footprint deviation"}],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+
+    def _empty_report(self) -> CycleReport:
+        return CycleReport(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+
+    def _task(self, issue_number=1, subtask_id="task-a") -> Task:
+        return Task(
+            issue_number=issue_number,
+            subtask_id=subtask_id,
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+    def test_posts_comment_with_selected_tasks_rendered(self):
+        """#402レビュー指摘: selected分岐の整形が未検証だった。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+        report = CycleReport(
+            selected=[self._task(issue_number=42, subtask_id="task-x")],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+
+        result = _post_event_log_comment(config, report)
+
+        assert result.status == PhaseStatus.SUCCESS
+        posted_body = config.forge.add_comment.call_args.args[1]
+        assert "Issue #42" in posted_body
+        assert "task-x" in posted_body
+
+    def test_posts_comment_with_completion_and_promotion_events_rendered(self):
+        """#402レビュー指摘: completion/promotion分岐の整形が未検証だった。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+        report = CycleReport(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[{"subtask_id": "task-c", "issue_number": 7}],
+            promotion_events=[{"subtask_id": "task-p", "issue_number": 8}],
+            applied=True,
+        )
+
+        result = _post_event_log_comment(config, report)
+
+        assert result.status == PhaseStatus.SUCCESS
+        posted_body = config.forge.add_comment.call_args.args[1]
+        assert "task-c" in posted_body
+        assert "task-p" in posted_body
+
+    def test_skips_comment_when_only_steady_state_deviation_events(self):
+        """#402レビュー指摘（最重要）: `already_forced_serial`のような
+        「状態が変わらず定常的に再生成され続ける」逸脱イベントだけの
+        サイクルは、`has_events`判定を素通りさせない。これを見落とすと、
+        force-serial状態が続く限り毎サイクル同じ内容のコメントが投稿され、
+        本来このガードが防ぐはずの「空コメントで埋め尽くされる」問題が
+        非空コメントで再現してしまう。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+        report = CycleReport(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[
+                {
+                    "issue_number": 5,
+                    "deviated_files": ["a.py"],
+                    "action": "already_forced_serial",
+                },
+                {
+                    "issue_number": 6,
+                    "deviated_files": ["b.py"],
+                    "action": "skipped_unknown_subtask",
+                },
+            ],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+
+        result = _post_event_log_comment(config, report)
+
+        assert result.status == PhaseStatus.SUCCESS
+        config.forge.add_comment.assert_not_called()
+        assert result.report["posted"] is False
+
+    def test_posts_comment_when_deviation_events_include_a_new_action(self):
+        """定常状態の逸脱イベントに混ざっていても、`forced_serial`/`recomputed`
+        のような新しい判断・状態遷移を表すイベントがあれば投稿する。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+        report = CycleReport(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[
+                {
+                    "issue_number": 5,
+                    "deviated_files": ["a.py"],
+                    "action": "already_forced_serial",
+                },
+                {
+                    "issue_number": 9,
+                    "deviated_files": ["c.py"],
+                    "action": "forced_serial",
+                    "recompute_count": 2,
+                },
+            ],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+
+        result = _post_event_log_comment(config, report)
+
+        assert result.status == PhaseStatus.SUCCESS
+        config.forge.add_comment.assert_called_once()
+        posted_body = config.forge.add_comment.call_args.args[1]
+        assert "forced_serial" in posted_body
+        assert "already_forced_serial" not in posted_body
+
+    def test_posts_comment_when_cycle_has_events(self):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+
+        result = _post_event_log_comment(config, self._report_with_events())
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
+        config.forge.add_comment.assert_called_once()
+        posted_issue_number, posted_body = config.forge.add_comment.call_args.args
+        assert posted_issue_number == 100
+        assert "footprint deviation" in posted_body
+
+    def test_skips_comment_when_cycle_has_no_events(self):
+        """頻繁なディスパッチサイクルで親Issueが空コメントに埋め尽くされる
+        のを防ぐため、何も起きなかったサイクルではコメントを投稿しない。"""
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+
+        result = _post_event_log_comment(config, self._empty_report())
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.SUCCESS
+        config.forge.add_comment.assert_not_called()
+        assert result.report is not None
+        assert result.report["posted"] is False
+
+    def test_returns_retryable_failure_when_add_comment_raises(self, capsys):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+        config.forge.add_comment.side_effect = RuntimeError("boom")
+
+        result = _post_event_log_comment(config, self._report_with_events())
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.RETRYABLE_FAILURE
+        assert result.retryable is True
+        assert "boom" in result.error_message
+        assert "boom" in capsys.readouterr().err
+
+    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+        )
+
+        result = _post_event_log_comment(
+            config,
+            self._report_with_events(),
+            auth_error=ForgeAuthError("auth-failed"),
         )
 
         assert isinstance(result, PhaseResult)

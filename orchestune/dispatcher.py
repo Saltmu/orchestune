@@ -14,6 +14,7 @@ from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
+    _post_event_log_comment,
     _process_parent_completion,
     _run_semantic_integrator,
 )
@@ -316,6 +317,8 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             if config.parent_issue_number is not None:
                 r3 = _process_parent_completion(config, auth_error=auth_error)
                 post_cycle_results.append(r3)
+                r4 = _post_event_log_comment(config, report, auth_error=auth_error)
+                post_cycle_results.append(r4)
 
         # 機械判定可能なレポート（標準出力のJSON）に後処理結果を統合する
         final_dict = _report_to_dict(report)
