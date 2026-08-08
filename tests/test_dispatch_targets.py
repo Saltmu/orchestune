@@ -1101,6 +1101,54 @@ class TestBuildDispatchTarget:
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "custom-cmd"
 
+    def test_unsafe_cli_without_allow_unsafe_flag_raises_error(self, tmp_path):
+        for target_name in ["claude-cli", "agy-cli", "codex-cli"]:
+            with pytest.raises(ValueError) as excinfo:
+                build_dispatch_target(target_name, None, None, tmp_path / "logs")
+            assert "完全権限実行となります" in str(excinfo.value)
+            assert "--allow-unsafe-agent-execution" in str(excinfo.value)
+
+    def test_auto_with_detected_cli_without_allow_unsafe_flag_raises_error(
+        self, tmp_path
+    ):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
+        ):
+            with pytest.raises(ValueError) as excinfo:
+                build_dispatch_target("auto", None, None, tmp_path / "logs")
+            assert "完全権限実行となります" in str(excinfo.value)
+
+    def test_unsafe_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
+        for target_name in ["claude-cli", "agy-cli", "codex-cli"]:
+            target = build_dispatch_target(
+                target_name,
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
+            assert isinstance(target, LocalProcessDispatchTarget)
+
+    def test_auto_with_detected_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
+        with patch(
+            "orchestune.dispatch_targets.shutil.which",
+            side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
+        ):
+            target = build_dispatch_target(
+                "auto", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+            )
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_auto_without_detected_cli_and_without_allow_unsafe_flag_succeeds_with_dummy(
+        self, tmp_path
+    ):
+        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._local_cmd is None
+
 
 class TestResolveDefaultDispatchTargetName:
     def test_defaults_to_auto_when_env_empty(self):

@@ -133,6 +133,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=Path("not_needed_review_state.json"),
         help="#282: 保留中のstatus:not-needed検証レビュー（合否ポーリング・自動クローズ待ち）の永続化先",
     )
+    parser.add_argument(
+        "--allow-unsafe-agent-execution",
+        action="store_true",
+        help="ローカルCLI（claude/agy/codex）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
+    )
     return parser
 
 
@@ -205,7 +210,7 @@ def _config_defaults(
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")
 
-        if normalized_key in {"apply", "zombie_gc"}:
+        if normalized_key in {"apply", "zombie_gc", "allow_unsafe_agent_execution"}:
             if not isinstance(value, bool):
                 _config_error(parser, f"{key!r} must be a boolean")
         elif normalized_key in path_keys:
@@ -263,12 +268,14 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             args.log_dir,
             local_cmd=args.local_cmd,
             codex_cloud_env=args.codex_cloud_env,
+            allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
         ),
         deviation_buffer_lines=args.deviation_buffer_lines,
         max_recompute_retries=args.max_recompute_retries,
         task_timeout_seconds=args.task_timeout_seconds,
         zombie_gc=args.zombie_gc,
         not_needed_review_state_path=args.not_needed_review_state_path,
+        allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
     )
     report = None
     post_cycle_results: list[PhaseResult] = []
