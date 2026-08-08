@@ -59,6 +59,18 @@ Run the setup command to automatically create symlinks in the global configurati
 orchestune setup
 ```
 
+#### `--with-workflow-skill`: Deploying a generic workflow skill project-locally
+
+If you need to create the agent discipline file required by Prerequisite (a) above from scratch, run setup with the `--with-workflow-skill` option:
+
+```bash
+orchestune setup --with-workflow-skill
+```
+
+- This **copies** (not symlinks) `skills/workflow-template/SKILL.md` — a template derived from `local-ci-developer` with its Python/Poetry-specific commands generalized — into each detected assistant's **project-local** skill directory (`.claude/skills/`, `.codex/skills/`, `.gemini/config/skills/`). It is a real copy because the source only exists inside the Orchestune package, not inside the target project.
+- Like `local-ci-developer`, `workflow-template` is excluded from automatic global linking, since this discipline should be project-specific. Running `orchestune setup` without the flag is unaffected.
+- After it's copied, replace the `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` placeholders in the template with your project's actual commands (`<CI_ENTRYPOINT>` should match the `ci_command` setting from Prerequisite (c) above). Feel free to rename the folder or skill as you like.
+
 ### Method B: Manual Setup (Per Project or Global)
 
 * **`.agents/skills.json`** (For Antigravity):

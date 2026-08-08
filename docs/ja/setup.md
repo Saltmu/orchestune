@@ -59,6 +59,18 @@ AIエージェントに `orchestune` / `orchestune-dispatch` / `local-ci-develop
 orchestune setup
 ```
 
+#### `--with-workflow-skill`: 汎用ワークフロースキルのプロジェクトローカル配置
+
+上記の「0. 導入要件」(a)にある、エージェント規律を定義したファイルをゼロから用意したい場合は、`--with-workflow-skill` オプションを付けて実行します。
+
+```bash
+orchestune setup --with-workflow-skill
+```
+
+- `skills/workflow-template/SKILL.md`（`local-ci-developer` からPython/Poetry固有のコマンドを一般化したテンプレート）を、検出されたアシスタントごとに**プロジェクトローカル**な `.claude/skills/`・`.codex/skills/`・`.gemini/config/skills/` 配下へ**実体コピー**します（シンボリックリンクではありません。コピー元はOrchestuneパッケージ内にしか存在せず、対象プロジェクト内には存在しないため）。
+- `workflow-template` は `local-ci-developer` と同様、この規律がプロジェクト固有であるべきという理由からグローバル自動リンクの対象外です。オプションを付けない通常の `orchestune setup` の挙動には影響しません。
+- 配置後、テンプレート内の `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` プレースホルダーを、対象プロジェクトの実際のコマンドに置き換えてから使用してください（`<CI_ENTRYPOINT>` は上記(c)の `ci_command` 設定と一致させることを推奨します）。フォルダ名・スキル名も自由に変更できます。
+
 ### 方法B: 手動セットアップ（プロジェクト単位またはグローバル）
 
 * **`.agents/skills.json`** （Antigravity向け）:
