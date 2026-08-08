@@ -28,7 +28,7 @@ class _IsCompleteOnlyTarget(DispatchTarget):
     def __init__(self, complete: bool):
         self.complete = complete
 
-    def launch(self, task: Task, branch_name: str, worktree_path):
+    def launch(self, task: Task, branch_name: str, worktree_path, *, force_push=False):
         return DispatchHandle(branch_name=branch_name)
 
     def is_complete(self, handle: DispatchHandle, forge=None) -> bool:
@@ -43,7 +43,7 @@ class _LegacySignatureTarget(DispatchTarget):
     def __init__(self, complete: bool):
         self.complete = complete
 
-    def launch(self, task: Task, branch_name: str, worktree_path):
+    def launch(self, task: Task, branch_name: str, worktree_path, *, force_push=False):
         return DispatchHandle(branch_name=branch_name)
 
     def is_complete(self, handle: DispatchHandle) -> bool:  # type: ignore[override]
@@ -257,6 +257,53 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             "claude/issue-1-task-a",
         )
         assert events.index(push_event) < events.index("fire")
+
+    def test_launch_force_pushes_after_rebase(self, tmp_path):
+        """#384: 自動リベースによる再launchでは、rebaseで書き換え済みの履歴を
+        安全に再push（--force-with-lease）できなければならない。force無しの
+        通常pushは常にnon-fast-forwardで拒否されていた。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+
+        def fake_run(args, **kwargs):
+            if args[:2] == ["git", "push"]:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout="", stderr=""
+                )
+            if args[:2] == ["git", "rev-parse"]:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout="abc123\n", stderr=""
+                )
+            if args[:2] == ["git", "ls-remote"]:
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout="abc123\trefs/heads/claude/issue-1-task-a\n",
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected command: {args}")
+
+        with (
+            patch(
+                "orchestune.dispatch_targets.subprocess.run", side_effect=fake_run
+            ) as mock_run,
+            patch(
+                "orchestune.dispatch_targets.urllib.request.urlopen",
+                return_value=self._response(),
+            ),
+        ):
+            target.launch(
+                _task(), "claude/issue-1-task-a", tmp_path / "wt", force_push=True
+            )
+
+        push_call = mock_run.call_args_list[0]
+        assert push_call.args[0] == [
+            "git",
+            "push",
+            "--force-with-lease",
+            "--set-upstream",
+            "origin",
+            "claude/issue-1-task-a",
+        ]
 
     def test_launch_does_not_fire_when_push_fails(self, tmp_path):
         """#244: pushに失敗した場合はfireせず、例外を伝播させる（fail closed）。"""
@@ -731,6 +778,24 @@ class TestCodexCloudDispatchTarget:
         assert handle.pid is None
         assert handle.external_id == "codex-cloud:claude/issue-1-task-a"
         assert handle.branch_name == "claude/issue-1-task-a"
+
+    def test_launch_force_pushes_after_rebase(self, tmp_path):
+        """#384: 自動リベースによる再launchでは--force-with-leaseでpushする。"""
+        target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
+        with patch("orchestune.dispatch_targets.subprocess.run") as mock_run:
+            target.launch(
+                _task(), "claude/issue-1-task-a", tmp_path / "wt", force_push=True
+            )
+
+        push_call = mock_run.call_args_list[0]
+        assert push_call.args[0] == [
+            "git",
+            "push",
+            "--force-with-lease",
+            "--set-upstream",
+            "origin",
+            "claude/issue-1-task-a",
+        ]
 
     def test_launch_propagates_codex_cloud_submission_failure(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")

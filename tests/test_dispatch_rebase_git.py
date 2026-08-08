@@ -127,6 +127,65 @@ class TestApplyAutoRebase:
         # Assert base_branch updated to parent-branch
         assert active.base_branch == "parent-branch"
         assert active.pid == 222
+        # #384: rebaseで書き換え済みの履歴を安全に再pushできるよう、
+        # 再launch時はforce_push=Trueを明示的に渡す。
+        mock_target.launch.assert_called_once_with(
+            task, active.branch, Path(active.worktree_path), force_push=True
+        )
+
+    @patch("orchestune.dispatch_rebase.os.kill")
+    @patch("orchestune.dispatch_rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch_rebase.resolve_local_or_remote_branch", return_value="main"
+    )
+    def test_push_failure_after_successful_rebase_is_reported_distinctly(
+        self, mock_resolve, mock_run, mock_kill
+    ):
+        """#384: rebase自体は成功した後のpush失敗（non-fast-forward等）は、
+        「コンフリクト」ではなくpush失敗として原因をIssueへ正しく報告すること。"""
+        import subprocess
+
+        from orchestune.dispatch_rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        # rebase・local-ci.shはいずれも成功
+        mock_run.return_value.returncode = 0
+
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        mock_target.launch.side_effect = subprocess.CalledProcessError(
+            1,
+            [
+                "git",
+                "push",
+                "--force-with-lease",
+                "--set-upstream",
+                "origin",
+                active.branch,
+            ],
+        )
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=mock_target,
+            apply=True,
+        )
+
+        with (
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+        ):
+            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+
+        posted_message = mock_comment.call_args.args[1]
+        assert "push" in posted_message
+        assert "自動リベース中にコンフリクトが発生しました" not in posted_message
+        assert "1" not in run_state.active_worktrees
 
     @patch("orchestune.dispatch_rebase.os.kill")
     @patch("orchestune.dispatch_rebase.subprocess.run")

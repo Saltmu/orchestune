@@ -228,7 +228,12 @@ class DummyAgentDispatchTarget(DispatchTarget):
         self.completed_ids = set()
 
     def launch(
-        self, task: Task, branch_name: str, worktree_path: Path
+        self,
+        task: Task,
+        branch_name: str,
+        worktree_path: Path,
+        *,
+        force_push: bool = False,
     ) -> DispatchHandle:
         # Run agent task scenario synchronously
         self.run_scenario_func(task, branch_name, worktree_path)
