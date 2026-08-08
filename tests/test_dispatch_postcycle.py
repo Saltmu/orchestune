@@ -488,9 +488,10 @@ class TestPostEventLogComment:
             created_at="2026-01-01T00:00:00+00:00",
         )
 
-    def test_posts_comment_with_selected_tasks_rendered(self):
+    def test_posts_comment_with_selected_tasks_rendered(self, tmp_path):
         """#402レビュー指摘: selected分岐の整形が未検証だった。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -514,9 +515,12 @@ class TestPostEventLogComment:
         assert "Issue #42" in posted_body
         assert "task-x" in posted_body
 
-    def test_posts_comment_with_completion_and_promotion_events_rendered(self):
+    def test_posts_comment_with_completion_and_promotion_events_rendered(
+        self, tmp_path
+    ):
         """#402レビュー指摘: completion/promotion分岐の整形が未検証だった。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -540,7 +544,7 @@ class TestPostEventLogComment:
         assert "task-c" in posted_body
         assert "task-p" in posted_body
 
-    def test_skips_comment_when_only_steady_state_deviation_events(self):
+    def test_skips_comment_when_only_steady_state_deviation_events(self, tmp_path):
         """#402レビュー指摘（最重要）: `already_forced_serial`のような
         「状態が変わらず定常的に再生成され続ける」逸脱イベントだけの
         サイクルは、`has_events`判定を素通りさせない。これを見落とすと、
@@ -548,6 +552,7 @@ class TestPostEventLogComment:
         本来このガードが防ぐはずの「空コメントで埋め尽くされる」問題が
         非空コメントで再現してしまう。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -581,10 +586,11 @@ class TestPostEventLogComment:
         config.forge.add_comment.assert_not_called()
         assert result.report["posted"] is False
 
-    def test_posts_comment_when_deviation_events_include_a_new_action(self):
+    def test_posts_comment_when_deviation_events_include_a_new_action(self, tmp_path):
         """定常状態の逸脱イベントに混ざっていても、`forced_serial`/`recomputed`
         のような新しい判断・状態遷移を表すイベントがあれば投稿する。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -621,8 +627,9 @@ class TestPostEventLogComment:
         assert "forced_serial" in posted_body
         assert "already_forced_serial" not in posted_body
 
-    def test_posts_comment_when_cycle_has_events(self):
+    def test_posts_comment_when_cycle_has_events(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -639,10 +646,11 @@ class TestPostEventLogComment:
         assert posted_issue_number == 100
         assert "footprint deviation" in posted_body
 
-    def test_skips_comment_when_cycle_has_no_events(self):
+    def test_skips_comment_when_cycle_has_no_events(self, tmp_path):
         """頻繁なディスパッチサイクルで親Issueが空コメントに埋め尽くされる
         のを防ぐため、何も起きなかったサイクルではコメントを投稿しない。"""
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -658,8 +666,9 @@ class TestPostEventLogComment:
         assert result.report is not None
         assert result.report["posted"] is False
 
-    def test_returns_retryable_failure_when_add_comment_raises(self, capsys):
+    def test_returns_retryable_failure_when_add_comment_raises(self, tmp_path, capsys):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,
@@ -676,8 +685,9 @@ class TestPostEventLogComment:
         assert "boom" in result.error_message
         assert "boom" in capsys.readouterr().err
 
-    def test_returns_fatal_failure_on_forge_auth_error(self, capsys):
+    def test_returns_fatal_failure_on_forge_auth_error(self, tmp_path, capsys):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             parent_issue_number=100,

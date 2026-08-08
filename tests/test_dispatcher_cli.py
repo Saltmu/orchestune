@@ -688,7 +688,15 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._post_event_log_comment") as mock_post,
         ):
-            code = main(["--apply", "--allow-unsafe-agent-execution"], cwd=tmp_path)
+            code = main(
+                [
+                    "--apply",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
 
         assert code == 0
         mock_post.assert_not_called()
@@ -726,7 +734,14 @@ class TestDispatcherConfigLoading:
             ) as mock_post,
         ):
             code = main(
-                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
                 cwd=tmp_path,
             )
 
