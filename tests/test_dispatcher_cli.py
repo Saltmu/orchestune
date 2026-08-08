@@ -457,7 +457,10 @@ class TestDispatcherConfigLoading:
             patch("orchestune.dispatcher._run_semantic_integrator", return_value=r2),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 0
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
@@ -480,7 +483,10 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 2
             out = json.loads(capsys.readouterr().out)
             assert out["post_cycle_results"][1]["status"] == "retryable_failure"
@@ -501,7 +507,10 @@ class TestDispatcherConfigLoading:
             ),
             patch("orchestune.dispatcher._process_parent_completion", return_value=r3),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert out["post_cycle_results"][1]["status"] == "fatal_failure"
@@ -517,7 +526,10 @@ class TestDispatcherConfigLoading:
                 side_effect=ForgeAuthError("main-auth-failed"),
             ),
         ):
-            code = main(["--apply", "--parent-issue", "100"], cwd=tmp_path)
+            code = main(
+                ["--apply", "--parent-issue", "100", "--allow-unsafe-agent-execution"],
+                cwd=tmp_path,
+            )
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
