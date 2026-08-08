@@ -172,32 +172,55 @@ def _run_semantic_integrator(
     )
 
 
-def _format_event_log_comment(report: CycleReport) -> str:
+# footprint逸脱の判定（dispatch_rebase.py の _decide_footprint_deviation_outcome）が
+# 返しうる`action`のうち、この2つは「何も新しく判断・遷移しなかった」ことを示す
+# だけの結果である。`already_forced_serial`は、対象active worktreeが既に強制直列化
+# 済みである限り、状態が変わらなくても毎サイクル同じイベントとして再生成され続ける
+# （チャーン防止のための早期returnがそのままイベントにもなってしまうため）。
+# これをそのまま「イベントあり」の判定材料にすると、空サイクルスキップのガードが
+# 実質的に無力化され、force-serial状態が解消するまで毎サイクル同じ内容のコメントを
+# 親Issueへ投稿し続けてしまう（#402レビュー指摘）。
+_STEADY_STATE_DEVIATION_ACTIONS = frozenset(
+    {"already_forced_serial", "skipped_unknown_subtask"}
+)
+
+
+def _noteworthy_deviation_events(report: CycleReport) -> list[dict]:
+    """`report.deviation_events`のうち、定常状態の再通知ではないものだけを返す。"""
+    return [
+        event
+        for event in report.deviation_events
+        if event.get("action") not in _STEADY_STATE_DEVIATION_ACTIONS
+    ]
+
+
+def _format_event_log_comment(report: CycleReport, deviation_events: list[dict]) -> str:
     lines = ["## 🤖 Orchestune Dispatch Cycle Report\n"]
     lines.append(f"Quota slots available: **{report.quota_slots_available}**\n")
 
-    if report.selected:
-        lines.append("### 🚀 選定タスク（Selected）")
-        for task in report.selected:
-            lines.append(f"- Issue #{task.issue_number}（`{task.subtask_id}`）")
-        lines.append("")
-
-    if report.deviation_events:
-        lines.append("### ⚠️ footprint逸脱イベント（Deviation）")
-        for event in report.deviation_events:
-            lines.append(f"- `{event}`")
-        lines.append("")
-
-    if report.completion_events:
-        lines.append("### ✅ 完了イベント（Completion）")
-        for event in report.completion_events:
-            lines.append(f"- `{event}`")
-        lines.append("")
-
-    if report.promotion_events:
-        lines.append("### ⬆️ 昇格イベント（Promotion）")
-        for event in report.promotion_events:
-            lines.append(f"- `{event}`")
+    sections = [
+        (
+            "🚀 選定タスク（Selected）",
+            [f"Issue #{t.issue_number}（`{t.subtask_id}`）" for t in report.selected],
+        ),
+        (
+            "⚠️ footprint逸脱イベント（Deviation）",
+            [f"`{event}`" for event in deviation_events],
+        ),
+        (
+            "✅ 完了イベント（Completion）",
+            [f"`{event}`" for event in report.completion_events],
+        ),
+        (
+            "⬆️ 昇格イベント（Promotion）",
+            [f"`{event}`" for event in report.promotion_events],
+        ),
+    ]
+    for header, items in sections:
+        if not items:
+            continue
+        lines.append(f"### {header}")
+        lines.extend(f"- {item}" for item in items)
         lines.append("")
 
     return "\n".join(lines)
@@ -219,23 +242,26 @@ def _post_event_log_comment(
 
     頻繁なディスパッチサイクルで親Issueが空コメントに埋め尽くされるのを
     防ぐため、選定・逸脱・完了・昇格のいずれのイベントも無いサイクルでは
-    投稿をスキップする。
+    投稿をスキップする。footprint逸脱のうち、状態が変わらず定常的に再生成
+    され続ける種類のイベント（`_noteworthy_deviation_events`参照）は、この
+    判定・投稿内容のいずれからも除外する。
     """
 
     def work() -> dict:
         if config.parent_issue_number is None:
             return {"posted": False, "reason": "no parent issue configured"}
 
+        deviation_events = _noteworthy_deviation_events(report)
         has_events = bool(
             report.selected
-            or report.deviation_events
+            or deviation_events
             or report.completion_events
             or report.promotion_events
         )
         if not has_events:
             return {"posted": False, "reason": "no events in this cycle"}
 
-        body = _format_event_log_comment(report)
+        body = _format_event_log_comment(report, deviation_events)
         config.resolved_forge.add_comment(config.parent_issue_number, body)
         return {"posted": True, "issue_number": config.parent_issue_number}
 
