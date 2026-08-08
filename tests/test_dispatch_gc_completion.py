@@ -15,6 +15,7 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_gc_completion import (
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
+    _finalize_abandoned_cloud_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     _is_worktree_complete,
@@ -125,6 +126,138 @@ class TestFinalizeCompletedWorktree:
         mock_remove_label.assert_called_once_with(280, "status:in-progress")
         mock_add_label.assert_called_once_with(280, "status:done")
         assert event["commit_sha"] == "deadbeef"
+
+    def test_completed_also_removes_stale_queued_label(self):
+        # #381レビュー対応(Codex P2): launch成功時のtransition_status_labelが
+        # add(status:in-progress)後のremove(status:queued)に失敗すると、
+        # Issueにstatus:queuedが取り残されたまま完了しうる。ここで
+        # status:in-progressだけを除去すると、Issueはstatus:done +
+        # status:queuedを同時に持つことになり、`_reconcile_dual_status_tasks`
+        # がIntegratorロールバック(#254)と誤認してstatus:doneを除去し、
+        # 完了済みタスクが再キューイングされ二重実行されうる。完了確定時点で
+        # 判明している一次status:*ラベルはまとめて除去しなければならない。
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:queued", "status:in-progress"))
+        config = DispatcherConfig(apply=True)
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="deadbeef\n", stderr=""
+            )
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] == "completed"
+        mock_add_label.assert_called_once_with(280, "status:done")
+        mock_remove_label.assert_any_call(280, "status:in-progress")
+        mock_remove_label.assert_any_call(280, "status:queued")
+        assert mock_remove_label.call_count == 2
+
+    def test_completed_adds_done_before_removing_in_progress(self):
+        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
+        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(apply=True)
+        call_order: list[tuple[str, str]] = []
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="deadbeef\n", stderr=""
+            )
+            _finalize_completed_worktree(active, task, config)
+
+        assert call_order == [
+            ("add", "status:done"),
+            ("remove", "status:in-progress"),
+        ]
+
+
+class TestFinalizeAbandonedCloudWorktree:
+    """#381レビュー対応(Codex P2): PRがマージされずクローズされた際の
+    再キューイングが、中断した以前の遷移で取り残された一次status:*ラベルを
+    正しく後始末することを検証する。"""
+
+    def test_removes_stale_blocked_label_alongside_in_progress(self):
+        # stacked launch中断で取り残されたstatus:blockedも併せて除去し、
+        # status:queuedへ確実に収束させなければならない。
+        active = _active()
+        task = _task(status_labels=("status:blocked", "status:in-progress"))
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            event = _finalize_abandoned_cloud_worktree(active, task, config)
+
+        assert event["action"] == "abandoned_pr_requeued"
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        mock_remove_label.assert_any_call(280, "status:in-progress")
+        mock_remove_label.assert_any_call(280, "status:blocked")
+        assert mock_remove_label.call_count == 2
+
+    def test_does_not_overwrite_terminal_escalation_label(self):
+        # 中断した以前の遷移でstatus:blocked-human-reviewが既に付与されている
+        # 場合、status:queuedへの書き換えは人間の確認要求を握りつぶして
+        # しまうため、ラベルには一切触れてはならない。
+        active = _active()
+        task = _task(
+            status_labels=("status:blocked-human-review", "status:in-progress")
+        )
+        config = DispatcherConfig(apply=True)
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            event = _finalize_abandoned_cloud_worktree(active, task, config)
+
+        assert event["action"] == "abandoned_pr_requeued"
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_comment.assert_called_once()
 
 
 class TestFinalizeNotNeededWorktree:

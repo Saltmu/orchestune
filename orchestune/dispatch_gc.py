@@ -5,6 +5,7 @@ Implementation helpers are re-exported for backward-compatible imports.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import replace
 
@@ -130,10 +131,61 @@ def _decide_stale_active_entry(
 
 
 def _apply_stale_active_entry_discard(
-    run_state: RunState, key: str, config: DispatcherConfig
-) -> None:
-    if config.apply:
-        del run_state.active_worktrees[key]
+    run_state: RunState,
+    key: str,
+    active: ActiveWorktree,
+    reason: str,
+    config: DispatcherConfig,
+) -> bool:
+    """#382: 帳簿(run_state)を破棄する前に、対応する物理worktree・プロセスの
+    状態を確認し、必要な後始末を行う。
+
+    GitHubラベルの更新がrun_state保存より後に行われる順序（#381の起動成功
+    パスのコメント参照）のため、この間でクラッシュすると、実際には
+    エージェントプロセスがまだ稼働しworktreeへ書き込みを続けているのに、
+    GitHubラベルだけがstatus:in-progress以外に変わっている（あるいは戻って
+    いる）ことがある。それを確認せず帳簿だけ破棄すると、後続サイクルで同じ
+    Issueが再度起動候補に選ばれた際、`create_worktree_and_launch`が生存中
+    プロセスの作業ディレクトリを無条件に強制削除・再作成してしまう。
+    ゾンビ/タイムアウト回収（`_apply_zombie_or_timeout_reclaim`）と同じ
+    安全策（WIPバックアップ→プロセス停止→worktree削除→帳簿削除の順）を
+    ここでも適用する。
+
+    WIPバックアップの作成に失敗した場合は、未コミットの作業データ消失を
+    防ぐため今回の破棄処理全体をスキップし、`False`を返す（run_stateは
+    変更せず、次サイクルでの再試行に委ねる）。
+    """
+    if not config.apply:
+        return True
+
+    worktree_exists = os.path.exists(active.worktree_path)
+    if worktree_exists:
+        backup_error = backup_wip_commit(
+            active.worktree_path, "WIP: backup by Orchestune GC (stale active entry)"
+        )
+        if backup_error is not None:
+            config.resolved_forge.add_comment(
+                active.issue_number,
+                "run_stateの古い帳簿エントリを検知しました"
+                f"（{reason}）。対象プロセスの後始末を試みましたが、WIP"
+                "バックアップコミットの作成に失敗しました。\n"
+                "未コミットの作業データ消失を防ぐため、今回の帳簿破棄処理を"
+                "一時スキップしました。次サイクルで再試行します。\n"
+                f"エラー詳細:\n```\n{backup_error}\n```",
+            )
+            return False
+
+    if active.pid and is_process_alive(active.pid):
+        try:
+            os.kill(active.pid, 9)
+        except Exception:
+            pass
+
+    if worktree_exists:
+        remove_worktree(active.worktree_path)
+
+    del run_state.active_worktrees[key]
+    return True
 
 
 def _rule_stale_entry(
@@ -142,7 +194,11 @@ def _rule_stale_entry(
     stale_event = _decide_stale_active_entry(active, active_task)
     if stale_event is None:
         return None
-    _apply_stale_active_entry_discard(ctx.run_state, key, ctx.config)
+    discarded = _apply_stale_active_entry_discard(
+        ctx.run_state, key, active, stale_event["reason"], ctx.config
+    )
+    if not discarded:
+        return None
     return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
 
 

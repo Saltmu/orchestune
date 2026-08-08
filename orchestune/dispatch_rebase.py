@@ -14,6 +14,7 @@ from orchestune import dispatch_gc
 from orchestune.dag_graph import recompute_dag_for_footprint_change
 from orchestune.dag_models import FootprintConflict, SubTask
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_locks import check_footprint_deviation
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
@@ -62,8 +63,9 @@ def notify_recompute(
         if parent_issue_number is not None:
             forge.add_comment(parent_issue_number, bodies[-1])
         if blocked_issue is not None:
-            forge.remove_label(blocked_issue, "status:queued")
-            forge.add_label(blocked_issue, "status:blocked")
+            transition_status_label(
+                forge, blocked_issue, "status:blocked", ("status:queued",)
+            )
             forge.add_label(blocked_issue, "status:blocked-recompute")
 
     return bodies
@@ -336,9 +338,11 @@ def _apply_auto_rebase(
         active.worktree_path, "WIP: backup by Orchestune auto-rebase"
     )
     if backup_error is not None:
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(
-            active.issue_number, "status:manual-merge-required"
+        transition_status_label(
+            config.resolved_forge,
+            active.issue_number,
+            "status:manual-merge-required",
+            ("status:in-progress",),
         )
         config.resolved_forge.add_comment(
             active.issue_number,
@@ -390,10 +394,11 @@ def _apply_auto_rebase(
         except Exception:
             pass
 
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
-        config.resolved_forge.add_label(
+        transition_status_label(
+            config.resolved_forge,
             active.issue_number,
             "status:manual-merge-required",
+            ("status:in-progress",),
         )
 
         msg = "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n"

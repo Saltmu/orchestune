@@ -330,8 +330,11 @@ class TestLaunchOrderingCrashSafety:
             with pytest.raises(RuntimeError, match="simulated crash"):
                 run_dispatch_cycle(config)
 
-        # ラベル遷移（status:in-progress付与）はクラッシュにより行われていない。
-        mock_add_label.assert_not_called()
+        # #381: status:in-progressの付与はstatus:queuedの除去より先に行われる
+        # ため（transition_status_label）、除去でクラッシュしてもstatus:in-progress
+        # は既に付与済みになっている。クラッシュ後もIssueは常にどちらかの
+        # status:*ラベルを持ち続ける（この場合は両方が一時的に併存する）。
+        mock_add_label.assert_called_once_with(1, "status:in-progress")
 
         # しかし、run_state.json にはactive_worktreeエントリが既に永続化されている
         # （ラベル更新より前にsave_run_stateが呼ばれる順序になっているため）。
