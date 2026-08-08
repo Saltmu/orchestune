@@ -6,9 +6,7 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 """
 
 import subprocess
-import tempfile
 from contextlib import ExitStack, contextmanager
-from pathlib import Path
 from unittest.mock import ANY, patch
 
 import pytest
@@ -31,8 +29,6 @@ from orchestune.dispatch_state import (
 )
 from orchestune.models import IssueRecord
 from tests.conftest import make_issue
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):

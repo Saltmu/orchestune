@@ -1,14 +1,13 @@
 from pathlib import Path
 
 import pytest
-from _pytest.outcomes import Failed
 
 from orchestune.dispatch_config import DispatcherConfig
 
 
 def test_guard_events_log_path_fails_on_default_init():
     """`DispatcherConfig` initialized with default `Path('events.jsonl')` should fail immediately in tests."""
-    with pytest.raises(Failed) as exc_info:
+    with pytest.raises(pytest.fail.Exception) as exc_info:
         DispatcherConfig()
 
     assert (

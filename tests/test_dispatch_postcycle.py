@@ -8,8 +8,6 @@
 """
 
 import argparse
-import tempfile
-from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -31,8 +29,6 @@ from orchestune.dispatch_targets import (
 )
 from orchestune.forge import ForgeAuthError
 from orchestune.models import Task
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 class TestDecideSemanticReviewEnabled:

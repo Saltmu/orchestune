@@ -5,8 +5,6 @@
 通知処理・エンドツーエンド統合テストは`test_dispatch_rebase.py`に残している。
 """
 
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -18,8 +16,6 @@ from orchestune.dispatch_rebase import (
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):

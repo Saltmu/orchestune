@@ -1,4 +1,3 @@
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,8 +6,6 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_recovery import recover_run_state
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def test_recover_run_state_no_missing(tmp_path):

@@ -1,5 +1,3 @@
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -11,8 +9,6 @@ from orchestune.dispatch_recovery import (
 )
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _issue_with_footprint(
