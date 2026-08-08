@@ -361,7 +361,9 @@ class TestDispatcherConfigLoading:
         `orchestune-dispatch`本体はクラッシュせず通常どおり動作すること。"""
         config_path = tmp_path / "orchestune.toml"
         config_path.write_text(
-            "max-concurrent = 5\n" 'dag_ignore_patterns = ["(^|/)package.json$"]\n',
+            "max-concurrent = 5\n"
+            "events-log-path = 'custom_events.jsonl'\n"
+            'dag_ignore_patterns = ["(^|/)package.json$"]\n',
             encoding="utf-8",
         )
 
