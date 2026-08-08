@@ -3,12 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
+from orchestune.dag_models import (
+    compile_extra_ignore_patterns,
+    extract_dag_ignore_patterns,
+)
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_postcycle import (
@@ -271,6 +276,13 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
     if config_data:
         parser.set_defaults(**_config_defaults(parser, config_data))
 
+    try:
+        dag_ignore_patterns = compile_extra_ignore_patterns(
+            extract_dag_ignore_patterns(config_data)
+        )
+    except (ValueError, re.error) as e:
+        _config_error(parser, str(e))
+
     args = parser.parse_args(argv)
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
         os.environ
@@ -302,6 +314,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             zombie_gc=args.zombie_gc,
             not_needed_review_state_path=args.not_needed_review_state_path,
             ci_command=shlex.split(args.ci_command) if args.ci_command else None,
+            dag_ignore_patterns=dag_ignore_patterns,
         )
     except ValueError as e:
         _config_error(parser, str(e))

@@ -9,7 +9,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dag_models import FootprintConflict
+from orchestune.dag_models import (
+    FootprintConflict,
+    SubTask,
+    compile_extra_ignore_patterns,
+)
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_reconciliation import (
     _apply_blocked_promotions,
@@ -204,6 +208,7 @@ class TestCollectActiveConflictSubtaskIds:
             subtasks_for_recompute,
             "task-a",
             updated_footprint=("a.py", "b.py"),
+            ignore_patterns=config.dag_ignore_patterns,
         )
 
     def test_conflict_without_blocked_subtask_id_is_ignored(self, tmp_path):
@@ -266,6 +271,59 @@ class TestCollectActiveConflictSubtaskIds:
             )
 
         assert result == {"task-a", "task-b"}
+
+    def _subtask(self, id_, footprint):
+        return SubTask(
+            id=id_,
+            description="",
+            footprint=footprint,
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+
+    def test_dag_ignore_patterns_suppresses_recompute_conflict(self, tmp_path):
+        """#398/#404: orchestune-dag向けのdag_ignore_patternsは、
+        dispatcherの実行時DAG再計算（reconciliation側）にも適用され、
+        初回検証で無視される設定のファイルの衝突を誤って競合検知しないこと。"""
+        task = _task(issue_number=1, subtask_id="task-a", footprint=("src/only_a.py",))
+        active = _active(issue_number=1, declared_footprint=("src/only_a.py",))
+        run_state = RunState(active_worktrees={"w1": active})
+        ctx = _ctx(tasks_by_issue={1: task})
+        subtasks_for_recompute = {
+            "task-a": self._subtask("task-a", ("src/only_a.py",)),
+            "task-b": self._subtask("task-b", ("package.json",)),
+        }
+
+        config_without_ignore = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        with patch(
+            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            return_value=["package.json"],
+        ):
+            result_without_ignore = _collect_active_conflict_subtask_ids(
+                run_state, ctx, subtasks_for_recompute, config_without_ignore
+            )
+        assert result_without_ignore == {"task-b"}
+
+        config_with_ignore = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dag_ignore_patterns=compile_extra_ignore_patterns([r"(^|/)package\.json$"]),
+        )
+        with patch(
+            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            return_value=["package.json"],
+        ):
+            result_with_ignore = _collect_active_conflict_subtask_ids(
+                run_state, ctx, subtasks_for_recompute, config_with_ignore
+            )
+        assert result_with_ignore == set()
 
 
 class TestDecideBlockedPromotions:

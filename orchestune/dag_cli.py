@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from orchestune.dag_graph import build_dag_from_plan
-from orchestune.dag_models import compile_extra_ignore_patterns
+from orchestune.dag_models import (
+    compile_extra_ignore_patterns,
+    extract_dag_ignore_patterns,
+)
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
-
-_DAG_IGNORE_PATTERNS_KEY = "dag_ignore_patterns"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -63,10 +63,7 @@ def _load_dag_ignore_patterns_config(repo_root: Path) -> list[str]:
         if not isinstance(config, dict):
             raise ValueError(f"{pyproject_toml}: [tool.orchestune] must be a table")
 
-    patterns = config.get(_DAG_IGNORE_PATTERNS_KEY, [])
-    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
-        raise ValueError(f"{_DAG_IGNORE_PATTERNS_KEY!r} must be a list of strings")
-    return cast(list[str], patterns)
+    return extract_dag_ignore_patterns(config)
 
 
 def _print_text_result(dag: dict[str, Any]) -> None:
@@ -111,8 +108,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             if args.threshold is not None
             else DEFAULT_SIMILARITY_THRESHOLD
         )
-        if not math.isfinite(threshold):
-            raise ValueError(f"--threshold must be a finite number, got {threshold}")
+        # 類似度スコア（重み付きOtsuka-Ochiai係数）は[0, 1]の範囲に収まるため、
+        # 域外の値（NaN/Inf/範囲外の有限値）は全エッジが黙って抑制される
+        # だけの無意味な指定になる。明示的にエラーとして拒否する。
+        if not (0 <= threshold <= 1):
+            raise ValueError(
+                f"--threshold must be within [0, 1] (a similarity score), got {threshold}"
+            )
         dag = build_dag_from_plan(
             args.plan,
             threshold=threshold,

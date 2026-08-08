@@ -379,6 +379,27 @@ class TestDispatcherConfigLoading:
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 5
+        assert len(config_arg.dag_ignore_patterns) == 1
+        assert config_arg.dag_ignore_patterns[0].search("package.json")
+        assert config_arg.dag_ignore_patterns[0].search("src/package.json")
+        assert config_arg.dag_ignore_patterns[0].search("other.json") is None
+
+    def test_invalid_dag_ignore_patterns_in_config_is_reported_as_error(
+        self, tmp_path, capsys
+    ):
+        """#398/#404: dag_ignore_patternsの型・正規表現が不正な場合も、
+        他のdispatcher設定エラーと同様にexit code 2で明示的に報告すること。"""
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            'dag_ignore_patterns = "not-a-list"\n',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit) as error:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert error.value.code == 2
+        assert "dag_ignore_patterns" in capsys.readouterr().err
 
     def test_load_config_from_pyproject_toml(self, tmp_path):
         config_path = tmp_path / "pyproject.toml"

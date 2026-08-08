@@ -152,6 +152,7 @@ def _decide_footprint_deviation_outcome(
         _build_subtasks_for_recompute(tasks_by_issue),
         active_task.subtask_id,
         updated_footprint=merged_footprint,
+        ignore_patterns=config.dag_ignore_patterns,
     )
     return FootprintDeviationDecision(
         action="recomputed",

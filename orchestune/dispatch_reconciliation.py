@@ -45,6 +45,7 @@ def _collect_active_conflict_subtask_ids(
                 subtasks_for_recompute,
                 active_task.subtask_id,
                 updated_footprint=merged_footprint,
+                ignore_patterns=config.dag_ignore_patterns,
             )
             for conflict in conflicts:
                 if conflict.blocked_subtask_id:

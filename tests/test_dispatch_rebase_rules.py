@@ -7,6 +7,7 @@
 
 from unittest.mock import patch
 
+from orchestune.dag_models import compile_extra_ignore_patterns
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_rebase import (
     _decide_footprint_deviation_outcome,
@@ -103,6 +104,37 @@ class TestDecideFootprintDeviationOutcome:
         assert decision.subtask_id == "task-a"
         # decide層はactive.recompute_countを書き換えない
         assert active.recompute_count == 0
+
+    def test_recompute_reports_conflict_for_shared_manifest_by_default(self, tmp_path):
+        # #398/#404: dag_ignore_patterns未指定時は既存挙動どおり、
+        # 実行中に新たに触れたファイル（package.json）が既存の他サブタスクと
+        # 衝突すれば競合として検知されること（後方互換の確認）
+        active = _active(recompute_count=0, declared_footprint=("src/only_a.py",))
+        task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
+        task_b = _task(issue_number=2, subtask_id="task-b", footprint=("package.json",))
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl")
+        decision = _decide_footprint_deviation_outcome(
+            active, ["package.json"], {1: task_a, 2: task_b}, config
+        )
+        assert decision.action == "recomputed"
+        assert len(decision.conflicts) == 1
+
+    def test_dag_ignore_patterns_suppresses_recompute_conflict(self, tmp_path):
+        # #398/#404: orchestune-dag向けに設定したdag_ignore_patternsは、
+        # dispatcherの実行時DAG再計算（footprint逸脱時）にも適用され、
+        # 初回検証で無視される設定のファイルの衝突を誤って競合検知しないこと
+        active = _active(recompute_count=0, declared_footprint=("src/only_a.py",))
+        task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
+        task_b = _task(issue_number=2, subtask_id="task-b", footprint=("package.json",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            dag_ignore_patterns=compile_extra_ignore_patterns([r"(^|/)package\.json$"]),
+        )
+        decision = _decide_footprint_deviation_outcome(
+            active, ["package.json"], {1: task_a, 2: task_b}, config
+        )
+        assert decision.action == "recomputed"
+        assert decision.conflicts == []
 
 
 class TestDecideRebaseTarget:

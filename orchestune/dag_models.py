@@ -28,6 +28,19 @@ def compile_extra_ignore_patterns(
     return tuple(re.compile(pattern) for pattern in patterns)
 
 
+def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
+    """Validate and return the `dag_ignore_patterns` list from a loaded config dict.
+
+    Shared by orchestune-dag (dag_cli.py) and orchestune-dispatch
+    (dispatcher.py), which may both read this setting from the same
+    orchestune.toml / pyproject.toml `[tool.orchestune]` table.
+    """
+    patterns = config.get("dag_ignore_patterns", [])
+    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+        raise ValueError("'dag_ignore_patterns' must be a list of strings")
+    return patterns
+
+
 def normalize_footprint_path(path: str) -> str:
     """Normalize a footprint path into a canonical repository-relative POSIX path.
 
@@ -100,6 +113,10 @@ class SubTask:
     def touch_set(
         self, extra_ignored_patterns: Iterable[re.Pattern[str]] = ()
     ) -> frozenset[str]:
+        # is_ignored_footprintをself.footprintの各パスに対して複数回呼ぶため、
+        # ジェネレータ等の使い捨てiterableが渡されると2件目以降が空になる問題を
+        # 避けてtupleへ実体化する。
+        extra_ignored_patterns = tuple(extra_ignored_patterns)
         footprint = frozenset(
             path
             for path in self.footprint

@@ -881,6 +881,20 @@ def test_subtask_post_init_normalizes_footprint():
     assert subtask.touch_set() == frozenset({"src/core.py", "src/utils.py"})
 
 
+def test_touch_set_ignore_patterns_generator_behaves_like_equivalent_tuple():
+    # is_ignored_footprintは footprint の各パスに対して複数回呼ばれるため、
+    # ジェネレータのような使い捨てiterableを渡しても、同じ内容のtupleを
+    # 渡した場合と結果が一致すること
+    subtask = _subtask("a", ["src/a.py", "package.json"], [])
+    pattern = re.compile(r"(^|/)package\.json$")
+
+    def _pattern_generator():
+        yield pattern
+
+    assert subtask.touch_set(_pattern_generator()) == subtask.touch_set((pattern,))
+    assert subtask.touch_set((pattern,)) == frozenset({"src/a.py"})
+
+
 def test_dag_conflict_edge_generated_for_unnormalized_equivalent_paths(tmp_path):
     plan_content = """\
     ---
