@@ -121,8 +121,9 @@ def _cycle_edges(cycle: list[str], edges: list[DagEdge]) -> list[DagEdge]:
 def _resolve_cycles_if_possible(
     node_ids: list[str],
     edges: list[DagEdge],
-) -> list[DagEdge]:
+) -> tuple[list[DagEdge], list[str]]:
     resolved = list(edges)
+    warnings: list[str] = []
     while cycle := _detect_cycle(node_ids, resolved):
         similarity_edges = [
             edge
@@ -136,6 +137,10 @@ def _resolve_cycles_if_possible(
             similarity_edges,
             key=lambda edge: edge.score if edge.score is not None else 0.0,
         )
+        msg = (
+            f"循環参照を検出したため、類似度エッジを自動解消しました: "
+            f"{weakest.source} -> {weakest.target} (reason: {weakest.reason}, score: {weakest.score})"
+        )
         logger.warning(
             "循環参照を検出したため、類似度エッジを自動解消しました: "
             "%s -> %s (reason: %s, score: %s)",
@@ -144,8 +149,9 @@ def _resolve_cycles_if_possible(
             weakest.reason,
             weakest.score,
         )
+        warnings.append(msg)
         resolved.remove(weakest)
-    return resolved
+    return resolved, warnings
 
 
 def _footprint_and_symbol_warnings(
@@ -183,19 +189,27 @@ def _assemble_dag(
     repo_root: str | Path | None = None,
 ) -> DagResult:
     node_ids = [subtask.id for subtask in subtasks]
-    resolved_edges = _resolve_cycles_if_possible(node_ids, edges)
+    resolved_edges, cycle_warnings = _resolve_cycles_if_possible(node_ids, edges)
     topological_order = _topological_sort(node_ids, resolved_edges)
     targets = {edge.target for edge in resolved_edges}
-    warnings = find_unowned_shared_contract_hotspots(subtasks, resolved_edges)
-    if repo_root is not None:
-        warnings = [*warnings, *_footprint_and_symbol_warnings(subtasks, repo_root)]
+
+    contract_warnings = list(
+        find_unowned_shared_contract_hotspots(subtasks, resolved_edges)
+    )
+    existence_warnings = (
+        _footprint_and_symbol_warnings(subtasks, repo_root)
+        if repo_root is not None
+        else []
+    )
+    all_warnings = tuple(contract_warnings + cycle_warnings + existence_warnings)
+
     return DagResult(
         subtasks={subtask.id: subtask for subtask in subtasks},
         edges=resolved_edges,
         topological_order=topological_order,
         parallel_leaves=sorted(node for node in node_ids if node not in targets),
         risky_subtask_ids=sorted(subtask.id for subtask in subtasks if subtask.risk),
-        warnings=tuple(warnings),
+        warnings=all_warnings,
     )
 
 

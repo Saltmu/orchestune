@@ -178,3 +178,40 @@ class TestCliSurfacesFootprintWarnings:
             assert excinfo.value.code == 0
         finally:
             sys.argv = orig_argv
+
+    def test_cli_resolves_footprint_relative_to_plan_not_cwd(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """`--plan`が指すディレクトリと呼び出し元のcwdが異なっていても、
+        footprintはplanの置き場所（=リポジトリルート）を基点に解決される
+        こと。cwdを基点にすると、実在するファイルまで「見つからない」と
+        誤検出してしまう（コードレビュー指摘）。"""
+        from orchestune.dag_cli import main
+
+        project_dir = tmp_path / "project"
+        (project_dir / "src").mkdir(parents=True)
+        (project_dir / "src" / "existing.py").write_text("x = 1\n", encoding="utf-8")
+        plan_content = """\
+        ---
+        subtasks:
+          - id: task-a
+            footprint: ["src/existing.py"]
+        ---
+        """
+        plan_path = _write_plan(project_dir, plan_content)
+
+        elsewhere_dir = tmp_path / "elsewhere"
+        elsewhere_dir.mkdir()
+        monkeypatch.chdir(elsewhere_dir)
+
+        orig_argv = sys.argv
+        sys.argv = ["orchestune-dag", "--plan", str(plan_path)]
+        try:
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+            assert excinfo.value.code == 0
+        finally:
+            sys.argv = orig_argv
+
+        captured = capsys.readouterr()
+        assert "Warnings:" not in captured.out
