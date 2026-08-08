@@ -68,6 +68,8 @@ class IssueForge(Protocol):
 
 @runtime_checkable
 class PullRequestForge(Protocol):
+    def delete_branch(self, branch: str) -> None: ...
+
     def merge_pull_request(self, pr_number: int | str) -> None: ...
 
     def create_pull_request(

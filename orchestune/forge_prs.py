@@ -35,6 +35,25 @@ class GitHubPullRequestMixin:
 
     _run: _Runner
 
+    def delete_branch(self, branch: str) -> None:
+        validate_ref_name(branch)
+        encoded_branch = quote(branch, safe="")
+        try:
+            self._run(
+                [
+                    "gh",
+                    "api",
+                    "--method",
+                    "DELETE",
+                    f"repos/{{owner}}/{{repo}}/git/refs/heads/{encoded_branch}",
+                ]
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").lower()
+            if "404" in detail or "not found" in detail:
+                return
+            raise
+
     def merge_pull_request(self, pr_number: int | str) -> None:
         number = validate_issue_number(pr_number)
         self._run(["gh", "pr", "merge", str(number), "--merge"])

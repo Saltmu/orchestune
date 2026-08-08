@@ -134,6 +134,8 @@ class IntegratorEnv:
     remove_label: MagicMock
     add_comment: MagicMock
     is_current_branch_tip_merged_into: MagicMock
+    delete_branch: MagicMock
+    branch_exists: MagicMock
 
     def set_done_issues(
         self,
@@ -207,12 +209,15 @@ def integrator_env() -> Iterator[IntegratorEnv]:
         patch("orchestune.forge.GitHubForge.remove_label") as remove_label,
         patch("orchestune.forge.GitHubForge.add_comment") as add_comment,
         patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into") as tip,
+        patch("orchestune.forge.GitHubForge.delete_branch") as delete_branch,
+        patch("orchestune.forge.GitHubForge.branch_exists") as branch_exists,
     ):
         run.return_value = _completed(stdout=b"")
         list_issues.side_effect = lambda label, *a, **k: []
         list_open_prs.return_value = []
         create_pr.return_value = 999
         tip.return_value = False
+        branch_exists.return_value = True
         yield IntegratorEnv(
             run=run,
             list_issues_by_label=list_issues,
@@ -224,6 +229,8 @@ def integrator_env() -> Iterator[IntegratorEnv]:
             remove_label=remove_label,
             add_comment=add_comment,
             is_current_branch_tip_merged_into=tip,
+            delete_branch=delete_branch,
+            branch_exists=branch_exists,
         )
 
 
