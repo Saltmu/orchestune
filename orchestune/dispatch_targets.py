@@ -111,9 +111,19 @@ class DispatchTarget(ABC):
 
     @abstractmethod
     def launch(
-        self, task: Task, branch_name: str, worktree_path: Path
+        self,
+        task: Task,
+        branch_name: str,
+        worktree_path: Path,
+        *,
+        force_push: bool = False,
     ) -> DispatchHandle:
-        """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。"""
+        """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。
+
+        #384: `force_push=True`は、自動リベース後の再launch（ローカルで書き
+        換え済みの履歴を再pushする必要がある場合）を呼び出し元が明示するため
+        のフラグ。pushを行わない実装では無視してよい。
+        """
 
     @abstractmethod
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
@@ -207,19 +217,24 @@ class BranchReachabilityError(RuntimeError):
     """
 
 
-def _push_branch_and_verify(branch_name: str, worktree_path: Path) -> None:
+def _push_branch_and_verify(
+    branch_name: str, worktree_path: Path, *, force: bool = False
+) -> None:
     """#244: stacked/parent base付きで作成されたローカルtask branchを、リモート
     セッションがその内容ごとcheckoutできるようoriginへpushし、到達性を検証する。
 
     push後に`git ls-remote`でリモートbranchのSHAをローカルHEADと照合し、
     確認できない場合は`BranchReachabilityError`を送出する
     （呼び出し側はfireせずfail closed）。
+
+    #384: `force=True`の場合は`--force-with-lease`を付与する。自動リベースは
+    ローカルで既存の履歴を書き換えるため、force無しの通常pushは常に
+    non-fast-forwardで拒否される（初回起動時の新規ブランチpushには影響しない）。
     """
-    run_git(
-        ["push", "--set-upstream", "origin", branch_name],
-        cwd=worktree_path,
-        check=True,
-    )
+    push_args = ["push", "--set-upstream", "origin", branch_name]
+    if force:
+        push_args.insert(1, "--force-with-lease")
+    run_git(push_args, cwd=worktree_path, check=True)
     local_sha = run_git(
         ["rev-parse", "HEAD"], cwd=worktree_path, check=True
     ).stdout.strip()
@@ -257,7 +272,12 @@ class LocalProcessDispatchTarget(DispatchTarget):
         self._local_cmd = local_cmd
 
     def launch(
-        self, task: Task, branch_name: str, worktree_path: Path
+        self,
+        task: Task,
+        branch_name: str,
+        worktree_path: Path,
+        *,
+        force_push: bool = False,
     ) -> DispatchHandle:
         self._log_dir.mkdir(parents=True, exist_ok=True)
         if self._local_cmd:
@@ -349,10 +369,15 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         return self._fire_with_retry(request)
 
     def launch(
-        self, task: Task, branch_name: str, worktree_path: Path
+        self,
+        task: Task,
+        branch_name: str,
+        worktree_path: Path,
+        *,
+        force_push: bool = False,
     ) -> DispatchHandle:
         # #244: fireより先にpush・到達性検証を行い、確認できなければfireしない。
-        _push_branch_and_verify(branch_name, worktree_path)
+        _push_branch_and_verify(branch_name, worktree_path, force=force_push)
         payload = self._fire(self._build_text(task, branch_name))
         return DispatchHandle(
             external_id=payload.get("claude_code_session_id"),
@@ -430,13 +455,19 @@ class CodexCloudDispatchTarget(DispatchTarget):
         )
 
     def launch(
-        self, task: Task, branch_name: str, worktree_path: Path
+        self,
+        task: Task,
+        branch_name: str,
+        worktree_path: Path,
+        *,
+        force_push: bool = False,
     ) -> DispatchHandle:
-        run_git(
-            ["push", "--set-upstream", "origin", branch_name],
-            cwd=worktree_path,
-            check=True,
-        )
+        # #384: 自動リベース後の再launchでは、書き換え済み履歴を再pushできる
+        # よう--force-with-leaseを付与する（初回起動時は付与しない）。
+        push_args = ["push", "--set-upstream", "origin", branch_name]
+        if force_push:
+            push_args.insert(1, "--force-with-lease")
+        run_git(push_args, cwd=worktree_path, check=True)
         self._log_dir.mkdir(parents=True, exist_ok=True)
         slug = branch_name.replace("/", "-")
         log_path = self._log_dir / f"{slug}.log"
