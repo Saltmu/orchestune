@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
 from orchestune.forge import BootstrapResult, Forge, GitHubForge
 from orchestune.models import IssueRecord, PrRecord
@@ -284,23 +285,34 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(autouse=True)
-def _guard_events_log_path():
+def _guard_events_log_path(monkeypatch: pytest.MonkeyPatch):
     """Ensure tests do not create or modify 'events.jsonl' in the repository root."""
+    orig_init = DispatcherConfig.__init__
+
+    def guarded_init(self: DispatcherConfig, *args: Any, **kwargs: Any) -> None:
+        orig_init(self, *args, **kwargs)
+        if self.events_log_path == Path("events.jsonl"):
+            pytest.fail(
+                "DispatcherConfig initialized with default events_log_path ('events.jsonl'). "
+                "Specify events_log_path=tmp_path / 'events.jsonl' in tests for isolation."
+            )
+
+    monkeypatch.setattr(DispatcherConfig, "__init__", guarded_init)
+
     root_events_log = Path(__file__).resolve().parent.parent / "events.jsonl"
     exists_before = root_events_log.exists()
     mtime_before = root_events_log.stat().st_mtime if exists_before else None
     size_before = root_events_log.stat().st_size if exists_before else None
-
     yield
-
     exists_after = root_events_log.exists()
     mtime_after = root_events_log.stat().st_mtime if exists_after else None
     size_after = root_events_log.stat().st_size if exists_after else None
-
     if not exists_before and exists_after:
         pytest.fail(
             "Test created 'events.jsonl' in the repository root instead of using tmp_path."
         )
+    elif exists_before and not exists_after:
+        pytest.fail("Test deleted 'events.jsonl' from the repository root.")
     elif exists_before and exists_after:
         if mtime_before != mtime_after or size_before != size_after:
             pytest.fail(

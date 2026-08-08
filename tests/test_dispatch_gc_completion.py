@@ -359,8 +359,9 @@ class TestFinalizeNotNeededWorktree:
 class TestFinalizeNotNeededWorktreeCloudRoutineReview:
     """#282: クラウドルーチン利用可能時は即時クローズせず独立検証レビューへ委譲する。"""
 
-    def _cloud_config(self, **overrides):
+    def _cloud_config(self, tmp_path, **overrides):
         defaults = dict(
+            events_log_path=tmp_path / "events.jsonl",
             apply=True,
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
         )
@@ -371,7 +372,8 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         active = _active()
         task = _task()
         config = self._cloud_config(
-            not_needed_review_state_path=tmp_path / "state.json"
+            tmp_path,
+            not_needed_review_state_path=tmp_path / "state.json",
         )
         dispatch_review = MagicMock()
         with (
@@ -403,7 +405,8 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         active = _active()
         task = _task()
         config = self._cloud_config(
-            not_needed_review_state_path=tmp_path / "state.json"
+            tmp_path,
+            not_needed_review_state_path=tmp_path / "state.json",
         )
         with (
             patch(
