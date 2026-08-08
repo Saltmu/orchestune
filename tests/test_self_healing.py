@@ -1,4 +1,3 @@
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,15 +7,15 @@ from orchestune.dispatch_recovery import recover_run_state
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
-
-def test_recover_run_state_no_missing():
+def test_recover_run_state_no_missing(tmp_path):
     # 欠損がない場合は modified が False であること
     run_state = RunState(active_worktrees={})
     in_progress = []
     config = DispatcherConfig(
-        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+        events_log_path=tmp_path / "events.jsonl",
+        run_state_path=tmp_path / "run_state.json",
+        worktree_root=tmp_path / "worktrees",
     )
 
     modified = recover_run_state(run_state, in_progress, config)
@@ -26,7 +25,7 @@ def test_recover_run_state_no_missing():
 
 @patch("orchestune.forge.GitHubForge.list_open_prs")
 @patch("subprocess.run")
-def test_recover_run_state_with_missing_no_pr(mock_subproc, mock_list_prs):
+def test_recover_run_state_with_missing_no_pr(mock_subproc, mock_list_prs, tmp_path):
     # status:in-progress の Issue があるが、run_state にない場合 (PRなし)
     run_state = RunState(active_worktrees={})
 
@@ -48,7 +47,9 @@ footprint:
     )
     in_progress = [issue]
     config = DispatcherConfig(
-        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+        events_log_path=tmp_path / "events.jsonl",
+        run_state_path=tmp_path / "run_state.json",
+        worktree_root=tmp_path / "worktrees",
     )
 
     # PRは存在しない
@@ -76,7 +77,7 @@ footprint:
 
 @patch("orchestune.forge.GitHubForge.list_open_prs")
 @patch("subprocess.run")
-def test_recover_run_state_with_missing_and_pr(mock_subproc, mock_list_prs):
+def test_recover_run_state_with_missing_and_pr(mock_subproc, mock_list_prs, tmp_path):
     # status:in-progress の Issue があり、紐づく PR がある場合
     run_state = RunState(active_worktrees={})
 
@@ -96,7 +97,9 @@ footprint: []
     )
     in_progress = [issue]
     config = DispatcherConfig(
-        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+        events_log_path=tmp_path / "events.jsonl",
+        run_state_path=tmp_path / "run_state.json",
+        worktree_root=tmp_path / "worktrees",
     )
 
     # PRのモック
@@ -128,10 +131,12 @@ footprint: []
 
 
 @patch("subprocess.run")
-def test_recover_run_state_physical_worktree_mismatch(mock_subproc):
+def test_recover_run_state_physical_worktree_mismatch(mock_subproc, tmp_path):
     # run_state にはあるが、物理 worktree がなく、PRもない場合は削除されること
     config = DispatcherConfig(
-        run_state_path=tmp_path / "run_state.json", worktree_root=tmp_path / "worktrees"
+        events_log_path=tmp_path / "events.jsonl",
+        run_state_path=tmp_path / "run_state.json",
+        worktree_root=tmp_path / "worktrees",
     )
 
     # PRもPIDもないアクティブ worktree

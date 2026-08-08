@@ -57,6 +57,7 @@ def _ctx(**overrides):
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         ),

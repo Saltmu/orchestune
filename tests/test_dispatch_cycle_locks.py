@@ -164,7 +164,7 @@ class TestDecideExternalLockSync:
 
 
 class TestApplyExternalLockSync:
-    def test_unlocking_blocked_task_does_not_requeue_it(self):
+    def test_unlocking_blocked_task_does_not_requeue_it(self, tmp_path):
         task = _task(status_labels=("status:blocked", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
 
@@ -172,12 +172,15 @@ class TestApplyExternalLockSync:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
-            _apply_external_lock_sync(lock_result, DispatcherConfig(apply=True))
+            _apply_external_lock_sync(
+                lock_result,
+                DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+            )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
         mock_add_label.assert_not_called()
 
-    def test_unlocking_in_progress_task_does_not_requeue_it(self):
+    def test_unlocking_in_progress_task_does_not_requeue_it(self, tmp_path):
         task = _task(status_labels=("status:in-progress", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
 
@@ -185,12 +188,15 @@ class TestApplyExternalLockSync:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
-            _apply_external_lock_sync(lock_result, DispatcherConfig(apply=True))
+            _apply_external_lock_sync(
+                lock_result,
+                DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+            )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
         mock_add_label.assert_not_called()
 
-    def test_unlocking_queued_task_requeues_it(self):
+    def test_unlocking_queued_task_requeues_it(self, tmp_path):
         task = _task(status_labels=("status:queued", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
 
@@ -198,7 +204,10 @@ class TestApplyExternalLockSync:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
-            _apply_external_lock_sync(lock_result, DispatcherConfig(apply=True))
+            _apply_external_lock_sync(
+                lock_result,
+                DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+            )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
         mock_add_label.assert_called_once_with(1, "status:queued")
@@ -226,6 +235,7 @@ class TestRunDispatchCycleBranchNormalization:
             run_state_path,
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -260,6 +270,7 @@ class TestRunDispatchCycleBranchNormalization:
 
     def test_excludes_branch_with_open_pr_multisegment_headref(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -292,6 +303,7 @@ class TestRunDispatchCycleBranchNormalization:
 
     def test_unrelated_external_branch_still_locks_overlapping_task(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,

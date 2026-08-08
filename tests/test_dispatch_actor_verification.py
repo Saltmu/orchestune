@@ -195,14 +195,14 @@ class TestDecideActorVerificationWithFakeForge:
 
 
 class TestApplyActorVerification:
-    def test_authorized_task_stays_in_candidates(self):
+    def test_authorized_task_stays_in_candidates(self, tmp_path):
         task = _task(1)
         decisions = [
             ActorVerificationDecision(
                 task=task, actor="alice", permission="write", is_authorized=True
             )
         ]
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
             "orchestune.dispatch_actor_verification.apply_human_review_escalation"
         ) as mock_escalate:
@@ -210,14 +210,16 @@ class TestApplyActorVerification:
         assert result == [task]
         mock_escalate.assert_not_called()
 
-    def test_unauthorized_task_is_excluded_and_escalated_when_apply_true(self):
+    def test_unauthorized_task_is_excluded_and_escalated_when_apply_true(
+        self, tmp_path
+    ):
         task = _task(1, status_labels=("status:queued",))
         decisions = [
             ActorVerificationDecision(
                 task=task, actor="mallory", permission="read", is_authorized=False
             )
         ]
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
             "orchestune.dispatch_actor_verification.apply_human_review_escalation"
         ) as mock_escalate:
@@ -230,14 +232,18 @@ class TestApplyActorVerification:
         assert "mallory" in args[2]
         assert "read" in args[2]
 
-    def test_unauthorized_task_excluded_but_not_escalated_when_apply_false(self):
+    def test_unauthorized_task_excluded_but_not_escalated_when_apply_false(
+        self, tmp_path
+    ):
         task = _task(1)
         decisions = [
             ActorVerificationDecision(
                 task=task, actor="mallory", permission="none", is_authorized=False
             )
         ]
-        config = DispatcherConfig(apply=False)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=False
+        )
         with patch(
             "orchestune.dispatch_actor_verification.apply_human_review_escalation"
         ) as mock_escalate:
@@ -245,7 +251,7 @@ class TestApplyActorVerification:
         assert result == []
         mock_escalate.assert_not_called()
 
-    def test_mixed_decisions_keep_only_authorized(self):
+    def test_mixed_decisions_keep_only_authorized(self, tmp_path):
         task_ok = _task(1)
         task_bad = _task(2)
         decisions = [
@@ -256,7 +262,7 @@ class TestApplyActorVerification:
                 task=task_bad, actor="mallory", permission="read", is_authorized=False
             ),
         ]
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
             "orchestune.dispatch_actor_verification.apply_human_review_escalation"
         ):

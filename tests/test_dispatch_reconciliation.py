@@ -70,6 +70,7 @@ def _ctx(**overrides):
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         ),
@@ -100,11 +101,12 @@ class _IssuesStub:
 
 
 class TestCollectActiveConflictSubtaskIds:
-    def test_skips_active_worktree_without_matching_task(self):
+    def test_skips_active_worktree_without_matching_task(self, tmp_path):
         active = _active(issue_number=99)
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -117,12 +119,13 @@ class TestCollectActiveConflictSubtaskIds:
 
         assert result == set()
 
-    def test_skips_active_worktree_when_task_has_no_subtask_id(self):
+    def test_skips_active_worktree_when_task_has_no_subtask_id(self, tmp_path):
         task = _task(issue_number=1, subtask_id="")
         active = _active(issue_number=1)
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -135,7 +138,7 @@ class TestCollectActiveConflictSubtaskIds:
 
         assert result == set()
 
-    def test_fail_closed_when_deviation_undetectable(self):
+    def test_fail_closed_when_deviation_undetectable(self, tmp_path):
         """deviatedがNone（検出不能エラー）の場合は全サブタスクを競合中として扱う。"""
         task = _task(issue_number=1, subtask_id="task-a")
         active = _active(issue_number=1)
@@ -143,6 +146,7 @@ class TestCollectActiveConflictSubtaskIds:
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -157,7 +161,7 @@ class TestCollectActiveConflictSubtaskIds:
 
         assert result == {"task-a", "task-b"}
 
-    def test_adds_blocked_subtask_ids_from_recomputed_conflicts(self):
+    def test_adds_blocked_subtask_ids_from_recomputed_conflicts(self, tmp_path):
         task = _task(issue_number=1, subtask_id="task-a", footprint=("a.py",))
         active = _active(
             issue_number=1,
@@ -168,6 +172,7 @@ class TestCollectActiveConflictSubtaskIds:
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -201,12 +206,13 @@ class TestCollectActiveConflictSubtaskIds:
             updated_footprint=("a.py", "b.py"),
         )
 
-    def test_conflict_without_blocked_subtask_id_is_ignored(self):
+    def test_conflict_without_blocked_subtask_id_is_ignored(self, tmp_path):
         task = _task(issue_number=1, subtask_id="task-a")
         active = _active(issue_number=1)
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -233,13 +239,14 @@ class TestCollectActiveConflictSubtaskIds:
 
         assert result == set()
 
-    def test_fail_closed_when_recompute_raises(self):
+    def test_fail_closed_when_recompute_raises(self, tmp_path):
         task = _task(issue_number=1, subtask_id="task-a")
         active = _active(issue_number=1)
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -273,9 +280,10 @@ class TestDecideBlockedPromotions:
 
 
 class TestApplyBlockedPromotions:
-    def test_dry_run_returns_events_without_calling_github(self):
+    def test_dry_run_returns_events_without_calling_github(self, tmp_path):
         task = _task(issue_number=5, subtask_id="task-e")
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=False,
@@ -291,9 +299,10 @@ class TestApplyBlockedPromotions:
         mock_add.assert_not_called()
         assert events == [{"issue_number": 5, "subtask_id": "task-e"}]
 
-    def test_apply_swaps_blocked_label_for_queued(self):
+    def test_apply_swaps_blocked_label_for_queued(self, tmp_path):
         task = _task(issue_number=5, subtask_id="task-e")
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -309,11 +318,12 @@ class TestApplyBlockedPromotions:
         mock_add.assert_called_once_with(5, "status:queued")
         assert events == [{"issue_number": 5, "subtask_id": "task-e"}]
 
-    def test_adds_queued_before_removing_blocked(self):
+    def test_adds_queued_before_removing_blocked(self, tmp_path):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
         task = _task(issue_number=5, subtask_id="task-e")
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -336,9 +346,10 @@ class TestApplyBlockedPromotions:
 
 
 class TestPromoteBlockedTasks:
-    def test_decide_and_apply_are_wired_together(self):
+    def test_decide_and_apply_are_wired_together(self, tmp_path):
         task = _task(issue_number=1, subtask_id="task-a", depends_on=("task-x",))
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -361,6 +372,7 @@ class TestSelfHealRunState:
     def test_persists_recovered_state_when_run_state_missing(self, tmp_path):
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -388,6 +400,7 @@ class TestSelfHealRunState:
 
     def test_does_not_persist_when_recovery_reports_no_change(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -411,7 +424,7 @@ class TestSelfHealRunState:
 
 
 class TestDualStatusReconciliationMultipleTasks:
-    def test_only_dual_status_tasks_are_reconciled_among_several(self):
+    def test_only_dual_status_tasks_are_reconciled_among_several(self, tmp_path):
         """複数タスクが混在する中で、status:done/status:queuedの重複を持つ
         タスクのみが個別に整合修復されることを確認する（境界値: 複数ラベル重複）。"""
         dual_a = _task(
@@ -430,6 +443,7 @@ class TestDualStatusReconciliationMultipleTasks:
             status_labels=("status:queued",),
         )
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -451,10 +465,11 @@ class TestDualStatusReconciliationMultipleTasks:
 
 
 class TestHandleBlockedRecomputeRecovery:
-    def test_returns_empty_when_no_blocked_recompute_issues(self):
+    def test_returns_empty_when_no_blocked_recompute_issues(self, tmp_path):
         run_state = RunState(active_worktrees={})
         ctx = _ctx()
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -469,10 +484,11 @@ class TestHandleBlockedRecomputeRecovery:
 
         assert result == []
 
-    def test_issue_without_matching_task_is_skipped(self):
+    def test_issue_without_matching_task_is_skipped(self, tmp_path):
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -496,13 +512,14 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_not_called()
         assert result == []
 
-    def test_dry_run_returns_event_without_calling_github(self):
+    def test_dry_run_returns_event_without_calling_github(self, tmp_path):
         task = _task(
             issue_number=1, subtask_id="task-a", depends_on=(), status_labels=()
         )
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=False,
@@ -526,7 +543,7 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_not_called()
         assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
 
-    def test_apply_promotes_when_dependencies_are_resolved(self):
+    def test_apply_promotes_when_dependencies_are_resolved(self, tmp_path):
         task = _task(
             issue_number=1,
             subtask_id="task-a",
@@ -536,6 +553,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids={"task-x"})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -562,7 +580,7 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_called_once_with(1, "status:queued")
         assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
 
-    def test_adds_queued_before_removing_blocked(self):
+    def test_adds_queued_before_removing_blocked(self, tmp_path):
         # #381: status:blocked-recompute除去後もstatus:blockedが併存する間は
         # 安全だが、最終的にstatus:queuedへ遷移する際は、途中でクラッシュ
         # してもIssueが必ずいずれかのstatus:*ラベルを持ち続けるよう、
@@ -576,6 +594,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids={"task-x"})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -608,7 +627,7 @@ class TestHandleBlockedRecomputeRecovery:
             ("remove", "status:blocked"),
         ]
 
-    def test_stays_blocked_when_dependency_still_pending(self):
+    def test_stays_blocked_when_dependency_still_pending(self, tmp_path):
         task = _task(
             issue_number=1,
             subtask_id="task-a",
@@ -618,6 +637,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids=set())
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
@@ -641,7 +661,7 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_not_called()
         assert result == []
 
-    def test_dependency_resolved_via_completed_subtask_ids(self):
+    def test_dependency_resolved_via_completed_subtask_ids(self, tmp_path):
         """`completed_subtask_ids`（status:not-neededを含む解決経路）でも
         依存解決とみなされることを確認する。"""
         task = _task(
@@ -653,6 +673,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids=set())
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,

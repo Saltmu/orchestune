@@ -77,6 +77,7 @@ def _ctx(**overrides):
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         ),
@@ -372,7 +373,7 @@ class TestApplyStaleActiveEntryDiscard:
     def test_kills_live_process_and_removes_worktree(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
             patch(
@@ -397,7 +398,7 @@ class TestApplyStaleActiveEntryDiscard:
     def test_dead_process_skips_kill_but_still_removes_worktree(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
             patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
@@ -414,10 +415,10 @@ class TestApplyStaleActiveEntryDiscard:
         mock_remove.assert_called_once_with(str(tmp_path))
         assert run_state.active_worktrees == {}
 
-    def test_missing_worktree_skips_backup_and_removal(self):
+    def test_missing_worktree_skips_backup_and_removal(self, tmp_path):
         active = _active(worktree_path="worktrees/does-not-exist", pid=12345)
         run_state = RunState(active_worktrees={"280": active})
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
             patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
@@ -439,7 +440,7 @@ class TestApplyStaleActiveEntryDiscard:
     def test_backup_failure_skips_discard_and_preserves_entry(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
-        config = DispatcherConfig(apply=True)
+        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
             patch(
@@ -466,7 +467,9 @@ class TestApplyStaleActiveEntryDiscard:
     def test_dry_run_does_not_touch_anything(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
-        config = DispatcherConfig(apply=False)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=False
+        )
 
         with (
             patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
@@ -1042,6 +1045,7 @@ class TestWorktreeHasNewCommitsIntegration:
 class TestGC:
     def test_gc_reclaim_zombie(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
@@ -1115,6 +1119,7 @@ class TestGC:
 
     def test_gc_reclaim_zombie_only(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
@@ -1182,6 +1187,7 @@ class TestGC:
 
     def test_gc_reclaim_zombie_disabled(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
@@ -1246,6 +1252,7 @@ class TestGC:
 
     def test_gc_reclaim_timeout(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
@@ -1305,6 +1312,7 @@ class TestGC:
 
     def test_gc_reclaim_backup_failure_skips_deletion(self, tmp_path):
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",

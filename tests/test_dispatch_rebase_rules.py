@@ -5,8 +5,6 @@
 通知処理・エンドツーエンド統合テストは`test_dispatch_rebase.py`に残している。
 """
 
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -18,8 +16,6 @@ from orchestune.dispatch_rebase import (
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 def _task(**overrides):
@@ -56,24 +52,36 @@ class TestDecideFootprintDeviationOutcome:
     """decide層: DAG再計算自体は純粋計算で、githubへの通知やactive/run_stateの
     変更は行わない。"""
 
-    def test_already_forced_serial_is_noop(self):
+    def test_already_forced_serial_is_noop(self, tmp_path):
         active = _active(forced_serial=True)
         decision = _decide_footprint_deviation_outcome(
-            active, ["src/foo.py"], {}, DispatcherConfig()
+            active,
+            ["src/foo.py"],
+            {},
+            DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
+            ),
         )
         assert decision.action == "already_forced_serial"
 
-    def test_unknown_subtask_is_skipped(self):
+    def test_unknown_subtask_is_skipped(self, tmp_path):
         active = _active()
         decision = _decide_footprint_deviation_outcome(
-            active, ["src/foo.py"], {}, DispatcherConfig()
+            active,
+            ["src/foo.py"],
+            {},
+            DispatcherConfig(
+                events_log_path=tmp_path / "events.jsonl",
+            ),
         )
         assert decision.action == "skipped_unknown_subtask"
 
-    def test_retry_limit_exceeded_forces_serial(self):
+    def test_retry_limit_exceeded_forces_serial(self, tmp_path):
         active = _active(recompute_count=2)
         task = _task()
-        config = DispatcherConfig(max_recompute_retries=2)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", max_recompute_retries=2
+        )
         decision = _decide_footprint_deviation_outcome(
             active, ["src/foo.py"], {1: task}, config
         )
@@ -82,10 +90,12 @@ class TestDecideFootprintDeviationOutcome:
         # decide層はactive.forced_serialを書き換えない
         assert active.forced_serial is False
 
-    def test_under_retry_limit_recomputes(self):
+    def test_under_retry_limit_recomputes(self, tmp_path):
         active = _active(recompute_count=0)
         task = _task()
-        config = DispatcherConfig(max_recompute_retries=2)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", max_recompute_retries=2
+        )
         decision = _decide_footprint_deviation_outcome(
             active, ["src/bar.py"], {1: task}, config
         )
@@ -227,7 +237,7 @@ class TestDecideRebaseNeeded:
 
 
 class TestTryAutoRebase:
-    def test_rebase_not_needed_returns_false(self):
+    def test_rebase_not_needed_returns_false(self, tmp_path):
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
@@ -237,6 +247,7 @@ class TestTryAutoRebase:
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
@@ -262,7 +273,7 @@ class TestTryAutoRebase:
         assert result is False
         mock_apply.assert_not_called()
 
-    def test_rebase_needed_returns_true(self):
+    def test_rebase_needed_returns_true(self, tmp_path):
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
@@ -272,6 +283,7 @@ class TestTryAutoRebase:
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
         )
