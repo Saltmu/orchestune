@@ -20,7 +20,12 @@ from pathlib import Path
 import yaml
 
 from orchestune.dag_graph import build_dag
-from orchestune.dag_models import SubTask
+from orchestune.dag_models import (
+    SubTask,
+    compile_extra_ignore_patterns,
+    extract_dag_ignore_patterns,
+    load_orchestune_config,
+)
 from orchestune.dag_parsing import (
     extract_frontmatter_and_body,
     parse_decomposition_plan,
@@ -315,7 +320,13 @@ def provision_issues(
     codebase (#359); a mismatch appends a warning to the rendered Issue body
     rather than blocking provisioning, since the check can't tell a stale
     `symbols` list apart from a footprint file that legitimately doesn't
-    exist yet.
+    exist yet. It's also where `orchestune.toml`/`pyproject.toml`'s
+    `dag_ignore_patterns` is read from (#398/#404): without it, a
+    similarity edge the setting was meant to suppress could still form
+    here, changing the Issue-creation order (`dag.topological_order`) from
+    what `orchestune-dag --plan ...` validated, or — if that edge only
+    closes a cycle together with an explicit dependency — raise an
+    unresolvable `DagCycleError` that validation didn't predict.
     """
     resolved_repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
     subtasks, metadata = _load_plan(plan_path)
@@ -324,7 +335,10 @@ def provision_issues(
             "decomposition_plan.md に必須の 'title' フィールドがありません"
         )
 
-    dag = build_dag(subtasks)
+    ignore_patterns = compile_extra_ignore_patterns(
+        extract_dag_ignore_patterns(load_orchestune_config(resolved_repo_root))
+    )
+    dag = build_dag(subtasks, ignore_patterns=ignore_patterns)
     template = Path(template_path).read_text(encoding="utf-8")
     _validate_template_identity_marker(template, template_path)
 
@@ -493,8 +507,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
 
     try:
+        # footprintおよびorchestune.toml/[tool.orchestune]はリポジトリルート
+        # からの相対パスとして定義されているため、呼び出し元のcwdではなく
+        # --planファイル自身の位置を基点にする（dag_cli.pyと同じ規約。#404）。
+        # これにより、`orchestune-dag --plan ...`が検証した設定
+        # （dag_ignore_patterns等）と同じファイルを`orchestune-provision`も読む。
+        repo_root = Path(args.plan).resolve().parent
         result = provision_issues(
-            args.plan, apply=args.apply, template_path=args.template
+            args.plan,
+            apply=args.apply,
+            template_path=args.template,
+            repo_root=repo_root,
         )
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)

@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.dag_graph import build_dag_from_plan
+from orchestune.dag_models import (
+    compile_extra_ignore_patterns,
+    extract_dag_ignore_patterns,
+    load_orchestune_config,
+)
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -20,7 +26,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the decomposition plan markdown file (default: decomposition_plan.md)",
     )
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Similarity edge threshold (default: "
+        f"{DEFAULT_SIMILARITY_THRESHOLD}, i.e. orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD)",
+    )
     return parser
+
+
+def _load_dag_ignore_patterns_config(repo_root: Path) -> list[str]:
+    """Load extra footprint ignore patterns for `repo_root`.
+
+    Looks up `orchestune.toml` (top-level `dag_ignore_patterns` key) first,
+    falling back to `pyproject.toml`'s `[tool.orchestune]` table. Missing
+    files/keys are not an error: an empty list keeps default behavior.
+    """
+    return extract_dag_ignore_patterns(load_orchestune_config(repo_root))
 
 
 def _print_text_result(dag: dict[str, Any]) -> None:
@@ -57,7 +80,27 @@ def main(argv: Sequence[str] | None = None) -> None:
         # （cwdが--planの置き場所と異なる場合、実在するファイルまで
         # 「見つからない」と誤検出してしまうため）。
         repo_root = Path(args.plan).resolve().parent
-        dag = build_dag_from_plan(args.plan, repo_root=repo_root)
+        extra_ignore_patterns = compile_extra_ignore_patterns(
+            _load_dag_ignore_patterns_config(repo_root)
+        )
+        threshold = (
+            args.threshold
+            if args.threshold is not None
+            else DEFAULT_SIMILARITY_THRESHOLD
+        )
+        # 類似度スコア（重み付きOtsuka-Ochiai係数）は[0, 1]の範囲に収まるため、
+        # 域外の値（NaN/Inf/範囲外の有限値）は全エッジが黙って抑制される
+        # だけの無意味な指定になる。明示的にエラーとして拒否する。
+        if not (0 <= threshold <= 1):
+            raise ValueError(
+                f"--threshold must be within [0, 1] (a similarity score), got {threshold}"
+            )
+        dag = build_dag_from_plan(
+            args.plan,
+            threshold=threshold,
+            repo_root=repo_root,
+            ignore_patterns=extra_ignore_patterns,
+        )
         if args.json:
             print(json.dumps(dag, indent=2))
         else:

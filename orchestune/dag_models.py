@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import posixpath
 import re
+import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)pyproject\.toml$"),
@@ -15,6 +18,80 @@ _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)config\.py$"),
     re.compile(r"(^|/)settings\.py$"),
 )
+
+
+def compile_extra_ignore_patterns(
+    patterns: Iterable[str],
+) -> tuple[re.Pattern[str], ...]:
+    """Compile user-supplied regex strings for use as extra ignore patterns.
+
+    Raises re.error if any pattern is not a valid regular expression.
+    """
+    return tuple(re.compile(pattern) for pattern in patterns)
+
+
+def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
+    """Validate and return the `dag_ignore_patterns` list from a loaded config dict.
+
+    Shared by orchestune-dag (dag_cli.py) and orchestune-dispatch
+    (dispatcher.py), which may both read this setting from the same
+    orchestune.toml / pyproject.toml `[tool.orchestune]` table.
+
+    Every other dispatcher setting in that file is written with hyphens
+    (e.g. `max-concurrent`) and normalized internally, so `dag-ignore-patterns`
+    is accepted as an alias for `dag_ignore_patterns` to avoid a silently
+    no-op config for users following that convention (#404 review).
+    """
+    patterns = config.get("dag_ignore_patterns")
+    if patterns is None:
+        patterns = config.get("dag-ignore-patterns", [])
+    # 空文字列はre.compile("")で有効な正規表現になり、あらゆるパスに
+    # マッチしてしまう（=全ての類似度エッジが無診断で消える）ため、
+    # 文字列であることに加えて空でないことも検証する（#404レビュー指摘）。
+    if not isinstance(patterns, list) or not all(
+        isinstance(p, str) and p for p in patterns
+    ):
+        raise ValueError(
+            "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of "
+            "non-empty strings"
+        )
+    return patterns
+
+
+def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
+    """Load the orchestune.toml / pyproject.toml `[tool.orchestune]` config table.
+
+    Checks `<repo_root>/orchestune.toml` first (its entire top level is the
+    config table); falls back to `<repo_root>/pyproject.toml`'s
+    `[tool.orchestune]` table. Missing files return an empty dict.
+
+    Shared by orchestune-dag (dag_cli.py), orchestune-dispatch
+    (dispatcher.py), and orchestune-provision (provisioning.py) so all three
+    agree on the same discovery order and error semantics (#404 review).
+    """
+    repo_root = Path(repo_root)
+
+    orchestune_toml = repo_root / "orchestune.toml"
+    if orchestune_toml.exists():
+        try:
+            with open(orchestune_toml, "rb") as f:
+                return cast(dict[str, Any], tomllib.load(f))
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
+
+    pyproject_toml = repo_root / "pyproject.toml"
+    if pyproject_toml.exists():
+        try:
+            with open(pyproject_toml, "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
+        config = data.get("tool", {}).get("orchestune", {})
+        if not isinstance(config, dict):
+            raise ValueError(f"{pyproject_toml}: [tool.orchestune] must be a table")
+        return cast(dict[str, Any], config)
+
+    return {}
 
 
 def normalize_footprint_path(path: str) -> str:
@@ -50,9 +127,14 @@ def normalize_footprint_path(path: str) -> str:
     return normalized
 
 
-def is_ignored_footprint(path: str) -> bool:
+def is_ignored_footprint(
+    path: str, extra_patterns: Iterable[re.Pattern[str]] = ()
+) -> bool:
     normalized = normalize_footprint_path(path)
-    return any(pattern.search(normalized) for pattern in _IGNORED_FOOTPRINT_PATTERNS)
+    return any(
+        pattern.search(normalized)
+        for pattern in (*_IGNORED_FOOTPRINT_PATTERNS, *extra_patterns)
+    )
 
 
 class DagCycleError(ValueError):
@@ -81,9 +163,17 @@ class SubTask:
         normalized = tuple(normalize_footprint_path(p) for p in self.footprint)
         object.__setattr__(self, "footprint", normalized)
 
-    def touch_set(self) -> frozenset[str]:
+    def touch_set(
+        self, extra_ignored_patterns: Iterable[re.Pattern[str]] = ()
+    ) -> frozenset[str]:
+        # is_ignored_footprintをself.footprintの各パスに対して複数回呼ぶため、
+        # ジェネレータ等の使い捨てiterableが渡されると2件目以降が空になる問題を
+        # 避けてtupleへ実体化する。
+        extra_ignored_patterns = tuple(extra_ignored_patterns)
         footprint = frozenset(
-            path for path in self.footprint if not is_ignored_footprint(path)
+            path
+            for path in self.footprint
+            if not is_ignored_footprint(path, extra_ignored_patterns)
         )
         return footprint | frozenset(self.symbols)
 
