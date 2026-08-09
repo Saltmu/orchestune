@@ -19,6 +19,16 @@ def _create_skill_link(src_skill: Path, dest_skill: Path) -> str:
     return "copied"
 
 
+def _package_relative_skills_dirs() -> list[Path]:
+    """Candidate `skills/` directories relative to the installed package.
+
+    Tried, in order, as a fallback when no ancestor of `cwd` has a usable
+    project-local `skills/` tree.
+    """
+    pkg_dir = Path(__file__).resolve().parent
+    return [pkg_dir / "skills", pkg_dir.parent / "skills"]
+
+
 def get_skills_source_dir() -> Path:
     cwd = Path.cwd()
     for parent in [cwd] + list(cwd.parents):
@@ -26,14 +36,9 @@ def get_skills_source_dir() -> Path:
         if skills_dir.is_dir() and (skills_dir / "orchestune").is_dir():
             return skills_dir
 
-    pkg_dir = Path(__file__).resolve().parent
-    pkg_skills_dir = pkg_dir / "skills"
-    if pkg_skills_dir.is_dir() and (pkg_skills_dir / "orchestune").is_dir():
-        return pkg_skills_dir
-
-    parent_skills_dir = pkg_dir.parent / "skills"
-    if parent_skills_dir.is_dir() and (parent_skills_dir / "orchestune").is_dir():
-        return parent_skills_dir
+    for candidate in _package_relative_skills_dirs():
+        if candidate.is_dir() and (candidate / "orchestune").is_dir():
+            return candidate
 
     raise FileNotFoundError(
         "Could not locate the 'skills' directory. "
@@ -228,11 +233,28 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
     if with_workflow_skill:
         src_workflow_skill = skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
         if not src_workflow_skill.is_dir():
+            # `skills_dir` may be a project-local tree that has 'orchestune'
+            # but not 'workflow-template' (e.g. a partial vendor copy). Fall
+            # back to the installed package's own skills/ before giving up,
+            # so a pipx install still finds the template it ships with.
+            fallback = next(
+                (
+                    candidate / WORKFLOW_TEMPLATE_SKILL_NAME
+                    for candidate in _package_relative_skills_dirs()
+                    if (candidate / WORKFLOW_TEMPLATE_SKILL_NAME).is_dir()
+                ),
+                None,
+            )
+            if fallback is not None:
+                src_workflow_skill = fallback
+
+        if not src_workflow_skill.is_dir():
             print(
-                f"  Warning: workflow template skill source not found in {skills_dir}, "
-                "skipping --with-workflow-skill.",
+                f"  Error: workflow template skill source not found in {skills_dir}, "
+                "cannot fulfill --with-workflow-skill.",
                 file=sys.stderr,
             )
+            failure_count += 1
         else:
             project_dir = Path.cwd()
             project_skill_dirs = {
@@ -258,7 +280,7 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
                 else:
                     failure_count += 1
 
-    if not assistants_detected:
+    if not assistants_detected and failure_count == 0:
         print(
             "\nNo supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory."
         )

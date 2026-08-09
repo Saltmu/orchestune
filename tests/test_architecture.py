@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from collections import defaultdict
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 TESTS_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).parents[1]
+SKILLS_ROOT = REPO_ROOT / "skills"
 DOCS_ROOT = Path(__file__).parents[1] / "docs"
 DOC_LANGUAGES = ("en", "ja")
+# `local-ci-developer` documents this repo's own dev workflow (TDD/local CI
+# rules) and is deliberately never linked into other projects by
+# `setup_skills` (see `SKILLS_EXCLUDED_FROM_SETUP`), so it has no reason to
+# ship in the distributed package either.
+PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
 PACKAGE_NAME = "orchestune"
 L4_MODULES = frozenset(
     {"cli", "dispatcher", "dag_cli", "monitor", "bootstrap", "provisioning"}
@@ -530,6 +538,35 @@ def test_documented_subprocess_partition_matches_the_enforced_one() -> None:
     }
     for lang in DOC_LANGUAGES:
         assert _documented_subprocess_partition(lang) == expected, lang
+
+
+def _pyproject_included_skill_paths() -> set[str]:
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    return {
+        entry["path"]
+        for entry in pyproject["tool"]["poetry"]["include"]
+        if entry["path"].startswith("skills/")
+    }
+
+
+def _distributable_skill_dirs() -> set[str]:
+    return {
+        f"skills/{d.name}"
+        for d in SKILLS_ROOT.iterdir()
+        if d.is_dir()
+        and (d / "SKILL.md").is_file()
+        and d.name not in PACKAGING_EXCLUDED_SKILLS
+    }
+
+
+def test_pyproject_include_lists_every_distributable_skill() -> None:
+    """#408: a skill missing from `[tool.poetry].include` is silently absent
+    from the built wheel/sdist, so `setup_skills(with_workflow_skill=True)`
+    finds no source to copy under a pipx-style install even though the repo
+    checkout has it under `skills/`."""
+    assert _pyproject_included_skill_paths() == _distributable_skill_dirs()
 
 
 def test_package_root_declares_a_public_api_without_entrypoints() -> None:

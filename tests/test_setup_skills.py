@@ -307,9 +307,11 @@ def test_setup_skills_with_workflow_skill_idempotent_when_already_present(
     assert "Skipped" in captured.out
 
 
-def test_setup_skills_with_workflow_skill_missing_source_warns(tmp_path, capsys):
-    """#394: パッケージ側にworkflow-templateが同梱されていない場合でも
-    クラッシュせず警告のみで継続する。"""
+def test_setup_skills_with_workflow_skill_missing_source_fails(tmp_path, capsys):
+    """#408: workflow-templateがプロジェクトローカルにも、パッケージ相対の
+    フォールバック先にも見つからない場合、クラッシュはしないが、
+    --with-workflow-skill単体の失敗として非ゼロ終了コードを返す
+    （他のスキルが成功していても、静かにexit 0にはしない）。"""
     from orchestune.setup_skills import setup_skills
 
     mock_home = tmp_path / "home"
@@ -324,15 +326,23 @@ def test_setup_skills_with_workflow_skill_missing_source_warns(tmp_path, capsys)
     (skills_dir / "orchestune" / "SKILL.md").touch()
     # workflow-templateディレクトリを作成しない
 
+    # パッケージ相対のフォールバック先（#413レビュー対応）にも存在しないことを
+    # 保証するため、__file__を無関係な場所へ差し替える。
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
     with (
         patch("pathlib.Path.home", return_value=mock_home),
         patch("pathlib.Path.cwd", return_value=mock_source),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
     ):
         exit_code = setup_skills(with_workflow_skill=True)
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "Warning" in captured.err
+    assert exit_code == 1
+    assert "Error" in captured.err
+    assert "--with-workflow-skill" in captured.err
     assert not (mock_source / ".claude" / "skills" / "workflow-template").exists()
 
 
@@ -498,6 +508,93 @@ def test_setup_skills_partial_failure_returns_1_with_summary(tmp_path, capsys):
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "Setup completed with" in captured.out
+
+
+def test_setup_skills_with_workflow_skill_falls_back_to_packaged_source(
+    tmp_path, capsys
+):
+    """PR #413 review: `get_skills_source_dir()` can select a project-local
+    `skills/` tree that has `orchestune` but not `workflow-template` (e.g. a
+    partial vendor copy) before ever considering the installed package. In
+    that case `--with-workflow-skill` must still find the packaged template
+    instead of failing outright."""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    # cwd's ancestor skills dir: has 'orchestune' but NOT 'workflow-template'.
+    mock_cwd = tmp_path / "project"
+    mock_cwd.mkdir()
+    project_skills_dir = mock_cwd / "skills"
+    project_skills_dir.mkdir()
+    (project_skills_dir / "orchestune").mkdir()
+    (project_skills_dir / "orchestune" / "SKILL.md").touch()
+
+    # Simulated installed package location, with 'workflow-template' present
+    # (as a pipx install has after the #408 packaging fix).
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+    pkg_skills_dir = fake_pkg_file.parent / "skills"
+    pkg_skills_dir.mkdir()
+    (pkg_skills_dir / "workflow-template").mkdir()
+    (pkg_skills_dir / "workflow-template" / "SKILL.md").write_text(
+        "template contents", encoding="utf-8"
+    )
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_cwd),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err
+    target = mock_cwd / ".claude" / "skills" / "workflow-template"
+    assert target.is_dir()
+    assert (target / "SKILL.md").read_text(encoding="utf-8") == "template contents"
+
+
+def test_setup_skills_with_workflow_skill_missing_source_fails_even_with_no_assistants(
+    tmp_path, capsys
+):
+    """PR #413 review: --with-workflow-skillのテンプレートソースが完全に
+    見つからず、かつサポート対象アシスタントのホームディレクトリも一つも
+    存在しない場合でも、"No supported AI assistants detected"の早期リターン
+    (exit 0)に隠れて、既に出力済みのErrorと矛盾する成功終了コードを
+    返してはならない。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    # .claude/.codex/.geminiのいずれも作成しない
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    # workflow-templateディレクトリを作成しない
+
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Error" in captured.err
+    assert "--with-workflow-skill" in captured.err
 
 
 def test_get_skills_source_dir_not_found(tmp_path):
