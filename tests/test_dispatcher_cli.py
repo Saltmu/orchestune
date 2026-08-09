@@ -384,6 +384,32 @@ class TestDispatcherConfigLoading:
         assert config_arg.dag_ignore_patterns[0].search("src/package.json")
         assert config_arg.dag_ignore_patterns[0].search("other.json") is None
 
+    def test_hyphenated_dag_ignore_patterns_key_is_also_honored(self, tmp_path):
+        """#404レビュー指摘の再現・回帰防止: この設定ファイルの他のキーは
+        全てハイフン区切り（max-concurrent等）のため、その慣習に沿って
+        `dag-ignore-patterns`と書いた場合もサイレントに無視されず、
+        `dag_ignore_patterns`と同様に効くこと。"""
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n"
+            "events-log-path = 'custom_events.jsonl'\n"
+            'dag-ignore-patterns = ["(^|/)package.json$"]\n',
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        config_arg = mock_run.call_args.args[0]
+        assert len(config_arg.dag_ignore_patterns) == 1
+        assert config_arg.dag_ignore_patterns[0].search("package.json")
+
     def test_invalid_dag_ignore_patterns_in_config_is_reported_as_error(
         self, tmp_path, capsys
     ):

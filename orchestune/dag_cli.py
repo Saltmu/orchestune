@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from orchestune.dag_graph import build_dag_from_plan
 from orchestune.dag_models import (
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
+    load_orchestune_config,
 )
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 
@@ -43,27 +43,7 @@ def _load_dag_ignore_patterns_config(repo_root: Path) -> list[str]:
     falling back to `pyproject.toml`'s `[tool.orchestune]` table. Missing
     files/keys are not an error: an empty list keeps default behavior.
     """
-    orchestune_toml = repo_root / "orchestune.toml"
-    if orchestune_toml.exists():
-        try:
-            with open(orchestune_toml, "rb") as f:
-                config: dict[str, Any] = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
-    else:
-        pyproject_toml = repo_root / "pyproject.toml"
-        if not pyproject_toml.exists():
-            return []
-        try:
-            with open(pyproject_toml, "rb") as f:
-                data = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
-        config = data.get("tool", {}).get("orchestune", {})
-        if not isinstance(config, dict):
-            raise ValueError(f"{pyproject_toml}: [tool.orchestune] must be a table")
-
-    return extract_dag_ignore_patterns(config)
+    return extract_dag_ignore_patterns(load_orchestune_config(repo_root))
 
 
 def _print_text_result(dag: dict[str, Any]) -> None:

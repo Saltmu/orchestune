@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import posixpath
 import re
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)pyproject\.toml$"),
@@ -34,11 +36,56 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     Shared by orchestune-dag (dag_cli.py) and orchestune-dispatch
     (dispatcher.py), which may both read this setting from the same
     orchestune.toml / pyproject.toml `[tool.orchestune]` table.
+
+    Every other dispatcher setting in that file is written with hyphens
+    (e.g. `max-concurrent`) and normalized internally, so `dag-ignore-patterns`
+    is accepted as an alias for `dag_ignore_patterns` to avoid a silently
+    no-op config for users following that convention (#404 review).
     """
-    patterns = config.get("dag_ignore_patterns", [])
+    patterns = config.get("dag_ignore_patterns")
+    if patterns is None:
+        patterns = config.get("dag-ignore-patterns", [])
     if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
-        raise ValueError("'dag_ignore_patterns' must be a list of strings")
+        raise ValueError(
+            "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of strings"
+        )
     return patterns
+
+
+def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
+    """Load the orchestune.toml / pyproject.toml `[tool.orchestune]` config table.
+
+    Checks `<repo_root>/orchestune.toml` first (its entire top level is the
+    config table); falls back to `<repo_root>/pyproject.toml`'s
+    `[tool.orchestune]` table. Missing files return an empty dict.
+
+    Shared by orchestune-dag (dag_cli.py), orchestune-dispatch
+    (dispatcher.py), and orchestune-provision (provisioning.py) so all three
+    agree on the same discovery order and error semantics (#404 review).
+    """
+    repo_root = Path(repo_root)
+
+    orchestune_toml = repo_root / "orchestune.toml"
+    if orchestune_toml.exists():
+        try:
+            with open(orchestune_toml, "rb") as f:
+                return cast(dict[str, Any], tomllib.load(f))
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
+
+    pyproject_toml = repo_root / "pyproject.toml"
+    if pyproject_toml.exists():
+        try:
+            with open(pyproject_toml, "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
+        config = data.get("tool", {}).get("orchestune", {})
+        if not isinstance(config, dict):
+            raise ValueError(f"{pyproject_toml}: [tool.orchestune] must be a table")
+        return cast(dict[str, Any], config)
+
+    return {}
 
 
 def normalize_footprint_path(path: str) -> str:

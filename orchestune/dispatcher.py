@@ -6,13 +6,13 @@ import os
 import re
 import shlex
 import sys
-import tomllib
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
 
 from orchestune.dag_models import (
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
+    load_orchestune_config,
 )
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
@@ -162,33 +162,15 @@ def load_config_file(cwd: Path | None = None) -> dict[str, Any]:
     Configuration syntax errors are deliberately fatal to the caller: falling
     through to another file or to CLI defaults would make a misspelled setting
     look like a successful dispatch.
+
+    Delegates the actual orchestune.toml/pyproject.toml discovery to
+    `dag_models.load_orchestune_config`, shared with orchestune-dag
+    (dag_cli.py) and orchestune-provision (provisioning.py) so all three
+    agree on the same discovery order and error semantics (#404 review).
     """
     if cwd is None:
         cwd = Path.cwd()
-
-    orchestune_toml = cwd / "orchestune.toml"
-    if orchestune_toml.exists():
-        try:
-            with open(orchestune_toml, "rb") as f:
-                return cast(dict[str, Any], tomllib.load(f))
-        except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
-
-    pyproject_toml = cwd / "pyproject.toml"
-    if pyproject_toml.exists():
-        try:
-            with open(pyproject_toml, "rb") as f:
-                data = tomllib.load(f)
-                config = data.get("tool", {}).get("orchestune", {})
-                if not isinstance(config, dict):
-                    raise ValueError(
-                        f"{pyproject_toml}: [tool.orchestune] must be a table"
-                    )
-                return cast(dict[str, Any], config)
-        except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
-
-    return {}
+    return load_orchestune_config(cwd)
 
 
 def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:

@@ -7,6 +7,7 @@ import textwrap
 import pytest
 
 from orchestune.dag_cli import main
+from orchestune.dag_models import extract_dag_ignore_patterns, load_orchestune_config
 
 
 def _write_plan(path, content: str) -> None:
@@ -256,3 +257,80 @@ class TestIgnorePatternsConfig:
 
         captured = capsys.readouterr()
         assert "Error:" in captured.err
+
+
+class TestExtractDagIgnorePatterns:
+    def test_missing_key_returns_empty_list(self):
+        assert extract_dag_ignore_patterns({}) == []
+
+    def test_underscore_key_is_read(self):
+        config = {"dag_ignore_patterns": [r"(^|/)package\.json$"]}
+        assert extract_dag_ignore_patterns(config) == [r"(^|/)package\.json$"]
+
+    def test_hyphenated_key_is_accepted_as_alias(self):
+        # #404レビュー指摘: この設定ファイルの他のキーは全てハイフン区切り
+        # （max-concurrent等）のため、dag-ignore-patternsと書いても
+        # サイレントに無視されず機能すること
+        config = {"dag-ignore-patterns": [r"(^|/)package\.json$"]}
+        assert extract_dag_ignore_patterns(config) == [r"(^|/)package\.json$"]
+
+    def test_underscore_key_takes_precedence_over_hyphenated(self):
+        config = {
+            "dag_ignore_patterns": ["underscore"],
+            "dag-ignore-patterns": ["hyphenated"],
+        }
+        assert extract_dag_ignore_patterns(config) == ["underscore"]
+
+    def test_non_list_value_raises_value_error(self):
+        with pytest.raises(ValueError, match="dag_ignore_patterns"):
+            extract_dag_ignore_patterns({"dag_ignore_patterns": "not-a-list"})
+
+    def test_non_string_element_raises_value_error(self):
+        with pytest.raises(ValueError, match="dag_ignore_patterns"):
+            extract_dag_ignore_patterns({"dag_ignore_patterns": [123]})
+
+
+class TestLoadOrchestuneConfig:
+    def test_missing_files_return_empty_dict(self, tmp_path):
+        assert load_orchestune_config(tmp_path) == {}
+
+    def test_reads_orchestune_toml_top_level(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            'dag_ignore_patterns = ["a.json"]\nmax-concurrent = 5\n',
+            encoding="utf-8",
+        )
+        config = load_orchestune_config(tmp_path)
+        assert config == {"dag_ignore_patterns": ["a.json"], "max-concurrent": 5}
+
+    def test_falls_back_to_pyproject_toml_tool_orchestune_table(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.orchestune]\n" 'dag_ignore_patterns = ["a.json"]\n',
+            encoding="utf-8",
+        )
+        config = load_orchestune_config(tmp_path)
+        assert config == {"dag_ignore_patterns": ["a.json"]}
+
+    def test_orchestune_toml_takes_precedence_over_pyproject_toml(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            'dag_ignore_patterns = ["from-orchestune-toml"]\n', encoding="utf-8"
+        )
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.orchestune]\n" 'dag_ignore_patterns = ["from-pyproject-toml"]\n',
+            encoding="utf-8",
+        )
+        config = load_orchestune_config(tmp_path)
+        assert config == {"dag_ignore_patterns": ["from-orchestune-toml"]}
+
+    def test_invalid_orchestune_toml_raises_value_error(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            "not valid toml [[[", encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="orchestune.toml"):
+            load_orchestune_config(tmp_path)
+
+    def test_non_table_tool_orchestune_section_raises_value_error(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool]\norchestune = 1\n", encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="tool.orchestune"):
+            load_orchestune_config(tmp_path)

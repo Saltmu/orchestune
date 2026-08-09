@@ -923,6 +923,72 @@ class TestSymbolVerificationWarning:
         assert result.applied is True
 
 
+class TestDagIgnorePatterns:
+    """#398/#404: provision_issuesもorchestune-dagと同じdag_ignore_patternsを
+    尊重すること。3件のsubtaskで、無視されるべき共有ファイル
+    （package.json）だけが理由の類似度エッジが、他の明示的な依存関係と
+    組み合わさって疑似的な循環参照を作ってしまうケースで検証する
+    （task-c -> task-a -> task-b は明示的依存、task-b <-> task-c の
+    package.json共有だけが類似度エッジの原因）。"""
+
+    def _plan(self) -> str:
+        return (
+            "---\n"
+            'title: "Example big rock"\n'
+            "parent_issue_number: null\n"
+            "subtasks:\n"
+            "  - id: task-a\n"
+            '    description: "A"\n'
+            "    footprint: [src/a.py]\n"
+            "    depends_on: [task-c]\n"
+            "    issue_number: null\n"
+            "  - id: task-b\n"
+            '    description: "B"\n'
+            "    footprint: [package.json]\n"
+            "    depends_on: [task-a]\n"
+            "    issue_number: null\n"
+            "  - id: task-c\n"
+            '    description: "C"\n'
+            "    footprint: [package.json]\n"
+            "    depends_on: []\n"
+            "    issue_number: null\n"
+            "---\n"
+            "\n"
+            "# Decomposition Plan\n"
+        )
+
+    def test_without_ignore_pattern_phantom_similarity_edge_triggers_cycle_warning(
+        self, tmp_path: Path, template_path: Path, caplog
+    ):
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan(), encoding="utf-8")
+        forge = FakeForge()
+
+        with caplog.at_level("WARNING"):
+            provision_issues(
+                plan_path, forge=forge, template_path=template_path, repo_root=tmp_path
+            )
+
+        assert any("循環参照" in record.message for record in caplog.records)
+
+    def test_dag_ignore_patterns_prevents_phantom_cycle(
+        self, tmp_path: Path, template_path: Path, caplog
+    ):
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan(), encoding="utf-8")
+        (tmp_path / "orchestune.toml").write_text(
+            'dag_ignore_patterns = ["(^|/)package.json$"]\n', encoding="utf-8"
+        )
+        forge = FakeForge()
+
+        with caplog.at_level("WARNING"):
+            provision_issues(
+                plan_path, forge=forge, template_path=template_path, repo_root=tmp_path
+            )
+
+        assert not any("循環参照" in record.message for record in caplog.records)
+
+
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
         self, plan_path: Path, template_path: Path, capsys
