@@ -205,8 +205,14 @@ def _normalize_config_key(key: str) -> str:
     return normalized_key
 
 
-def _is_non_dispatcher_config_key(normalized_key: str) -> bool:
-    return normalized_key in _NON_DISPATCHER_CONFIG_KEYS
+def _is_non_dispatcher_config_key(raw_key: str) -> bool:
+    # #415レビュー再指摘: 正規化後（ハイフン→アンダースコア変換後）の
+    # キーではなく、config_dataの生のキー文字列と比較する。正規化後の
+    # キーで比較すると、`dag_similarity-threshold`のような区切り文字
+    # 混在のtypoまで正規のスペリングへ丸め込まれて"unknown key"検知を
+    # すり抜けてしまう（extract_*関数は生のキーでしか値を読まないため、
+    # その値は結局どこにも読み取られずサイレントに無視される）。
+    return raw_key in _NON_DISPATCHER_CONFIG_KEYS
 
 
 def _config_defaults(
@@ -232,9 +238,9 @@ def _config_defaults(
     defaults: dict[str, Any] = {}
 
     for key, value in config_data.items():
-        normalized_key = _normalize_config_key(key)
-        if _is_non_dispatcher_config_key(normalized_key):
+        if _is_non_dispatcher_config_key(key):
             continue
+        normalized_key = _normalize_config_key(key)
         action = actions.get(normalized_key)
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")

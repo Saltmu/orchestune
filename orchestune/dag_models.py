@@ -27,7 +27,23 @@ _IGNORED_FOOTPRINT_PATTERNS = (
 # のようなtypoまで黙って見逃してしまうため、完全一致リストのまま
 # 定義場所だけを一元化し、新しい共有DAGキーを追加するextract_*関数の
 # すぐ側に追記させることで手動追記漏れを防ぐ）。
-DAG_TOOL_CONFIG_KEYS = frozenset({"dag_ignore_patterns", "dag_similarity_threshold"})
+#
+# #415レビュー再指摘: dispatcher.pyはこのセットを、他の設定キーのような
+# ハイフン→アンダースコア正規化を経た後の名前とではなく、config_dataの
+# 生のキー文字列と直接比較する（正規化後に比較すると、`dag_similarity-
+# threshold`のような区切り文字混在のtypoまで正規のスペリングへ丸め込まれて
+# "unknown key"検知をすり抜けてしまい、しかもextract_*関数は生のキーでしか
+# 値を読まないため気づかれないまま黙って無視されてしまう）。そのため
+# ここには、extract_*関数が実際に受け付ける2つの正規のスペリング
+# （全部アンダースコア／全部ハイフン）を両方とも列挙する。
+DAG_TOOL_CONFIG_KEYS = frozenset(
+    {
+        "dag_ignore_patterns",
+        "dag-ignore-patterns",
+        "dag_similarity_threshold",
+        "dag-similarity-threshold",
+    }
+)
 
 
 def compile_extra_ignore_patterns(

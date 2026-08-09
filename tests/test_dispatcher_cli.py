@@ -268,6 +268,26 @@ class TestConfigDefaults:
         with pytest.raises(SystemExit):
             _config_defaults(parser, {"dag_ignore_pattern": ["a.py"]})
 
+    def test_mixed_separator_dag_key_is_still_rejected(self):
+        """#415レビュー再指摘: 区切り文字が混在したtypo（`dag_similarity-threshold`
+        や`dag-ignore_patterns`）は、`_normalize_config_key`のハイフン→
+        アンダースコア正規化を経ると許可リストの正確な表記
+        （`dag_similarity_threshold`/`dag_ignore_patterns`）に一致して
+        しまい、"unknown key"検知をすり抜けてしまう。しかも
+        `extract_dag_similarity_threshold`/`extract_dag_ignore_patterns`は
+        元のキー文字列（正規化前）でしか値を読まないため、この場合は
+        気づかれないまま値が一切読み取られずデフォルトへフォールバックする
+        （二重の見逃し）。混在表記は正規のスペリングでは無いため、
+        引き続き"unknown key"として拒否すること。"""
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"dag_similarity-threshold": 0.5})
+
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"dag-ignore_patterns": ["a.py"]})
+
     def test_unrelated_unknown_key_is_still_rejected(self):
         """`dag_ignore_patterns`の許容リストがdispatcher自身の設定の
         typo検知（意図的な仕様）を無効化しないこと。"""
