@@ -261,3 +261,59 @@ class TestDocsSharedContractConsistency:
         block = _schema_bullet_block(lang, "shared_contract")
         marker = "書き込む" if lang == "ja" else "write"
         assert marker in block
+
+
+# #393/#400で追加された`orchestune-dag`の実在検証warningの実際の文言
+# （`orchestune/dag_graph.py`の`_footprint_and_symbol_warnings`が出力する
+# 固定部分）。#409: `skills/orchestune/SKILL.md`のtriage手順がこの文言を
+# そのまま引用していることを検証し、実装の文言変更にドリフトしないようにする。
+_EXISTENCE_VERIFICATION_MESSAGES = (
+    "footprintに実在しないパスがあります",
+    "symbolsが実コードベースに見つかりません",
+)
+
+
+class TestSkillDocumentsExistenceVerificationTriage:
+    """#409: `orchestune-dag`の実在検証warning（#393/#400）の解釈手順が
+    `skills/orchestune/SKILL.md`のStage 2に記載されていることを検証する。"""
+
+    def _stage2_section(self) -> str:
+        skill_text = (REPO_ROOT / "skills" / "orchestune" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"^### Stage 2: Validate DAG.*?(?=^### |\Z)",
+            skill_text,
+            re.MULTILINE | re.DOTALL,
+        )
+        assert match, "SKILL.mdに'### Stage 2: Validate DAG'節が見つかりません"
+        return match.group(0)
+
+    def test_stage2_quotes_the_actual_warning_wording(self):
+        section = self._stage2_section()
+        for phrase in _EXISTENCE_VERIFICATION_MESSAGES:
+            assert (
+                phrase in section
+            ), f"Stage 2に実在検証warningの文言'{phrase}'がありません"
+
+
+class TestDocsExistenceVerificationConsistency:
+    """#409: Usageの「DAG Validation」節（## 3.）に実在検証warningの説明が
+    あることを検証する。"""
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_key_checks_section_mentions_existence_verification(self, lang):
+        section = _section(lang, 3)
+        marker = "実在" if lang == "ja" else "exist"
+        assert marker in section
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_key_checks_section_notes_multiple_warning_types_can_coexist(self, lang):
+        """複数種類のwarningが同一の`Warnings:`出力に混在しうることの明示。
+
+        既存の"File/Symbol Conflict"文言に'multiple'/'複数'という語が偶然
+        含まれるため、それらと衝突しないより具体的なマーカーで判定する。
+        """
+        section = _section(lang, 3)
+        marker = "同時に" if lang == "ja" else "at once"
+        assert marker in section

@@ -132,8 +132,10 @@ orchestune dag --plan decomposition_plan.md
 ```
 
 ### Key Checks & Warnings
+A single `Warnings:` output can combine more than one of the warning types below at once — check each entry against its own wording rather than assuming they're all the same kind.
 * **`DagCycleError`**: Raised if there is a circular dependency within `depends_on`.
 * **File/Symbol Conflict**: Warnings or errors are output if multiple subtasks overlap in `footprint` or `symbols` without a defined dependency order.
+* **Existence Verification (`footprint`/`symbols`)**: Warns when a declared `footprint` path or `symbols` entry cannot be confirmed to exist in the current codebase (e.g. `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`). This is not necessarily an error — a subtask that is about to create the path/symbol for the first time is expected to trigger it. See the [`orchestune` skill](../../skills/orchestune/SKILL.md)'s Stage 2 for the full triage guidance (typo/wrong path vs. a missed `footprint` declaration).
 * **Risk Flags**: Flags are set if potential security risks (credentials, subprocesses) are detected.
 
 ---
