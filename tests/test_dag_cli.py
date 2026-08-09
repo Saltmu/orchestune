@@ -258,6 +258,20 @@ class TestIgnorePatternsConfig:
         captured = capsys.readouterr()
         assert "Error:" in captured.err
 
+    def test_empty_string_ignore_pattern_is_reported_as_error(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+        (tmp_path / "orchestune.toml").write_text(
+            'dag_ignore_patterns = [""]\n',
+            encoding="utf-8",
+        )
+
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "non-empty" in captured.err
+
 
 class TestExtractDagIgnorePatterns:
     def test_missing_key_returns_empty_list(self):
@@ -288,6 +302,13 @@ class TestExtractDagIgnorePatterns:
     def test_non_string_element_raises_value_error(self):
         with pytest.raises(ValueError, match="dag_ignore_patterns"):
             extract_dag_ignore_patterns({"dag_ignore_patterns": [123]})
+
+    def test_empty_string_element_raises_value_error(self):
+        # #404レビュー指摘: 空文字列はre.compile("")で有効な正規表現になり
+        # あらゆるパスにマッチしてしまう（=全ての類似度エッジが無診断で
+        # 消える）ため、明示的に拒否する
+        with pytest.raises(ValueError, match="non-empty"):
+            extract_dag_ignore_patterns({"dag_ignore_patterns": [""]})
 
 
 class TestLoadOrchestuneConfig:

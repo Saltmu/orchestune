@@ -45,9 +45,15 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     patterns = config.get("dag_ignore_patterns")
     if patterns is None:
         patterns = config.get("dag-ignore-patterns", [])
-    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+    # 空文字列はre.compile("")で有効な正規表現になり、あらゆるパスに
+    # マッチしてしまう（=全ての類似度エッジが無診断で消える）ため、
+    # 文字列であることに加えて空でないことも検証する（#404レビュー指摘）。
+    if not isinstance(patterns, list) or not all(
+        isinstance(p, str) and p for p in patterns
+    ):
         raise ValueError(
-            "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of strings"
+            "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of "
+            "non-empty strings"
         )
     return patterns
 

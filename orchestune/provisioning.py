@@ -507,8 +507,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
 
     try:
+        # footprintおよびorchestune.toml/[tool.orchestune]はリポジトリルート
+        # からの相対パスとして定義されているため、呼び出し元のcwdではなく
+        # --planファイル自身の位置を基点にする（dag_cli.pyと同じ規約。#404）。
+        # これにより、`orchestune-dag --plan ...`が検証した設定
+        # （dag_ignore_patterns等）と同じファイルを`orchestune-provision`も読む。
+        repo_root = Path(args.plan).resolve().parent
         result = provision_issues(
-            args.plan, apply=args.apply, template_path=args.template
+            args.plan,
+            apply=args.apply,
+            template_path=args.template,
+            repo_root=repo_root,
         )
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)

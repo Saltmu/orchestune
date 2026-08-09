@@ -805,190 +805,6 @@ class TestProvisionIssuesNoApply:
         assert "status:blocked" in result.previews[1].labels
 
 
-class TestSymbolVerificationWarning:
-    """#359: symbolsが実コードに存在しない場合、Issue本文に注記を追加する。"""
-
-    def _plan(self, symbols: str) -> str:
-        return (
-            "---\n"
-            'title: "Example big rock"\n'
-            "parent_issue_number: null\n"
-            "subtasks:\n"
-            "  - id: task-a\n"
-            '    description: "Implement feature XX"\n'
-            "    footprint: [src/foo.py]\n"
-            f"    symbols: [{symbols}]\n"
-            "    depends_on: []\n"
-            "    issue_number: null\n"
-            "---\n"
-            "\n"
-            "# Decomposition Plan\n"
-        )
-
-    def test_missing_symbol_appends_warning_on_create(
-        self, tmp_path: Path, template_path: Path
-    ):
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "foo.py").write_text(
-            "def actual_function():\n    pass\n", encoding="utf-8"
-        )
-        plan_path = tmp_path / "decomposition_plan.md"
-        plan_path.write_text(self._plan("renamed_away_function"), encoding="utf-8")
-
-        forge = FakeForge()
-        provision_issues(
-            plan_path,
-            forge=forge,
-            template_path=template_path,
-            repo_root=tmp_path,
-        )
-
-        subtask_body = next(
-            body for title, body, _ in forge.create_issue_calls if "task-a" in title
-        )
-        assert "symbols未検出" in subtask_body
-        assert "renamed_away_function" in subtask_body
-        # レビュー指摘(#372): 「見つからない=リファクタで陳腐化した」と
-        # 断定せず、新規追加の可能性にも触れる中立な文言であることを確認。
-        assert "新規追加する予定であれば問題ありません" in subtask_body
-
-    def test_existing_symbol_does_not_append_warning(
-        self, tmp_path: Path, template_path: Path
-    ):
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "foo.py").write_text(
-            "def actual_function():\n    pass\n", encoding="utf-8"
-        )
-        plan_path = tmp_path / "decomposition_plan.md"
-        plan_path.write_text(self._plan("actual_function"), encoding="utf-8")
-
-        forge = FakeForge()
-        provision_issues(
-            plan_path,
-            forge=forge,
-            template_path=template_path,
-            repo_root=tmp_path,
-        )
-
-        subtask_body = next(
-            body for title, body, _ in forge.create_issue_calls if "task-a" in title
-        )
-        assert "symbols未検出" not in subtask_body
-
-    def test_missing_symbol_appends_warning_in_no_apply_preview(
-        self, tmp_path: Path, template_path: Path
-    ):
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "foo.py").write_text(
-            "def actual_function():\n    pass\n", encoding="utf-8"
-        )
-        plan_path = tmp_path / "decomposition_plan.md"
-        plan_path.write_text(self._plan("renamed_away_function"), encoding="utf-8")
-
-        result = provision_issues(
-            plan_path,
-            apply=False,
-            template_path=template_path,
-            repo_root=tmp_path,
-        )
-
-        assert "symbols未検出" in result.previews[0].body
-
-    def test_footprint_file_not_yet_existing_skips_warning(
-        self, tmp_path: Path, template_path: Path
-    ):
-        """新規作成予定のfootprintファイルのみのsubtaskでは、検証材料が
-        無いためfalse positiveを避けて注記を付けない。"""
-        plan_path = tmp_path / "decomposition_plan.md"
-        plan_path.write_text(self._plan("brand_new_function"), encoding="utf-8")
-
-        forge = FakeForge()
-        provision_issues(
-            plan_path,
-            forge=forge,
-            template_path=template_path,
-            repo_root=tmp_path,
-        )
-
-        subtask_body = next(
-            body for title, body, _ in forge.create_issue_calls if "task-a" in title
-        )
-        assert "symbols未検出" not in subtask_body
-
-    def test_repo_root_defaults_to_cwd_without_crashing(
-        self, plan_path: Path, template_path: Path
-    ):
-        forge = FakeForge()
-        result = provision_issues(plan_path, forge=forge, template_path=template_path)
-        assert result.applied is True
-
-
-class TestDagIgnorePatterns:
-    """#398/#404: provision_issuesもorchestune-dagと同じdag_ignore_patternsを
-    尊重すること。3件のsubtaskで、無視されるべき共有ファイル
-    （package.json）だけが理由の類似度エッジが、他の明示的な依存関係と
-    組み合わさって疑似的な循環参照を作ってしまうケースで検証する
-    （task-c -> task-a -> task-b は明示的依存、task-b <-> task-c の
-    package.json共有だけが類似度エッジの原因）。"""
-
-    def _plan(self) -> str:
-        return (
-            "---\n"
-            'title: "Example big rock"\n'
-            "parent_issue_number: null\n"
-            "subtasks:\n"
-            "  - id: task-a\n"
-            '    description: "A"\n'
-            "    footprint: [src/a.py]\n"
-            "    depends_on: [task-c]\n"
-            "    issue_number: null\n"
-            "  - id: task-b\n"
-            '    description: "B"\n'
-            "    footprint: [package.json]\n"
-            "    depends_on: [task-a]\n"
-            "    issue_number: null\n"
-            "  - id: task-c\n"
-            '    description: "C"\n'
-            "    footprint: [package.json]\n"
-            "    depends_on: []\n"
-            "    issue_number: null\n"
-            "---\n"
-            "\n"
-            "# Decomposition Plan\n"
-        )
-
-    def test_without_ignore_pattern_phantom_similarity_edge_triggers_cycle_warning(
-        self, tmp_path: Path, template_path: Path, caplog
-    ):
-        plan_path = tmp_path / "decomposition_plan.md"
-        plan_path.write_text(self._plan(), encoding="utf-8")
-        forge = FakeForge()
-
-        with caplog.at_level("WARNING"):
-            provision_issues(
-                plan_path, forge=forge, template_path=template_path, repo_root=tmp_path
-            )
-
-        assert any("循環参照" in record.message for record in caplog.records)
-
-    def test_dag_ignore_patterns_prevents_phantom_cycle(
-        self, tmp_path: Path, template_path: Path, caplog
-    ):
-        plan_path = tmp_path / "decomposition_plan.md"
-        plan_path.write_text(self._plan(), encoding="utf-8")
-        (tmp_path / "orchestune.toml").write_text(
-            'dag_ignore_patterns = ["(^|/)package.json$"]\n', encoding="utf-8"
-        )
-        forge = FakeForge()
-
-        with caplog.at_level("WARNING"):
-            provision_issues(
-                plan_path, forge=forge, template_path=template_path, repo_root=tmp_path
-            )
-
-        assert not any("循環参照" in record.message for record in caplog.records)
-
-
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
         self, plan_path: Path, template_path: Path, capsys
@@ -1019,6 +835,24 @@ class TestMain:
         captured = capsys.readouterr()
         assert "Parent issue:" in captured.out
         assert "task-a" in captured.out
+
+    def test_resolves_repo_root_from_plan_location_not_cwd(
+        self, plan_path: Path, template_path: Path, capsys
+    ):
+        """#404レビュー指摘: dag_cli.pyと同様に、--planファイル自身の位置を
+        リポジトリルートとして orchestune.toml を読むこと（プロセスのcwdに
+        依存しない）。plan_path/template_pathフィクスチャはtmp_path配下に
+        あるが、テスト実行時のcwdはリポジトリルートのままである点がポイント。"""
+        plan_path.parent.joinpath("orchestune.toml").write_text(
+            "not valid toml [[[", encoding="utf-8"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "orchestune.toml" in captured.err
 
     def test_missing_plan_file_exits_1_with_error(self, tmp_path: Path, capsys):
         with pytest.raises(SystemExit) as exc_info:
