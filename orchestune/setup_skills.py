@@ -229,10 +229,11 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
         src_workflow_skill = skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
         if not src_workflow_skill.is_dir():
             print(
-                f"  Warning: workflow template skill source not found in {skills_dir}, "
-                "skipping --with-workflow-skill.",
+                f"  Error: workflow template skill source not found in {skills_dir}, "
+                "cannot fulfill --with-workflow-skill.",
                 file=sys.stderr,
             )
+            failure_count += 1
         else:
             project_dir = Path.cwd()
             project_skill_dirs = {

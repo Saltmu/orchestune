@@ -307,9 +307,10 @@ def test_setup_skills_with_workflow_skill_idempotent_when_already_present(
     assert "Skipped" in captured.out
 
 
-def test_setup_skills_with_workflow_skill_missing_source_warns(tmp_path, capsys):
-    """#394: パッケージ側にworkflow-templateが同梱されていない場合でも
-    クラッシュせず警告のみで継続する。"""
+def test_setup_skills_with_workflow_skill_missing_source_fails(tmp_path, capsys):
+    """#408: パッケージ側にworkflow-templateが同梱されていない場合、クラッシュは
+    しないが、--with-workflow-skill単体の失敗として非ゼロ終了コードを返す
+    （他のスキルが成功していても、静かにexit 0にはしない）。"""
     from orchestune.setup_skills import setup_skills
 
     mock_home = tmp_path / "home"
@@ -331,8 +332,9 @@ def test_setup_skills_with_workflow_skill_missing_source_warns(tmp_path, capsys)
         exit_code = setup_skills(with_workflow_skill=True)
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "Warning" in captured.err
+    assert exit_code == 1
+    assert "Error" in captured.err
+    assert "--with-workflow-skill" in captured.err
     assert not (mock_source / ".claude" / "skills" / "workflow-template").exists()
 
 
