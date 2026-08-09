@@ -558,6 +558,45 @@ def test_setup_skills_with_workflow_skill_falls_back_to_packaged_source(
     assert (target / "SKILL.md").read_text(encoding="utf-8") == "template contents"
 
 
+def test_setup_skills_with_workflow_skill_missing_source_fails_even_with_no_assistants(
+    tmp_path, capsys
+):
+    """PR #413 review: --with-workflow-skillのテンプレートソースが完全に
+    見つからず、かつサポート対象アシスタントのホームディレクトリも一つも
+    存在しない場合でも、"No supported AI assistants detected"の早期リターン
+    (exit 0)に隠れて、既に出力済みのErrorと矛盾する成功終了コードを
+    返してはならない。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    # .claude/.codex/.geminiのいずれも作成しない
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+    # workflow-templateディレクトリを作成しない
+
+    fake_pkg_file = tmp_path / "site-packages" / "orchestune" / "setup_skills.py"
+    fake_pkg_file.parent.mkdir(parents=True)
+    fake_pkg_file.touch()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+        patch("orchestune.setup_skills.__file__", str(fake_pkg_file)),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Error" in captured.err
+    assert "--with-workflow-skill" in captured.err
+
+
 def test_get_skills_source_dir_not_found(tmp_path):
     import pytest
 

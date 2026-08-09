@@ -280,7 +280,7 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
                 else:
                     failure_count += 1
 
-    if not assistants_detected:
+    if not assistants_detected and failure_count == 0:
         print(
             "\nNo supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory."
         )
