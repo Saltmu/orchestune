@@ -27,9 +27,14 @@ Then install the local Git hooks so the local CI script (including the gitleaks 
 
 ## Running Tests
 
-Execute unit tests and coverage checks using `pytest`:
+Execute unit tests using `pytest`:
 ```bash
 poetry run pytest
+```
+
+Coverage instrumentation is intentionally left out of the default `pytest` run to keep the local dev loop fast. To check coverage, pass the flags explicitly (this is also what `local-ci.sh` runs):
+```bash
+poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
 ## Local CI Script

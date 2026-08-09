@@ -18,7 +18,7 @@ echo "[3/5] Checking types (mypy)..."
 poetry run mypy orchestune tests
 
 echo "[4/5] Running tests with coverage (pytest)..."
-poetry run pytest -n auto --cov=orchestune --cov-fail-under=90
+poetry run pytest -n auto --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 
 echo "[5/5] Scanning for secrets and local paths (gitleaks)..."
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
