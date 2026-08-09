@@ -140,6 +140,7 @@ def _run_semantic_integrator(
             apply=config.apply,
             forge=config.forge,
             ci_command=config.ci_command,
+            dag_ignore_patterns=config.dag_ignore_patterns,
         )
         if semantic_review_enabled and isinstance(
             config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget

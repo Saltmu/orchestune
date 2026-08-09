@@ -7,7 +7,11 @@ import textwrap
 import pytest
 
 from orchestune.dag_cli import main
-from orchestune.dag_models import extract_dag_ignore_patterns, load_orchestune_config
+from orchestune.dag_models import (
+    extract_dag_ignore_patterns,
+    extract_dag_similarity_threshold,
+    load_orchestune_config,
+)
 
 
 def _write_plan(path, content: str) -> None:
@@ -271,6 +275,135 @@ class TestIgnorePatternsConfig:
         captured = capsys.readouterr()
         assert "Error:" in captured.err
         assert "non-empty" in captured.err
+
+
+class TestSimilarityThresholdConfig:
+    """#407: `--threshold`未指定時、`dag_similarity_threshold`設定ファイルの
+    値が`DEFAULT_SIMILARITY_THRESHOLD`より優先されること。CLIフラグは
+    設定ファイルより常に優先される。"""
+
+    _PLAN = TestThresholdFlag._PLAN
+
+    def test_no_config_keeps_default_behavior(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+
+        data = _run_cli_json(["--plan", str(plan_path)], capsys)
+
+        assert data["edges"] == []
+
+    def test_config_threshold_lowers_effective_threshold(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+        (tmp_path / "orchestune.toml").write_text(
+            "dag_similarity_threshold = 0.1\n", encoding="utf-8"
+        )
+
+        data = _run_cli_json(["--plan", str(plan_path)], capsys)
+
+        assert {(e["source"], e["target"]) for e in data["edges"]} == {
+            ("task-a", "task-b")
+        }
+
+    def test_pyproject_toml_tool_orchestune_threshold(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+        (tmp_path / "pyproject.toml").write_text(
+            textwrap.dedent(
+                """\
+                [tool.orchestune]
+                dag_similarity_threshold = 0.1
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        data = _run_cli_json(["--plan", str(plan_path)], capsys)
+
+        assert {(e["source"], e["target"]) for e in data["edges"]} == {
+            ("task-a", "task-b")
+        }
+
+    def test_cli_flag_takes_precedence_over_config(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+        (tmp_path / "orchestune.toml").write_text(
+            "dag_similarity_threshold = 0.1\n", encoding="utf-8"
+        )
+
+        data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.99"], capsys)
+
+        assert data["edges"] == []
+
+    def test_invalid_threshold_type_is_reported_as_error(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+        (tmp_path / "orchestune.toml").write_text(
+            'dag_similarity_threshold = "not-a-number"\n', encoding="utf-8"
+        )
+
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "dag_similarity_threshold" in captured.err
+
+    def test_out_of_range_threshold_is_reported_as_error(self, tmp_path, capsys):
+        plan_path = tmp_path / "plan.md"
+        _write_plan(plan_path, self._PLAN)
+        (tmp_path / "orchestune.toml").write_text(
+            "dag_similarity_threshold = 2\n", encoding="utf-8"
+        )
+
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "[0, 1]" in captured.err
+
+
+class TestExtractDagSimilarityThreshold:
+    def test_missing_key_returns_none(self):
+        assert extract_dag_similarity_threshold({}) is None
+
+    def test_underscore_key_is_read(self):
+        assert (
+            extract_dag_similarity_threshold({"dag_similarity_threshold": 0.3}) == 0.3
+        )
+
+    def test_hyphenated_key_is_accepted_as_alias(self):
+        config = {"dag-similarity-threshold": 0.3}
+        assert extract_dag_similarity_threshold(config) == 0.3
+
+    def test_underscore_key_takes_precedence_over_hyphenated(self):
+        config = {
+            "dag_similarity_threshold": 0.1,
+            "dag-similarity-threshold": 0.9,
+        }
+        assert extract_dag_similarity_threshold(config) == 0.1
+
+    def test_integer_value_is_coerced_to_float(self):
+        assert extract_dag_similarity_threshold({"dag_similarity_threshold": 1}) == 1.0
+
+    def test_boolean_value_raises_value_error(self):
+        # #404のdag_ignore_patternsレビュー指摘と同様: bool は int のサブクラスの
+        # ため、isinstance(value, int)だけだとTrue/Falseが1.0/0.0としてすり抜ける
+        with pytest.raises(ValueError, match="dag_similarity_threshold"):
+            extract_dag_similarity_threshold({"dag_similarity_threshold": True})
+
+    def test_non_numeric_value_raises_value_error(self):
+        with pytest.raises(ValueError, match="dag_similarity_threshold"):
+            extract_dag_similarity_threshold({"dag_similarity_threshold": "0.5"})
+
+    def test_out_of_range_value_raises_value_error(self):
+        with pytest.raises(ValueError, match=r"\[0, 1\]"):
+            extract_dag_similarity_threshold({"dag_similarity_threshold": 1.5})
+
+    @pytest.mark.parametrize("boundary", [0, 1, 0.0, 1.0])
+    def test_boundary_values_are_accepted(self, boundary):
+        assert extract_dag_similarity_threshold(
+            {"dag_similarity_threshold": boundary}
+        ) == float(boundary)
 
 
 class TestExtractDagIgnorePatterns:

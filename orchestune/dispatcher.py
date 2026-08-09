@@ -178,11 +178,16 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
 
 
 # orchestune.toml / pyproject.toml の [tool.orchestune] は本来dispatcher専用の
-# 設定名前空間だが、orchestune-dag CLI（dag_cli.py）も同じファイル・セクションから
-# dag_ignore_patterns を読み込む（#398）。dispatcherの未知キー検知に巻き込まれて
-# `orchestune-dispatch` がクラッシュしないよう、他ツール由来と判明しているキーは
-# ここで明示的に無視する（dispatcher自身の設定としては使用しない）。
-_NON_DISPATCHER_CONFIG_KEYS = frozenset({"dag_ignore_patterns"})
+# 設定名前空間だが、orchestune-dag CLI（dag_cli.py）・orchestune-provision
+# （provisioning.py）も同じファイル・セクションから dag_ignore_patterns /
+# dag_similarity_threshold を読み込む（#398/#407）。dispatcherの未知キー検知に
+# 巻き込まれて `orchestune-dispatch` がクラッシュしないよう、他ツール由来と
+# 判明しているキーはここで無視する（dispatcher自身の設定としては使用しない）。
+# #407 レビュー: 完全一致の許可リストだと、他ツール専用キーが増えるたびに
+# 手動で追記する必要がある。dispatcher自身のCLIオプションに`dag_`で始まる
+# ものは無い（DAG関連ツール専用の名前空間として予約されている）ため、
+# prefixで一般的に判定する。
+_NON_DISPATCHER_CONFIG_KEY_PREFIXES = ("dag_",)
 
 
 def _normalize_config_key(key: str) -> str:
@@ -190,6 +195,10 @@ def _normalize_config_key(key: str) -> str:
     if normalized_key == "parent_issue_number":
         return "parent_issue"
     return normalized_key
+
+
+def _is_non_dispatcher_config_key(normalized_key: str) -> bool:
+    return normalized_key.startswith(_NON_DISPATCHER_CONFIG_KEY_PREFIXES)
 
 
 def _config_defaults(
@@ -216,7 +225,7 @@ def _config_defaults(
 
     for key, value in config_data.items():
         normalized_key = _normalize_config_key(key)
-        if normalized_key in _NON_DISPATCHER_CONFIG_KEYS:
+        if _is_non_dispatcher_config_key(normalized_key):
             continue
         action = actions.get(normalized_key)
         if action is None or normalized_key == "help":

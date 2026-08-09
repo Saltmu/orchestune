@@ -24,12 +24,14 @@ from orchestune.dag_models import (
     SubTask,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
+    extract_dag_similarity_threshold,
     load_orchestune_config,
 )
 from orchestune.dag_parsing import (
     extract_frontmatter_and_body,
     parse_decomposition_plan,
 )
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, PARENT_MARKER
 from orchestune.plan_writer import write_issue_numbers
@@ -335,10 +337,22 @@ def provision_issues(
             "decomposition_plan.md に必須の 'title' フィールドがありません"
         )
 
+    orchestune_config = load_orchestune_config(resolved_repo_root)
     ignore_patterns = compile_extra_ignore_patterns(
-        extract_dag_ignore_patterns(load_orchestune_config(resolved_repo_root))
+        extract_dag_ignore_patterns(orchestune_config)
     )
-    dag = build_dag(subtasks, ignore_patterns=ignore_patterns)
+    # #407: `orchestune-dag --threshold`で永続化された`dag_similarity_threshold`を
+    # 尊重する。そうしないと、`orchestune-dag`が意図的に消したエッジが既定閾値で
+    # 再計算されて復活し、Issue作成順（topological_order）が検証済みのプランと
+    # 食い違う、あるいは明示的な依存関係と組み合わさって偽のDagCycleErrorを
+    # 誘発しうる。
+    config_threshold = extract_dag_similarity_threshold(orchestune_config)
+    threshold = (
+        config_threshold
+        if config_threshold is not None
+        else DEFAULT_SIMILARITY_THRESHOLD
+    )
+    dag = build_dag(subtasks, ignore_patterns=ignore_patterns, threshold=threshold)
     template = Path(template_path).read_text(encoding="utf-8")
     _validate_template_identity_marker(template, template_path)
 

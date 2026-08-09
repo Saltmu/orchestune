@@ -58,6 +58,46 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     return patterns
 
 
+def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
+    """Validate and return the `dag_similarity_threshold` value from a loaded config dict.
+
+    Shared by orchestune-dag (dag_cli.py) and orchestune-provision
+    (provisioning.py, #407) so a threshold chosen via `orchestune-dag
+    --threshold` and persisted here is also honored by
+    `orchestune-provision`'s own DAG recomputation, instead of that tool
+    silently falling back to `DEFAULT_SIMILARITY_THRESHOLD` and producing a
+    different `topological_order`/edge set than what was validated.
+
+    Follows the same hyphen-alias convention as `dag_ignore_patterns`:
+    `dag-similarity-threshold` is accepted as an alias, and the
+    underscore form takes precedence when both are present.
+
+    Returns `None` when the key is absent, so callers fall back to their own
+    default (typically `DEFAULT_SIMILARITY_THRESHOLD`, or a `--threshold`
+    CLI flag when one takes precedence). Raises `ValueError` if present but
+    not a number, or outside the [0, 1] similarity-score range.
+    """
+    value = config.get("dag_similarity_threshold")
+    if value is None:
+        value = config.get("dag-similarity-threshold")
+    if value is None:
+        return None
+    # bool is an int subclass, so isinstance(value, int) alone would let
+    # True/False silently pass through as 1.0/0.0 (#404's dag_ignore_patterns
+    # review raised the same concern for its own type check).
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be a number"
+        )
+    threshold = float(value)
+    if not (0 <= threshold <= 1):
+        raise ValueError(
+            "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
+            f"within [0, 1] (a similarity score), got {threshold}"
+        )
+    return threshold
+
+
 def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
     """Load the orchestune.toml / pyproject.toml `[tool.orchestune]` config table.
 

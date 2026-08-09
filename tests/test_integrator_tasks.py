@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import re
+from unittest.mock import MagicMock, patch
 
 from orchestune.integrator_tasks import get_sorted_done_tasks
 from orchestune.models import IssueRecord
@@ -41,3 +42,42 @@ def test_sorts_done_tasks_using_injected_fake_forge():
 
     assert unparsable == []
     assert [task.subtask_id for task in sorted_done] == ["task-1"]
+
+
+def test_ignore_patterns_default_to_empty_tuple_when_unspecified():
+    """#407: `ignore_patterns`省略時は`build_dag`が空タプルで呼ばれる
+    （既定の挙動を変えない）。"""
+    done_issue = _done_issue(1, "task-1")
+    fake_forge = MagicMock()
+    fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
+        [done_issue] if label == "status:done" else []
+    )
+
+    with patch(
+        "orchestune.integrator_tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
+    ) as mock_build_dag:
+        get_sorted_done_tasks(None, forge=fake_forge)
+
+    mock_build_dag.assert_called_once()
+    assert mock_build_dag.call_args.kwargs.get("ignore_patterns", ()) == ()
+
+
+def test_ignore_patterns_are_forwarded_to_build_dag():
+    """#407: `orchestune-dag`向けの`dag_ignore_patterns`と同じく、
+    `get_sorted_done_tasks`に渡された`ignore_patterns`が`build_dag`へ
+    そのまま伝搬されること。無視されるべきfootprint衝突が明示的な依存関係と
+    組み合わさってDagCycleErrorを誘発する（#404と同様の）回帰を防ぐ。"""
+    done_issue = _done_issue(1, "task-1")
+    fake_forge = MagicMock()
+    fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
+        [done_issue] if label == "status:done" else []
+    )
+    patterns = (re.compile(r"(^|/)package\.json$"),)
+
+    with patch(
+        "orchestune.integrator_tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
+    ) as mock_build_dag:
+        get_sorted_done_tasks(None, forge=fake_forge, ignore_patterns=patterns)
+
+    mock_build_dag.assert_called_once()
+    assert mock_build_dag.call_args.kwargs.get("ignore_patterns") == patterns

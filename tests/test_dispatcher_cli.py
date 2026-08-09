@@ -220,6 +220,38 @@ class TestConfigDefaults:
         assert "dag_ignore_patterns" not in defaults
         assert defaults["max_concurrent"] == 3
 
+    def test_dag_similarity_threshold_key_is_ignored_not_rejected(self):
+        """#407: orchestune-dag/orchestune-provisionが同じ設定ファイルから
+        読む`dag_similarity_threshold`も、dag_ignore_patternsと同様に
+        dispatcher自身の引数ではないため"unknown key"にせず無視できること。
+        `_NON_DISPATCHER_CONFIG_KEYS`の完全一致リストへ個別に追記する方式
+        だと、こうした「他ツール専用の新規キー」が増えるたびに手動追記が
+        必要になる（Issue #407 項目3）。"""
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        defaults = _config_defaults(
+            parser,
+            {
+                "dag_similarity_threshold": 0.5,
+                "max-concurrent": 3,
+            },
+        )
+        assert "dag_similarity_threshold" not in defaults
+        assert defaults["max_concurrent"] == 3
+
+    def test_hyphenated_dag_similarity_threshold_key_is_also_ignored(self):
+        """`dag-similarity-threshold`エイリアス表記でも同様に無視されること。"""
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        defaults = _config_defaults(
+            parser,
+            {"dag-similarity-threshold": 0.5},
+        )
+        assert "dag_similarity_threshold" not in defaults
+        assert "dag-similarity-threshold" not in defaults
+
     def test_unrelated_unknown_key_is_still_rejected(self):
         """`dag_ignore_patterns`の許容リストがdispatcher自身の設定の
         typo検知（意図的な仕様）を無効化しないこと。"""
