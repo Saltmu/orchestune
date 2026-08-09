@@ -316,6 +316,15 @@ class TestSkillDocumentsExistenceVerificationTriage:
         section = self._stage2_section()
         assert "silently skipped" in section
 
+    def test_stage2_documents_that_one_unparseable_file_skips_the_whole_subtask(self):
+        """#414レビュー再指摘: footprintに既存の`.py`ファイルがあっても、
+        そのうち1件でもparseに失敗（構文/エンコーディングエラー）すれば
+        `any_file_unparseable`ガードによりsubtask全体でsymbols検証が
+        スキップされる（他の実在パースできる`.py`ファイルがあっても関係
+        ない）。この非自明な挙動が明記されていることを検証する。"""
+        section = self._stage2_section()
+        assert "unparseable" in section
+
 
 class TestDocsExistenceVerificationConsistency:
     """#409: Usageの「DAG Validation」節（## 3.）に実在検証warningの説明が
@@ -334,6 +343,14 @@ class TestDocsExistenceVerificationConsistency:
         """#414レビュー指摘: symbols検証が黙ってスキップされうることの明記。"""
         section = _section(lang, 3)
         marker = "スキップされ" if lang == "ja" else "silently skipped"
+        assert marker in section
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_key_checks_section_documents_the_unparseable_file_case(self, lang):
+        """#414レビュー再指摘: parse失敗ファイルが1件でもあれば
+        subtask全体でsymbols検証がスキップされることの明記。"""
+        section = _section(lang, 3)
+        marker = "parse失敗" if lang == "ja" else "unparseable"
         assert marker in section
 
     @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
