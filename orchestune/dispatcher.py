@@ -10,10 +10,13 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from orchestune.dag_models import (
+    DAG_TOOL_CONFIG_KEYS,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
+    extract_dag_similarity_threshold,
     load_orchestune_config,
 )
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_postcycle import (
@@ -182,12 +185,17 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
 # （provisioning.py）も同じファイル・セクションから dag_ignore_patterns /
 # dag_similarity_threshold を読み込む（#398/#407）。dispatcherの未知キー検知に
 # 巻き込まれて `orchestune-dispatch` がクラッシュしないよう、他ツール由来と
-# 判明しているキーはここで無視する（dispatcher自身の設定としては使用しない）。
-# #407 レビュー: 完全一致の許可リストだと、他ツール専用キーが増えるたびに
-# 手動で追記する必要がある。dispatcher自身のCLIオプションに`dag_`で始まる
-# ものは無い（DAG関連ツール専用の名前空間として予約されている）ため、
-# prefixで一般的に判定する。
-_NON_DISPATCHER_CONFIG_KEY_PREFIXES = ("dag_",)
+# 判明しているキーはここで無視する（dispatcher自身の設定としては使用しない値
+# としてargparseの未知キー検知をスキップするだけで、DispatcherConfigへの
+# 実際の反映はmain()が個別に行う）。
+#
+# #415レビュー指摘: `dag_`prefixによる無条件許可は、`dag_ignore_pattern`
+# （末尾のs脱落）のようなtypoまで黙って見逃してしまい、設定が効いていない
+# ことにユーザーが気づけなくなる。既知の共有DAGキー名（`dag_models.py`の
+# `DAG_TOOL_CONFIG_KEYS`、extract_*関数のすぐ側で一元管理）との完全一致で
+# のみ無視し、それ以外の`dag_`始まりキーは引き続き"unknown key"として
+# 拒否する。
+_NON_DISPATCHER_CONFIG_KEYS = DAG_TOOL_CONFIG_KEYS
 
 
 def _normalize_config_key(key: str) -> str:
@@ -198,7 +206,7 @@ def _normalize_config_key(key: str) -> str:
 
 
 def _is_non_dispatcher_config_key(normalized_key: str) -> bool:
-    return normalized_key.startswith(_NON_DISPATCHER_CONFIG_KEY_PREFIXES)
+    return normalized_key in _NON_DISPATCHER_CONFIG_KEYS
 
 
 def _config_defaults(
@@ -271,8 +279,14 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         dag_ignore_patterns = compile_extra_ignore_patterns(
             extract_dag_ignore_patterns(config_data)
         )
+        config_dag_similarity_threshold = extract_dag_similarity_threshold(config_data)
     except (ValueError, re.error) as e:
         _config_error(parser, str(e))
+    dag_similarity_threshold = (
+        config_dag_similarity_threshold
+        if config_dag_similarity_threshold is not None
+        else DEFAULT_SIMILARITY_THRESHOLD
+    )
 
     args = parser.parse_args(argv)
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
@@ -306,6 +320,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             not_needed_review_state_path=args.not_needed_review_state_path,
             ci_command=shlex.split(args.ci_command) if args.ci_command else None,
             dag_ignore_patterns=dag_ignore_patterns,
+            dag_similarity_threshold=dag_similarity_threshold,
         )
     except ValueError as e:
         _config_error(parser, str(e))

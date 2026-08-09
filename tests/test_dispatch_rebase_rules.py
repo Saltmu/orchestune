@@ -5,7 +5,7 @@
 通知処理・エンドツーエンド統合テストは`test_dispatch_rebase.py`に残している。
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from orchestune.dag_models import compile_extra_ignore_patterns
 from orchestune.dispatch_config import DispatcherConfig
@@ -135,6 +135,28 @@ class TestDecideFootprintDeviationOutcome:
         )
         assert decision.action == "recomputed"
         assert decision.conflicts == []
+
+    def test_dag_similarity_threshold_is_forwarded_to_recompute(self, tmp_path):
+        """#407/#415レビュー指摘: dag_similarity_thresholdもdag_ignore_patterns
+        と同様に実行時DAG再計算（footprint逸脱時）へ伝搬させること。伝搬しないと、
+        orchestune-dagで意図的に低い閾値へ変更したエッジがrecompute側の
+        既定閾値で計算し直され、結果が食い違いうる。"""
+        active = _active(recompute_count=0, declared_footprint=("src/only_a.py",))
+        task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            dag_similarity_threshold=0.1,
+        )
+
+        with patch(
+            "orchestune.dispatch_rebase.recompute_dag_for_footprint_change",
+            return_value=(MagicMock(), []),
+        ) as mock_recompute:
+            _decide_footprint_deviation_outcome(
+                active, ["package.json"], {1: task_a}, config
+            )
+
+        assert mock_recompute.call_args.kwargs.get("threshold") == 0.1
 
 
 class TestDecideRebaseTarget:

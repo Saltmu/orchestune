@@ -29,6 +29,7 @@ class PrepareTasksStep(IntegrationComponent):
             ctx.config.parent_issue_number,
             forge=ctx.config.forge,
             ignore_patterns=ctx.config.dag_ignore_patterns,
+            threshold=ctx.config.dag_similarity_threshold,
         )
         self._warn_and_flag_unparsable_done_tasks(ctx)
 

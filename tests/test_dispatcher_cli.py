@@ -252,6 +252,22 @@ class TestConfigDefaults:
         assert "dag_similarity_threshold" not in defaults
         assert "dag-similarity-threshold" not in defaults
 
+    def test_misspelled_dag_key_is_still_rejected(self):
+        """#415レビュー指摘: `dag_`prefixだけで無条件に許可すると、
+        `dag_similarity_treshold`（スペルミス）や`dag_ignore_pattern`
+        （末尾のs脱落）のようなtypoも黙って無視され、設定が効いていない
+        ことにユーザーが気づけない。既知の共有DAGキー名の完全一致でのみ
+        無視し、それ以外の`dag_`始まりキーは引き続き"unknown key"として
+        拒否すること。"""
+        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"dag_similarity_treshold": 0.5})
+
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"dag_ignore_pattern": ["a.py"]})
+
     def test_unrelated_unknown_key_is_still_rejected(self):
         """`dag_ignore_patterns`の許容リストがdispatcher自身の設定の
         typo検知（意図的な仕様）を無効化しないこと。"""
@@ -415,6 +431,71 @@ class TestDispatcherConfigLoading:
         assert config_arg.dag_ignore_patterns[0].search("package.json")
         assert config_arg.dag_ignore_patterns[0].search("src/package.json")
         assert config_arg.dag_ignore_patterns[0].search("other.json") is None
+
+    def test_orchestune_toml_with_dag_similarity_threshold_is_forwarded(self, tmp_path):
+        """#407/#415レビュー指摘: dag_similarity_thresholdもdag_ignore_patterns
+        と同様に読み込まれ、DispatcherConfig（ひいては実行時DAG再計算・
+        integrator）へ実際に反映されること（無視されるだけで終わらないこと）。"""
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "max-concurrent = 5\n"
+            "events-log-path = 'custom_events.jsonl'\n"
+            "dag_similarity_threshold = 0.1\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.dag_similarity_threshold == 0.1
+
+    def test_dag_similarity_threshold_defaults_when_unset(self, tmp_path):
+        """#407/#415: 設定ファイル未指定時はDEFAULT_SIMILARITY_THRESHOLDのまま
+        （既定挙動を変えない）。"""
+        from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(
+                [
+                    "--no-apply",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
+
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.dag_similarity_threshold == DEFAULT_SIMILARITY_THRESHOLD
+
+    def test_invalid_dag_similarity_threshold_in_config_is_reported_as_error(
+        self, tmp_path, capsys
+    ):
+        config_path = tmp_path / "orchestune.toml"
+        config_path.write_text(
+            "dag_similarity_threshold = 2\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2
+        assert "[0, 1]" in capsys.readouterr().err
 
     def test_hyphenated_dag_ignore_patterns_key_is_also_honored(self, tmp_path):
         """#404レビュー指摘の再現・回帰防止: この設定ファイルの他のキーは

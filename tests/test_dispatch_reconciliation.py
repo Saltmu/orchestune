@@ -208,6 +208,7 @@ class TestCollectActiveConflictSubtaskIds:
             subtasks_for_recompute,
             "task-a",
             updated_footprint=("a.py", "b.py"),
+            threshold=config.dag_similarity_threshold,
             ignore_patterns=config.dag_ignore_patterns,
         )
 
@@ -324,6 +325,37 @@ class TestCollectActiveConflictSubtaskIds:
                 run_state, ctx, subtasks_for_recompute, config_with_ignore
             )
         assert result_with_ignore == set()
+
+    def test_dag_similarity_threshold_is_forwarded_to_recompute(self, tmp_path):
+        """#407/#415レビュー指摘: dag_similarity_thresholdもdag_ignore_patterns
+        と同様にreconciliation側の実行時DAG再計算へ伝搬させること。"""
+        task = _task(issue_number=1, subtask_id="task-a", footprint=("src/only_a.py",))
+        active = _active(issue_number=1, declared_footprint=("src/only_a.py",))
+        run_state = RunState(active_worktrees={"w1": active})
+        ctx = _ctx(tasks_by_issue={1: task})
+        subtasks_for_recompute = {"task-a": object(), "task-b": object()}
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dag_similarity_threshold=0.1,
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch_reconciliation.check_footprint_deviation",
+                return_value=["package.json"],
+            ),
+            patch(
+                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
+                return_value=(MagicMock(), []),
+            ) as mock_recompute,
+        ):
+            _collect_active_conflict_subtask_ids(
+                run_state, ctx, subtasks_for_recompute, config
+            )
+
+        assert mock_recompute.call_args.kwargs.get("threshold") == 0.1
 
 
 class TestDecideBlockedPromotions:

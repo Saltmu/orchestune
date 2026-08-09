@@ -296,6 +296,50 @@ class TestRunSemanticIntegrator:
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.dag_ignore_patterns == ()
 
+    def test_propagates_dag_similarity_threshold_from_dispatcher_config(self, tmp_path):
+        """#407/#415レビュー指摘: `DispatcherConfig.dag_similarity_threshold`が
+        `IntegratorConfig.dag_similarity_threshold`へそのまま伝播すること。"""
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+            dag_similarity_threshold=0.1,
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": "success", "ok": True}
+        with patch(
+            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.dag_similarity_threshold == 0.1
+
+    def test_dag_similarity_threshold_defaults_when_unset(self, tmp_path):
+        """#407/#415: `DispatcherConfig.dag_similarity_threshold`未設定時は
+        `IntegratorConfig`側もそのデフォルト（`DEFAULT_SIMILARITY_THRESHOLD`）
+        のまま。"""
+        from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": "success", "ok": True}
+        with patch(
+            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert (
+            integrator_config.dag_similarity_threshold == DEFAULT_SIMILARITY_THRESHOLD
+        )
+
     def test_ci_command_none_when_unset(self, tmp_path):
         """#394: `DispatcherConfig.ci_command`未設定時は`IntegratorConfig.ci_command`
         も`None`のままで、Integrator側の既定値フォールバックに委ねる。"""

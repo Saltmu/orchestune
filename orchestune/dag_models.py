@@ -19,6 +19,16 @@ _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)settings\.py$"),
 )
 
+# orchestune.toml / pyproject.toml の [tool.orchestune] のキーのうち、
+# DAG計算ツール（orchestune-dag/orchestune-provision）専用でdispatcher
+# 自身の引数ではないもの（#398/#404/#407）。dispatcher.pyの未知キー検知が
+# これらをtypoと誤判定してクラッシュしないよう、ここで一元管理する
+# （#415レビュー指摘: `dag_`prefixによる無条件許可は`dag_ignore_pattern`
+# のようなtypoまで黙って見逃してしまうため、完全一致リストのまま
+# 定義場所だけを一元化し、新しい共有DAGキーを追加するextract_*関数の
+# すぐ側に追記させることで手動追記漏れを防ぐ）。
+DAG_TOOL_CONFIG_KEYS = frozenset({"dag_ignore_patterns", "dag_similarity_threshold"})
+
 
 def compile_extra_ignore_patterns(
     patterns: Iterable[str],
