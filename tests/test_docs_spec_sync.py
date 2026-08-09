@@ -11,6 +11,7 @@ import re
 import pytest
 
 from orchestune.dag_contracts import _SHARED_CONTRACT_PATTERNS
+from orchestune.dag_graph import _footprint_and_symbol_warnings
 from orchestune.dag_parsing import _parse_subtask
 from orchestune.dispatcher import _build_arg_parser
 from orchestune.provisioning import _build_arg_parser as _build_provision_arg_parser
@@ -263,14 +264,24 @@ class TestDocsSharedContractConsistency:
         assert marker in block
 
 
-# #393/#400で追加された`orchestune-dag`の実在検証warningの実際の文言
-# （`orchestune/dag_graph.py`の`_footprint_and_symbol_warnings`が出力する
-# 固定部分）。#409: `skills/orchestune/SKILL.md`のtriage手順がこの文言を
-# そのまま引用していることを検証し、実装の文言変更にドリフトしないようにする。
-_EXISTENCE_VERIFICATION_MESSAGES = (
-    "footprintに実在しないパスがあります",
-    "symbolsが実コードベースに見つかりません",
-)
+_WARNING_PHRASE_PATTERN = re.compile(r'f"\{subtask\.id\}: ([^"]+)"')
+
+
+def _actual_existence_verification_phrases() -> tuple[str, str]:
+    """`_footprint_and_symbol_warnings`のソースから、警告文言の固定部分
+    （`subtask.id`直後、パス/シンボル一覧より前の定型句）を直接抽出する。
+
+    #414レビュー指摘: ここで文言をハードコードして複製すると、実装側の
+    文言が変わってもこの複製が追従せずテストがグリーンのままになり、
+    ドリフト検知として機能しない。実装ソースを唯一の正とすることで防ぐ。
+    """
+    source = inspect.getsource(_footprint_and_symbol_warnings)
+    phrases = _WARNING_PHRASE_PATTERN.findall(source)
+    assert len(phrases) == 2, (
+        "_footprint_and_symbol_warningsのf-string構造が変わり、"
+        "固定文言を抽出できませんでした"
+    )
+    return phrases[0], phrases[1]
 
 
 class TestSkillDocumentsExistenceVerificationTriage:
@@ -291,10 +302,19 @@ class TestSkillDocumentsExistenceVerificationTriage:
 
     def test_stage2_quotes_the_actual_warning_wording(self):
         section = self._stage2_section()
-        for phrase in _EXISTENCE_VERIFICATION_MESSAGES:
+        for phrase in _actual_existence_verification_phrases():
             assert (
                 phrase in section
             ), f"Stage 2に実在検証warningの文言'{phrase}'がありません"
+
+    def test_stage2_documents_that_symbol_verification_can_be_silently_skipped(self):
+        """#414レビュー指摘: footprintが丸ごと新規ファイルのみの場合、
+        `find_missing_symbols`は検証材料が無いため`symbols`の警告を一切
+        出さずスキップする（`any_file_checked`ガード）。"警告が無い＝
+        symbolsが確認済み"と誤読されないよう、この旨が明記されていること
+        を検証する。"""
+        section = self._stage2_section()
+        assert "silently skipped" in section
 
 
 class TestDocsExistenceVerificationConsistency:
@@ -305,6 +325,15 @@ class TestDocsExistenceVerificationConsistency:
     def test_key_checks_section_mentions_existence_verification(self, lang):
         section = _section(lang, 3)
         marker = "実在" if lang == "ja" else "exist"
+        assert marker in section
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_key_checks_section_documents_that_symbol_verification_can_be_skipped(
+        self, lang
+    ):
+        """#414レビュー指摘: symbols検証が黙ってスキップされうることの明記。"""
+        section = _section(lang, 3)
+        marker = "スキップされ" if lang == "ja" else "silently skipped"
         assert marker in section
 
     @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
