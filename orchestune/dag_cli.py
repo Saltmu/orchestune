@@ -37,6 +37,19 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_repo_root(plan_path: str | Path) -> Path:
+    """planの位置からGitリポジトリルートを探索する。
+
+    Git管理外では、従来の挙動と互換性を保つためplanの親を返す。
+    """
+    plan_parent = Path(plan_path).resolve().parent
+    for candidate in (plan_parent, *plan_parent.parents):
+        git_marker = candidate / ".git"
+        if git_marker.is_file() or (git_marker / "HEAD").is_file():
+            return candidate
+    return plan_parent
+
+
 def _print_text_result(dag: dict[str, Any]) -> None:
     topological_order = dag["topological_order"]
     parallel_leaves = dag["parallel_leaves"]
@@ -67,10 +80,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     try:
         # footprintはリポジトリルートからの相対パスとして定義されているため、
-        # 呼び出し元のcwdではなく--planファイル自身の位置を基点にする
-        # （cwdが--planの置き場所と異なる場合、実在するファイルまで
-        # 「見つからない」と誤検出してしまうため）。
-        repo_root = Path(args.plan).resolve().parent
+        # --planの位置から.gitを上方探索する。Git管理外の場合のみ、
+        # 呼び出し元のcwdではなく--planファイル自身の位置を基点にする。
+        repo_root = _resolve_repo_root(args.plan)
         config = load_orchestune_config(repo_root)
         extra_ignore_patterns = compile_extra_ignore_patterns(
             extract_dag_ignore_patterns(config)

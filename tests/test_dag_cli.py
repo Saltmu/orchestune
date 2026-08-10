@@ -18,6 +18,12 @@ def _write_plan(path, content: str) -> None:
     path.write_text(textwrap.dedent(content), encoding="utf-8")
 
 
+def _mark_git_repository(path) -> None:
+    git_dir = path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+
 def _run_cli(argv, expected_exit_code=0):
     orig_argv = sys.argv
     sys.argv = ["orchestune-dag", *argv]
@@ -97,6 +103,49 @@ def test_cli_validation_cycle_failure(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Error:" in captured.err
+
+
+class TestRepoRootDiscovery:
+    """#410: サブディレクトリのplanでもGitリポジトリルートを基準にする。"""
+
+    def test_nested_plan_validates_footprint_from_repository_root(
+        self, tmp_path, capsys
+    ):
+        _mark_git_repository(tmp_path)
+        (tmp_path / "plans").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "existing.py").write_text("", encoding="utf-8")
+        plan_path = tmp_path / "plans" / "decomposition_plan.md"
+        _write_plan(
+            plan_path,
+            """\
+            ---
+            subtasks:
+              - id: task-a
+                footprint: ["src/existing.py"]
+            ---
+            """,
+        )
+
+        data = _run_cli_json(["--plan", str(plan_path)], capsys)
+
+        assert data["warnings"] == []
+
+    def test_nested_plan_loads_ignore_patterns_from_repository_root(
+        self, tmp_path, capsys
+    ):
+        _mark_git_repository(tmp_path)
+        (tmp_path / "plans").mkdir()
+        (tmp_path / "orchestune.toml").write_text(
+            'dag_ignore_patterns = ["(^|/)package\\\\.json$"]\n',
+            encoding="utf-8",
+        )
+        plan_path = tmp_path / "plans" / "decomposition_plan.md"
+        _write_plan(plan_path, TestIgnorePatternsConfig._PLAN)
+
+        data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.1"], capsys)
+
+        assert data["edges"] == []
 
 
 class TestThresholdFlag:
