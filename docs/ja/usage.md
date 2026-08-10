@@ -131,6 +131,32 @@ orchestune-dag --plan decomposition_plan.md
 orchestune dag --plan decomposition_plan.md
 ```
 
+### 主要なオプション
+
+| オプション | デフォルト値 | 説明 |
+| :--- | :--- | :--- |
+| `--threshold <float>` | - | 類似度エッジの閾値（`[0, 1]`の範囲）。未指定時は、設定ファイルの`dag_similarity_threshold`（後述）が設定されていればその値、無ければ`0.2`（`orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD`）にフォールバックする。`[0, 1]`の範囲外の値（`nan`/`inf`を含む）はエラーとして拒否される。 |
+
+### 設定ファイルによる指定
+
+`orchestune-dispatch`（§4）と同様に、`orchestune-dag`も`orchestune.toml` / `pyproject.toml`の`[tool.orchestune]`テーブルを読み込む（探索順序も同じ: `orchestune.toml`を先に、次に`pyproject.toml`）。
+
+| 設定項目 | デフォルト値 | 説明 |
+| :--- | :--- | :--- |
+| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチする — `symbols`の項目はこの設定でフィルタされることは無く、常に類似度スコアの計算対象に含まれる。マッチしたfootprintパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度スコアの**計算入力**から除外される（＝そのペアの重なりスコアに寄与しなくなる）。ただし、そのペアが除外対象でない別のfootprintパスや共有する`symbols`の項目でも重なっている場合は、類似度エッジ自体は形成され続ける（または新たに形成される）ことがある。同様に、下記の「ファイル/シンボルの競合」チェックが必ず防げるとも限らない — このチェックは各subtaskの元の（フィルタ前の）footprintを見るため、同一カテゴリの書き込み者同士をそれまで繋いでいたエッジが除外によって消えた場合、この警告を防ぐのではなく**新たに発生させる**こともある。`DagCycleError`自体には影響しない（循環が全て明示的な`depends_on`エッジのみで構成される場合にのみ発生し、`dag_ignore_patterns`はそのケースに影響を及ぼせない） — 下記の実在検証・リスク検出という独立したチェックにも影響しない。空文字列は拒否される（空パターンはあらゆるfootprintパスに一致し、全てのfootprint項目をスコア計算から無診断で除いてしまうが、共有する`symbols`の項目があれば依然としてエッジが形成され得るため）。 |
+| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のDAG再計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `--plan`がリポジトリルートより下のネストしたファイルを指す場合、`orchestune-dag`は上位へ`.git`を探索してリポジトリルートを特定するのに対し、`orchestune provision`は現状`--plan`自身の親ディレクトリのみを見る。そのためネストしたplanでは、リポジトリルートの設定が一方のツールにしか反映されないことがある（既知のギャップ）。 |
+
+#### 設定ファイルの記述例 (`orchestune.toml`)
+
+```toml
+dag_ignore_patterns = ['(^|/)package\.json$', '(^|/)generated/']
+dag_similarity_threshold = 0.35
+```
+
+> [!WARNING]
+> `dag_ignore_patterns`の各要素はTOMLから読み込まれる正規表現であり、パスの文字列そのものではありません。上記のようにTOMLの**リテラル文字列**（シングルクォート`'...'`）を使うことを推奨します: バックスラッシュはそのまま扱われるため、`\.`を意図した通りに書けます。
+> 代わりにTOMLの**基本文字列**（ダブルクォート`"..."`）を使う場合、バックスラッシュはTOML自体のエスケープ文字も兼ねるため、正規表現側のバックスラッシュ1つごとに追加のエスケープが必要になります — 正規表現の`\.`は`"\\."`と書かなければなりません。`"(^|/)package\\.json$"`（基本文字列）と`'(^|/)package\.json$'`（リテラル文字列）は、全く同じ正規表現にコンパイルされます。基本文字列の中に裸の`"\."`を書くと、単に「正規表現として間違っている」のではなく、TOMLパーサー自体が不正なエスケープシーケンスとして拒否します。
+
 ### 主なエラー・警告検出
 1回の`Warnings:`出力に、以下の複数種類の警告が同時に含まれることがあります。各行の文言に応じて種類を判別してください。
 * **`DagCycleError`**: 依存関係（`depends_on`）に循環参照がある場合にエラーを出力します。

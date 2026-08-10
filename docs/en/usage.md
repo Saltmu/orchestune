@@ -131,6 +131,32 @@ orchestune-dag --plan decomposition_plan.md
 orchestune dag --plan decomposition_plan.md
 ```
 
+### Major Options
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--threshold <float>` | - | Similarity edge threshold in `[0, 1]`. When omitted, falls back to the `dag_similarity_threshold` config-file setting (see below) if set, otherwise to `0.2` (`orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD`). Values outside `[0, 1]` (including `nan`/`inf`) are rejected with an error. |
+
+### Configuration File Options
+
+Like `orchestune-dispatch` (§4), `orchestune-dag` also reads `orchestune.toml` / `pyproject.toml`'s `[tool.orchestune]` table (same discovery order: `orchestune.toml` first, then `pyproject.toml`).
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| `dag_ignore_patterns` (or `dag-ignore-patterns`) | `[]` | List of regex strings, matched only against `footprint` paths — `symbols` entries are never filtered by this setting and always contribute to similarity scoring. A matching footprint path is excluded from the similarity-*scoring input* (in addition to the built-in ignore list: `pyproject.toml`, `poetry.lock`, `logging.py`, `logger.py`, `config.py`, `settings.py`) — it can no longer contribute to a pair's overlap score. This does not guarantee a pair's inferred similarity edge disappears: the pair can still form (or keep) an edge through another unignored footprint path or through a shared `symbols` entry. It also does not guarantee the "File/Symbol Conflict" check below is suppressed — that check reads each subtask's original, unfiltered footprint, so removing the edge that used to connect two same-category writers can just as easily *cause* that warning to newly appear as prevent it. It has no effect on `DagCycleError` itself — that's only raised when a cycle is made up entirely of explicit `depends_on` edges, which `dag_ignore_patterns` cannot influence — nor on the independent Existence Verification or Risk Flags checks below. Empty strings are rejected (an empty pattern matches every footprint path and would silently remove every footprint item from scoring, though shared `symbols` entries could still form an edge). |
+| `dag_similarity_threshold` (or `dag-similarity-threshold`) | `0.2` | Persisted fallback for `--threshold` (see above), a float in `[0, 1]`. Also read by `orchestune provision`'s own DAG recomputation from the same config file, so a threshold tuned here isn't silently ignored there. Note: when `--plan` points to a file nested below the repository root, `orchestune-dag` locates the config by walking up to the enclosing Git repository, while `orchestune provision` currently looks only in `--plan`'s own parent directory — for such nested plans a repository-root config may be picked up by one tool but not the other (a known gap). |
+
+#### Example Config (`orchestune.toml`)
+
+```toml
+dag_ignore_patterns = ['(^|/)package\.json$', '(^|/)generated/']
+dag_similarity_threshold = 0.35
+```
+
+> [!WARNING]
+> `dag_ignore_patterns` entries are regular expressions read from TOML, not literal path fragments. Prefer TOML **literal strings** (single quotes, `'...'`) as shown above: backslashes are taken verbatim, so `\.` is written exactly as the regex intends.
+> If you use a TOML **basic string** (double quotes, `"..."`) instead, the backslash is *also* a TOML escape character, so every regex backslash needs its own escape — a regex `\.` must be written `"\\."`. `"(^|/)package\\.json$"` (basic string) and `'(^|/)package\.json$'` (literal string) compile to the exact same regular expression. A bare `"\."` inside a basic string is rejected by the TOML parser as an invalid escape sequence, not merely as "the wrong regex".
+
 ### Key Checks & Warnings
 A single `Warnings:` output can combine more than one of the warning types below at once — check each entry against its own wording rather than assuming they're all the same kind.
 * **`DagCycleError`**: Raised if there is a circular dependency within `depends_on`.
