@@ -7,11 +7,14 @@
 import inspect
 import pathlib
 import re
+import tomllib
 
 import pytest
 
+from orchestune.dag_cli import _build_parser as _build_dag_arg_parser
 from orchestune.dag_contracts import _SHARED_CONTRACT_PATTERNS
 from orchestune.dag_graph import _footprint_and_symbol_warnings
+from orchestune.dag_models import DAG_TOOL_CONFIG_KEYS
 from orchestune.dag_parsing import _parse_subtask
 from orchestune.dispatcher import _build_arg_parser
 from orchestune.provisioning import _build_arg_parser as _build_provision_arg_parser
@@ -71,6 +74,11 @@ def _documented_options(lang: str) -> dict[str, str | None]:
 def _documented_provision_options(lang: str) -> dict[str, str | None]:
     """`orchestune provision`（## 2.）節のオプション表を抽出する。"""
     return _documented_options_in(_section(lang, 2))
+
+
+def _documented_dag_options(lang: str) -> dict[str, str | None]:
+    """`orchestune-dag`（## 3.）節のオプション表を抽出する。"""
+    return _documented_options_in(_section(lang, 3))
 
 
 def _documented_schema_fields(lang: str) -> dict[str, str]:
@@ -183,6 +191,81 @@ class TestDocsProvisionCliConsistency:
         assert {k: v for k, v in ja.items() if v is not None} == {
             k: v for k, v in en.items() if v is not None
         }
+
+
+class TestDagDocsCliConsistency:
+    """#411: Usageに記載された`orchestune-dag`（## 3.）のオプションと
+    実装の乖離を機械的に検知する。"""
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_documented_defaults_match_parser(self, lang):
+        parser_defaults = vars(_build_dag_arg_parser().parse_args([]))
+        documented = _documented_dag_options(lang)
+        assert documented, f"{lang}のUsageからdagのオプション表を抽出できませんでした"
+
+        for option, documented_default in documented.items():
+            dest = option.removeprefix("--").replace("-", "_")
+            assert (
+                dest in parser_defaults
+            ), f"{lang}のUsageに記載された{option}は実装に存在しません"
+            if documented_default is None:
+                continue
+            assert documented_default == str(parser_defaults[dest]), (
+                f"{lang}のUsageの{option}のデフォルト値が実装と一致しません: "
+                f"docs={documented_default} / implementation={parser_defaults[dest]}"
+            )
+
+    def test_ja_and_en_document_the_same_options(self):
+        assert (
+            _documented_dag_options("ja").keys() == _documented_dag_options("en").keys()
+        )
+
+
+_DAG_CONFIG_KEY_PATTERN = re.compile(r"`(dag[_-][a-z_-]+)`")
+
+
+def _documented_dag_config_keys(lang: str) -> set[str]:
+    """Usageの`orchestune-dag`（## 3.）節「Configuration File Options」節から
+    バッククォート付きの`dag_.../dag-...`キー名トークンを抽出する。"""
+    return set(_DAG_CONFIG_KEY_PATTERN.findall(_section(lang, 3)))
+
+
+class TestDagConfigFileDocsConsistency:
+    """#411: `dag_ignore_patterns`/`dag_similarity_threshold`のような
+    CLIフラグを持たない設定ファイル専用キーが、Usageと実装（`dag_models.py`の
+    `DAG_TOOL_CONFIG_KEYS`）の間でドリフトしないことを検証する。"""
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_config_keys_match_dag_tool_config_keys(self, lang):
+        documented = _documented_dag_config_keys(lang)
+        assert documented == set(DAG_TOOL_CONFIG_KEYS), (
+            f"{lang}のUsageに記載された設定キーがDAG_TOOL_CONFIG_KEYSと"
+            f"一致しません: docs={documented} / impl={set(DAG_TOOL_CONFIG_KEYS)}"
+        )
+
+    def test_ja_and_en_document_the_same_config_keys(self):
+        assert _documented_dag_config_keys("ja") == _documented_dag_config_keys("en")
+
+    _TOML_FENCE_PATTERN = re.compile(r"```toml\n(.*?)```", re.DOTALL)
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_toml_ignore_pattern_example_is_valid_and_matches_a_path(self, lang):
+        section = _section(lang, 3)
+        match = self._TOML_FENCE_PATTERN.search(section)
+        assert match, f"{lang}のUsageに## 3.節のtomlフェンスブロックが見つかりません"
+        parsed = tomllib.loads(match.group(1))
+        patterns = parsed["dag_ignore_patterns"]
+        assert patterns and re.compile(patterns[0]).search("src/package.json")
+
+    def test_basic_string_and_literal_string_escaping_examples_are_equivalent(self):
+        """#411: `[!WARNING]`注意書きが示すbasic string/literal stringの
+        エスケープ対応関係が、実際に同じ正規表現へ解決することを直接証明する
+        （散文の説明が正しいTOML/正規表現の知識であることの根拠）。"""
+        basic = '"(^|/)package\\\\.json$"'
+        literal = "'(^|/)package\\.json$'"
+        assert (
+            tomllib.loads(f"p = {basic}")["p"] == tomllib.loads(f"p = {literal}")["p"]
+        )
 
 
 class TestDocsSchemaConsistency:

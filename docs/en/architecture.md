@@ -159,6 +159,8 @@ Between these two gates, child-level integration PRs, CI verification, and the r
 
 **CI as the de facto quality gate**: the pre-merge CI verification described in Section 3 substitutes for per-task human review — every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
 
+**Traceability backstop: dispatch cycle reports on the parent Issue**: `orchestune-dispatch`'s per-run event log (`events.jsonl`) is `.gitignore`d and does not survive between CI runs, so it cannot serve as durable history on its own. To keep dispatch-cycle decisions traceable without depending on that ephemeral log, each dispatch cycle posts a `## 🤖 Orchestune Dispatch Cycle Report` comment to the configured parent Issue (`--parent-issue`, #396) summarizing that cycle's selected tasks, noteworthy footprint-deviation events, completions, and promotions. Deviation events that merely re-report an unchanged steady state (e.g. a worktree that is already force-serialized) are excluded from both the skip check and the comment body, so the parent Issue isn't flooded with an identical comment every cycle; a cycle with nothing to report, or with no parent Issue configured, posts nothing. Like the other post-cycle phases, posting is best-effort: a failure (e.g. an auth error) is logged as a warning and does not stop the dispatch run.
+
 This keeps human review effort concentrated where judgment matters most (scoping and the final acceptance merge), while everything mechanical in between — including Issue closing at both tiers — is fully automated.
 
 ---

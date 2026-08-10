@@ -131,6 +131,32 @@ orchestune-dag --plan decomposition_plan.md
 orchestune dag --plan decomposition_plan.md
 ```
 
+### 主要なオプション
+
+| オプション | デフォルト値 | 説明 |
+| :--- | :--- | :--- |
+| `--threshold <float>` | - | 類似度エッジの閾値（`[0, 1]`の範囲）。未指定時は、設定ファイルの`dag_similarity_threshold`（後述）が設定されていればその値、無ければ`0.2`（`orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD`）にフォールバックする。`[0, 1]`の範囲外の値（`nan`/`inf`を含む）はエラーとして拒否される。 |
+
+### 設定ファイルによる指定
+
+`orchestune-dispatch`（§4）と同様に、`orchestune-dag`も`orchestune.toml` / `pyproject.toml`の`[tool.orchestune]`テーブルを読み込む（探索順序も同じ: `orchestune.toml`を先に、次に`pyproject.toml`）。
+
+| 設定項目 | デフォルト値 | 説明 |
+| :--- | :--- | :--- |
+| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。いずれかに一致するfootprintパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度エッジのスコア計算から除外される。除外されたパスは類似度エッジを形成しなくなるため、それが原因の`DagCycleError`や「ファイル/シンボルの競合」警告を防げる — 下記の実在検証・リスク検出という独立したチェックには影響しない。空文字列は拒否される（空パターンはあらゆるパスに一致し、全ての類似度エッジを無診断で消してしまうため）。 |
+| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。`orchestune-provision`側のDAG再計算にも適用されるため、ここで調整した閾値が`orchestune-dag`と`orchestune-provision`の間で食い違うこと（provision側が黙って既定値に戻ってしまうこと）を防ぐ。 |
+
+#### 設定ファイルの記述例 (`orchestune.toml`)
+
+```toml
+dag_ignore_patterns = ['(^|/)package\.json$', '(^|/)generated/']
+dag_similarity_threshold = 0.35
+```
+
+> [!WARNING]
+> `dag_ignore_patterns`の各要素はTOMLから読み込まれる正規表現であり、パスの文字列そのものではありません。上記のようにTOMLの**リテラル文字列**（シングルクォート`'...'`）を使うことを推奨します: バックスラッシュはそのまま扱われるため、`\.`を意図した通りに書けます。
+> 代わりにTOMLの**基本文字列**（ダブルクォート`"..."`）を使う場合、バックスラッシュはTOML自体のエスケープ文字も兼ねるため、正規表現側のバックスラッシュ1つごとに追加のエスケープが必要になります — 正規表現の`\.`は`"\\."`と書かなければなりません。`"(^|/)package\\.json$"`（基本文字列）と`'(^|/)package\.json$'`（リテラル文字列）は、全く同じ正規表現にコンパイルされます。基本文字列の中に裸の`"\."`を書くと、単に「正規表現として間違っている」のではなく、TOMLパーサー自体が不正なエスケープシーケンスとして拒否します。
+
 ### 主なエラー・警告検出
 1回の`Warnings:`出力に、以下の複数種類の警告が同時に含まれることがあります。各行の文言に応じて種類を判別してください。
 * **`DagCycleError`**: 依存関係（`depends_on`）に循環参照がある場合にエラーを出力します。

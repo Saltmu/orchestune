@@ -131,6 +131,32 @@ orchestune-dag --plan decomposition_plan.md
 orchestune dag --plan decomposition_plan.md
 ```
 
+### Major Options
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--threshold <float>` | - | Similarity edge threshold in `[0, 1]`. When omitted, falls back to the `dag_similarity_threshold` config-file setting (see below) if set, otherwise to `0.2` (`orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD`). Values outside `[0, 1]` (including `nan`/`inf`) are rejected with an error. |
+
+### Configuration File Options
+
+Like `orchestune-dispatch` (§4), `orchestune-dag` also reads `orchestune.toml` / `pyproject.toml`'s `[tool.orchestune]` table (same discovery order: `orchestune.toml` first, then `pyproject.toml`).
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| `dag_ignore_patterns` (or `dag-ignore-patterns`) | `[]` | List of regex strings. Footprint paths matching any of them are excluded from similarity-edge scoring, in addition to the built-in ignore list (`pyproject.toml`, `poetry.lock`, `logging.py`, `logger.py`, `config.py`, `settings.py`). An excluded path can no longer form a similarity edge, so it can't trigger a `DagCycleError` or "File/Symbol Conflict" warning caused by that edge — it does not affect the independent Existence Verification or Risk Flags checks below. Empty strings are rejected (an empty pattern matches every path and would silently suppress every similarity edge). |
+| `dag_similarity_threshold` (or `dag-similarity-threshold`) | `0.2` | Persisted fallback for `--threshold` (see above), a float in `[0, 1]`. Also honored by `orchestune-provision`'s own DAG recomputation, so a threshold tuned here stays consistent between `orchestune-dag` and `orchestune-provision` instead of the latter silently reverting to the default. |
+
+#### Example Config (`orchestune.toml`)
+
+```toml
+dag_ignore_patterns = ['(^|/)package\.json$', '(^|/)generated/']
+dag_similarity_threshold = 0.35
+```
+
+> [!WARNING]
+> `dag_ignore_patterns` entries are regular expressions read from TOML, not literal path fragments. Prefer TOML **literal strings** (single quotes, `'...'`) as shown above: backslashes are taken verbatim, so `\.` is written exactly as the regex intends.
+> If you use a TOML **basic string** (double quotes, `"..."`) instead, the backslash is *also* a TOML escape character, so every regex backslash needs its own escape — a regex `\.` must be written `"\\."`. `"(^|/)package\\.json$"` (basic string) and `'(^|/)package\.json$'` (literal string) compile to the exact same regular expression. A bare `"\."` inside a basic string is rejected by the TOML parser as an invalid escape sequence, not merely as "the wrong regex".
+
 ### Key Checks & Warnings
 A single `Warnings:` output can combine more than one of the warning types below at once — check each entry against its own wording rather than assuming they're all the same kind.
 * **`DagCycleError`**: Raised if there is a circular dependency within `depends_on`.

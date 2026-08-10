@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import re
 import tomllib
 from collections import defaultdict
@@ -585,3 +586,23 @@ def test_package_root_declares_a_public_api_without_entrypoints() -> None:
     }
     assert reexported & L4_MODULES == set()
     assert _import_graph()[PACKAGE_NAME] & L4_MODULES == set()
+
+
+def test_architecture_docs_mention_dispatch_cycle_report() -> None:
+    """#411: #396のディスパッチサイクルレポート（親Issueへのコメント投稿）
+    機能がarchitecture.mdのトレーサビリティに関する記述に反映されていること。
+    見出し文字列は実装（`_format_event_log_comment`）のソースから直接抽出し、
+    ハードコード複製によるドリフトを防ぐ。"""
+    from orchestune.dispatch_postcycle import _format_event_log_comment
+
+    source = inspect.getsource(_format_event_log_comment)
+    match = re.search(r'lines = \["(## [^"]+)\\n"\]', source)
+    assert match, (
+        "_format_event_log_commentのソースからレポート見出し文字列を"
+        "抽出できませんでした"
+    )
+    header = match.group(1)
+
+    for lang in DOC_LANGUAGES:
+        doc_text = "\n".join(_architecture_doc(lang))
+        assert header in doc_text, f"{lang}のarchitecture.mdに'{header}'がありません"
