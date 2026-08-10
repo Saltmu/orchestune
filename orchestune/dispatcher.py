@@ -10,10 +10,13 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from orchestune.dag_models import (
+    DAG_TOOL_CONFIG_KEYS,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
+    extract_dag_similarity_threshold,
     load_orchestune_config,
 )
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_postcycle import (
@@ -178,11 +181,21 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
 
 
 # orchestune.toml / pyproject.toml の [tool.orchestune] は本来dispatcher専用の
-# 設定名前空間だが、orchestune-dag CLI（dag_cli.py）も同じファイル・セクションから
-# dag_ignore_patterns を読み込む（#398）。dispatcherの未知キー検知に巻き込まれて
-# `orchestune-dispatch` がクラッシュしないよう、他ツール由来と判明しているキーは
-# ここで明示的に無視する（dispatcher自身の設定としては使用しない）。
-_NON_DISPATCHER_CONFIG_KEYS = frozenset({"dag_ignore_patterns"})
+# 設定名前空間だが、orchestune-dag CLI（dag_cli.py）・orchestune-provision
+# （provisioning.py）も同じファイル・セクションから dag_ignore_patterns /
+# dag_similarity_threshold を読み込む（#398/#407）。dispatcherの未知キー検知に
+# 巻き込まれて `orchestune-dispatch` がクラッシュしないよう、他ツール由来と
+# 判明しているキーはここで無視する（dispatcher自身の設定としては使用しない値
+# としてargparseの未知キー検知をスキップするだけで、DispatcherConfigへの
+# 実際の反映はmain()が個別に行う）。
+#
+# #415レビュー指摘: `dag_`prefixによる無条件許可は、`dag_ignore_pattern`
+# （末尾のs脱落）のようなtypoまで黙って見逃してしまい、設定が効いていない
+# ことにユーザーが気づけなくなる。既知の共有DAGキー名（`dag_models.py`の
+# `DAG_TOOL_CONFIG_KEYS`、extract_*関数のすぐ側で一元管理）との完全一致で
+# のみ無視し、それ以外の`dag_`始まりキーは引き続き"unknown key"として
+# 拒否する。
+_NON_DISPATCHER_CONFIG_KEYS = DAG_TOOL_CONFIG_KEYS
 
 
 def _normalize_config_key(key: str) -> str:
@@ -190,6 +203,16 @@ def _normalize_config_key(key: str) -> str:
     if normalized_key == "parent_issue_number":
         return "parent_issue"
     return normalized_key
+
+
+def _is_non_dispatcher_config_key(raw_key: str) -> bool:
+    # #415レビュー再指摘: 正規化後（ハイフン→アンダースコア変換後）の
+    # キーではなく、config_dataの生のキー文字列と比較する。正規化後の
+    # キーで比較すると、`dag_similarity-threshold`のような区切り文字
+    # 混在のtypoまで正規のスペリングへ丸め込まれて"unknown key"検知を
+    # すり抜けてしまう（extract_*関数は生のキーでしか値を読まないため、
+    # その値は結局どこにも読み取られずサイレントに無視される）。
+    return raw_key in _NON_DISPATCHER_CONFIG_KEYS
 
 
 def _config_defaults(
@@ -215,9 +238,9 @@ def _config_defaults(
     defaults: dict[str, Any] = {}
 
     for key, value in config_data.items():
-        normalized_key = _normalize_config_key(key)
-        if normalized_key in _NON_DISPATCHER_CONFIG_KEYS:
+        if _is_non_dispatcher_config_key(key):
             continue
+        normalized_key = _normalize_config_key(key)
         action = actions.get(normalized_key)
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")
@@ -262,8 +285,14 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         dag_ignore_patterns = compile_extra_ignore_patterns(
             extract_dag_ignore_patterns(config_data)
         )
+        config_dag_similarity_threshold = extract_dag_similarity_threshold(config_data)
     except (ValueError, re.error) as e:
         _config_error(parser, str(e))
+    dag_similarity_threshold = (
+        config_dag_similarity_threshold
+        if config_dag_similarity_threshold is not None
+        else DEFAULT_SIMILARITY_THRESHOLD
+    )
 
     args = parser.parse_args(argv)
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
@@ -297,6 +326,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             not_needed_review_state_path=args.not_needed_review_state_path,
             ci_command=shlex.split(args.ci_command) if args.ci_command else None,
             dag_ignore_patterns=dag_ignore_patterns,
+            dag_similarity_threshold=dag_similarity_threshold,
         )
     except ValueError as e:
         _config_error(parser, str(e))

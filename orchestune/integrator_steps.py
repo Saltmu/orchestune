@@ -26,7 +26,10 @@ from orchestune.integrator_worktree import IntegrationWorktree
 class PrepareTasksStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
-            ctx.config.parent_issue_number, forge=ctx.config.forge
+            ctx.config.parent_issue_number,
+            forge=ctx.config.forge,
+            ignore_patterns=ctx.config.dag_ignore_patterns,
+            threshold=ctx.config.dag_similarity_threshold,
         )
         self._warn_and_flag_unparsable_done_tasks(ctx)
 

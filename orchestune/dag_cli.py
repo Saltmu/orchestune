@@ -13,6 +13,7 @@ from orchestune.dag_graph import build_dag_from_plan
 from orchestune.dag_models import (
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
+    extract_dag_similarity_threshold,
     load_orchestune_config,
 )
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
@@ -34,16 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
         f"{DEFAULT_SIMILARITY_THRESHOLD}, i.e. orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD)",
     )
     return parser
-
-
-def _load_dag_ignore_patterns_config(repo_root: Path) -> list[str]:
-    """Load extra footprint ignore patterns for `repo_root`.
-
-    Looks up `orchestune.toml` (top-level `dag_ignore_patterns` key) first,
-    falling back to `pyproject.toml`'s `[tool.orchestune]` table. Missing
-    files/keys are not an error: an empty list keeps default behavior.
-    """
-    return extract_dag_ignore_patterns(load_orchestune_config(repo_root))
 
 
 def _print_text_result(dag: dict[str, Any]) -> None:
@@ -80,12 +71,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         # （cwdが--planの置き場所と異なる場合、実在するファイルまで
         # 「見つからない」と誤検出してしまうため）。
         repo_root = Path(args.plan).resolve().parent
+        config = load_orchestune_config(repo_root)
         extra_ignore_patterns = compile_extra_ignore_patterns(
-            _load_dag_ignore_patterns_config(repo_root)
+            extract_dag_ignore_patterns(config)
         )
+        # 優先順位: --threshold（CLI） > dag_similarity_threshold（設定ファイル、
+        # #407）> DEFAULT_SIMILARITY_THRESHOLD。設定ファイルへ永続化した値は
+        # orchestune-provisionからも同じ関数で読まれ、両ツールが同じ閾値で
+        # 再計算するため、`orchestune-dag --threshold`で意図的に消したエッジが
+        # provision側で復活する食い違いを防ぐ。
+        config_threshold = extract_dag_similarity_threshold(config)
         threshold = (
             args.threshold
             if args.threshold is not None
+            else config_threshold
+            if config_threshold is not None
             else DEFAULT_SIMILARITY_THRESHOLD
         )
         # 類似度スコア（重み付きOtsuka-Ochiai係数）は[0, 1]の範囲に収まるため、

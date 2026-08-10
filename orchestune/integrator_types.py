@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TypedDict
 
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
 from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.models import Task
@@ -57,6 +59,16 @@ class IntegratorConfig:
     enable_semantic_review: bool = True
     coordinator: IntegrationCoordinator | None = None
     forge: Forge | None = None
+    # #398/#404/#407: DispatcherConfig.dag_ignore_patternsと同じ設定を
+    # get_sorted_done_tasksのDAG構築（get_sorted_done_tasks -> build_dag）にも
+    # 一貫して適用し、無視されるべきfootprint衝突が明示的な依存関係と
+    # 組み合わさって偽のDagCycleErrorを誘発しないようにする。
+    dag_ignore_patterns: tuple[re.Pattern[str], ...] = ()
+    # #407/#415: DispatcherConfig.dag_similarity_thresholdと同じ設定を
+    # get_sorted_done_tasksのDAG構築にも一貫して適用し、意図的に作った・
+    # 消した類似度エッジが既定閾値の再計算で復活・消失して統合順序
+    # （topological_order）が検証時と食い違わないようにする。
+    dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
 
     def __post_init__(self) -> None:
         if self.parent_issue_number is not None:

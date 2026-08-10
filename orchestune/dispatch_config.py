@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch_targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
 
@@ -45,6 +46,13 @@ class DispatcherConfig:
     # にも一貫して適用し、初回検証で無視されたファイルが実行中の再計算で
     # 誤って競合として検知されないようにする。
     dag_ignore_patterns: tuple[re.Pattern[str], ...] = ()
+    # #407レビュー(#415): orchestune-dag CLIと同じorchestune.toml/[tool.orchestune]の
+    # dag_similarity_thresholdから読み込んだ閾値。dag_ignore_patternsと同様、
+    # 実行時DAG再計算（_decide_footprint_deviation_outcome/
+    # _collect_active_conflict_subtask_ids）とpost-cycle integratorにも
+    # 一貫して適用し、orchestune-dagで意図的に消したエッジが既定閾値の
+    # 再計算で復活してしまわないようにする。
+    dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
 
     def __post_init__(self) -> None:
         if self.dispatch_target is None:

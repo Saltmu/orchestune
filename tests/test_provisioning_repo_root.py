@@ -6,9 +6,11 @@ dag_ignore_patterns）に関するテスト。
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.provisioning import provision_issues
 from tests.test_provisioning import FakeForge
 
@@ -231,6 +233,72 @@ class TestDagIgnorePatterns:
         )
 
         with pytest.raises(ValueError, match="non-empty"):
+            provision_issues(
+                plan_path,
+                forge=FakeForge(),
+                template_path=template_path,
+                repo_root=tmp_path,
+            )
+
+    def test_dag_similarity_threshold_config_is_forwarded_to_build_dag(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#407: `orchestune-dag --threshold`で永続化された
+        `dag_similarity_threshold`設定を`orchestune-provision`も読み、
+        同じ閾値で`build_dag`を呼ぶこと。伝搬しないと、`orchestune-dag`が
+        意図的に消したエッジが既定閾値で再計算されて復活し、
+        `topological_order`が検証時と食い違いうる。"""
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan(), encoding="utf-8")
+        (tmp_path / "orchestune.toml").write_text(
+            "dag_similarity_threshold = 0.1\n", encoding="utf-8"
+        )
+
+        with patch(
+            "orchestune.provisioning.build_dag", wraps=lambda *a, **kw: MagicMock()
+        ) as mock_build_dag:
+            provision_issues(
+                plan_path,
+                forge=FakeForge(),
+                template_path=template_path,
+                repo_root=tmp_path,
+            )
+
+        assert mock_build_dag.call_args.kwargs.get("threshold") == 0.1
+
+    def test_dag_similarity_threshold_defaults_when_unset(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#407: 設定ファイル未指定時は`DEFAULT_SIMILARITY_THRESHOLD`のまま
+        （既定挙動を変えない）。"""
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan(), encoding="utf-8")
+
+        with patch(
+            "orchestune.provisioning.build_dag", wraps=lambda *a, **kw: MagicMock()
+        ) as mock_build_dag:
+            provision_issues(
+                plan_path,
+                forge=FakeForge(),
+                template_path=template_path,
+                repo_root=tmp_path,
+            )
+
+        assert (
+            mock_build_dag.call_args.kwargs.get("threshold")
+            == DEFAULT_SIMILARITY_THRESHOLD
+        )
+
+    def test_invalid_dag_similarity_threshold_raises_clear_error(
+        self, tmp_path: Path, template_path: Path
+    ):
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan(), encoding="utf-8")
+        (tmp_path / "orchestune.toml").write_text(
+            "dag_similarity_threshold = 2\n", encoding="utf-8"
+        )
+
+        with pytest.raises(ValueError, match=r"\[0, 1\]"):
             provision_issues(
                 plan_path,
                 forge=FakeForge(),

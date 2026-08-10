@@ -19,6 +19,32 @@ _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)settings\.py$"),
 )
 
+# orchestune.toml / pyproject.toml の [tool.orchestune] のキーのうち、
+# DAG計算ツール（orchestune-dag/orchestune-provision）専用でdispatcher
+# 自身の引数ではないもの（#398/#404/#407）。dispatcher.pyの未知キー検知が
+# これらをtypoと誤判定してクラッシュしないよう、ここで一元管理する
+# （#415レビュー指摘: `dag_`prefixによる無条件許可は`dag_ignore_pattern`
+# のようなtypoまで黙って見逃してしまうため、完全一致リストのまま
+# 定義場所だけを一元化し、新しい共有DAGキーを追加するextract_*関数の
+# すぐ側に追記させることで手動追記漏れを防ぐ）。
+#
+# #415レビュー再指摘: dispatcher.pyはこのセットを、他の設定キーのような
+# ハイフン→アンダースコア正規化を経た後の名前とではなく、config_dataの
+# 生のキー文字列と直接比較する（正規化後に比較すると、`dag_similarity-
+# threshold`のような区切り文字混在のtypoまで正規のスペリングへ丸め込まれて
+# "unknown key"検知をすり抜けてしまい、しかもextract_*関数は生のキーでしか
+# 値を読まないため気づかれないまま黙って無視されてしまう）。そのため
+# ここには、extract_*関数が実際に受け付ける2つの正規のスペリング
+# （全部アンダースコア／全部ハイフン）を両方とも列挙する。
+DAG_TOOL_CONFIG_KEYS = frozenset(
+    {
+        "dag_ignore_patterns",
+        "dag-ignore-patterns",
+        "dag_similarity_threshold",
+        "dag-similarity-threshold",
+    }
+)
+
 
 def compile_extra_ignore_patterns(
     patterns: Iterable[str],
@@ -56,6 +82,46 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
             "non-empty strings"
         )
     return patterns
+
+
+def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
+    """Validate and return the `dag_similarity_threshold` value from a loaded config dict.
+
+    Shared by orchestune-dag (dag_cli.py) and orchestune-provision
+    (provisioning.py, #407) so a threshold chosen via `orchestune-dag
+    --threshold` and persisted here is also honored by
+    `orchestune-provision`'s own DAG recomputation, instead of that tool
+    silently falling back to `DEFAULT_SIMILARITY_THRESHOLD` and producing a
+    different `topological_order`/edge set than what was validated.
+
+    Follows the same hyphen-alias convention as `dag_ignore_patterns`:
+    `dag-similarity-threshold` is accepted as an alias, and the
+    underscore form takes precedence when both are present.
+
+    Returns `None` when the key is absent, so callers fall back to their own
+    default (typically `DEFAULT_SIMILARITY_THRESHOLD`, or a `--threshold`
+    CLI flag when one takes precedence). Raises `ValueError` if present but
+    not a number, or outside the [0, 1] similarity-score range.
+    """
+    value = config.get("dag_similarity_threshold")
+    if value is None:
+        value = config.get("dag-similarity-threshold")
+    if value is None:
+        return None
+    # bool is an int subclass, so isinstance(value, int) alone would let
+    # True/False silently pass through as 1.0/0.0 (#404's dag_ignore_patterns
+    # review raised the same concern for its own type check).
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be a number"
+        )
+    threshold = float(value)
+    if not (0 <= threshold <= 1):
+        raise ValueError(
+            "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
+            f"within [0, 1] (a similarity score), got {threshold}"
+        )
+    return threshold
 
 
 def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:

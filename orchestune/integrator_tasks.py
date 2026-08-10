@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 import sys
+from collections.abc import Iterable
 
 from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
+from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.models import IssueRecord, Task
@@ -30,12 +33,24 @@ def build_issue_to_subtask_id_map(issues: list[IssueRecord]) -> dict[int, str]:
 def get_sorted_done_tasks(
     parent_issue_number: int | None,
     forge: Forge | None = None,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+    threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
 ) -> tuple[list[Task], list[Task]]:
     """`status:done`タスクを依存関係のトポロジカル順に並べる。
 
     戻り値は`(sorted_done_tasks, unparsable_done_tasks)`。後者はFootprint YAMLから
     `subtask_id`を抽出できなかった`status:done`タスクで、マージ対象のIDに紐付けられない
     ため統合できない。
+
+    `ignore_patterns`（#398/#404/#407）: `orchestune-dag`/`orchestune-dispatch`と
+    同じ`dag_ignore_patterns`設定を渡すことで、無視されるべきfootprint衝突が
+    明示的な依存関係と組み合わさって偽の`DagCycleError`を誘発しないようにする
+    （`dispatch_rebase.py`/`dispatch_reconciliation.py`/`provisioning.py`と同じ配線）。
+
+    `threshold`（#407/#415）: 同じ`dag_similarity_threshold`設定を渡すことで、
+    低い（または高い）閾値で意図的に作られた・消された類似度エッジが
+    既定閾値での再計算により復活・消失し、統合順序（topological_order）が
+    検証時と食い違わないようにする。
     """
     forge = forge or GitHubForge()
     done_issues = forge.list_issues_by_label("status:done", state="all")
@@ -94,7 +109,7 @@ def get_sorted_done_tasks(
     ]
 
     try:
-        dag = build_dag(subtasks)
+        dag = build_dag(subtasks, threshold=threshold, ignore_patterns=ignore_patterns)
         topological_order = dag.topological_order
     except Exception as e:
         print(f"Warning: Failed to build DAG: {e}", file=sys.stderr)
