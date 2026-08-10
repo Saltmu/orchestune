@@ -143,8 +143,8 @@ orchestune dag --plan decomposition_plan.md
 
 | 設定項目 | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。いずれかに一致するfootprintパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度エッジのスコア計算から除外される。除外されたパスは類似度エッジを形成しなくなるため、それが原因の「ファイル/シンボルの競合」警告や、循環解消のために類似度エッジが自動的に取り除かれた際の情報提供のみの警告を防げる。`DagCycleError`自体には影響しない（循環が全て明示的な`depends_on`エッジのみで構成される場合にのみ発生し、`dag_ignore_patterns`はそのケースに影響を及ぼせない） — 下記の実在検証・リスク検出という独立したチェックにも影響しない。空文字列は拒否される（空パターンはあらゆるパスに一致し、全ての類似度エッジを無診断で消してしまうため）。 |
-| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。`orchestune-provision`側のDAG再計算にも適用されるため、ここで調整した閾値が`orchestune-dag`と`orchestune-provision`の間で食い違うこと（provision側が黙って既定値に戻ってしまうこと）を防ぐ。 |
+| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。いずれかに一致するfootprintパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度エッジのスコア計算から除外される。除外されたパスは類似度エッジを形成しなくなるため、そのペアは`Edges:`出力に現れず`topological_order`にも影響しない。また、除外されたパスが共有拡張ポイントのカテゴリに一致する場合は下記の「ファイル/シンボルの競合」チェックのトリガーを防げることがあり、循環解消のために推論エッジが自動的に取り除かれた際の情報提供のみの警告のトリガーを防げることもある。`DagCycleError`自体には影響しない（循環が全て明示的な`depends_on`エッジのみで構成される場合にのみ発生し、`dag_ignore_patterns`はそのケースに影響を及ぼせない） — 下記の実在検証・リスク検出という独立したチェックにも影響しない。空文字列は拒否される（空パターンはあらゆるパスに一致し、全ての類似度エッジを無診断で消してしまうため）。 |
+| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のDAG再計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `--plan`がリポジトリルートより下のネストしたファイルを指す場合、`orchestune-dag`は上位へ`.git`を探索してリポジトリルートを特定するのに対し、`orchestune provision`は現状`--plan`自身の親ディレクトリのみを見る。そのためネストしたplanでは、リポジトリルートの設定が一方のツールにしか反映されないことがある（既知のギャップ）。 |
 
 #### 設定ファイルの記述例 (`orchestune.toml`)
 
