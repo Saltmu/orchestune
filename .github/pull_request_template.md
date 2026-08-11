@@ -17,7 +17,7 @@ Closes #<!-- 関連するIssueの番号を記載してください。例: Closes
 
 ## ローカルCI実行結果
 <!-- 
-PR作成前に、必ずプロジェクトルートで `./scripts/local-ci.sh` を実行してください。
+PR作成前に、必ずプロジェクトルートでOSに対応するローカルCIを実行してください（Windows PowerShell: `.\scripts\local-ci.ps1`、Linux/macOS: `./scripts/local-ci.sh`）。
 チェックリストを埋めてください。
 -->
 - [ ] Ruff による自動フォーマット/Lintチェックに合格したか？
