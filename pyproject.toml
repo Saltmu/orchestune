@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orchestune"
-version = "0.1.0"
+version = "0.5.0"
 description = "Multi-agent implementation orchestrator (DAG construction, dispatch cycles, self-healing)"
 authors = ["Saltmu"]
 packages = [{include = "orchestune"}]

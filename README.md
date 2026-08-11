@@ -2,22 +2,22 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-⚠️ **Alpha**: Orchestune is in early-stage development. APIs, CLI commands, and workflows may change without notice.
+⚠️ **Beta**: Orchestune's core workflow is operational, but APIs, CLI commands, and workflows may still change before the stable release.
 
-Orchestune is a multi-agent implementation orchestrator designed to coordinate parallel development tasks. It automates DAG construction, scheduling, dispatch cycles, self-healing, and pull request integration.
+**Orchestune lets you delegate large development tasks to AI agents while keeping every subtask, dependency, and result traceable.**
 
-Orchestune is provided as a **Skill for Agentic AI development** (e.g., Claude Code, Antigravity), allowing an AI agent to autonomously decompose tasks, dispatch subtasks, and integrate results.
+It turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple agents, and links the resulting branches, pull requests, and CI outcomes back to the original task. Orchestune is provided as a **Skill for Agentic AI development** (e.g., Claude Code, Codex CLI, and Antigravity).
 
 ## Key Features
 
-1. **DAG Construction & Conflict Prevention**
-   - Statically computes dependencies based on file and symbol overlap similarity metrics, building conflict-free DAGs for safe parallel execution.
-2. **Intelligent Dispatch & Scheduling**
-   - Supports local command execution as well as dispatching agents via Claude Code Cloud Routine and Codex Cloud.
-3. **Self-healing State Recovery**
-   - Optimized for stateless CI/CD environments (like GitHub Actions); automatically reconstructs state using active GitHub Issues and PRs.
-4. **Integration & Rebase Coordination**
-   - Monitors completed subtask PRs, orchestrating merges and rebasing downstream branches automatically to minimize conflicts.
+1. **Decompose large tasks into traceable work units**
+   - Creates a reviewable plan in which every subtask has an explicit scope, acceptance criteria, verification steps, dependencies, and expected file or symbol footprint.
+2. **Validate dependencies and conflicts before implementation**
+   - Builds a DAG from the plan and detects dependency cycles, overlapping files or symbols, shared-contract risks, and unsafe parallel work before agents modify the codebase.
+3. **Provision an auditable execution plan on GitHub**
+   - Converts the approved plan into parent and child Issues with dependency links, status labels, and implementation context, preserving why each unit of work exists and how it should be verified.
+4. **Coordinate autonomous implementation and integration**
+   - Dispatches ready Issues to local or cloud coding agents, reconstructs progress from GitHub Issues and PRs, and coordinates downstream rebases and integration while keeping the full development history reviewable.
 
 👉 For more details about the design, see [Architecture & Design](docs/en/architecture.md).
 👉 For the meaning and lifecycle of each `status:*` GitHub label, see [status:* Label Lifecycle](docs/en/status-labels.md).
@@ -49,12 +49,20 @@ orchestune setup
 
 A typical Orchestune workflow follows these steps:
 
-1. **Decompose**: Ask your AI agent to decompose a feature using `orchestune`, which drafts and validates a `decomposition_plan.md`.
-2. **Dispatch**: Once the plan is approved, run the dispatcher to spin up worktrees and start subtask agents.
+1. **Decompose and validate**: Ask your AI agent to turn a large task into a reviewable `decomposition_plan.md`, then validate its dependency DAG and conflict risks.
+2. **Provision**: After approval, create dependency-linked parent and child GitHub Issues from the plan.
+3. **Dispatch**: Start eligible subtasks in isolated worktrees using local or cloud coding agents.
+4. **Trace and integrate**: Follow each subtask through its Issue, branch, pull request, and CI result while Orchestune coordinates dependent work and integration.
 
 ```bash
 # Validate your decomposition plan's DAG
 orchestune dag --plan decomposition_plan.md
+
+# Preview the GitHub Issues generated from the approved plan
+orchestune provision --plan decomposition_plan.md --no-apply
+
+# Create the parent and child GitHub Issues
+orchestune provision --plan decomposition_plan.md
 
 # Run dispatcher in dry-run mode
 orchestune dispatch --no-apply
