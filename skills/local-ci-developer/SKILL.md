@@ -66,16 +66,24 @@ description: "設計・実装プラン作成、GitHubでのIssue起票、TDDに�
 
 ### 8. エッジケースと異常系のカバレッジ補強
 - カバレッジが **75%** に満たない場合や、品質向上のため、エッジケースやエラーハンドリング（異常系）のテストを追加で記述し、カバレッジを向上させます。
-- カバレッジ計測は開発ループを軽くするため `pytest` の既定（`addopts`）には含まれていません。未カバーの行を確認する際は `poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing` のように明示的にオプションを指定して実行してください（`./scripts/local-ci.sh` はこのオプションを常に付与して実行します）。
+- カバレッジ計測は開発ループを軽くするため `pytest` の既定（`addopts`）には含まれていません。未カバーの行を確認する際は `poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing` のように明示的にオプションを指定して実行してください（Windows用の`.\scripts\local-ci.ps1`とLinux/macOS用の`./scripts/local-ci.sh`はこのオプションを常に付与して実行します）。
 
 ### 9. ローカルCIの一括実行とエラー解消
-コードの修正が完了したら、以下のコマンドをプロジェクトルートで実行します。
+コードの修正が完了したら、実行OSを判定し、対応するコマンドをプロジェクトルートで実行します。
+
+Windows PowerShell:
+
+```powershell
+.\scripts\local-ci.ps1
+```
+
+Linux / macOS:
 
 ```bash
 ./scripts/local-ci.sh
 ```
 
-このスクリプトは以下の順にチェックを行います。失敗した場合はそれぞれのステップに応じてエラーを解消してください。
+どちらのスクリプトも以下の順にチェックを行います。失敗した場合はそれぞれのステップに応じてエラーを解消してください。
 
 #### ① Ruff Format/Lint エラーの場合
 - 自動フォーマットを実行: `poetry run ruff format`
@@ -95,7 +103,7 @@ description: "設計・実装プラン作成、GitHubでのIssue起票、TDDに�
 - ファイルやスキルのサイズが肥大化（目安としてコード: 1,000行以上、スキル: 500行以上）していたり、複雑度が高すぎる警告（`poetry run detect-bloat`等）を検知した場合は、そのままコード修正を進めずに作業を一時停止し、まずユーザーにモジュールやプロンプトの分割リファクタリング計画を提示し、承認を得てください。
 
 ### 10. すべてがパスした後の確認とPR作成（PR agent / finalization）
-- `./scripts/local-ci.sh` が `✨ Local CI passed successfully!` と出力して正常終了したことを確認します。
+- OSに対応するローカルCIスクリプト（Windowsでは`.\scripts\local-ci.ps1`、Linux/macOSでは`./scripts/local-ci.sh`）が `✨ Local CI passed successfully!` と出力して正常終了したことを確認します。
 - `walkthrough.md` を作成し、実施した変更やテスト内容、Local CI の結果をまとめます。
 - PR本文は、必ずリポジトリのPRテンプレート（`.github/pull_request_template.md`）から作成します。テンプレートを直接`--body-file`へ渡さず、作業用ファイル（例: `/tmp/pr_body.md`）へコピーしてから、見出し・チェックリスト・必須項目を削除せずにすべて記入してください。
 - テンプレートにプレースホルダー、未記入の箇条書き、未判定のチェックボックスが残っていないことを確認します。該当しない項目は削除せず、理由を添えて「該当なし」と記載します。

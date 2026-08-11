@@ -31,6 +31,23 @@ def test_powershell_setup_git_hooks_contract():
     assert "local-ci.ps1" in content
 
 
+def test_agent_workflow_selects_local_ci_by_os():
+    workflow_files = [
+        PROJECT_ROOT / ".agents" / "AGENTS.md",
+        PROJECT_ROOT / "skills" / "local-ci-developer" / "SKILL.md",
+        PROJECT_ROOT / ".github" / "pull_request_template.md",
+    ]
+
+    for workflow_file in workflow_files:
+        content = workflow_file.read_text(encoding="utf-8")
+        assert (
+            "local-ci.ps1" in content
+        ), f"{workflow_file.relative_to(PROJECT_ROOT)} must document Windows local CI"
+        assert (
+            "local-ci.sh" in content
+        ), f"{workflow_file.relative_to(PROJECT_ROOT)} must document POSIX local CI"
+
+
 def test_gitleaks_installer_scripts_exist():
     install_sh = PROJECT_ROOT / "scripts" / "install-gitleaks.sh"
     install_ps1 = PROJECT_ROOT / "scripts" / "install-gitleaks.ps1"
