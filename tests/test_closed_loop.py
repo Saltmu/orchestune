@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -62,16 +63,19 @@ class DummyGitRepo:
             "src/main.py", "def main():\n    print('Hello')\n", "Initial main.py"
         )
 
-        # Setup local-ci.sh
-        # This CI script will compile the python files.
-        # If there's a syntax error, it will fail (exit 1).
-        ci_content = (
-            "#!/bin/bash\n"
-            "echo 'Running Local CI...'\n"
-            "python3 -m py_compile src/main.py\n"
-        )
+        # Set up the platform-local CI entrypoint. This CI script compiles the
+        # Python file, so a syntax error makes integration fail.
+        if sys.platform == "win32":
+            ci_path = "scripts/local-ci.ps1"
+            ci_content = (
+                "python -m py_compile src/main.py\n"
+                "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
+            )
+        else:
+            ci_path = "scripts/local-ci.sh"
+            ci_content = "#!/bin/bash\npython3 -m py_compile src/main.py\n"
         self._commit_file(
-            "scripts/local-ci.sh", ci_content, "Add local-ci.sh", executable=True
+            ci_path, ci_content, f"Add {Path(ci_path).name}", executable=True
         )
 
     def _commit_file(
@@ -439,7 +443,6 @@ def test_closed_loop_flow():
             repository_root=repo.local_path,
             base_branch="origin/main",
             temp_branch="integration/temp-main",
-            ci_command=["bash", str(repo.local_path / "scripts/local-ci.sh")],
             apply=True,
         )
         integrator = Integrator(int_config)
@@ -481,7 +484,6 @@ def test_closed_loop_flow():
             repository_root=repo.local_path,
             base_branch="origin/main",
             temp_branch="integration/temp-main",
-            ci_command=["bash", str(repo.local_path / "scripts/local-ci.sh")],
             apply=True,
         )
         integrator2 = Integrator(int_config2)

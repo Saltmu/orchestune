@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -196,13 +197,21 @@ class TestRelativeRepositoryRoot:
         )
 
         self._commit_file(repo_path, "README.md", "dummy\n", "Initial commit")
-        self._commit_file(
-            repo_path,
-            "scripts/local-ci.sh",
-            "#!/bin/bash\nexit 0\n",
-            "Add local-ci.sh",
-            executable=True,
-        )
+        if sys.platform == "win32":
+            self._commit_file(
+                repo_path,
+                "scripts/local-ci.ps1",
+                "exit 0\n",
+                "Add local-ci.ps1",
+            )
+        else:
+            self._commit_file(
+                repo_path,
+                "scripts/local-ci.sh",
+                "#!/bin/bash\nexit 0\n",
+                "Add local-ci.sh",
+                executable=True,
+            )
         self._git(repo_path, "push", "-u", "origin", "main")
 
         self._git(repo_path, "checkout", "-b", "claude/issue-1-task-1")

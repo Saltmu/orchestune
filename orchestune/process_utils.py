@@ -30,6 +30,20 @@ _STILL_ACTIVE = 259
 _ERROR_ACCESS_DENIED = 5
 
 
+def default_ci_command() -> list[str]:
+    """Return the repository-local CI command appropriate for this platform."""
+    if sys.platform == "win32":
+        return [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/local-ci.ps1",
+        ]
+    return ["./scripts/local-ci.sh"]
+
+
 def _is_process_alive_windows(pid: int) -> bool:
     assert _kernel32 is not None
     # PROCESS_QUERY_LIMITED_INFORMATIONは終了コード取得に必要な最小限の

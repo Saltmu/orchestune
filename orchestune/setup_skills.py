@@ -1,9 +1,22 @@
+import ntpath
+import os
 import shutil
 import sys
 from pathlib import Path
 
 SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer", "workflow-template"}
 WORKFLOW_TEMPLATE_SKILL_NAME = "workflow-template"
+
+
+def _normalized_path(path: str) -> str:
+    """Normalize Windows extended-length paths before comparing link targets."""
+    if sys.platform == "win32":
+        if path.startswith("\\\\?\\UNC\\"):
+            path = "\\\\" + path[8:]
+        elif path.startswith("\\\\?\\"):
+            path = path[4:]
+        return ntpath.normcase(ntpath.normpath(path))
+    return os.path.normcase(os.path.normpath(path))
 
 
 def _create_skill_link(src_skill: Path, dest_skill: Path) -> str:
@@ -64,7 +77,9 @@ def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
 
         try:
             link_target = dest_skill.readlink()
-            if link_target.resolve() == src_skill.resolve():
+            if _normalized_path(str(link_target.resolve())) == _normalized_path(
+                str(src_skill.resolve())
+            ):
                 print(
                     f"  Skipped '{skill_name}' (already correctly linked to {src_skill})"
                 )

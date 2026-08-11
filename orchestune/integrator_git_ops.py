@@ -10,6 +10,7 @@ from orchestune.forge import Forge, GitHubForge
 from orchestune.git_cli import run_git
 from orchestune.integrator_pr import handle_merge_failure
 from orchestune.models import Task
+from orchestune.process_utils import default_ci_command
 
 
 class IntegrationMerger:
@@ -126,7 +127,7 @@ class IntegrationMerger:
         # 内部で吸収するため、ここで通しの再実行を重ねる必要はない。
         # quarantine対象外のテストが不安定な場合は、そのままCI失敗として
         # 正しく検知させ、人間がquarantineリストへの追加を判断する。
-        ci_cmd = self.ci_command or ["./scripts/local-ci.sh"]
+        ci_cmd = self.ci_command or default_ci_command()
 
         env = os.environ.copy()
         env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"

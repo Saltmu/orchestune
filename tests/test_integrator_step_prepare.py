@@ -134,9 +134,7 @@ class TestDependencyFailureBlocking:
             make_done_issue(2, subtask_id="task-2", depends_on=("task-1",)),
             make_done_issue(3, subtask_id="task-3", depends_on=("task-2",)),
         )
-        integrator_env.fail_git(
-            lambda args: "local-ci.sh" in args[0] or "local-ci.sh" in args
-        )
+        integrator_env.fail_git(lambda args: any("local-ci." in arg for arg in args))
 
         res = Integrator(IntegratorConfig(apply=True)).run()
 

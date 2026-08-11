@@ -14,7 +14,11 @@ permissions:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout code
@@ -23,6 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Scan for secrets and local paths (gitleaks)
+        if: runner.os == 'Linux'
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,7 +46,13 @@ jobs:
         run: |
           poetry install --no-interaction
 
-      - name: Run CI checks
+      - name: Run CI checks (Linux)
+        if: runner.os == 'Linux'
         run: |
           chmod +x scripts/local-ci.sh
           ./scripts/local-ci.sh
+
+      - name: Run CI checks (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/local-ci.ps1

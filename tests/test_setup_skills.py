@@ -5,6 +5,18 @@ from unittest.mock import patch
 import pytest
 
 
+def test_normalized_path_removes_windows_extended_path_prefix():
+    from orchestune.setup_skills import _normalized_path
+
+    with patch("orchestune.setup_skills.sys.platform", "win32"):
+        assert _normalized_path(r"\\?\C:\workspace\skills\orchestune") == (
+            r"c:\workspace\skills\orchestune"
+        )
+        assert _normalized_path(r"\\?\UNC\server\share\skills\orchestune") == (
+            r"\\server\share\skills\orchestune"
+        )
+
+
 def test_create_skill_link_copies_on_windows_privilege_error(tmp_path):
     from orchestune.setup_skills import _create_skill_link
 

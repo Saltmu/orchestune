@@ -21,6 +21,7 @@ from orchestune.integrator_types import (
     IntegrationStatus,
 )
 from orchestune.integrator_worktree import IntegrationWorktree
+from orchestune.process_utils import default_ci_command
 
 
 class PrepareTasksStep(IntegrationComponent):
@@ -148,7 +149,7 @@ class MergeAndTestStep(IntegrationComponent):
         merger = IntegrationMerger(
             repository_root=ctx.repository_root,
             original_root=ctx.original_root,
-            ci_command=ctx.config.ci_command or ["./scripts/local-ci.sh"],
+            ci_command=ctx.config.ci_command or default_ci_command(),
             forge=ctx.config.forge,
         )
 
