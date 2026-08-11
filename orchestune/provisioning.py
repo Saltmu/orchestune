@@ -26,6 +26,7 @@ from orchestune.dag_models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
     load_orchestune_config,
+    resolve_repo_root,
 )
 from orchestune.dag_parsing import (
     extract_frontmatter_and_body,
@@ -524,9 +525,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         # footprintおよびorchestune.toml/[tool.orchestune]はリポジトリルート
         # からの相対パスとして定義されているため、呼び出し元のcwdではなく
         # --planファイル自身の位置を基点にする（dag_cli.pyと同じ規約。#404）。
-        # これにより、`orchestune-dag --plan ...`が検証した設定
-        # （dag_ignore_patterns等）と同じファイルを`orchestune-provision`も読む。
-        repo_root = Path(args.plan).resolve().parent
+        # --planがリポジトリルートより下のネストしたパスを指す場合でも、
+        # dag_cli.pyと同じく.gitを上位探索して真のリポジトリルートを特定する
+        # （#410, #418）。これにより、`orchestune-dag --plan ...`が検証した
+        # 設定（dag_ignore_patterns等）と同じファイルを`orchestune provision`
+        # も一貫して読む。
+        repo_root = resolve_repo_root(args.plan)
         result = provision_issues(
             args.plan,
             apply=args.apply,

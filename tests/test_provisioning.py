@@ -873,7 +873,15 @@ class TestMain:
         plan_path.write_text(_PLAN, encoding="utf-8")
 
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
