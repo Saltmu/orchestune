@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import re
 import tomllib
@@ -51,12 +52,17 @@ def _module_name(path: Path) -> str:
     return ".".join((PACKAGE_NAME, *parts))
 
 
+@functools.cache
 def _package_modules() -> dict[str, Path]:
     """Every `.py` under `orchestune/`, subpackage initialisers included.
 
     A nested `__init__.py` can carry imports and package wiring of its own, so
     leaving it out would hide cycles and upward dependencies introduced there —
     and would quietly weaken the "the layer table covers every file" promise.
+
+    Cached: callers only read the result, never mutate it, and this file's
+    package tree doesn't change mid test-run, so repeated calls (12+ across
+    this module's tests) can safely share one filesystem walk.
     """
     return {_module_name(path): path for path in PACKAGE_ROOT.rglob("*.py")}
 
@@ -117,6 +123,7 @@ def _internal_imports(
     return imports
 
 
+@functools.cache
 def _import_graph() -> dict[str, set[str]]:
     modules = _package_modules()
     known_modules = set(modules)
