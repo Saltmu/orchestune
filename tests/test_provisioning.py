@@ -854,6 +854,39 @@ class TestMain:
         captured = capsys.readouterr()
         assert "orchestune.toml" in captured.err
 
+    def test_nested_plan_reads_config_from_git_repository_root(
+        self, tmp_path: Path, template_path: Path, capsys
+    ):
+        """#418: `--plan`がリポジトリルートより下のネストしたパスを指す場合、
+        `orchestune-dag`（`dag_cli._resolve_repo_root`、#410）と同様に`.git`を
+        上位探索してリポジトリルート直下の`orchestune.toml`を読むべきで、
+        `--plan`自身の親ディレクトリを単純に使ってはならない。"""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (tmp_path / "orchestune.toml").write_text(
+            "not valid toml [[[", encoding="utf-8"
+        )
+        plans_dir = tmp_path / "plans"
+        plans_dir.mkdir()
+        plan_path = plans_dir / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "orchestune.toml" in captured.err
+
     def test_missing_plan_file_exits_1_with_error(self, tmp_path: Path, capsys):
         with pytest.raises(SystemExit) as exc_info:
             main(["--plan", str(tmp_path / "nonexistent.md")])

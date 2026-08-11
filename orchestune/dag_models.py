@@ -124,6 +124,27 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
     return threshold
 
 
+def resolve_repo_root(plan_path: str | Path) -> Path:
+    """Locate the Git repository root a plan file lives under.
+
+    Walks upward from `plan_path`'s parent directory looking for a `.git`
+    marker (a directory in a normal checkout, or a file pointing at the
+    real gitdir in a linked worktree). Outside a Git repository, falls back
+    to the plan's own parent directory to preserve pre-#410 behavior.
+
+    Shared by orchestune-dag (dag_cli.py) and orchestune-provision
+    (provisioning.py) so that both tools agree on which directory's
+    orchestune.toml / pyproject.toml `[tool.orchestune]` table to read when
+    `--plan` points to a file nested below the repository root (#410, #418).
+    """
+    plan_parent = Path(plan_path).resolve().parent
+    for candidate in (plan_parent, *plan_parent.parents):
+        git_marker = candidate / ".git"
+        if git_marker.is_file() or (git_marker / "HEAD").is_file():
+            return candidate
+    return plan_parent
+
+
 def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
     """Load the orchestune.toml / pyproject.toml `[tool.orchestune]` config table.
 

@@ -6,7 +6,6 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 from orchestune.dag_graph import build_dag_from_plan
@@ -15,6 +14,7 @@ from orchestune.dag_models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
     load_orchestune_config,
+    resolve_repo_root,
 )
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 
@@ -35,19 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
         f"{DEFAULT_SIMILARITY_THRESHOLD}, i.e. orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD)",
     )
     return parser
-
-
-def _resolve_repo_root(plan_path: str | Path) -> Path:
-    """planの位置からGitリポジトリルートを探索する。
-
-    Git管理外では、従来の挙動と互換性を保つためplanの親を返す。
-    """
-    plan_parent = Path(plan_path).resolve().parent
-    for candidate in (plan_parent, *plan_parent.parents):
-        git_marker = candidate / ".git"
-        if git_marker.is_file() or (git_marker / "HEAD").is_file():
-            return candidate
-    return plan_parent
 
 
 def _print_text_result(dag: dict[str, Any]) -> None:
@@ -82,7 +69,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # footprintはリポジトリルートからの相対パスとして定義されているため、
         # --planの位置から.gitを上方探索する。Git管理外の場合のみ、
         # 呼び出し元のcwdではなく--planファイル自身の位置を基点にする。
-        repo_root = _resolve_repo_root(args.plan)
+        repo_root = resolve_repo_root(args.plan)
         config = load_orchestune_config(repo_root)
         extra_ignore_patterns = compile_extra_ignore_patterns(
             extract_dag_ignore_patterns(config)
