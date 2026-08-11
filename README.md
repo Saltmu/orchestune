@@ -47,27 +47,25 @@ orchestune setup
 
 ## Usage
 
-A typical Orchestune workflow follows these steps:
+In practice, you don't type the commands below yourself. You describe the task to your AI agent in natural language (e.g. "decompose this feature with orchestune"), and the `orchestune` skill drives the whole pipeline internally — including handing off to `orchestune-dispatch` — calling these CLI commands as tool calls on your behalf. They're shown here to make each stage concrete, and because you may still want to run a step manually in exceptional cases (e.g. resuming dispatch after local state is lost).
 
-1. **Decompose and validate**: Ask your AI agent to turn a large task into a reviewable `decomposition_plan.md`, then validate its dependency DAG and conflict risks.
-2. **Provision**: After approval, create dependency-linked parent and child GitHub Issues from the plan.
-3. **Dispatch**: Start eligible subtasks in isolated worktrees using local or cloud coding agents.
-4. **Trace and integrate**: Follow each subtask through its Issue, branch, pull request, and CI result while Orchestune coordinates dependent work and integration.
+1. **Decompose and validate**: Your agent turns the large task into a reviewable `decomposition_plan.md`, then validates its dependency DAG and conflict risks — you review and approve the plan.
+2. **Provision**: Once you approve, your agent creates dependency-linked parent and child GitHub Issues from the plan.
+3. **Dispatch**: Your agent starts eligible subtasks in isolated worktrees using local or cloud coding agents.
+4. **Trace and integrate**: Each subtask is tracked through its Issue, branch, pull request, and CI result while Orchestune coordinates dependent work and integration.
 
 ```bash
-# Validate your decomposition plan's DAG
+# What the orchestune skill runs on your behalf at each stage:
+
+# 1. Validate the decomposition plan's DAG
 orchestune dag --plan decomposition_plan.md
 
-# Preview the GitHub Issues generated from the approved plan
+# 2. Preview, then create, the GitHub Issues from the approved plan
 orchestune provision --plan decomposition_plan.md --no-apply
-
-# Create the parent and child GitHub Issues
 orchestune provision --plan decomposition_plan.md
 
-# Run dispatcher in dry-run mode
+# 3. Start the dispatcher (dry-run, then execute)
 orchestune dispatch --no-apply
-
-# Run dispatcher (execute)
 orchestune dispatch
 ```
 
