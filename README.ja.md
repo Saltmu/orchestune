@@ -47,27 +47,25 @@ orchestune setup
 
 ## 使い方
 
-Orchestuneの基本的な流れは以下の通りです。
+実際には、以下のコマンドを人間が自分で打つことはありません。「この機能をorchestuneで分解して」のように自然言語でAIエージェントへ依頼すると、`orchestune`スキルが`orchestune-dispatch`への引き継ぎも含めてパイプライン全体を内部で駆動し、これらのCLIコマンドをツール呼び出しとして代行実行します。以下はその各段階を具体的に示すためのものであり、また状態ファイル消失後の手動再開など例外的なケースで、いずれかのステップを人間が直接実行したくなる場合もあるためです。
 
-1. **分解と検証**: AIエージェントに大きなタスクをレビュー可能な`decomposition_plan.md`へ分解させ、依存DAGと競合リスクを検証します。
-2. **Issue起票**: 計画の承認後、依存関係で結ばれたGitHubの親Issueと子Issueを作成します。
-3. **ディスパッチ**: 着手可能なサブタスクを分離されたworktreeでローカルまたはクラウドのAIコーディングエージェントへ割り当てます。
+1. **分解と検証**: あなたのエージェントが大きなタスクをレビュー可能な`decomposition_plan.md`へ分解し、依存DAGと競合リスクを検証します。あなたはその計画をレビューして承認します。
+2. **Issue起票**: 承認後、あなたのエージェントが依存関係で結ばれたGitHubの親Issueと子Issueを作成します。
+3. **ディスパッチ**: あなたのエージェントが、着手可能なサブタスクを分離されたworktreeでローカルまたはクラウドのAIコーディングエージェントへ割り当てます。
 4. **追跡と統合**: 各サブタスクのIssue、ブランチ、プルリクエスト、CI結果を追跡しながら、Orchestuneが依存タスクと統合を調整します。
 
 ```bash
-# 計画のDAG検証
+# orchestuneスキルが各段階であなたの代わりに実行するコマンド:
+
+# 1. 計画のDAG検証
 orchestune dag --plan decomposition_plan.md
 
-# 承認した計画から生成されるGitHub Issueをプレビュー
+# 2. 承認した計画からGitHub Issueをプレビューし、その後起票する
 orchestune provision --plan decomposition_plan.md --no-apply
-
-# GitHubに親Issueと子Issueを起票
 orchestune provision --plan decomposition_plan.md
 
-# ディスパッチャーの起動（ドライラン）
+# 3. ディスパッチャーの起動（ドライラン、その後実行）
 orchestune dispatch --no-apply
-
-# ディスパッチャーの起動（実行）
 orchestune dispatch
 ```
 
