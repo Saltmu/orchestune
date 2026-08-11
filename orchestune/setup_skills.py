@@ -1,3 +1,4 @@
+import ntpath
 import os
 import shutil
 import sys
@@ -14,6 +15,7 @@ def _normalized_path(path: str) -> str:
             path = "\\\\" + path[8:]
         elif path.startswith("\\\\?\\"):
             path = path[4:]
+        return ntpath.normcase(ntpath.normpath(path))
     return os.path.normcase(os.path.normpath(path))
 
 
