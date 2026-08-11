@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -518,6 +519,10 @@ class TestAtomicWrite:
         siblings = {p.name for p in plan_path.parent.iterdir()}
         assert siblings == {plan_path.name}  # no leftover temp file either
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows chmod cannot preserve POSIX permission bits beyond read-only.",
+    )
     def test_preserves_original_file_permissions(self, plan_path: Path):
         """#323 review (P2): `mkstemp` creates the replacement at mode 0600;
         without copying the original's mode across, a typical 0644 plan

@@ -13,6 +13,7 @@ from unittest.mock import patch
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.models import PrRecord
+from orchestune.process_utils import default_ci_command
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _TASK_1_BRANCH = "claude/issue-1-task-1"
@@ -20,7 +21,7 @@ _TASK_1_REFSPEC = f"{_TASK_1_BRANCH}:refs/remotes/origin/{_TASK_1_BRANCH}"
 
 
 def _is_ci(args: list[str]) -> bool:
-    return "local-ci.sh" in args[0] or "local-ci.sh" in args
+    return any("local-ci." in arg for arg in args)
 
 
 def _ok(args: list[str], stdout: str = "") -> subprocess.CompletedProcess:
@@ -506,7 +507,7 @@ class TestCiEnvironment:
             integrator = Integrator(IntegratorConfig(apply=True, repository_root=root))
             integrator.run()
 
-        ci_calls = integrator_env.calls_with("./scripts/local-ci.sh")
+        ci_calls = integrator_env.calls_with(*default_ci_command())
         assert len(ci_calls) == 1
         env = ci_calls[0].kwargs["env"]
 

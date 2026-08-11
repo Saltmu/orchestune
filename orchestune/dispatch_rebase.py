@@ -21,7 +21,7 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 from orchestune.git_cli import resolve_local_or_remote_branch, run_git
-from orchestune.process_utils import is_process_alive
+from orchestune.process_utils import default_ci_command, is_process_alive
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +367,7 @@ def _apply_auto_rebase(
 
         env = _get_ci_env(Path(config.worktree_root).resolve().parent)
         ci_res = subprocess.run(
-            ["./scripts/local-ci.sh"],
+            default_ci_command(),
             cwd=active.worktree_path,
             capture_output=True,
             text=True,

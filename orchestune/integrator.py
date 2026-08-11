@@ -27,6 +27,7 @@ from orchestune.integrator_types import (
 )
 from orchestune.integrator_worktree import IntegrationWorktree
 from orchestune.models import Task
+from orchestune.process_utils import default_ci_command
 
 
 class IntegrationPipeline(IntegrationComponent):
@@ -157,7 +158,7 @@ class Integrator:
     def __init__(self, config: IntegratorConfig):
         self.config = config
         if self.config.ci_command is None:
-            self.config.ci_command = ["./scripts/local-ci.sh"]
+            self.config.ci_command = default_ci_command()
         self.original_root = Path(self.config.repository_root).resolve()
         self.config.repository_root = self.original_root
         self._worktree = IntegrationWorktree(
