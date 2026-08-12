@@ -19,6 +19,8 @@ from orchestune.dispatch_worktree import file_lock
 from orchestune.integrator import Integrator, IntegratorConfig
 from tests.conftest import IntegratorEnv, make_done_issue
 
+pytestmark = pytest.mark.integration
+
 _CUSTOM_ROOT = Path("/custom/repo/root")
 
 

@@ -2,6 +2,8 @@ import subprocess
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.git_cli import (
     GitResult,
     branch_changed_files,
@@ -10,6 +12,8 @@ from orchestune.git_cli import (
     resolve_local_or_remote_branch,
     run_git,
 )
+
+pytestmark = pytest.mark.integration
 
 
 class TestRunGit:

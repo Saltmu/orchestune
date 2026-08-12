@@ -5,6 +5,8 @@ import pytest
 from orchestune.bootstrap import main, run_bootstrap
 from orchestune.forge import BootstrapResult, ForgeAuthError, ForgeError
 
+pytestmark = pytest.mark.integration
+
 
 def _fake_forge(*, auth_error: ForgeAuthError | None = None, result=None):
     forge = MagicMock()
