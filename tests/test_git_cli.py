@@ -13,8 +13,6 @@ from orchestune.git_cli import (
     run_git,
 )
 
-pytestmark = pytest.mark.integration
-
 
 class TestRunGit:
     def test_prefixes_git_and_returns_git_result(self, tmp_path):
@@ -90,6 +88,7 @@ class TestListRemoteBranches:
             branches = list_remote_branches()
         assert branches == ["origin/main"]
 
+    @pytest.mark.integration
     def test_discovers_branch_never_fetched_locally(self, tmp_path):
         import os
 
@@ -394,6 +393,7 @@ class TestEnsureParentBranch:
             called_commands = [call.args[0] for call in mock_run.call_args_list]
             assert len(called_commands) == 2
 
+    @pytest.mark.integration
     def test_ensure_parent_branch_real_git_fetch_head(self, tmp_path):
         import os
 
@@ -499,6 +499,7 @@ class TestEnsureParentBranch:
 
         assert parent_sha == new_sha
 
+    @pytest.mark.integration
     def test_ensure_parent_branch_fetch_existing_branch(self, tmp_path):
         import os
 
@@ -614,6 +615,7 @@ class TestEnsureParentBranch:
         )
 
 
+@pytest.mark.integration
 class TestResolveLocalOrRemoteBranch:
     def test_resolve_local_or_remote_branch(self, tmp_path):
         # 1. ローカル・リモートリポジトリの初期化

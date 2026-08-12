@@ -27,8 +27,6 @@ from orchestune.dispatch_state import (
     RunState,
 )
 
-pytestmark = pytest.mark.integration
-
 
 def _task(**overrides):
     defaults = dict(

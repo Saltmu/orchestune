@@ -19,8 +19,6 @@ from orchestune.dispatch_worktree import file_lock
 from orchestune.integrator import Integrator, IntegratorConfig
 from tests.conftest import IntegratorEnv, make_done_issue
 
-pytestmark = pytest.mark.integration
-
 _CUSTOM_ROOT = Path("/custom/repo/root")
 
 
@@ -152,6 +150,7 @@ class TestWorktreeSafety:
             assert not leftover.exists()
 
 
+@pytest.mark.integration
 class TestRelativeRepositoryRoot:
     """#48: repository_rootが`Path(".")`以外の相対パスの場合、worktreeの作成先と
     その後のcheckout/merge/CIが参照するcwdがずれて処理全体が失敗する不具合の回帰テスト。
