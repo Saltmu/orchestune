@@ -75,6 +75,7 @@ class TestMain:
         assert exc_info.value.code == 1
 
 
+@pytest.mark.integration
 class TestEmptyRepoInit:
     def test_empty_repo_initialization(self, tmp_path):
         import subprocess

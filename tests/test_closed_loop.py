@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_state import RunState, save_run_state
@@ -13,6 +15,8 @@ from orchestune.dispatch_targets import DispatchHandle, DispatchTarget
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord, Task
+
+pytestmark = pytest.mark.integration
 
 
 class DummyGitRepo:

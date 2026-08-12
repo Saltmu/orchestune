@@ -60,6 +60,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "uses_real_file_lock: exercises the real fcntl-based Integrator worktree lock instead of the autouse no-op stub",
+    "integration: shells out to a real git binary via subprocess instead of mocking it, so it's slower than the unit-test default",
 ]
 
 [tool.coverage.run]

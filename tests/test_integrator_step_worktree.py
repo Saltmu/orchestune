@@ -150,6 +150,7 @@ class TestWorktreeSafety:
             assert not leftover.exists()
 
 
+@pytest.mark.integration
 class TestRelativeRepositoryRoot:
     """#48: repository_rootが`Path(".")`以外の相対パスの場合、worktreeの作成先と
     その後のcheckout/merge/CIが参照するcwdがずれて処理全体が失敗する不具合の回帰テスト。
