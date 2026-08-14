@@ -14,7 +14,7 @@ class IntegrationWorktree:
         self.temp_branch = temp_branch
 
     def key(self) -> str:
-        """`temp_branch`（親Issueごとに一意）を安全なファイル/ディレクトリ名に変換する。"""
+        """runごとに一意な`temp_branch`を安全なファイル名へ変換する。"""
         return self.temp_branch.replace("/", "-")
 
     def temp_path(self) -> Path:
@@ -22,6 +22,10 @@ class IntegrationWorktree:
 
     def lock_path(self) -> Path:
         return self.original_root / "worktrees" / ".locks" / f"{self.key()}.lock"
+
+    def gc_lock_path(self) -> Path:
+        """短時間のintegration GCを保護する共有ロックパスを返す。"""
+        return self.original_root / "worktrees" / ".locks" / "integration-gc.lock"
 
     def reclaim(self, path: Path) -> None:
         """`path`に残存物があれば、所有権を確認した上でのみ除去する。
