@@ -277,7 +277,7 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
             lambda _lock_path: contextlib.nullcontext(),
         ),
         patch(
-            "orchestune.integrator.file_lock",
+            "orchestune.integrator_steps.file_lock",
             lambda _lock_path: contextlib.nullcontext(),
         ),
     ):
