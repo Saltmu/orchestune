@@ -296,7 +296,6 @@ def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
         (worker / "integration.txt").write_text("integrated\n", encoding="utf-8")
         git(worker, "add", "integration.txt")
         git(worker, "commit", "-m", "integration result")
-        base_sha = git(worker, "rev-parse", "origin/parent/issue-100").stdout.strip()
 
         racer = workspace / "racer"
         subprocess.run(["git", "clone", str(origin), str(racer)], check=True)
@@ -322,7 +321,6 @@ def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
             original_root=worker,
             base_branch="origin/parent/issue-100",
             temp_branch=temp_branch,
-            parent_base_sha=base_sha,
             merged_tasks=["task-1"],
             active_done_tasks=[
                 Task(
@@ -350,7 +348,6 @@ def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
             text=True,
         ).stdout.strip()
         assert remote_parent == advanced_sha
-        assert remote_parent != base_sha
         fake_forge.add_label.assert_not_called()
         fake_forge.close_issue.assert_not_called()
 
