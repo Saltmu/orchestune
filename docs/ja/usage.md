@@ -144,7 +144,7 @@ orchestune dag --plan decomposition_plan.md
 | 設定項目 | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
 | `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチする — `symbols`の項目はこの設定でフィルタされることは無く、常に類似度スコアの計算対象に含まれる。マッチしたfootprintパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度スコアの**計算入力**から除外される（＝そのペアの重なりスコアに寄与しなくなる）。ただし、そのペアが除外対象でない別のfootprintパスや共有する`symbols`の項目でも重なっている場合は、類似度エッジ自体は形成され続ける（または新たに形成される）ことがある。同様に、下記の「ファイル/シンボルの競合」チェックが必ず防げるとも限らない — このチェックは各subtaskの元の（フィルタ前の）footprintを見るため、同一カテゴリの書き込み者同士をそれまで繋いでいたエッジが除外によって消えた場合、この警告を防ぐのではなく**新たに発生させる**こともある。`DagCycleError`自体には影響しない（循環が全て明示的な`depends_on`エッジのみで構成される場合にのみ発生し、`dag_ignore_patterns`はそのケースに影響を及ぼせない） — 下記の実在検証・リスク検出という独立したチェックにも影響しない。空文字列は拒否される（空パターンはあらゆるfootprintパスに一致し、全てのfootprint項目をスコア計算から無診断で除いてしまうが、共有する`symbols`の項目があれば依然としてエッジが形成され得るため）。 |
-| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のDAG再計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `--plan`がリポジトリルートより下のネストしたファイルを指す場合、`orchestune-dag`は上位へ`.git`を探索してリポジトリルートを特定するのに対し、`orchestune provision`は現状`--plan`自身の親ディレクトリのみを見る。そのためネストしたplanでは、リポジトリルートの設定が一方のツールにしか反映されないことがある（既知のギャップ）。 |
+| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のDAG再計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `orchestune-dag`と`orchestune provision`はいずれも共通の`resolve_repo_root()`関数を使ってリポジトリルートを解決しており、これは上位へ`.git`を探索してリポジトリルートを特定する。そのため`--plan`がリポジトリルートより下のネストしたファイルを指す場合でも、両ツールは一貫して同じリポジトリルートの設定を参照する。 |
 
 #### 設定ファイルの記述例 (`orchestune.toml`)
 
