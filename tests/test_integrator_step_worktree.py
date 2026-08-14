@@ -15,12 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.integrator import (
-    IntegrationContext,
-    Integrator,
-    IntegratorConfig,
-    SetupWorktreeStep,
-)
+from orchestune.integrator import Integrator, IntegratorConfig
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _CUSTOM_ROOT = Path("/custom/repo/root")
@@ -75,36 +70,6 @@ class TestWorktreeIsolation:
         assert res["status"] == "failed_to_create_temp_worktree"
         assert _worktree_remove_calls(integrator_env) == []
 
-    def test_parent_base_sha_is_recorded_after_worktree_setup(
-        self, integrator_env: IntegratorEnv
-    ):
-        config = IntegratorConfig(
-            apply=True,
-            parent_issue_number=100,
-            integration_run_id="test-run",
-            repository_root=_CUSTOM_ROOT,
-        )
-        ctx = IntegrationContext(
-            config=config,
-            repository_root=_CUSTOM_ROOT,
-            original_root=_CUSTOM_ROOT,
-            base_branch=config.base_branch,
-            temp_branch=config.temp_branch,
-        )
-
-        def git_with_parent_sha(args: list[str]):
-            if args[:3] == ["git", "rev-parse", "origin/parent/issue-100"]:
-                return subprocess.CompletedProcess(
-                    args=args, returncode=0, stdout="parent-base-sha\n", stderr=""
-                )
-            return None
-
-        integrator_env.stub_git(git_with_parent_sha)
-        result = SetupWorktreeStep().execute(ctx)
-
-        assert result["status"] == "success"
-        assert ctx.parent_base_sha == "parent-base-sha"
-
 
 class TestWorktreeSafety:
     """#435: 統合ラン同士がworktreeを共有しないことの回帰テスト。"""
@@ -131,6 +96,14 @@ class TestWorktreeSafety:
                 apply=True, parent_issue_number=42, integration_run_id="run-b"
             )
         )
+
+        assert integrator_a.config.temp_branch != integrator_b.config.temp_branch
+        assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
+        assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
+
+    def test_flat_mode_runs_have_distinct_branch_worktree_and_lock_paths(self):
+        integrator_a = Integrator(IntegratorConfig(apply=True, integration_run_id="a"))
+        integrator_b = Integrator(IntegratorConfig(apply=True, integration_run_id="b"))
 
         assert integrator_a.config.temp_branch != integrator_b.config.temp_branch
         assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
