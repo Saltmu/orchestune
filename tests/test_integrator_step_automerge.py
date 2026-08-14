@@ -10,11 +10,20 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
+from pathlib import Path
 from unittest.mock import ANY, patch
 
 import pytest
 
-from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator import (
+    AutoMergeChildIntegrationStep,
+    IntegrationContext,
+    IntegrationStatus,
+    Integrator,
+    IntegratorConfig,
+)
+from orchestune.models import Task
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _CLOSE_CHILD_ISSUES = (
@@ -27,7 +36,9 @@ class _SimulatedProcessCrash(Exception):
 
 
 def _child_config() -> IntegratorConfig:
-    return IntegratorConfig(apply=True, parent_issue_number=100)
+    return IntegratorConfig(
+        apply=True, parent_issue_number=100, integration_run_id="test-run"
+    )
 
 
 class TestLabelIncludedStep:
@@ -167,26 +178,44 @@ class TestAutoMergeChildIntegration:
         integrator_env.close_issue.assert_not_called()
         assert res.get("auto_merged") is None
 
-    def test_merge_failure_leaves_pr_open_and_skips_closing(
+    def test_parent_branch_push_rejection_skips_closing(
         self, integrator_env: IntegratorEnv
     ):
-        # レビュー指摘(#170): マージ失敗を`status: success`で握り潰さず、
-        # かつマージが確定していない以上`integration:included`も付与しない
-        # （パイプライン順序をAutoMerge→Labelに変更し、非successでラベル
-        # ステップ自体をスキップさせる）。
+        # #435: 親ブランチが別ランにより先へ進んでいれば、通常pushは
+        # non-fast-forwardで拒否される。親を上書きせず、完了ラベルやIssueの
+        # クローズも行わない。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
-        integrator_env.merge_pull_request.side_effect = subprocess.CalledProcessError(
-            1, ["gh", "pr", "merge"], stderr=b"not mergeable"
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="non-fast-forward",
         )
 
         res = Integrator(_child_config()).run()
 
-        assert res["status"] == "auto_merge_failed"
+        assert res["status"] == IntegrationStatus.PARENT_BRANCH_ADVANCED
         assert res["integration_pr_number"] == 999
-        integrator_env.merge_pull_request.assert_called_once_with(999)
+        integrator_env.merge_pull_request.assert_not_called()
         integrator_env.close_issue.assert_not_called()
         integrator_env.add_label.assert_not_called()
         integrator_env.add_comment.assert_any_call(1, ANY)
+
+    def test_parent_update_uses_non_force_git_push(self, integrator_env: IntegratorEnv):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] == "success"
+        parent_pushes = [
+            call
+            for call in integrator_env.calls_with("push")
+            if "HEAD:refs/heads/parent/issue-100" in call.args[0]
+        ]
+        assert len(parent_pushes) == 1
+        assert "--force" not in parent_pushes[0].args[0]
+        integrator_env.merge_pull_request.assert_not_called()
 
     def test_close_failure_for_one_task_does_not_block_others(
         self, integrator_env: IntegratorEnv
@@ -217,7 +246,7 @@ class TestAutoMergeChildIntegration:
         # 子ブランチと一時ブランチの削除が呼び出されていることを検証
         integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
         integrator_env.delete_branch.assert_any_call(
-            "integration/temp-parent-issue-100"
+            "integration/temp-parent-issue-100-test-run"
         )
         assert integrator_env.delete_branch.call_count == 2
 
@@ -235,6 +264,95 @@ class TestAutoMergeChildIntegration:
         assert res["status"] == "success"
         assert res["closed_issues"] == [1]
         integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+
+
+@pytest.mark.integration
+def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
+    """#435: 実gitでも競合ランが進めた親branchを上書きしない。"""
+
+    def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp)
+        origin = workspace / "origin.git"
+        subprocess.run(["git", "init", "--bare", str(origin)], check=True)
+        worker = workspace / "worker"
+        subprocess.run(["git", "clone", str(origin), str(worker)], check=True)
+        git(worker, "config", "user.name", "test-bot")
+        git(worker, "config", "user.email", "test-bot@example.com")
+        git(worker, "checkout", "-b", "main")
+        (worker / "base.txt").write_text("base\n", encoding="utf-8")
+        git(worker, "add", "base.txt")
+        git(worker, "commit", "-m", "base")
+        git(worker, "push", "-u", "origin", "main")
+        git(worker, "checkout", "-b", "parent/issue-100")
+        git(worker, "push", "-u", "origin", "parent/issue-100")
+
+        temp_branch = "integration/temp-parent-issue-100-test-run"
+        git(worker, "checkout", "-b", temp_branch, "origin/parent/issue-100")
+        (worker / "integration.txt").write_text("integrated\n", encoding="utf-8")
+        git(worker, "add", "integration.txt")
+        git(worker, "commit", "-m", "integration result")
+        base_sha = git(worker, "rev-parse", "origin/parent/issue-100").stdout.strip()
+
+        racer = workspace / "racer"
+        subprocess.run(["git", "clone", str(origin), str(racer)], check=True)
+        git(racer, "config", "user.name", "racer")
+        git(racer, "config", "user.email", "racer@example.com")
+        git(racer, "checkout", "parent/issue-100")
+        (racer / "racer.txt").write_text("advanced\n", encoding="utf-8")
+        git(racer, "add", "racer.txt")
+        git(racer, "commit", "-m", "advance parent")
+        git(racer, "push", "origin", "parent/issue-100")
+        advanced_sha = git(racer, "rev-parse", "HEAD").stdout.strip()
+
+        config = IntegratorConfig(
+            repository_root=worker,
+            parent_issue_number=100,
+            integration_run_id="test-run",
+            apply=True,
+            forge=fake_forge,
+        )
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=worker,
+            original_root=worker,
+            base_branch="origin/parent/issue-100",
+            temp_branch=temp_branch,
+            parent_base_sha=base_sha,
+            merged_tasks=["task-1"],
+            active_done_tasks=[
+                Task(
+                    issue_number=1,
+                    subtask_id="task-1",
+                    footprint=(),
+                    symbols=(),
+                    risk=False,
+                    priority="medium",
+                    progress_partial=False,
+                    status_labels=("status:done",),
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+            ],
+            integration_pr_number=123,
+        )
+
+        result = AutoMergeChildIntegrationStep().execute(ctx)
+
+        assert result["status"] == IntegrationStatus.PARENT_BRANCH_ADVANCED
+        remote_parent = subprocess.run(
+            ["git", "--git-dir", str(origin), "rev-parse", "parent/issue-100"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert remote_parent == advanced_sha
+        assert remote_parent != base_sha
+        fake_forge.add_label.assert_not_called()
+        fake_forge.close_issue.assert_not_called()
 
 
 class TestRetryChildIssueCloseStep:
@@ -313,7 +431,7 @@ class TestRetryChildIssueCloseStep:
         integrator_env.close_issue.assert_any_call(1, "completed", comment=ANY)
         integrator_env.close_issue.assert_any_call(2, "completed", comment=ANY)
         assert integrator_env.close_issue.call_count == 2
-        integrator_env.merge_pull_request.assert_called_once_with(999)
+        integrator_env.merge_pull_request.assert_not_called()
 
     def test_retry_failure_falls_back_to_normal_reprocessing(
         self, integrator_env: IntegratorEnv
