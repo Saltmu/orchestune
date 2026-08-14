@@ -1,4 +1,17 @@
-"""Similarity scoring and edge inference for DAG subtasks."""
+"""Similarity scoring and edge inference for DAG subtasks.
+
+サブタスク間の重なりから暗黙の依存エッジを推定する手法は、Co-Coder
+(arXiv:2606.00953, "When Parallelism Pays Off: Cohesion-Aware Task
+Partitioning for Multi-Agent Coding") を参考にしている。ただし目的が
+異なるため、以下を変更している:
+
+- グラフの由来: 既存リポジトリの構造ではなく、decomposition planで
+  宣言されたfootprint/symbols（まだ存在しないファイルを含む）
+- 出力: Infomapによるコミュニティ分割ではなく、閾値超過ペアへの
+  依存エッジ（担当の割り当てではなく実行順序を決めるため）
+- 重み付け: IDF（多くのサブタスクが触る項目の弁別力を下げる）と、
+  footprint項目への1.5倍係数（マージを壊すのはファイル単位の衝突のため）
+"""
 
 from __future__ import annotations
 

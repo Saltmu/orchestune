@@ -29,6 +29,19 @@ graph TD
     E --> F[Cycle & Risk Check]
 ```
 
+> The similarity-based task partitioning in this section derives from the
+> Co-Coder paper (Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin,
+> Fangru Lin, Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware
+> Task Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026). That
+> paper builds a symbol-sharing graph from a repository's static interface
+> and runs Infomap community detection to assign files to agents, optimizing
+> for critical-path length plus communication cost. Orchestune adapts this
+> for an operational tool: the objective changes from cohesion/cost
+> optimization to conflict avoidance, the graph's source changes from
+> existing repository files to a decomposition plan's declared
+> footprint/symbols, and it uses IDF-weighted Otsuka-Ochiai similarity. See
+> the docstring in `orchestune/dag_similarity.py` for details.
+
 ### Conflict Prevention Mechanism
 * **Overlap Analysis**:
   When multiple tasks attempt to edit the same files or symbols, merge conflicts are inevitable. Orchestune computes similarity metrics across footprints and automatically inserts "implicit dependencies" to sequence conflicting tasks safely.
