@@ -19,6 +19,8 @@ This is the **single user-facing entry point** for Orchestune. It understands a 
 
 Load this skill **when a user presents a 'big rock' task and requests task decomposition, implementation roadmap creation, or parallel development.** This is the only skill a user needs to invoke to go from task description to running parallel dispatch — do not ask the user to separately invoke `orchestune-dag` or `orchestune-dispatch`; drive both internally as described below.
 
+**Do not load it for small tasks.** Orchestune optimizes the finished work produced per unit of AI usage quota, not wall-clock speed on a single task; decomposition, Issue provisioning, and dispatch all cost quota of their own. If the task yields fewer than roughly three genuinely independent subtasks, implementing it directly is both faster and cheaper — say so and implement it directly instead.
+
 ## Prerequisites
 
 * The `poetry run orchestune-dag` or `orchestune-dag` command must be installed on the system.

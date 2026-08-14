@@ -4,6 +4,18 @@ This document explains how Orchestune builds conflict-free parallel tasks, drive
 
 ---
 
+## 0. Design Goal: Quota Efficiency
+
+Orchestune is a personal orchestrator: one developer, a fixed AI usage quota (a subscription's session/weekly allowance), no team to coordinate. Every design decision below follows from a single optimization target — **maximize the finished, mergeable work produced per unit of quota consumed** — and explicitly *not* from minimizing wall-clock time on any individual task. For a small task, prompting one agent directly is both faster and cheaper than decomposition, provisioning, and dispatch; Orchestune only pays for itself on tasks large enough that serial execution would leave quota idle between prompts.
+
+Three consequences run through the rest of this document:
+
+* **Parallelism is the mechanism, not the goal.** Quota is spent while agents run. Independent subtasks let several agents burn quota at once instead of one agent burning it in sequence, so DAG construction (Section 1) exists to find as much *safe* parallelism as the task allows.
+* **Rework is the main waste.** A merge conflict, a wrongly scoped subtask, or a duplicated implementation costs quota twice. The conflict-prevention analysis and the shared-contract gate (Section 1) trade a small up-front planning cost for avoided rework, and pre-merge CI (Section 3) catches mechanical breakage before it propagates downstream.
+* **Unattended operation is what converts parallelism into quota efficiency.** The gains only materialize if runs can proceed while the human is away — overnight, or in a stateless CI runner. That is why state is self-healing from GitHub (Section 2), why child-level integration merges without a human (Section 3), and why human judgment is confined to exactly two gates (Section 4). A design that required a click per subtask would stall the pipeline on human availability and give the quota nothing to do.
+
+---
+
 ## 1. DAG Construction & Conflict Prevention
 
 Orchestune analyzes subtask relationships statically using both explicit dependency declarations (`depends_on`) and overlap in target file paths (`footprint`) or code symbols (`symbols`).
