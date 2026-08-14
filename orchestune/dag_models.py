@@ -137,7 +137,16 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
         raise ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be a number"
         )
-    threshold = float(value)
+    try:
+        threshold = float(value)
+    except OverflowError as e:
+        # A TOML integer too large for `float` (e.g. a 500-digit integer,
+        # which tomllib accepts as-is) raises OverflowError here rather
+        # than reaching the range check below (Codex review, #441).
+        raise ConfigError(
+            "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
+            f"within [0, 1] (a similarity score): {e}"
+        ) from e
     if not (0 <= threshold <= 1):
         raise ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
