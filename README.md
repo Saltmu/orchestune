@@ -24,11 +24,13 @@ It turns an approved decomposition plan into dependency-aware GitHub Issues, coo
 
 ---
 
-## Design Philosophy: Quota Efficiency, Not Raw Speed
+## Design Philosophy: Quota Efficiency
 
-Orchestune is a **personal orchestrator** built for a single developer working against a fixed AI usage quota (e.g. a subscription's session/weekly usage allowance), not a team-scale platform. Its purpose is **not** to make any single task finish faster in wall-clock time — for a small task, just asking one agent directly is usually faster than going through decomposition and dispatch.
+Orchestune is for individual developers and small teams working with AI coding agents. The scarce resource here is not wall-clock time — it is **your AI usage quota (a subscription's session/weekly allowance) and the hours a human can actually be at the desk.**
 
-What Orchestune optimizes for is how much of your quota turns into finished, mergeable work. A large task decomposed into independent subtasks lets multiple agents run in parallel — including unattended, in the background, or overnight — so your quota is spent running agents concurrently instead of sitting idle between prompts of one long serial session. The DAG validation, self-healing state recovery, and two-gate human approval model (see [Architecture & Design](docs/en/architecture.md)) all exist to make that parallelism *safe* enough to leave unattended, which is what makes the quota-efficiency gain realizable in practice.
+For a small task, asking an agent directly is faster and cheaper than going through decomposition and dispatch. Orchestune pays for itself only on tasks large enough that you want them to keep running while you are away — overnight, or on a stateless CI runner.
+
+DAG validation, self-healing state recovery from GitHub, and the two-gate human approval model (see [Architecture & Design](docs/en/architecture.md)) all exist for one reason: so the pipeline holds together when nobody is watching.
 
 ---
 
