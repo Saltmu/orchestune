@@ -27,6 +27,11 @@ class IntegrationWorktree:
         """短時間のintegration GCを保護する共有ロックパスを返す。"""
         return self.original_root / "worktrees" / ".locks" / "integration-gc.lock"
 
+    def base_ref_lock_path(self, base_branch: str) -> Path:
+        """共有remote-tracking refの更新を保護するロックパスを返す。"""
+        key = base_branch.replace("/", "-")
+        return self.original_root / "worktrees" / ".locks" / f"{key}.lock"
+
     def reclaim(self, path: Path) -> None:
         """`path`に残存物があれば、所有権を確認した上でのみ除去する。
 
