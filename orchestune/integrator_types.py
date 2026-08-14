@@ -89,6 +89,8 @@ class IntegratorConfig:
                 "integration/temp-parent-issue-"
                 f"{self.parent_issue_number}-{self.integration_run_id}"
             )
+        else:
+            self.temp_branch = f"{self.temp_branch}-{self.integration_run_id}"
         if self.forge is None:
             self.forge = GitHubForge()
 
@@ -100,7 +102,6 @@ class IntegrationContext:
     original_root: Path
     base_branch: str
     temp_branch: str
-    parent_base_sha: str | None = None
     merged_tasks: list[str] = field(default_factory=list)
     failed_tasks: list[str] = field(default_factory=list)
     blocked_tasks: list[str] = field(default_factory=list)
