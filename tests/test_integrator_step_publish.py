@@ -53,17 +53,20 @@ class TestEnsureIntegrationPr:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         # #243: identityを検証できたPR（upstream上の正規head・指定base向け）
         # だけが再利用対象になる。
+        temp_branch = "integration/temp-main-test-run"
         integrator_env.list_open_prs.return_value = [
             PrRecord(
                 number=777,
-                head_ref="integration/temp-main",
+                head_ref=temp_branch,
                 changed_files=(),
                 base_ref="main",
                 is_cross_repository=False,
             )
         ]
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(
+            IntegratorConfig(apply=True, integration_run_id="test-run")
+        ).run()
 
         assert res["status"] == "success"
         assert res["integration_pr_number"] == 777
