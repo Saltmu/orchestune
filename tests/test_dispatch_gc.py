@@ -35,6 +35,7 @@ from orchestune.dispatch_gc_completion import (
 from orchestune.dispatch_gc_completion import (
     _finalize_completed_worktree as extracted_finalize_completed_worktree,
 )
+from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
 from orchestune.dispatch_gc_zombies import (
     ZombieOrTimeoutReclaim as ExtractedZombieOrTimeoutReclaim,
 )
@@ -166,6 +167,39 @@ class TestWorktreeHasUncommittedChanges:
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             assert worktree_has_uncommitted_changes("worktrees/missing") is False
+
+
+class TestPruneStaleIntegrationTempBranches:
+    def test_deletes_only_old_temp_branches_without_open_pr(self, fake_forge):
+        # #435: クラッシュ等で残ったtemp branchだけを回収し、レビュー中の
+        # 統合PRのheadや作成直後の並行ランを誤って削除してはならない。
+        with patch("orchestune.dispatch_gc_git.run_git") as run_git:
+            run_git.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    "origin/integration/temp-parent-issue-1-old 100\n"
+                    "origin/integration/temp-parent-issue-1-open 100\n"
+                    "origin/integration/temp-parent-issue-1-fresh 950\n"
+                ),
+                stderr="",
+            )
+            fake_forge.list_open_prs.return_value = [
+                PrRecord(
+                    number=1,
+                    head_ref="integration/temp-parent-issue-1-open",
+                    changed_files=(),
+                )
+            ]
+
+            removed = prune_stale_integration_temp_branches(
+                Path("/repo"), forge=fake_forge, now=1_000, max_age_seconds=100
+            )
+
+        assert removed == ["integration/temp-parent-issue-1-old"]
+        fake_forge.delete_branch.assert_called_once_with(
+            "integration/temp-parent-issue-1-old"
+        )
 
 
 class TestBackupWipCommit:
