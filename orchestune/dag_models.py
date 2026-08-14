@@ -65,14 +65,16 @@ def compile_extra_ignore_patterns(
 
     Raises ConfigError if any pattern is not a valid regular expression.
     """
+    # A malicious/pathological pattern doesn't only fail with `re.error`:
+    # an oversized repetition count (`a{9999...}`) raises `OverflowError`,
+    # and ~500+ nested groups raise `RecursionError` (Codex review, #441).
+    # `re.compile` is the only operation here, so any failure compiling
+    # user-supplied config data is a config problem, not an internal bug —
+    # catch broadly rather than chase the compiler's exception types one by
+    # one.
     try:
         return tuple(re.compile(pattern) for pattern in patterns)
-    except re.error as e:
-        raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
-    except OverflowError as e:
-        # An oversized repetition count (e.g. `a{9999999999999999999999}`)
-        # isn't caught by `re.error` — Python's regex compiler raises
-        # OverflowError instead (Codex review, #441).
+    except Exception as e:
         raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
 
 

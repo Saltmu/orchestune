@@ -192,26 +192,37 @@ class TestNonTableToolSectionExitCodeConsistency:
         assert "[tool]" in capsys.readouterr().err
 
 
-class TestOversizedRegexRepetitionExitCodeConsistency:
-    """Codex review (#441): an oversized repetition count in
-    `dag_ignore_patterns` (e.g. `a{9999999999999999999999999999999999999999}`)
-    makes Python's regex compiler raise `OverflowError` rather than
-    `re.error`, which `compile_extra_ignore_patterns` didn't catch, so
+class TestPathologicalRegexExitCodeConsistency:
+    """Codex review (#441): `re.compile()` doesn't only fail with `re.error`
+    for a malformed pattern. Two further exception types were found by
+    Codex, each reproduced live and each initially left unwrapped so
     `orchestune-dispatch` crashed with an uncaught traceback (exit 1)
-    instead of the exit-2 config-error contract this PR introduces. Cover
-    all three tools against the same oversized pattern."""
+    instead of the exit-2 config-error contract this PR introduces:
 
-    _OVERSIZED_REGEX_CONFIG = (
-        'dag_ignore_patterns = ["a{9999999999999999999999999999999999999999}"]\n'
-    )
+    - An oversized repetition count (`a{9999999999999999999999999999999999999999}`)
+      raises `OverflowError`.
+    - ~500 nested groups (`"(" * 500 + "a" + ")" * 500`) raise
+      `RecursionError`.
 
-    def _write_config(self, tmp_path: Path) -> None:
+    `compile_extra_ignore_patterns` now catches broadly (`except Exception`)
+    rather than chasing the regex compiler's exception types one by one;
+    this parametrizes both known cases across all three tools as a
+    regression guard.
+    """
+
+    _PATTERNS = {
+        "oversized_repetition": "a{9999999999999999999999999999999999999999}",
+        "deep_recursion": "(" * 500 + "a" + ")" * 500,
+    }
+
+    def _write_config(self, tmp_path: Path, pattern: str) -> None:
         (tmp_path / "orchestune.toml").write_text(
-            self._OVERSIZED_REGEX_CONFIG, encoding="utf-8"
+            f'dag_ignore_patterns = ["{pattern}"]\n', encoding="utf-8"
         )
 
-    def test_dag_cli_exits_2(self, tmp_path, capsys):
-        self._write_config(tmp_path)
+    @pytest.mark.parametrize("pattern", _PATTERNS.values(), ids=_PATTERNS.keys())
+    def test_dag_cli_exits_2(self, tmp_path, capsys, pattern):
+        self._write_config(tmp_path, pattern)
         plan_path = tmp_path / "decomposition_plan.md"
         plan_path.write_text(_PLAN, encoding="utf-8")
 
@@ -221,8 +232,9 @@ class TestOversizedRegexRepetitionExitCodeConsistency:
         assert excinfo.value.code == 2
         assert "dag_ignore_patterns" in capsys.readouterr().err
 
-    def test_provision_exits_2(self, tmp_path, capsys):
-        self._write_config(tmp_path)
+    @pytest.mark.parametrize("pattern", _PATTERNS.values(), ids=_PATTERNS.keys())
+    def test_provision_exits_2(self, tmp_path, capsys, pattern):
+        self._write_config(tmp_path, pattern)
         plan_path = tmp_path / "decomposition_plan.md"
         plan_path.write_text(_PLAN, encoding="utf-8")
         template_path = tmp_path / "issue_template.md"
@@ -242,8 +254,9 @@ class TestOversizedRegexRepetitionExitCodeConsistency:
         assert excinfo.value.code == 2
         assert "dag_ignore_patterns" in capsys.readouterr().err
 
-    def test_dispatch_exits_2(self, tmp_path, capsys):
-        self._write_config(tmp_path)
+    @pytest.mark.parametrize("pattern", _PATTERNS.values(), ids=_PATTERNS.keys())
+    def test_dispatch_exits_2(self, tmp_path, capsys, pattern):
+        self._write_config(tmp_path, pattern)
 
         with pytest.raises(SystemExit) as excinfo:
             dispatcher_main(["--no-apply"], cwd=tmp_path)
