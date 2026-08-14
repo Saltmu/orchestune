@@ -188,7 +188,10 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
                 data = tomllib.load(f)
         except (OSError, tomllib.TOMLDecodeError) as e:
             raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
-        config = data.get("tool", {}).get("orchestune", {})
+        tool = data.get("tool", {})
+        if not isinstance(tool, dict):
+            raise ConfigError(f"{pyproject_toml}: [tool] must be a table")
+        config = tool.get("orchestune", {})
         if not isinstance(config, dict):
             raise ConfigError(f"{pyproject_toml}: [tool.orchestune] must be a table")
         return cast(dict[str, Any], config)

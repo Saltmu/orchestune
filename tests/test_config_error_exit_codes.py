@@ -131,3 +131,62 @@ class TestDispatcherConfigErrorNotAffectedByChange:
             dispatcher_main(["--no-apply"], cwd=tmp_path)
 
         assert excinfo.value.code == 2
+
+
+class TestNonTableToolSectionExitCodeConsistency:
+    """Codex review (#441): a syntactically valid `pyproject.toml` whose
+    top-level `tool` key isn't a table (e.g. `tool = "not-a-table"`) used to
+    reach `data.get("tool", {}).get("orchestune", {})` and raise an uncaught
+    `AttributeError` (`str` has no `.get`) instead of the intended
+    `ConfigError`, so `orchestune-dispatch` crashed with exit 1 instead of
+    the exit-2 config-error contract this PR introduces. Cover all three
+    tools against the same malformed file."""
+
+    _INVALID_TOOL_SECTION = 'tool = "not-a-table"\n'
+
+    def test_dag_cli_exits_2(self, tmp_path, capsys):
+        (tmp_path / "pyproject.toml").write_text(
+            self._INVALID_TOOL_SECTION, encoding="utf-8"
+        )
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            dag_main(["--plan", str(plan_path)])
+
+        assert excinfo.value.code == 2
+        assert "[tool]" in capsys.readouterr().err
+
+    def test_provision_exits_2(self, tmp_path, capsys):
+        (tmp_path / "pyproject.toml").write_text(
+            self._INVALID_TOOL_SECTION, encoding="utf-8"
+        )
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+        template_path = tmp_path / "issue_template.md"
+        template_path.write_text(_TEMPLATE, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            provisioning_main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+
+        assert excinfo.value.code == 2
+        assert "[tool]" in capsys.readouterr().err
+
+    def test_dispatch_exits_2(self, tmp_path, capsys):
+        (tmp_path / "pyproject.toml").write_text(
+            self._INVALID_TOOL_SECTION, encoding="utf-8"
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2
+        assert "[tool]" in capsys.readouterr().err

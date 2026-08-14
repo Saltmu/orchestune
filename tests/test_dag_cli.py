@@ -537,3 +537,19 @@ class TestLoadOrchestuneConfig:
         )
         with pytest.raises(ValueError, match="tool.orchestune"):
             load_orchestune_config(tmp_path)
+
+    def test_non_table_tool_section_raises_config_error_not_attribute_error(
+        self, tmp_path
+    ):
+        """Codex review (#441): a syntactically valid `pyproject.toml` whose
+        top-level `tool` key isn't a table (e.g. `tool = "not-a-table"`) must
+        not reach `.get("orchestune", ...)` on a non-dict and blow up with an
+        uncaught `AttributeError` — it should be reported as the same
+        `ConfigError` as any other malformed config, so `orchestune-dag`/
+        `orchestune-provision`/`orchestune-dispatch` all map it to exit 2
+        rather than an uncaught traceback."""
+        (tmp_path / "pyproject.toml").write_text(
+            'tool = "not-a-table"\n', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match=r"\[tool\]"):
+            load_orchestune_config(tmp_path)
