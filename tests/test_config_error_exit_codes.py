@@ -372,3 +372,73 @@ class TestOversizedThresholdIntegerExitCodeConsistency:
 
         assert excinfo.value.code == 2
         assert "dag_similarity_threshold" in capsys.readouterr().err
+
+
+class TestDeeplyNestedTomlExitCodeConsistency:
+    """Codex review (#441): a syntactically valid but deeply nested TOML
+    value (`x = ` followed by ~500 nested arrays) makes `tomllib.load()`
+    raise `RecursionError`, which `load_orchestune_config`'s original
+    `except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError)` didn't
+    cover, so `orchestune-dispatch` crashed with an uncaught traceback
+    (exit 1) instead of the exit-2 config-error contract this PR
+    introduces. Covers both the `orchestune.toml` and `pyproject.toml`
+    code paths across all three tools."""
+
+    _DEEPLY_NESTED_ARRAY = "x = " + "[" * 500 + "]" * 500 + "\n"
+
+    def _write_orchestune_toml(self, tmp_path: Path) -> None:
+        (tmp_path / "orchestune.toml").write_text(
+            self._DEEPLY_NESTED_ARRAY, encoding="utf-8"
+        )
+
+    def _write_pyproject_toml(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.orchestune]\n" + self._DEEPLY_NESTED_ARRAY, encoding="utf-8"
+        )
+
+    @pytest.mark.parametrize(
+        "write_config", [_write_orchestune_toml, _write_pyproject_toml]
+    )
+    def test_dag_cli_exits_2(self, tmp_path, capsys, write_config):
+        write_config(self, tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            dag_main(["--plan", str(plan_path)])
+
+        assert excinfo.value.code == 2
+
+    @pytest.mark.parametrize(
+        "write_config", [_write_orchestune_toml, _write_pyproject_toml]
+    )
+    def test_provision_exits_2(self, tmp_path, capsys, write_config):
+        write_config(self, tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+        template_path = tmp_path / "issue_template.md"
+        template_path.write_text(_TEMPLATE, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            provisioning_main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+
+        assert excinfo.value.code == 2
+
+    @pytest.mark.parametrize(
+        "write_config", [_write_orchestune_toml, _write_pyproject_toml]
+    )
+    def test_dispatch_exits_2(self, tmp_path, capsys, write_config):
+        write_config(self, tmp_path)
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2

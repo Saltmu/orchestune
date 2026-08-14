@@ -189,12 +189,20 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
     """
     repo_root = Path(repo_root)
 
+    # Beyond `OSError`/`tomllib.TOMLDecodeError`, a pathological file can
+    # make `open()`/`tomllib.load()` fail in other ways too — invalid UTF-8
+    # raises `UnicodeDecodeError`, ~500+ levels of nested arrays/tables
+    # raise `RecursionError` (Codex review, #441). `tomllib.load` is the
+    # only risky operation in each block below, so any failure loading
+    # user-supplied config data is a config problem, not an internal bug —
+    # catch broadly rather than chase the parser's exception types one by
+    # one (same reasoning as `compile_extra_ignore_patterns` above).
     orchestune_toml = repo_root / "orchestune.toml"
     if orchestune_toml.exists():
         try:
             with open(orchestune_toml, "rb") as f:
                 return cast(dict[str, Any], tomllib.load(f))
-        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        except Exception as e:
             raise ConfigError(f"failed to load {orchestune_toml}: {e}") from e
 
     pyproject_toml = repo_root / "pyproject.toml"
@@ -202,7 +210,7 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
         try:
             with open(pyproject_toml, "rb") as f:
                 data = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        except Exception as e:
             raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
         tool = data.get("tool", {})
         if not isinstance(tool, dict):
