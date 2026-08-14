@@ -10,6 +10,7 @@ from typing import Any
 
 from orchestune.dag_graph import build_dag_from_plan
 from orchestune.dag_models import (
+    ConfigError,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
@@ -91,9 +92,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         # 域外の値（NaN/Inf/範囲外の有限値）は全エッジが黙って抑制される
         # だけの無意味な指定になる。明示的にエラーとして拒否する。
         if not (0 <= threshold <= 1):
-            raise ValueError(
+            raise ConfigError(
                 f"--threshold must be within [0, 1] (a similarity score), got {threshold}"
             )
+    except ConfigError as error:
+        # #428: config-derived errors (orchestune.toml / pyproject.toml
+        # values, or the --threshold flag validated against them) exit 2,
+        # matching orchestune-dispatch's `_config_error` convention, so
+        # automation can tell "bad config" apart from other failures below.
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(2) from error
+    except Exception as error:
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
+
+    try:
         dag = build_dag_from_plan(
             args.plan,
             threshold=threshold,

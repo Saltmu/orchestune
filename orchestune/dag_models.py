@@ -46,14 +46,36 @@ DAG_TOOL_CONFIG_KEYS = frozenset(
 )
 
 
+class ConfigError(ValueError):
+    """Raised for invalid `orchestune.toml` / `pyproject.toml` config values.
+
+    A `ValueError` subclass so existing `except ValueError` call sites keep
+    working unchanged, but distinct from other `ValueError`s (e.g.
+    `DagCycleError`, footprint validation) so callers can catch config
+    problems specifically and map them to a dedicated exit code (#428:
+    orchestune-dag / orchestune-provision / orchestune-dispatch all exit 2
+    for config errors, distinct from exit 1 for other failures).
+    """
+
+
 def compile_extra_ignore_patterns(
     patterns: Iterable[str],
 ) -> tuple[re.Pattern[str], ...]:
     """Compile user-supplied regex strings for use as extra ignore patterns.
 
-    Raises re.error if any pattern is not a valid regular expression.
+    Raises ConfigError if any pattern is not a valid regular expression.
     """
-    return tuple(re.compile(pattern) for pattern in patterns)
+    # A malicious/pathological pattern doesn't only fail with `re.error`:
+    # an oversized repetition count (`a{9999...}`) raises `OverflowError`,
+    # and ~500+ nested groups raise `RecursionError` (Codex review, #441).
+    # `re.compile` is the only operation here, so any failure compiling
+    # user-supplied config data is a config problem, not an internal bug —
+    # catch broadly rather than chase the compiler's exception types one by
+    # one.
+    try:
+        return tuple(re.compile(pattern) for pattern in patterns)
+    except Exception as e:
+        raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
 
 
 def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
@@ -77,7 +99,7 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     if not isinstance(patterns, list) or not all(
         isinstance(p, str) and p for p in patterns
     ):
-        raise ValueError(
+        raise ConfigError(
             "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of "
             "non-empty strings"
         )
@@ -112,12 +134,21 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
     # True/False silently pass through as 1.0/0.0 (#404's dag_ignore_patterns
     # review raised the same concern for its own type check).
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(
+        raise ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be a number"
         )
-    threshold = float(value)
+    try:
+        threshold = float(value)
+    except OverflowError as e:
+        # A TOML integer too large for `float` (e.g. a 500-digit integer,
+        # which tomllib accepts as-is) raises OverflowError here rather
+        # than reaching the range check below (Codex review, #441).
+        raise ConfigError(
+            "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
+            f"within [0, 1] (a similarity score): {e}"
+        ) from e
     if not (0 <= threshold <= 1):
-        raise ValueError(
+        raise ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
             f"within [0, 1] (a similarity score), got {threshold}"
         )
@@ -158,24 +189,35 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
     """
     repo_root = Path(repo_root)
 
+    # Beyond `OSError`/`tomllib.TOMLDecodeError`, a pathological file can
+    # make `open()`/`tomllib.load()` fail in other ways too — invalid UTF-8
+    # raises `UnicodeDecodeError`, ~500+ levels of nested arrays/tables
+    # raise `RecursionError` (Codex review, #441). `tomllib.load` is the
+    # only risky operation in each block below, so any failure loading
+    # user-supplied config data is a config problem, not an internal bug —
+    # catch broadly rather than chase the parser's exception types one by
+    # one (same reasoning as `compile_extra_ignore_patterns` above).
     orchestune_toml = repo_root / "orchestune.toml"
     if orchestune_toml.exists():
         try:
             with open(orchestune_toml, "rb") as f:
                 return cast(dict[str, Any], tomllib.load(f))
-        except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
+        except Exception as e:
+            raise ConfigError(f"failed to load {orchestune_toml}: {e}") from e
 
     pyproject_toml = repo_root / "pyproject.toml"
     if pyproject_toml.exists():
         try:
             with open(pyproject_toml, "rb") as f:
                 data = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
-        config = data.get("tool", {}).get("orchestune", {})
+        except Exception as e:
+            raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
+        tool = data.get("tool", {})
+        if not isinstance(tool, dict):
+            raise ConfigError(f"{pyproject_toml}: [tool] must be a table")
+        config = tool.get("orchestune", {})
         if not isinstance(config, dict):
-            raise ValueError(f"{pyproject_toml}: [tool.orchestune] must be a table")
+            raise ConfigError(f"{pyproject_toml}: [tool.orchestune] must be a table")
         return cast(dict[str, Any], config)
 
     return {}
