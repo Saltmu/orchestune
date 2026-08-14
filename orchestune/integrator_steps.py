@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
+from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
+from orchestune.dispatch_worktree import file_lock
 from orchestune.git_cli import run_git
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
@@ -22,6 +27,35 @@ from orchestune.integrator_types import (
 )
 from orchestune.integrator_worktree import IntegrationWorktree
 from orchestune.process_utils import default_ci_command
+
+
+@contextmanager
+def _retry_file_lock(lock_path, attempts: int = 3) -> Iterator[None]:
+    """短時間の共有git操作に限り、競合ロックを少数回リトライする。"""
+    lock = None
+    last_error: RuntimeError | None = None
+    for attempt in range(attempts):
+        candidate = file_lock(lock_path)
+        try:
+            candidate.__enter__()
+        except RuntimeError as error:
+            last_error = error
+            if attempt + 1 < attempts:
+                time.sleep(0.05 * (attempt + 1))
+            continue
+        lock = candidate
+        break
+    if lock is None:
+        assert last_error is not None
+        raise last_error
+
+    try:
+        yield
+    except BaseException as error:
+        lock.__exit__(type(error), error, error.__traceback__)
+        raise
+    else:
+        lock.__exit__(None, None, None)
 
 
 class PrepareTasksStep(IntegrationComponent):
@@ -118,21 +152,49 @@ class SetupWorktreeStep(IntegrationComponent):
             return {"status": IntegrationStatus.SUCCESS}
 
         try:
-            run_git(["worktree", "prune"], cwd=ctx.original_root, check=False)
-
             worktree_manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
-            worktree_manager.reclaim(worktree_manager.temp_path())
+            # GCだけを全integration runで短時間直列化する。CIやタスクmergeは
+            # run固有worktree上で行うため、このロックの外で並行実行できる。
+            try:
+                with _retry_file_lock(worktree_manager.gc_lock_path()):
+                    run_git(["worktree", "prune"], cwd=ctx.original_root, check=False)
+                    prune_stale_integration_temp_branches(
+                        ctx.original_root, forge=ctx.config.forge
+                    )
+            except RuntimeError as error:
+                # GCは孤児の掃除であり、現在のrunの正しさに必須ではない。
+                # 競合時は統合全体を失敗させず、次回に回収を委ねる。
+                print(
+                    f"Warning: Skipping integration GC due to lock contention: {error}",
+                    file=sys.stderr,
+                )
 
-            run_git(
-                [
-                    "worktree",
-                    "add",
-                    str(worktree_manager.temp_path()),
-                    ctx.base_branch,
-                ],
-                cwd=ctx.original_root,
-                check=True,
-            )
+            with file_lock(worktree_manager.lock_path()):
+                if ctx.config.parent_issue_number is not None:
+                    base_name = ctx.base_branch.removeprefix("origin/")
+                    with _retry_file_lock(
+                        worktree_manager.base_ref_lock_path(ctx.base_branch)
+                    ):
+                        run_git(
+                            [
+                                "fetch",
+                                "origin",
+                                f"{base_name}:refs/remotes/origin/{base_name}",
+                            ],
+                            cwd=ctx.original_root,
+                            check=True,
+                        )
+                worktree_manager.reclaim(worktree_manager.temp_path())
+                run_git(
+                    [
+                        "worktree",
+                        "add",
+                        str(worktree_manager.temp_path()),
+                        ctx.base_branch,
+                    ],
+                    cwd=ctx.original_root,
+                    check=True,
+                )
             ctx.repository_root = worktree_manager.temp_path()
             ctx.config.repository_root = worktree_manager.temp_path()
             ctx.temp_worktree_path = worktree_manager.temp_path()
@@ -334,7 +396,7 @@ def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
 
 
 class AutoMergeChildIntegrationStep(IntegrationComponent):
-    """Auto-merge child integrations, leaving final parent merges to humans."""
+    """non-force pushで子統合を親へ確定し、最終mainマージは人に委ねる。"""
 
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply or ctx.config.parent_issue_number is None:
@@ -355,16 +417,23 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 return {"status": ctx.status}
         else:
             try:
-                ctx.forge.merge_pull_request(ctx.integration_pr_number)
-            except Exception as error:
+                base_branch = ctx.base_branch.removeprefix("origin/")
+                # #435: 通常pushは親branchが進んだ場合にnon-fast-forwardで拒否
+                # される。--forceを使わないため古いCI結果で上書きしない。
+                run_git(
+                    ["push", "origin", f"HEAD:refs/heads/{base_branch}"],
+                    cwd=ctx.repository_root,
+                    check=True,
+                )
+            except (subprocess.CalledProcessError, OSError) as error:
                 print(
-                    "Warning: Failed to auto-merge integration PR "
+                    "Warning: Failed to update parent branch for integration PR "
                     f"#{ctx.integration_pr_number}: {error}",
                     file=sys.stderr,
                 )
                 self._comment_on_merge_failure(ctx, error)
                 return {
-                    "status": IntegrationStatus.AUTO_MERGE_FAILED,
+                    "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": str(error),
                     "auto_merged": False,
                 }
@@ -446,7 +515,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     task.issue_number,
                     (
                         "Integratorによる統合PR "
-                        f"#{ctx.integration_pr_number} の自動マージに失敗しました"
+                        f"#{ctx.integration_pr_number} の親ブランチ更新に失敗しました"
                         f"（{error}）。次回のディスパッチサイクルで自動的に"
                         "再試行されます。ブランチ保護や権限設定に起因する場合は、"
                         "人間による確認が必要です。"

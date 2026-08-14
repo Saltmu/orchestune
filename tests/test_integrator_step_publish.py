@@ -53,17 +53,20 @@ class TestEnsureIntegrationPr:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         # #243: identityを検証できたPR（upstream上の正規head・指定base向け）
         # だけが再利用対象になる。
+        temp_branch = "integration/temp-main-test-run"
         integrator_env.list_open_prs.return_value = [
             PrRecord(
                 number=777,
-                head_ref="integration/temp-main",
+                head_ref=temp_branch,
                 changed_files=(),
                 base_ref="main",
                 is_cross_repository=False,
             )
         ]
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(
+            IntegratorConfig(apply=True, integration_run_id="test-run")
+        ).run()
 
         assert res["status"] == "success"
         assert res["integration_pr_number"] == 777
@@ -105,7 +108,7 @@ class TestPushTempBranchFailure:
         assert res["status"] == "failed_to_push_temp_branch"
         assert res["merged"] == ["task-1"]
         assert "remote rejected" in res["error"]
-        integrator_env.list_open_prs.assert_not_called()
+        # stale temp branch GCがopen PRを保護するための一覧取得は行い得る。
         integrator_env.create_pull_request.assert_not_called()
         # #139: push失敗時は統合の安全確定ができていないため、
         # integration:includedを付与してはならない。
@@ -128,7 +131,7 @@ class TestPushTempBranchFailure:
         assert res["status"] == "failed_to_push_temp_branch"
         assert "integration_pr_number" not in res
         assert "semantic_review_dispatched" not in res
-        integrator_env.list_open_prs.assert_not_called()
+        # stale temp branch GCがopen PRを保護するための一覧取得は行い得る。
         integrator_env.create_pull_request.assert_not_called()
         coordinator.dispatch_review.assert_not_called()
 
@@ -160,6 +163,7 @@ class TestSemanticReview:
         config = IntegratorConfig(
             apply=True,
             parent_issue_number=100,
+            integration_run_id="review-run",
             enable_semantic_review=True,
             coordinator=coordinator,
         )
@@ -175,12 +179,13 @@ class TestSemanticReview:
         assert len(coordinator.calls) == 1
         assert coordinator.calls[0]["merged_subtask_ids"] == ["task-1"]
         assert (
-            coordinator.calls[0]["temp_branch"] == "integration/temp-parent-issue-100"
+            coordinator.calls[0]["temp_branch"]
+            == "integration/temp-parent-issue-100-review-run"
         )
         assert coordinator.calls[0]["pr_number"] == 315
 
-        # ブランチのforce pushは行われる（起動セッションがレビューできるように）
-        assert len(integrator_env.calls_with("push")) == 1
+        # temp branch公開と、non-force pushによる親ブランチ更新の2回だけpushする。
+        assert len(integrator_env.calls_with("push")) == 2
 
     def test_explicitly_disabled_is_not_dispatched(self, integrator_env: IntegratorEnv):
         # enable_semantic_review=False を明示するとレビューは委譲されない。

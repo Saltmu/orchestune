@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -15,6 +17,14 @@ from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.models import Task
 
 
+def _default_integration_run_id() -> str:
+    """Git refとして安全なrun idを返す。"""
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", run_id):
+        return run_id
+    return uuid.uuid4().hex
+
+
 class IntegrationStatus(StrEnum):
     SUCCESS = "success"
     FAILURE = "failure"
@@ -24,6 +34,7 @@ class IntegrationStatus(StrEnum):
     FAILED_TO_CREATE_TEMP_BRANCH = "failed_to_create_temp_branch"
     FAILED_TO_PUSH_TEMP_BRANCH = "failed_to_push_temp_branch"
     AUTO_MERGE_FAILED = "auto_merge_failed"
+    PARENT_BRANCH_ADVANCED = "parent_branch_advanced"
     INTEGRATION_BRANCH_LOCKED = "integration_branch_locked"
     COMPOSITE_SUCCESS = "composite_success"
     COMPOSITE_PARTIAL_SUCCESS = "composite_partial_success"
@@ -55,6 +66,7 @@ class IntegratorConfig:
     temp_branch: str = "integration/temp-main"
     ci_command: list[str] | None = None
     parent_issue_number: int | None = None
+    integration_run_id: str = field(default_factory=_default_integration_run_id)
     apply: bool = False
     enable_semantic_review: bool = True
     coordinator: IntegrationCoordinator | None = None
@@ -74,8 +86,11 @@ class IntegratorConfig:
         if self.parent_issue_number is not None:
             self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
             self.temp_branch = (
-                f"integration/temp-parent-issue-{self.parent_issue_number}"
+                "integration/temp-parent-issue-"
+                f"{self.parent_issue_number}-{self.integration_run_id}"
             )
+        else:
+            self.temp_branch = f"{self.temp_branch}-{self.integration_run_id}"
         if self.forge is None:
             self.forge = GitHubForge()
 

@@ -4,7 +4,6 @@ import copy
 import subprocess as subprocess  # compatibility patch surface
 from pathlib import Path
 
-from orchestune.dispatch_worktree import file_lock
 from orchestune.git_cli import run_git
 from orchestune.integrator_steps import (
     AutoMergeChildIntegrationStep,
@@ -137,21 +136,16 @@ class SingleIssueIntegrator(IntegrationComponent):
         if self.parent_issue is not None:
             ctx.config.parent_issue_number = self.parent_issue
             ctx.base_branch = f"origin/parent/issue-{self.parent_issue}"
-            ctx.temp_branch = f"integration/temp-parent-issue-{self.parent_issue}"
+            ctx.temp_branch = (
+                f"integration/temp-parent-issue-{self.parent_issue}-"
+                f"{ctx.config.integration_run_id}"
+            )
+            ctx.config.base_branch = ctx.base_branch
+            ctx.config.temp_branch = ctx.temp_branch
 
-        if not ctx.config.apply:
-            return self.pipeline.execute(ctx)
-
-        worktree_manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
-        lock_path = worktree_manager.lock_path()
-        try:
-            with file_lock(lock_path):
-                return self.pipeline.execute(ctx)
-        except RuntimeError as error:
-            return {
-                "status": IntegrationStatus.INTEGRATION_BRANCH_LOCKED,
-                "error": str(error),
-            }
+        # #435: runごとに一意なworktreeを使うため、CIを含むサイクル全体は
+        # ロックしない。worktree操作だけを各Stepで短く保護する。
+        return self.pipeline.execute(ctx)
 
 
 class Integrator:

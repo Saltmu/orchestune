@@ -11,11 +11,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from orchestune.dispatch_worktree import file_lock
 from orchestune.integrator import Integrator, IntegratorConfig
 from tests.conftest import IntegratorEnv, make_done_issue
 
@@ -73,7 +72,7 @@ class TestWorktreeIsolation:
 
 
 class TestWorktreeSafety:
-    """#51: 固定worktreeパスの共有によって並行実行が相互に破壊しあう不具合の回帰テスト。"""
+    """#435: 統合ラン同士がworktreeを共有しないことの回帰テスト。"""
 
     def test_different_parent_issues_use_distinct_worktree_and_lock_paths(self):
         # 親Issueごとに一意なworktree/lockパスが割り当てられ、異なる親Issueの
@@ -84,30 +83,72 @@ class TestWorktreeSafety:
         assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
         assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
 
-    @pytest.mark.uses_real_file_lock
-    def test_concurrent_run_on_same_branch_is_serialized_not_destructive(
-        self, fake_forge: MagicMock
+    def test_same_parent_runs_have_distinct_branch_worktree_and_lock_paths(self):
+        # 同じ親Issueに対する同時実行でも、run idが異なれば作業用リソースは
+        # すべて別になる。CI中に全体ロックを保持する必要はない。
+        integrator_a = Integrator(
+            IntegratorConfig(
+                apply=True, parent_issue_number=42, integration_run_id="run-a"
+            )
+        )
+        integrator_b = Integrator(
+            IntegratorConfig(
+                apply=True, parent_issue_number=42, integration_run_id="run-b"
+            )
+        )
+
+        assert integrator_a.config.temp_branch != integrator_b.config.temp_branch
+        assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
+        assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
+
+    def test_flat_mode_runs_have_distinct_branch_worktree_and_lock_paths(self):
+        integrator_a = Integrator(IntegratorConfig(apply=True, integration_run_id="a"))
+        integrator_b = Integrator(IntegratorConfig(apply=True, integration_run_id="b"))
+
+        assert integrator_a.config.temp_branch != integrator_b.config.temp_branch
+        assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
+        assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
+
+    def test_gc_contention_is_skipped_and_parent_ref_fetch_retries(
+        self, integrator_env: IntegratorEnv
     ):
-        # 同じ統合ブランチに対する実行が既にロックを保持している間は、
-        # 後続の実行はworktreeを奪い取ったり削除したりせず、ロック済みとして
-        # 直ちに直列化（自身は何もせず終了）されるべき。
-        with tempfile.TemporaryDirectory() as tmp:
-            issue = make_done_issue(
-                1, subtask_id="task-1", parent={"number": 42, "state": "OPEN"}
-            )
-            fake_forge.list_issues_by_label.side_effect = lambda label, *a, **k: [issue]
-            config = IntegratorConfig(
-                apply=True,
-                parent_issue_number=42,
-                repository_root=Path(tmp),
-                forge=fake_forge,
-            )
-            integrator = Integrator(config)
+        """#435: 短時間ロックの競合は統合runを失敗させず、fetchは再試行する。"""
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        gc_conflict = MagicMock()
+        gc_conflict.__enter__.side_effect = RuntimeError("GC lock is busy")
+        fetch_conflict = MagicMock()
+        fetch_conflict.__enter__.side_effect = RuntimeError("fetch lock is busy")
+        acquired_lock = MagicMock()
+        acquired_lock.__enter__.return_value = None
 
-            with file_lock(integrator._worktree_lock_path()):
-                res = integrator.run()
+        def lock_for(path: Path) -> MagicMock:
+            if path.name == "integration-gc.lock":
+                return gc_conflict
+            if path.name == "origin-parent-issue-100.lock":
+                if not fetch_conflict.__enter__.called:
+                    return fetch_conflict
+            return acquired_lock
 
-        assert res["status"] == "integration_branch_locked"
+        with (
+            patch("orchestune.integrator_steps.file_lock", side_effect=lock_for),
+            patch("orchestune.integrator_steps.time.sleep") as sleep,
+        ):
+            res = Integrator(
+                IntegratorConfig(
+                    apply=True, parent_issue_number=100, integration_run_id="lock-test"
+                )
+            ).run()
+
+        assert res["status"] == "success"
+        assert gc_conflict.__enter__.call_count == 3
+        assert fetch_conflict.__enter__.call_count == 1
+        assert sleep.call_args_list == [call(0.05), call(0.1), call(0.05)]
+        fetch_calls = integrator_env.calls_with("fetch")
+        assert any(
+            "parent/issue-100" in arg
+            for fetch_call in fetch_calls
+            for arg in fetch_call.args[0]
+        )
 
     def test_reclaim_refuses_to_delete_unrecognized_directory(self):
         # git worktreeとして認識できない（`.git`ポインタファイルを持たない）

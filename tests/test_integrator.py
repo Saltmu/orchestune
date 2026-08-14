@@ -85,7 +85,9 @@ class TestIntegratorRun:
         # `status:done`側は依存と逆順で返し、トポロジカルソートが効くことを示す。
         integrator_env.set_done_issues(issue_a, issue_b, done=[issue_b, issue_a])
 
-        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        config = IntegratorConfig(
+            apply=True, parent_issue_number=100, integration_run_id="test-run"
+        )
         res = Integrator(config).run()
 
         assert res["status"] == "success"
@@ -104,12 +106,15 @@ class TestIntegratorRun:
         # のみ人間が行う）。
         create_pr = integrator_env.create_pull_request
         create_pr.assert_called_once()
-        assert create_pr.call_args.kwargs["head"] == "integration/temp-parent-issue-100"
+        assert (
+            create_pr.call_args.kwargs["head"]
+            == "integration/temp-parent-issue-100-test-run"
+        )
         assert create_pr.call_args.kwargs["base"] == "parent/issue-100"
         assert "task-1" in create_pr.call_args.kwargs["body"]
         assert "自動的にマージ" in create_pr.call_args.kwargs["body"]
 
-        integrator_env.merge_pull_request.assert_called_once_with(999)
+        integrator_env.merge_pull_request.assert_not_called()
         integrator_env.close_issue.assert_any_call(1, "completed", comment=ANY)
         integrator_env.close_issue.assert_any_call(2, "completed", comment=ANY)
         assert integrator_env.close_issue.call_count == 2
