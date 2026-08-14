@@ -15,8 +15,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch_worktree import file_lock
-from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator import (
+    IntegrationContext,
+    Integrator,
+    IntegratorConfig,
+    SetupWorktreeStep,
+)
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _CUSTOM_ROOT = Path("/custom/repo/root")
@@ -71,9 +75,39 @@ class TestWorktreeIsolation:
         assert res["status"] == "failed_to_create_temp_worktree"
         assert _worktree_remove_calls(integrator_env) == []
 
+    def test_parent_base_sha_is_recorded_after_worktree_setup(
+        self, integrator_env: IntegratorEnv
+    ):
+        config = IntegratorConfig(
+            apply=True,
+            parent_issue_number=100,
+            integration_run_id="test-run",
+            repository_root=_CUSTOM_ROOT,
+        )
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=_CUSTOM_ROOT,
+            original_root=_CUSTOM_ROOT,
+            base_branch=config.base_branch,
+            temp_branch=config.temp_branch,
+        )
+
+        def git_with_parent_sha(args: list[str]):
+            if args[:3] == ["git", "rev-parse", "origin/parent/issue-100"]:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout="parent-base-sha\n", stderr=""
+                )
+            return None
+
+        integrator_env.stub_git(git_with_parent_sha)
+        result = SetupWorktreeStep().execute(ctx)
+
+        assert result["status"] == "success"
+        assert ctx.parent_base_sha == "parent-base-sha"
+
 
 class TestWorktreeSafety:
-    """#51: 固定worktreeパスの共有によって並行実行が相互に破壊しあう不具合の回帰テスト。"""
+    """#435: 統合ラン同士がworktreeを共有しないことの回帰テスト。"""
 
     def test_different_parent_issues_use_distinct_worktree_and_lock_paths(self):
         # 親Issueごとに一意なworktree/lockパスが割り当てられ、異なる親Issueの
@@ -84,30 +118,23 @@ class TestWorktreeSafety:
         assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
         assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
 
-    @pytest.mark.uses_real_file_lock
-    def test_concurrent_run_on_same_branch_is_serialized_not_destructive(
-        self, fake_forge: MagicMock
-    ):
-        # 同じ統合ブランチに対する実行が既にロックを保持している間は、
-        # 後続の実行はworktreeを奪い取ったり削除したりせず、ロック済みとして
-        # 直ちに直列化（自身は何もせず終了）されるべき。
-        with tempfile.TemporaryDirectory() as tmp:
-            issue = make_done_issue(
-                1, subtask_id="task-1", parent={"number": 42, "state": "OPEN"}
+    def test_same_parent_runs_have_distinct_branch_worktree_and_lock_paths(self):
+        # 同じ親Issueに対する同時実行でも、run idが異なれば作業用リソースは
+        # すべて別になる。CI中に全体ロックを保持する必要はない。
+        integrator_a = Integrator(
+            IntegratorConfig(
+                apply=True, parent_issue_number=42, integration_run_id="run-a"
             )
-            fake_forge.list_issues_by_label.side_effect = lambda label, *a, **k: [issue]
-            config = IntegratorConfig(
-                apply=True,
-                parent_issue_number=42,
-                repository_root=Path(tmp),
-                forge=fake_forge,
+        )
+        integrator_b = Integrator(
+            IntegratorConfig(
+                apply=True, parent_issue_number=42, integration_run_id="run-b"
             )
-            integrator = Integrator(config)
+        )
 
-            with file_lock(integrator._worktree_lock_path()):
-                res = integrator.run()
-
-        assert res["status"] == "integration_branch_locked"
+        assert integrator_a.config.temp_branch != integrator_b.config.temp_branch
+        assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
+        assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
 
     def test_reclaim_refuses_to_delete_unrecognized_directory(self):
         # git worktreeとして認識できない（`.git`ポインタファイルを持たない）
