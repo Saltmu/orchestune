@@ -500,7 +500,11 @@ def test_closed_loop_flow():
         # Verify output in temporary integration branch
         subprocess.run(["git", "fetch", "origin"], cwd=str(repo.local_path), check=True)
         res_show = subprocess.run(
-            ["git", "show", "origin/integration/temp-main:src/main.py"],
+            [
+                "git",
+                "show",
+                f"origin/{integrator2.config.temp_branch}:src/main.py",
+            ],
             cwd=str(repo.local_path),
             capture_output=True,
             text=True,
