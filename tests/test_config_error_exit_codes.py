@@ -263,3 +263,55 @@ class TestPathologicalRegexExitCodeConsistency:
 
         assert excinfo.value.code == 2
         assert "dag_ignore_patterns" in capsys.readouterr().err
+
+
+class TestInvalidUtf8ConfigExitCodeConsistency:
+    """Codex review (#441): `orchestune.toml` containing invalid UTF-8 bytes
+    makes `tomllib.load()` raise `UnicodeDecodeError`, which the original
+    `except (OSError, tomllib.TOMLDecodeError)` didn't cover. Because
+    `UnicodeDecodeError` is a `ValueError`, `orchestune-dispatch`'s own
+    `except (ValueError, re.error)` happened to still map it to exit 2, but
+    `orchestune-dag`/`orchestune-provision` reached their generic
+    except-Exception handler and exited 1, breaking the three-tool
+    consistency this PR introduces."""
+
+    def _write_invalid_utf8_config(self, tmp_path: Path) -> None:
+        (tmp_path / "orchestune.toml").write_bytes(b'key = "\xff\xfe invalid"\n')
+
+    def test_dag_cli_exits_2(self, tmp_path, capsys):
+        self._write_invalid_utf8_config(tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            dag_main(["--plan", str(plan_path)])
+
+        assert excinfo.value.code == 2
+
+    def test_provision_exits_2(self, tmp_path, capsys):
+        self._write_invalid_utf8_config(tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+        template_path = tmp_path / "issue_template.md"
+        template_path.write_text(_TEMPLATE, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            provisioning_main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+
+        assert excinfo.value.code == 2
+
+    def test_dispatch_exits_2(self, tmp_path, capsys):
+        self._write_invalid_utf8_config(tmp_path)
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2

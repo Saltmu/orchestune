@@ -185,7 +185,7 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
         try:
             with open(orchestune_toml, "rb") as f:
                 return cast(dict[str, Any], tomllib.load(f))
-        except (OSError, tomllib.TOMLDecodeError) as e:
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
             raise ConfigError(f"failed to load {orchestune_toml}: {e}") from e
 
     pyproject_toml = repo_root / "pyproject.toml"
@@ -193,7 +193,7 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
         try:
             with open(pyproject_toml, "rb") as f:
                 data = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError) as e:
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
             raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
         tool = data.get("tool", {})
         if not isinstance(tool, dict):
