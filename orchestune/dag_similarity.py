@@ -1,16 +1,16 @@
 """Similarity scoring and edge inference for DAG subtasks.
 
-The similarity-based partitioning approach here derives from the Co-Coder
-paper (Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin, Fangru Lin,
-Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware Task
-Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026), which builds a
-symbol-sharing graph from a repository's static interface and runs Infomap
-community detection to assign files to agents (optimizing for critical-path
-length plus communication cost). This module adapts that idea for conflict
-avoidance instead: the graph's source is a decomposition plan's declared
-footprint/symbols rather than existing repository files, and edges are
-inferred via IDF-weighted Otsuka-Ochiai similarity (see `_idf_weights`)
-rather than Infomap community detection.
+サブタスク間の重なりから暗黙の依存エッジを推定する手法は、Co-Coder
+(arXiv:2606.00953, "When Parallelism Pays Off: Cohesion-Aware Task
+Partitioning for Multi-Agent Coding") を参考にしている。ただし目的が
+異なるため、以下を変更している:
+
+- グラフの由来: 既存リポジトリの構造ではなく、decomposition planで
+  宣言されたfootprint/symbols（まだ存在しないファイルを含む）
+- 出力: Infomapによるコミュニティ分割ではなく、閾値超過ペアへの
+  依存エッジ（担当の割り当てではなく実行順序を決めるため）
+- 重み付け: IDF（多くのサブタスクが触る項目の弁別力を下げる）と、
+  footprint項目への1.5倍係数（マージを壊すのはファイル単位の衝突のため）
 """
 
 from __future__ import annotations
