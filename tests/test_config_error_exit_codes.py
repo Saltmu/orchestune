@@ -190,3 +190,63 @@ class TestNonTableToolSectionExitCodeConsistency:
 
         assert excinfo.value.code == 2
         assert "[tool]" in capsys.readouterr().err
+
+
+class TestOversizedRegexRepetitionExitCodeConsistency:
+    """Codex review (#441): an oversized repetition count in
+    `dag_ignore_patterns` (e.g. `a{9999999999999999999999999999999999999999}`)
+    makes Python's regex compiler raise `OverflowError` rather than
+    `re.error`, which `compile_extra_ignore_patterns` didn't catch, so
+    `orchestune-dispatch` crashed with an uncaught traceback (exit 1)
+    instead of the exit-2 config-error contract this PR introduces. Cover
+    all three tools against the same oversized pattern."""
+
+    _OVERSIZED_REGEX_CONFIG = (
+        'dag_ignore_patterns = ["a{9999999999999999999999999999999999999999}"]\n'
+    )
+
+    def _write_config(self, tmp_path: Path) -> None:
+        (tmp_path / "orchestune.toml").write_text(
+            self._OVERSIZED_REGEX_CONFIG, encoding="utf-8"
+        )
+
+    def test_dag_cli_exits_2(self, tmp_path, capsys):
+        self._write_config(tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            dag_main(["--plan", str(plan_path)])
+
+        assert excinfo.value.code == 2
+        assert "dag_ignore_patterns" in capsys.readouterr().err
+
+    def test_provision_exits_2(self, tmp_path, capsys):
+        self._write_config(tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+        template_path = tmp_path / "issue_template.md"
+        template_path.write_text(_TEMPLATE, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            provisioning_main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+
+        assert excinfo.value.code == 2
+        assert "dag_ignore_patterns" in capsys.readouterr().err
+
+    def test_dispatch_exits_2(self, tmp_path, capsys):
+        self._write_config(tmp_path)
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2
+        assert "dag_ignore_patterns" in capsys.readouterr().err

@@ -69,6 +69,11 @@ def compile_extra_ignore_patterns(
         return tuple(re.compile(pattern) for pattern in patterns)
     except re.error as e:
         raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
+    except OverflowError as e:
+        # An oversized repetition count (e.g. `a{9999999999999999999999}`)
+        # isn't caught by `re.error` — Python's regex compiler raises
+        # OverflowError instead (Codex review, #441).
+        raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
 
 
 def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
