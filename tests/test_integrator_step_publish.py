@@ -184,7 +184,7 @@ class TestSemanticReview:
         )
         assert coordinator.calls[0]["pr_number"] == 315
 
-        # temp branch公開と、CASとなる親ブランチ更新の2回だけpushする。
+        # temp branch公開と、non-force pushによる親ブランチ更新の2回だけpushする。
         assert len(integrator_env.calls_with("push")) == 2
 
     def test_explicitly_disabled_is_not_dispatched(self, integrator_env: IntegratorEnv):
