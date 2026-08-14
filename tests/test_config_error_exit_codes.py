@@ -1,0 +1,133 @@
+"""#428: 設定エラー（不正な`dag_ignore_patterns`）に対して、3ツール
+（orchestune-dag/orchestune-provision/orchestune-dispatch）が同じ
+exit code 2 で一貫して報告することの回帰防止テスト。
+
+3ツールとも `orchestune/dag_models.py` の共有関数
+（`load_orchestune_config`/`extract_dag_ignore_patterns`/
+`compile_extra_ignore_patterns`）から `ConfigError` を送出させ、それぞれの
+`main()` がこれを exit 2 にマッピングする。構造的エラー（`DagCycleError`等）
+は引き続き exit 1 のままであることも合わせて確認する。
+"""
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from orchestune.dag_cli import main as dag_main
+from orchestune.dispatcher import main as dispatcher_main
+from orchestune.provisioning import main as provisioning_main
+
+_PLAN = """\
+---
+title: "Example big rock"
+subtasks:
+  - id: task-a
+    description: "Implement feature XX"
+    footprint: [src/foo.py]
+---
+
+# Decomposition Plan
+"""
+
+_TEMPLATE = (
+    "# [FEAT] {{subtask_id}}: {{description}}\n\n"
+    "## Overview\n{{overview}}\n\n"
+    "## Proposed Changes\n{{proposed_changes}}\n\n"
+    "## Acceptance Criteria\n{{acceptance_criteria}}\n\n"
+    "## Verification Plan\n{{verification_plan}}\n\n"
+    "```yaml\n"
+    "subtask_id: {{subtask_id_yaml}}\n"
+    "footprint: {{footprint}}\n"
+    "symbols: {{symbols}}\n"
+    "depends_on: {{depends_on}}\n"
+    "```\n"
+)
+
+_INVALID_CONFIG = 'dag_ignore_patterns = ["("]\n'
+
+
+def _write_invalid_orchestune_toml(tmp_path: Path) -> None:
+    (tmp_path / "orchestune.toml").write_text(_INVALID_CONFIG, encoding="utf-8")
+
+
+class TestConfigErrorExitCodeConsistency:
+    def test_dag_cli_exits_2(self, tmp_path, capsys):
+        _write_invalid_orchestune_toml(tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            dag_main(["--plan", str(plan_path)])
+
+        assert excinfo.value.code == 2
+        assert "Error:" in capsys.readouterr().err
+
+    def test_provision_exits_2(self, tmp_path, capsys):
+        _write_invalid_orchestune_toml(tmp_path)
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
+        template_path = tmp_path / "issue_template.md"
+        template_path.write_text(_TEMPLATE, encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            provisioning_main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+
+        assert excinfo.value.code == 2
+        assert "Error:" in capsys.readouterr().err
+
+    def test_dispatch_exits_2(self, tmp_path, capsys):
+        _write_invalid_orchestune_toml(tmp_path)
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2
+        assert "invalid dispatcher config" in capsys.readouterr().err
+
+    def test_dag_cli_structural_error_still_exits_1(self, tmp_path, capsys):
+        """設定エラーではない構造的エラー（DagCycleError）はexit 2に
+        巻き込まれず、従来通りexit 1のままであることを確認する。"""
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(
+            """\
+---
+subtasks:
+  - id: task-a
+    depends_on: ["task-b"]
+  - id: task-b
+    depends_on: ["task-a"]
+---
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            dag_main(["--plan", str(plan_path)])
+
+        assert excinfo.value.code == 1
+
+
+class TestDispatcherConfigErrorNotAffectedByChange:
+    """dispatcher.pyの既存の`except (ValueError, re.error)`は、`ConfigError`が
+    `ValueError`のサブクラスであるため無改修のまま動作を維持することを
+    念のため確認する（#428実装メモ）。"""
+
+    def test_dispatcher_still_maps_invalid_regex_to_exit_2(self, tmp_path, capsys):
+        _write_invalid_orchestune_toml(tmp_path)
+
+        with (
+            patch("orchestune.dispatcher.build_dispatch_target"),
+            pytest.raises(SystemExit) as excinfo,
+        ):
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2

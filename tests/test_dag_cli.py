@@ -215,7 +215,7 @@ class TestThresholdFlag:
 
         _run_cli(
             ["--plan", str(plan_path), f"--threshold={bad_threshold}"],
-            expected_exit_code=1,
+            expected_exit_code=2,
         )
 
         captured = capsys.readouterr()
@@ -292,7 +292,7 @@ class TestIgnorePatternsConfig:
             encoding="utf-8",
         )
 
-        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=2)
 
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -306,7 +306,7 @@ class TestIgnorePatternsConfig:
             encoding="utf-8",
         )
 
-        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=2)
 
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -319,7 +319,7 @@ class TestIgnorePatternsConfig:
             encoding="utf-8",
         )
 
-        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=2)
 
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -391,7 +391,7 @@ class TestSimilarityThresholdConfig:
             'dag_similarity_threshold = "not-a-number"\n', encoding="utf-8"
         )
 
-        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=2)
 
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -404,7 +404,7 @@ class TestSimilarityThresholdConfig:
             "dag_similarity_threshold = 2\n", encoding="utf-8"
         )
 
-        _run_cli(["--plan", str(plan_path)], expected_exit_code=1)
+        _run_cli(["--plan", str(plan_path)], expected_exit_code=2)
 
         captured = capsys.readouterr()
         assert "Error:" in captured.err

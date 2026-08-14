@@ -21,6 +21,7 @@ import yaml
 
 from orchestune.dag_graph import build_dag
 from orchestune.dag_models import (
+    ConfigError,
     SubTask,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
@@ -537,6 +538,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             template_path=args.template,
             repo_root=repo_root,
         )
+    except ConfigError as error:
+        # #428: config-derived errors (orchestune.toml / pyproject.toml
+        # values) exit 2, matching orchestune-dispatch's `_config_error`
+        # convention and orchestune-dag's own exit-2 mapping, distinct from
+        # exit 1 for other failures (missing plan file, DagCycleError, etc.).
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(2) from error
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error

@@ -46,14 +46,29 @@ DAG_TOOL_CONFIG_KEYS = frozenset(
 )
 
 
+class ConfigError(ValueError):
+    """Raised for invalid `orchestune.toml` / `pyproject.toml` config values.
+
+    A `ValueError` subclass so existing `except ValueError` call sites keep
+    working unchanged, but distinct from other `ValueError`s (e.g.
+    `DagCycleError`, footprint validation) so callers can catch config
+    problems specifically and map them to a dedicated exit code (#428:
+    orchestune-dag / orchestune-provision / orchestune-dispatch all exit 2
+    for config errors, distinct from exit 1 for other failures).
+    """
+
+
 def compile_extra_ignore_patterns(
     patterns: Iterable[str],
 ) -> tuple[re.Pattern[str], ...]:
     """Compile user-supplied regex strings for use as extra ignore patterns.
 
-    Raises re.error if any pattern is not a valid regular expression.
+    Raises ConfigError if any pattern is not a valid regular expression.
     """
-    return tuple(re.compile(pattern) for pattern in patterns)
+    try:
+        return tuple(re.compile(pattern) for pattern in patterns)
+    except re.error as e:
+        raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
 
 
 def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
@@ -77,7 +92,7 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     if not isinstance(patterns, list) or not all(
         isinstance(p, str) and p for p in patterns
     ):
-        raise ValueError(
+        raise ConfigError(
             "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of "
             "non-empty strings"
         )
@@ -112,12 +127,12 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
     # True/False silently pass through as 1.0/0.0 (#404's dag_ignore_patterns
     # review raised the same concern for its own type check).
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(
+        raise ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be a number"
         )
     threshold = float(value)
     if not (0 <= threshold <= 1):
-        raise ValueError(
+        raise ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
             f"within [0, 1] (a similarity score), got {threshold}"
         )
@@ -164,7 +179,7 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
             with open(orchestune_toml, "rb") as f:
                 return cast(dict[str, Any], tomllib.load(f))
         except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {orchestune_toml}: {e}") from e
+            raise ConfigError(f"failed to load {orchestune_toml}: {e}") from e
 
     pyproject_toml = repo_root / "pyproject.toml"
     if pyproject_toml.exists():
@@ -172,10 +187,10 @@ def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
             with open(pyproject_toml, "rb") as f:
                 data = tomllib.load(f)
         except (OSError, tomllib.TOMLDecodeError) as e:
-            raise ValueError(f"failed to load {pyproject_toml}: {e}") from e
+            raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
         config = data.get("tool", {}).get("orchestune", {})
         if not isinstance(config, dict):
-            raise ValueError(f"{pyproject_toml}: [tool.orchestune] must be a table")
+            raise ConfigError(f"{pyproject_toml}: [tool.orchestune] must be a table")
         return cast(dict[str, Any], config)
 
     return {}

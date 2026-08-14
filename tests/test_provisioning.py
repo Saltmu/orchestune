@@ -850,7 +850,7 @@ class TestMain:
         with pytest.raises(SystemExit) as exc_info:
             main(["--plan", str(plan_path), "--template", str(template_path)])
 
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert "orchestune.toml" in captured.err
 
@@ -883,7 +883,7 @@ class TestMain:
                 ]
             )
 
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert "orchestune.toml" in captured.err
 
