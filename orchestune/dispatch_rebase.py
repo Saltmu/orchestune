@@ -408,9 +408,11 @@ def _apply_auto_rebase(
         # #384: cmd_args[0]は"git"（rebaseとpushで共通）のため、cmd全体を見て
         # push失敗をコンフリクトと誤判定しないよう区別する。
         # #427: Windowsではdefault_ci_command()がpowershell経由のコマンドを返すため、
-        # cmd_args[0]（"powershell"）だけでなくcmd全体でlocal-ciを判定する。
+        # cmd_args[0]（"powershell"）だけでは判定できない。cmd全体を
+        # default_ci_command()と厳密一致で比較する（部分一致だと、rebase/push対象の
+        # ブランチ名やパスに偶然"local-ci"を含む場合に誤検知しうるため）。
         cmd_args = getattr(e, "cmd", [])
-        if cmd_args and any("local-ci" in str(part) for part in cmd_args):
+        if cmd_args == default_ci_command():
             msg = "自動リベース後のローカルCI実行に失敗しました。手動で修正を行ってください。\n"
         elif cmd_args and "push" in cmd_args:
             msg = (
