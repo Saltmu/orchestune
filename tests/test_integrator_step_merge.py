@@ -226,10 +226,21 @@ class TestFetchBeforeMerge:
         res = Integrator(IntegratorConfig(apply=True)).run()
 
         assert res["status"] == "success"
-        fetch_calls = integrator_env.calls_with("fetch")
-        assert len(fetch_calls) == 1
-        assert fetch_calls[0].args[0] == ["git", "fetch", "origin", _TASK_1_REFSPEC]
-        assert integrator_env.call_index(fetch_calls[0]) < _merge_index(integrator_env)
+        task_fetch_calls = [
+            call
+            for call in integrator_env.calls_with("fetch")
+            if _TASK_1_REFSPEC in call.args[0]
+        ]
+        assert len(task_fetch_calls) == 1
+        assert task_fetch_calls[0].args[0] == [
+            "git",
+            "fetch",
+            "origin",
+            _TASK_1_REFSPEC,
+        ]
+        assert integrator_env.call_index(task_fetch_calls[0]) < _merge_index(
+            integrator_env
+        )
 
     def test_configures_git_identity_before_merging(
         self, integrator_env: IntegratorEnv
@@ -257,9 +268,9 @@ class TestFetchBeforeMerge:
         # 必ず失敗するため、浅いリポジトリの場合は事前に履歴を深くする必要がある。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.stub_git(
-            lambda args: _ok(args, "true\n")
-            if args[:2] == ["git", "rev-parse"]
-            else None
+            lambda args: (
+                _ok(args, "true\n") if args[:2] == ["git", "rev-parse"] else None
+            )
         )
 
         res = Integrator(IntegratorConfig(apply=True)).run()
@@ -285,9 +296,9 @@ class TestFetchBeforeMerge:
     ):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.stub_git(
-            lambda args: _ok(args, "false\n")
-            if args[:2] == ["git", "rev-parse"]
-            else None
+            lambda args: (
+                _ok(args, "false\n") if args[:2] == ["git", "rev-parse"] else None
+            )
         )
 
         res = Integrator(IntegratorConfig(apply=True)).run()
