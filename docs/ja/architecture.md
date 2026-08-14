@@ -29,6 +29,18 @@ graph TD
     E --> F[Cycle & Risk Check]
 ```
 
+> このセクションの類似度ベースのタスク分割は、Co-Coder論文
+> （Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin, Fangru Lin,
+> Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware Task
+> Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026.）を出典とする。
+> 同論文は静的解析でリポジトリのinterfaceからシンボル共有グラフを構築し、
+> Infomapでコミュニティ検出してファイル→エージェントの割り当てを最適化する
+> （目的関数はクリティカルパス＋通信コスト）。Orchestuneはこの手法を
+> 運用ツール向けに変更し、目的関数を「凝集/コスト最適化」から「競合回避」へ、
+> グラフの由来をリポジトリ既存ファイルから分解計画の宣言済みfootprint/symbols
+> へ変更し、IDF重み付きOtsuka-Ochiai類似度を採用している。詳細は
+> `orchestune/dag_similarity.py` のdocstringを参照。
+
 ### コンフリクト回避の仕組み
 * **メタデータの重複分析**:
   複数のタスクが同じファイルやクラスを同時に変更しようとすると、コンフリクト（競合）が発生します。Orchestuneは、類似度メトリクスを用いてフットプリント間の重複を計算し、競合する可能性のあるタスク間に「暗黙の依存関係」を追加して実行順序を整理します。

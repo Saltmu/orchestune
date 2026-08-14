@@ -1,4 +1,17 @@
-"""Similarity scoring and edge inference for DAG subtasks."""
+"""Similarity scoring and edge inference for DAG subtasks.
+
+The similarity-based partitioning approach here derives from the Co-Coder
+paper (Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin, Fangru Lin,
+Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware Task
+Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026), which builds a
+symbol-sharing graph from a repository's static interface and runs Infomap
+community detection to assign files to agents (optimizing for critical-path
+length plus communication cost). This module adapts that idea for conflict
+avoidance instead: the graph's source is a decomposition plan's declared
+footprint/symbols rather than existing repository files, and edges are
+inferred via IDF-weighted Otsuka-Ochiai similarity (see `_idf_weights`)
+rather than Infomap community detection.
+"""
 
 from __future__ import annotations
 
