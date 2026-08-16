@@ -452,6 +452,19 @@ class TestMergeTaskBranch:
         assert pre_merge_sha is None
         assert "Failed to capture pre-merge HEAD" in err
 
+    def test_merge_oserror_aborts_and_fails(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch("orchestune.integrator_git_ops.run_git") as mock_git:
+            mock_git.side_effect = [
+                _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
+                OSError("git process failed to start"),
+                _ok(["merge", "--abort"]),
+            ]
+            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+        assert success is False
+        assert pre_merge_sha == "sha123"
+        assert "Merge conflict" in err
+
 
 class TestVerifyCiAndRollback:
     def test_ci_success(self, tmp_path: Path):

@@ -292,8 +292,8 @@ class IntegrationMerger:
         # CI失敗時はそのSHAへ確実に戻す。
         try:
             pre_merge_sha: str | None = self.current_head_sha()
-        except subprocess.CalledProcessError as e:
-            head_error = e.stderr or ""
+        except (subprocess.CalledProcessError, OSError) as e:
+            head_error = getattr(e, "stderr", None) or str(e)
             return False, None, f"Failed to capture pre-merge HEAD: {head_error}"
 
         try:
@@ -309,9 +309,9 @@ class IntegrationMerger:
                 check=True,
             )
             return True, pre_merge_sha, ""
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, OSError) as e:
             self.abort_merge()
-            merge_error = e.stderr or ""
+            merge_error = getattr(e, "stderr", None) or str(e)
             return False, pre_merge_sha, f"Merge conflict: {merge_error}"
 
     def _verify_ci_and_rollback(
@@ -388,6 +388,13 @@ class IntegrationMerger:
             failed_reasons[task.subtask_id] = reason
             handle_merge_failure(task, reason, apply, ci_output, forge=self.forge)
 
+        def record_failure(
+            task: Task, reason: str, ci_output: str | None = None
+        ) -> None:
+            handle_failure(task, reason, ci_output)
+            failed_tasks.append(task.subtask_id)
+            unavailable_ids.add(task.subtask_id)
+
         for task in sorted_done_tasks:
             # #374: このタスクの処理中に想定外の例外（subprocess.CalledProcessError
             # 以外）が発生しても、他タスクの処理・戻り値の一貫性を守るため、
@@ -415,9 +422,7 @@ class IntegrationMerger:
                         branch_name, base_branch
                     )
                     if not fetch_ok:
-                        handle_failure(task, fetch_err)
-                        failed_tasks.append(task.subtask_id)
-                        unavailable_ids.add(task.subtask_id)
+                        record_failure(task, fetch_err)
                         continue
                     if already_merged:
                         merged_tasks.append(task.subtask_id)
@@ -427,20 +432,15 @@ class IntegrationMerger:
                         branch_name
                     )
                     captured_pre_merge_sha = pre_merge_sha
-                    if not merge_ok:
-                        handle_failure(task, merge_err)
-                        failed_tasks.append(task.subtask_id)
-                        unavailable_ids.add(task.subtask_id)
+                    if not merge_ok or pre_merge_sha is None:
+                        record_failure(task, merge_err)
                         continue
 
-                    assert pre_merge_sha is not None
                     ci_ok, ci_reason, ci_out = self._verify_ci_and_rollback(
                         pre_merge_sha
                     )
                     if not ci_ok:
-                        handle_failure(task, ci_reason, ci_output=ci_out)
-                        failed_tasks.append(task.subtask_id)
-                        unavailable_ids.add(task.subtask_id)
+                        record_failure(task, ci_reason, ci_output=ci_out)
                         continue
 
                 merged_tasks.append(task.subtask_id)
