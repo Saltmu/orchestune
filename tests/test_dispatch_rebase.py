@@ -8,6 +8,8 @@ git rebase実行（apply層）は`test_dispatch_rebase_git.py`へそれぞれ分
 
 import subprocess
 from contextlib import ExitStack, contextmanager
+from dataclasses import fields
+from inspect import signature
 from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.dag_models import FootprintConflict
@@ -61,6 +63,28 @@ def _issue(
         created_at=created_at,
         parent=parent,
     )
+
+
+class TestRebaseContext:
+    def test_context_carries_auto_rebase_dependencies(self):
+        from orchestune.dispatch_rebase import RebaseContext
+
+        assert {field.name for field in fields(RebaseContext)} == {
+            "active",
+            "active_task",
+            "key",
+            "run_state",
+            "done_subtask_ids",
+            "ci_passed_pr_subtask_ids",
+            "subtask_branch_map",
+            "config",
+        }
+
+    def test_rebase_functions_accept_context_instead_of_many_arguments(self):
+        from orchestune.dispatch_rebase import _apply_auto_rebase, _try_auto_rebase
+
+        assert len(signature(_try_auto_rebase).parameters) <= 3
+        assert len(signature(_apply_auto_rebase).parameters) <= 3
 
 
 class TestNotifyRecompute:

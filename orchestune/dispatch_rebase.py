@@ -26,6 +26,20 @@ from orchestune.process_utils import default_ci_command, is_process_alive
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class RebaseContext:
+    """State shared by automatic rebase decision and application steps."""
+
+    active: ActiveWorktree
+    active_task: Task | None
+    key: str
+    run_state: RunState
+    done_subtask_ids: set[str]
+    ci_passed_pr_subtask_ids: set[str]
+    subtask_branch_map: dict[str, str]
+    config: DispatcherConfig
+
+
 def notify_recompute(
     conflict: FootprintConflict,
     work_summary: str,
@@ -314,16 +328,13 @@ def _decide_rebase_needed(
         return False
 
 
-def _apply_auto_rebase(
-    active: ActiveWorktree,
-    active_task: Task,
-    key: str,
-    run_state: RunState,
-    parent_branch: str,
-    config: DispatcherConfig,
-) -> None:
+def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
     """実際にプロセス停止・git rebase・ローカルCI再実行・エージェント（LLM）の
     再起動を行う。コンフリクトやCI失敗時はstatus:manual-merge-requiredへ遷移する。"""
+    active = ctx.active
+    active_task = ctx.active_task
+    assert active_task is not None
+    config = ctx.config
     if not config.apply:
         return
 
@@ -353,7 +364,7 @@ def _apply_auto_rebase(
             "可能性があるため、削除・再作成される前に手動で確認してください。\n"
             f"エラー詳細:\n```\n{backup_error}\n```",
         )
-        del run_state.active_worktrees[key]
+        del ctx.run_state.active_worktrees[ctx.key]
         return
 
     resolved_parent = resolve_local_or_remote_branch(
@@ -427,32 +438,27 @@ def _apply_auto_rebase(
             active.issue_number,
             f"{msg}対象の依存元ブランチ: {parent_branch}",
         )
-        del run_state.active_worktrees[key]
+        del ctx.run_state.active_worktrees[ctx.key]
 
 
-def _try_auto_rebase(
-    active: ActiveWorktree,
-    active_task: Task | None,
-    key: str,
-    run_state: RunState,
-    done_subtask_ids: set[str],
-    ci_passed_pr_subtask_ids: set[str],
-    subtask_branch_map: dict[str, str],
-    config: DispatcherConfig,
-) -> bool:
+def _try_auto_rebase(ctx: RebaseContext) -> bool:
     """decide+applyの薄いラッパー。自動リベースを試行し、実際にリベースを
     実行した場合は True を返す。リベースが不要、あるいは対象がない場合は
     False を返す（呼び出し元が footprint 逸脱チェック等の後続処理へ
     フォールスルーできるようにするため）。"""
     parent_branch = _decide_rebase_target(
-        active_task, done_subtask_ids, ci_passed_pr_subtask_ids, subtask_branch_map
+        ctx.active_task,
+        ctx.done_subtask_ids,
+        ctx.ci_passed_pr_subtask_ids,
+        ctx.subtask_branch_map,
     )
     if parent_branch is None:
         return False
 
-    if _decide_rebase_needed(parent_branch, active.branch, active.worktree_path):
-        assert active_task is not None
-        _apply_auto_rebase(active, active_task, key, run_state, parent_branch, config)
+    if _decide_rebase_needed(
+        parent_branch, ctx.active.branch, ctx.active.worktree_path
+    ):
+        _apply_auto_rebase(ctx, parent_branch)
         return True
     return False
 
@@ -463,16 +469,17 @@ def _rule_auto_rebase(
     """#201: 自動リベース判定＆実行。"""
     if not dispatch_gc.is_process_alive(active.pid):
         return None
-    if not _try_auto_rebase(
-        active,
-        active_task,
-        key,
-        ctx.run_state,
-        ctx.done_subtask_ids,
-        ctx.ci_passed_pr_subtask_ids,
-        ctx.subtask_branch_map,
-        ctx.config,
-    ):
+    rebase_ctx = RebaseContext(
+        active=active,
+        active_task=active_task,
+        key=key,
+        run_state=ctx.run_state,
+        done_subtask_ids=ctx.done_subtask_ids,
+        ci_passed_pr_subtask_ids=ctx.ci_passed_pr_subtask_ids,
+        subtask_branch_map=ctx.subtask_branch_map,
+        config=ctx.config,
+    )
+    if not _try_auto_rebase(rebase_ctx):
         return None
     return ActiveWorktreeRuleOutcome(terminal=True)
 

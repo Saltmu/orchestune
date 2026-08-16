@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from orchestune.dag_models import compile_extra_ignore_patterns
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_rebase import (
+    RebaseContext,
     _decide_footprint_deviation_outcome,
     _decide_rebase_needed,
     _decide_rebase_target,
@@ -47,6 +48,27 @@ def _active(**overrides):
     )
     defaults.update(overrides)
     return ActiveWorktree(**defaults)
+
+
+def _context(
+    active: ActiveWorktree,
+    task: Task,
+    run_state: RunState,
+    config: DispatcherConfig,
+    *,
+    ci_passed_pr_subtask_ids: set[str],
+    subtask_branch_map: dict[str, str],
+) -> RebaseContext:
+    return RebaseContext(
+        active=active,
+        active_task=task,
+        key="1",
+        run_state=run_state,
+        done_subtask_ids=set(),
+        ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+        subtask_branch_map=subtask_branch_map,
+        config=config,
+    )
 
 
 class TestDecideFootprintDeviationOutcome:
@@ -295,7 +317,6 @@ class TestTryAutoRebase:
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
-        done_subtask_ids = set()
         ci_passed_pr_subtask_ids = {"task-parent"}
         subtask_branch_map = {"task-parent": "parent-branch"}
 
@@ -314,14 +335,14 @@ class TestTryAutoRebase:
             patch("orchestune.dispatch_rebase._apply_auto_rebase") as mock_apply,
         ):
             result = _try_auto_rebase(
-                active=active,
-                active_task=task,
-                key="1",
-                run_state=run_state,
-                done_subtask_ids=done_subtask_ids,
-                ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-                subtask_branch_map=subtask_branch_map,
-                config=config,
+                _context(
+                    active,
+                    task,
+                    run_state,
+                    config,
+                    ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
+                    subtask_branch_map=subtask_branch_map,
+                )
             )
 
         assert result is False
@@ -331,7 +352,6 @@ class TestTryAutoRebase:
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
-        done_subtask_ids = set()
         ci_passed_pr_subtask_ids = {"task-parent"}
         subtask_branch_map = {"task-parent": "parent-branch"}
 
@@ -349,18 +369,15 @@ class TestTryAutoRebase:
             ),
             patch("orchestune.dispatch_rebase._apply_auto_rebase") as mock_apply,
         ):
-            result = _try_auto_rebase(
-                active=active,
-                active_task=task,
-                key="1",
-                run_state=run_state,
-                done_subtask_ids=done_subtask_ids,
+            context = _context(
+                active,
+                task,
+                run_state,
+                config,
                 ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
                 subtask_branch_map=subtask_branch_map,
-                config=config,
             )
+            result = _try_auto_rebase(context)
 
         assert result is True
-        mock_apply.assert_called_once_with(
-            active, task, "1", run_state, "parent-branch", config
-        )
+        mock_apply.assert_called_once_with(context, "parent-branch")
