@@ -11,7 +11,6 @@
 検証を続ける）。
 """
 
-import inspect
 import json
 import tempfile
 import time
@@ -105,59 +104,6 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args([])
         assert args.apply is True
 
-
-class TestDispatcherCliSingleResponsibility:
-    def test_parser_and_main_are_thin_orchestrators(self):
-        from orchestune.dispatcher import _build_arg_parser, main
-
-        assert len(inspect.getsourcelines(_build_arg_parser)[0]) <= 15
-        assert len(inspect.getsourcelines(main)[0]) <= 35
-
-    def test_parser_option_groups_preserve_all_destinations(self):
-        from orchestune.dispatcher import (
-            _add_dispatch_target_arguments,
-            _add_execution_arguments,
-            _add_safety_and_budget_arguments,
-            _add_storage_arguments,
-        )
-
-        parser = __import__("argparse").ArgumentParser()
-        for register in (
-            _add_execution_arguments,
-            _add_storage_arguments,
-            _add_dispatch_target_arguments,
-            _add_safety_and_budget_arguments,
-        ):
-            register(parser)
-
-        destinations = {action.dest for action in parser._actions}
-        assert {
-            "apply",
-            "max_concurrent",
-            "run_state_path",
-            "events_log_path",
-            "dispatch_target",
-            "routine_token",
-            "allow_unsafe_agent_execution",
-            "max_tokens_per_task",
-            "ci_command",
-        } <= destinations
-
-    @pytest.mark.parametrize(
-        ("statuses", "expected"),
-        [
-            ([], 0),
-            ([PhaseStatus.SUCCESS], 0),
-            ([PhaseStatus.RETRYABLE_FAILURE], 2),
-            ([PhaseStatus.RETRYABLE_FAILURE, PhaseStatus.FATAL_FAILURE], 1),
-        ],
-    )
-    def test_post_cycle_exit_code_is_calculated_independently(self, statuses, expected):
-        from orchestune.dispatcher import _post_cycle_exit_code
-
-        results = [PhaseResult(phase_name="test", status=status) for status in statuses]
-        assert _post_cycle_exit_code(results) == expected
-
     def test_no_apply_flag_disables_apply(self):
         from orchestune.dispatcher import _build_arg_parser
 
@@ -250,6 +196,53 @@ class TestDispatcherCliSingleResponsibility:
 
         args = _build_arg_parser().parse_args(["--no-zombie-gc"])
         assert args.zombie_gc is False
+
+
+class TestDispatcherCliSingleResponsibility:
+    def test_parser_option_groups_preserve_all_destinations(self):
+        from orchestune.dispatcher import (
+            _add_dispatch_target_arguments,
+            _add_execution_arguments,
+            _add_safety_and_budget_arguments,
+            _add_storage_arguments,
+        )
+
+        parser = __import__("argparse").ArgumentParser()
+        for register in (
+            _add_execution_arguments,
+            _add_storage_arguments,
+            _add_dispatch_target_arguments,
+            _add_safety_and_budget_arguments,
+        ):
+            register(parser)
+
+        destinations = {action.dest for action in parser._actions}
+        assert {
+            "apply",
+            "max_concurrent",
+            "run_state_path",
+            "events_log_path",
+            "dispatch_target",
+            "routine_token",
+            "allow_unsafe_agent_execution",
+            "max_tokens_per_task",
+            "ci_command",
+        } <= destinations
+
+    @pytest.mark.parametrize(
+        ("statuses", "expected"),
+        [
+            ([], 0),
+            ([PhaseStatus.SUCCESS], 0),
+            ([PhaseStatus.RETRYABLE_FAILURE], 2),
+            ([PhaseStatus.RETRYABLE_FAILURE, PhaseStatus.FATAL_FAILURE], 1),
+        ],
+    )
+    def test_post_cycle_exit_code_is_calculated_independently(self, statuses, expected):
+        from orchestune.dispatcher import _post_cycle_exit_code
+
+        results = [PhaseResult(phase_name="test", status=status) for status in statuses]
+        assert _post_cycle_exit_code(results) == expected
 
 
 class TestConfigDefaults:

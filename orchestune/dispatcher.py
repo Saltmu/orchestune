@@ -311,7 +311,7 @@ class _DispatcherInputs:
 class _DispatcherRunResult:
     report: Any
     post_cycle_results: list[PhaseResult]
-    integrator_run_report: Any | None
+    integrator_run_report: Any
 
 
 def _load_dispatcher_inputs(
