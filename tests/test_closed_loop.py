@@ -520,7 +520,6 @@ def test_closed_loop_flow():
         repo.cleanup()
 
 
-@pytest.mark.integration
 def test_closed_loop_dag_recomputation_serialization():
     import os
 
