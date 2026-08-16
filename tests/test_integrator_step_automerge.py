@@ -376,6 +376,34 @@ class TestParentBranchStaleRetryEscalation:
             100, "integration:parent-branch-stale"
         )
 
+    def test_marker_is_retained_when_escalation_fails(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: エスカレーション（子Issueへのstatus:blocked-human
+        # -review付与）が一時的なAPI障害等で失敗した場合、その子Issueは統合
+        # 対象から除外されないまま残る。この状態でマーカーを消してしまうと、
+        # 次のCAS拒否が誤って「1回目」として扱われ、再エスカレーションまで
+        # さらに2サイクル分遅延してしまう。エスカレーションが全て成功した
+        # 場合のみマーカーをクリアしなければならない。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+
+        def fail_child_escalation(issue_number, label):
+            if (issue_number, label) == (1, "status:blocked-human-review"):
+                raise RuntimeError("API rate limited")
+
+        integrator_env.add_label.side_effect = fail_child_escalation
+
+        Integrator(_child_config()).run()
+
+        assert not any(
+            call.args == (100, "integration:parent-branch-stale")
+            for call in integrator_env.remove_label.call_args_list
+        )
+
     def test_successful_push_clears_the_marker_label(
         self, integrator_env: IntegratorEnv
     ):

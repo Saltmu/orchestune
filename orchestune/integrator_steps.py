@@ -681,11 +681,16 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
         # 2サイクル連続で陳腐化 → 設定/運用構成の異常の可能性が高いため、
         # 対象の子Issueをエスカレーションする。
-        clear_parent_branch_stale_marker(ctx)
-
+        # #437レビュー対応: マーカーのクリアは、対象の子Issueすべてのエスカレー
+        # ションが成功した後にのみ行う。先にクリアしてしまうと、一時的な
+        # GitHub API障害等で一部のエスカレーションが失敗した場合、その子Issue
+        # は統合対象に残ったままなのにマーカーだけが消え、次のCAS拒否が誤って
+        # 「1回目」として扱われて再エスカレーションまでさらに2サイクル分
+        # 遅延してしまう。
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
+        all_escalations_succeeded = True
         for subtask_id in ctx.merged_tasks:
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
@@ -704,12 +709,16 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     forge=ctx.forge,
                 )
             except Exception as escalation_error:
+                all_escalations_succeeded = False
                 print(
                     "Warning: Failed to escalate issue "
                     f"#{task.issue_number} to status:blocked-human-review: "
                     f"{escalation_error}",
                     file=sys.stderr,
                 )
+
+        if all_escalations_succeeded:
+            clear_parent_branch_stale_marker(ctx)
 
     def _close_merged_child_issues(self, ctx: IntegrationContext) -> list[int]:
         closed_issues: list[int] = []
