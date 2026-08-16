@@ -872,3 +872,35 @@ def test_setup_skills_returns_1_when_skills_dir_not_found(tmp_path, capsys):
     assert exit_code == 1
     assert "Error:" in captured.err
     assert "Could not locate the 'skills' directory" in captured.err
+
+
+def test_setup_skills_links_all_distributable_skills_including_provision(tmp_path):
+    """`setup_skills` が orchestune, orchestune-provision, orchestune-dispatch を含む
+    すべての配布対象スキルを正しくリンクすることを検証する。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+
+    for skill_name in ["orchestune", "orchestune-provision", "orchestune-dispatch"]:
+        (skills_dir / skill_name).mkdir()
+        (skills_dir / skill_name / "SKILL.md").touch()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills()
+
+    assert exit_code == 0
+    claude_skills = mock_home / ".claude" / "skills"
+    for skill_name in ["orchestune", "orchestune-provision", "orchestune-dispatch"]:
+        target = claude_skills / skill_name
+        assert target.is_dir()
+        assert (target / "SKILL.md").is_file()

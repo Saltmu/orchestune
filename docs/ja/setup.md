@@ -50,7 +50,7 @@ OrchestuneはWindows NT/10/11環境をネイティブサポートしています
 
 ## 2. エージェントへのスキル定義の登録
 
-AIエージェントに `orchestune` / `orchestune-dispatch` / `local-ci-developer` の各スキルの存在を認識させる必要があります。以下のいずれかの方法を選んでください。
+AIエージェントに `orchestune` / `orchestune-provision` / `orchestune-dispatch` / `local-ci-developer` の各スキルの存在を認識させる必要があります。以下のいずれかの方法を選んでください。
 
 ### 方法A: 自動セットアップ（推奨）
 セットアップコマンドを実行するだけで、サポートされているすべてのAIアシスタント（Claude Code、Codex CLI、Antigravity）のグローバル設定ディレクトリに対して、自動的にシンボリックリンクを作成します。`local-ci-developer` は自動リンクの対象外です。

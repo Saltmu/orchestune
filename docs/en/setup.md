@@ -50,7 +50,7 @@ Orchestune natively supports Windows NT/10/11 environments:
 
 ## 2. Registering Skills with AI Assistants
 
-The AI agent needs to know that the `orchestune`, `orchestune-dispatch`, and `local-ci-developer` skills exist. Choose one of the following methods to register them:
+The AI agent needs to know that the `orchestune`, `orchestune-provision`, `orchestune-dispatch`, and `local-ci-developer` skills exist. Choose one of the following methods to register them:
 
 ### Method A: Automatic Setup (Recommended)
 Run the setup command to automatically create symlinks in the global configuration directories of all supported AI assistants (Claude Code, Codex CLI, Antigravity). `local-ci-developer` is excluded from automatic linking:

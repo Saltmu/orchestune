@@ -114,7 +114,7 @@ orchestune provision --plan decomposition_plan.md
 
 * **Labels**: `status:queued` if `depends_on` is empty or every dependency is already `status:done`; otherwise `status:blocked`. `priority:high`/`medium`/`low` follows `priority`; `risk: true` adds `risk:flagged`.
 * **Idempotency check order**: (1) reuse the subtask's `issue_number` if already set; (2) otherwise search the parent's existing child issues for one whose body embeds a matching `subtask_id` in its Footprint YAML block, and reuse it if found; (3) only create a new issue if neither matches.
-* Requires the `gh` CLI to be installed and authenticated (`orchestune bootstrap` verifies this beforehand). See the [orchestune-dispatch skill](../../skills/orchestune-dispatch/SKILL.md) for the fallback procedure when `gh` is unavailable.
+* Requires the `gh` CLI to be installed and authenticated (`orchestune bootstrap` verifies this beforehand). See the [orchestune-provision skill](../../skills/orchestune-provision/SKILL.md) for the fallback procedure when `gh` is unavailable.
 
 ---
 

@@ -62,7 +62,7 @@ independently of the lifecycle above (see "External lock" below).
 ## Transition details
 
 ### 1. Initial assignment: `status:queued` / `status:blocked`
-- Source: `skills/orchestune-dispatch/SKILL.md` (at Issue creation time, `gh issue create`)
+- Source: `skills/orchestune-provision/SKILL.md` (at Issue creation time, `gh issue create` / `orchestune provision`)
 - Condition: `status:blocked` if the task has unresolved upstream dependencies
   (`depends_on`); `status:queued` if there are none or all are already resolved.
 

@@ -6,6 +6,7 @@ authors = ["Saltmu"]
 packages = [{include = "orchestune"}]
 include = [
     { path = "skills/orchestune", format = ["sdist", "wheel"] },
+    { path = "skills/orchestune-provision", format = ["sdist", "wheel"] },
     { path = "skills/orchestune-dispatch", format = ["sdist", "wheel"] },
     { path = "skills/workflow-template", format = ["sdist", "wheel"] }
 ]
