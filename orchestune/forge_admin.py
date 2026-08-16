@@ -156,4 +156,9 @@ REQUIRED_LABELS: tuple[LabelSpec, ...] = (
         "BFD4F2",
         "Already merged into an integration branch/PR by the Integrator",
     ),
+    LabelSpec(
+        "integration:parent-branch-stale",
+        "B60205",
+        "Parent branch push was rejected (CAS) in the previous integration cycle",
+    ),
 )

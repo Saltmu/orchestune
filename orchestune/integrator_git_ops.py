@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from orchestune.dispatch_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.git_cli import run_git
 from orchestune.integrator_pr import handle_merge_failure
@@ -251,6 +252,34 @@ class IntegrationMerger:
             # merge直前のHEADを記録しておき、except側でロールバックに使う。
             captured_pre_merge_sha: str | None = None
             try:
+                # #437レビュー対応: status:blocked-human-review（親branchの
+                # 連続陳腐化等でエスカレーション済み）のタスクはここでマージ
+                # せずblocked扱いにする。`PrepareTasksStep`側で完全に除外して
+                # しまうと、このタスクに依存する後続タスク（特にスタッキングで
+                # 既にこのタスクの未マージコミットを含んだブランチを持つ後続
+                # タスク）が、下のブロック伝播（`unavailable_ids`）の対象から
+                # 漏れてそのまま独立にマージされてしまい、エスカレーションで
+                # 意図した人間の確認をブロックされたタスクの内容そのものが
+                # 迂回してparent branchへ入ってしまう。
+                escalated_labels = sorted(
+                    label
+                    for label in TERMINAL_ESCALATION_LABELS
+                    if label in task.status_labels
+                )
+                if escalated_labels:
+                    reason = (
+                        f"{', '.join(escalated_labels)}へエスカレーション済みのため、"
+                        "人間の確認が完了するまで統合を実行せずスキップしました。"
+                    )
+                    print(
+                        f"[Integrator] Skipping {task.subtask_id}: {reason}",
+                        file=sys.stderr,
+                    )
+                    blocked_reasons[task.subtask_id] = reason
+                    blocked_tasks.append(task.subtask_id)
+                    unavailable_ids.add(task.subtask_id)
+                    continue
+
                 blocking_deps = sorted(
                     dep for dep in task.depends_on if dep in unavailable_ids
                 )
