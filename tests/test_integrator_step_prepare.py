@@ -53,6 +53,87 @@ class TestDoneTaskSelection:
         assert any("claude/issue-3-task-3" in arg for arg in merge_calls[0].args[0])
 
 
+class TestBlockedHumanReviewExclusion:
+    """#437: 親branch陳腐化の連続によりstatus:blocked-human-reviewへ
+    エスカレーション済みのタスクは、人間の確認が入るまで統合（マージ）
+    対象から外れる。#437レビュー対応: ただし`PrepareTasksStep`の時点で
+    `active_done_tasks`から完全に除外してはいけない。除外すると、この
+    タスクに依存する後続タスク（特にスタッキングにより既にこのタスクの
+    未マージコミットを含んだブランチを持つ後続タスク）を検知してブロック
+    する既存の推移的依存判定（`IntegrationMerger.merge_and_test_tasks`）が
+    このタスクの存在自体を認識できず素通りしてしまい、エスカレーションで
+    意図した人間の確認をブロックされた変更が後続タスク経由でparent branchへ
+    迂回して入ってしまう。そのため、実際にマージをスキップする判定は
+    `merge_and_test_tasks`側で行う（`TestDependencyFailureBlocking`と同じ
+    箇所）。"""
+
+    def test_excludes_task_labeled_blocked_human_review(
+        self, integrator_env: IntegratorEnv
+    ):
+        blocked = make_done_issue(
+            1,
+            subtask_id="task-1",
+            labels=("status:done", "status:blocked-human-review"),
+        )
+        active = make_done_issue(2, subtask_id="task-2")
+        integrator_env.set_done_issues(blocked, active)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-2"]
+        assert res["blocked"] == ["task-1"]
+
+    def test_all_tasks_blocked_yields_failure_not_silently_dropped(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: 唯一の対象タスクがエスカレーション済みの場合、
+        # 以前は`PrepareTasksStep`が完全に除外して`no_done_tasks`（＝何も
+        # 対象が無かった）を返していたが、これは「ブロックされたタスクが
+        # 存在する」ことを覆い隠してしまう。実際にはタスクは存在し統合を
+        # 試みてブロックされたため、`failure`として明示的に報告する。
+        blocked = make_done_issue(
+            1,
+            subtask_id="task-1",
+            labels=("status:done", "status:blocked-human-review"),
+        )
+        integrator_env.set_done_issues(blocked)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "failure"
+        assert res["blocked"] == ["task-1"]
+
+    def test_stacked_dependent_of_blocked_task_is_also_blocked(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応（Codexの指摘の回帰テスト）: task-1がescalation
+        # 済みでも、task-1に依存するtask-2（スタッキングによりtask-1の
+        # 未マージコミットを既に含んだブランチを持ちうる）が独立にマージ
+        # されてしまうと、ブロックしたはずのtask-1の変更が実質的に
+        # parent branchへ入ってしまう。task-2も推移的にブロックされ、
+        # 一切fetch/mergeを試みてはならない。
+        blocked = make_done_issue(
+            1,
+            subtask_id="task-1",
+            labels=("status:done", "status:blocked-human-review"),
+        )
+        dependent = make_done_issue(2, subtask_id="task-2", depends_on=("task-1",))
+        integrator_env.set_done_issues(blocked, dependent, done=[dependent, blocked])
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "failure"
+        assert res.get("merged", []) == []
+        assert sorted(res["blocked"]) == ["task-1", "task-2"]
+        assert not [
+            call
+            for call in integrator_env.run.call_args_list
+            if any("claude/issue-2-task-2" in a for a in call.args[0])
+            and "merge" in call.args[0]
+        ]
+
+
 class TestUnparsableDoneTask:
     """#54: Footprint YAMLから`subtask_id`を抽出できなかった`status:done`タスクが、
     警告もなく黙って処理対象から消えていた不具合の回帰テスト。"""

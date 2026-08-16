@@ -185,3 +185,26 @@ These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." 
 > Note that a dedicated `git worktree` is only a boundary for isolating source code changes; it is **not** an OS-level security boundary (sandbox). An agent process running with bypassed permissions can access anything the host user has access to, including your home directory, credentials, other repositories, and network resources. For untrusted codebases/issues, or when running in shared/production environments, we strongly recommend wrapping Orchestune in a secure container or VM isolation layer.
 
 There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
+
+---
+
+## 6. Scheduled Runs on GitHub Actions and Cross-Runner Serialization
+
+If you build a workflow that runs `orchestune dispatch` on a GitHub Actions cron schedule, we strongly recommend configuring a `concurrency` group. As documented in [Architecture §3](architecture.md#3-integration--auto-rebase) (design assumption #377), the integrator's mutual exclusion is enforced only by a same-machine file lock (`file_lock` in `orchestune/integrator_worktree.py`), which provides no protection across multiple CI runners/machines. A `concurrency` group gets you repository-wide (i.e. all-runner) serialization per parent Issue with no code changes.
+
+```yaml
+concurrency:
+  # Group by parent Issue. In flat mode (no --parent-issue), integration/temp-main
+  # is a shared resource, so serialize under the fixed key 'flat' instead.
+  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue || 'flat' }}
+  # Required: setting this to true would let a run cancel an in-flight integrator,
+  # leaving the temp branch and worktree behind (`dispatch_gc` picks up more orphans,
+  # and depending on when the cancel lands, the parent branch could end up partially
+  # advanced).
+  cancel-in-progress: false
+```
+
+> [!NOTE]
+> GitHub Actions' `concurrency` only keeps "one running + one queued" run; a third trigger cancels whichever run was queued. This is harmless by design: the dispatcher reconstructs its state from GitHub (Issue labels/PRs/branches) every cycle, so a run cancelled out of the queue is equivalent to the next cron tick. It does not mean "a cycle is lost and processing stalls" — the next trigger picks up processing from the same state.
+
+Note that this repository does not currently run its own `orchestune dispatch` on a GitHub Actions schedule (dispatch here goes through the Cloud Routine or a local CLI), so the snippet above is an example for adopting repositories. If you enable a real scheduled run here, add a workflow file under `.github/workflows/` that includes the `concurrency` block above.

@@ -115,6 +115,12 @@ class IntegrationContext:
     temp_worktree_path: Path | None = None
     status: IntegrationStatus = IntegrationStatus.SUCCESS
     error: str | None = None
+    # #437レビュー対応: このサイクルで実際にnon-fast-forward（CAS）拒否を
+    # 検知したかどうか。`IntegrationPipeline`が、CAS拒否以外の理由でサイクルが
+    # 終了した場合（CI失敗・worktreeセットアップ失敗等、`AutoMergeChildIntegrationStep`
+    # 自体に到達しない場合を含む）に陳腐化マーカーラベルをクリアするかどうかの
+    # 判定に使う。
+    parent_branch_cas_rejected_this_cycle: bool = False
 
     @property
     def forge(self) -> Forge:

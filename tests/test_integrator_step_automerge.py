@@ -23,6 +23,10 @@ from orchestune.integrator import (
     Integrator,
     IntegratorConfig,
 )
+from orchestune.integrator_steps import (
+    _is_parent_branch_cas_rejection,
+    clear_parent_branch_stale_marker,
+)
 from orchestune.models import Task
 from tests.conftest import IntegratorEnv, make_done_issue
 
@@ -39,6 +43,76 @@ def _child_config() -> IntegratorConfig:
     return IntegratorConfig(
         apply=True, parent_issue_number=100, integration_run_id="test-run"
     )
+
+
+class TestIsParentBranchCasRejection:
+    """#437レビュー対応: non-fast-forward拒否と、認証・ネットワーク等の
+    他のpush失敗要因とを区別する判定ロジック。"""
+
+    def test_true_for_non_fast_forward_stderr(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="! [rejected] (non-fast-forward)"
+        )
+        assert _is_parent_branch_cas_rejection(error) is True
+
+    def test_true_for_fetch_first_stderr(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="! [rejected] (fetch first)"
+        )
+        assert _is_parent_branch_cas_rejection(error) is True
+
+    def test_false_for_authentication_failure(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="fatal: Authentication failed"
+        )
+        assert _is_parent_branch_cas_rejection(error) is False
+
+    def test_false_for_os_error(self):
+        assert _is_parent_branch_cas_rejection(OSError("network unreachable")) is False
+
+    def test_false_for_missing_stderr(self):
+        error = subprocess.CalledProcessError(1, ["git", "push"], stderr=None)
+        assert _is_parent_branch_cas_rejection(error) is False
+
+    def test_true_for_bytes_stderr(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr=b"! [rejected] (non-fast-forward)"
+        )
+        assert _is_parent_branch_cas_rejection(error) is True
+
+
+class TestClearParentBranchStaleMarkerRetries:
+    """#437レビュー対応: `remove_label`が一時的なAPI障害で失敗した場合、
+    古いマーカーを残置すると、後で発生する無関係なCAS拒否を誤って
+    「2サイクル連続」と誤判定させてしまう。少数回リトライして解消する。"""
+
+    def _ctx(self, forge) -> IntegrationContext:
+        config = IntegratorConfig(apply=True, parent_issue_number=100, forge=forge)
+        return IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="origin/parent/issue-100",
+            temp_branch="temp-branch",
+        )
+
+    def test_succeeds_after_transient_failures(self, fake_forge):
+        fake_forge.remove_label.side_effect = [
+            RuntimeError("API rate limited"),
+            RuntimeError("API rate limited"),
+            None,
+        ]
+
+        clear_parent_branch_stale_marker(self._ctx(fake_forge))
+
+        assert fake_forge.remove_label.call_count == 3
+
+    def test_gives_up_after_exhausting_attempts(self, fake_forge):
+        fake_forge.remove_label.side_effect = RuntimeError("API rate limited")
+
+        clear_parent_branch_stale_marker(self._ctx(fake_forge))
+
+        assert fake_forge.remove_label.call_count == 3
 
 
 class TestLabelIncludedStep:
@@ -199,8 +273,30 @@ class TestAutoMergeChildIntegration:
         assert res["integration_pr_number"] == 999
         integrator_env.merge_pull_request.assert_not_called()
         integrator_env.close_issue.assert_not_called()
-        integrator_env.add_label.assert_not_called()
+        # #437: 1回目の陳腐化では、まだ子Issueへの完了ラベルは付与しない。
+        # 親Issueへは（2回連続の判定に使う）マーカーラベルのみ付与する。
+        integrator_env.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
         integrator_env.add_comment.assert_any_call(1, ANY)
+
+    def test_staleness_is_also_recorded_on_the_parent_issue(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437: 子Issueへのコメントだけでなく、親Issue側にも陳腐化イベントを
+        # 記録することで、親Issueだけを見ても衝突が起きた事実を説明できる。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="non-fast-forward",
+        )
+
+        Integrator(_child_config()).run()
+
+        integrator_env.add_comment.assert_any_call(100, ANY)
 
     def test_parent_update_uses_non_force_git_push(self, integrator_env: IntegratorEnv):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
@@ -264,6 +360,237 @@ class TestAutoMergeChildIntegration:
         assert res["status"] == "success"
         assert res["closed_issues"] == [1]
         integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+
+
+class TestParentBranchStaleRetryEscalation:
+    """#437: 親branch更新の連続陳腐化を2サイクル連続で検知した場合、対象の
+    子Issueをstatus:blocked-human-reviewへエスカレーションする。#437レビュー
+    対応: 連続回数はローカルのstate fileではなく親Issueのマーカーラベル
+    （`integration:parent-branch-stale`）で判定する。GitHub Actionsの
+    スケジュール実行のようにサイクルごとに別のランナーが使われる構成でも
+    判定が失われないようにするため。"""
+
+    def _fail_parent_push(self, integrator_env: IntegratorEnv) -> None:
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="non-fast-forward",
+        )
+
+    def test_first_occurrence_marks_parent_issue_without_escalating(
+        self, integrator_env: IntegratorEnv
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+
+        Integrator(_child_config()).run()
+
+        integrator_env.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
+
+    def test_first_occurrence_ensures_the_marker_label_exists(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: `orchestune bootstrap`は`ensure_labels`の唯一の
+        # 呼び出し元で、`orchestune dispatch`からは自動で再実行されない。
+        # このリリース以前にbootstrap済みの既存リポジトリには
+        # `integration:parent-branch-stale`ラベル自体がまだ存在せず、
+        # 何もしなければ`add_label`が「そんなラベルは無い」と失敗して
+        # マーカーが一切永続化されない（＝エスカレーション機能が丸ごと
+        # 沈黙して働かなくなる）。初回付与の直前に自己修復的にラベルを
+        # 用意しなければならない。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        call_order: list[str] = []
+        integrator_env.ensure_labels.side_effect = lambda *a, **k: call_order.append(
+            "ensure_labels"
+        )
+        integrator_env.add_label.side_effect = lambda *a, **k: call_order.append(
+            "add_label"
+        )
+
+        Integrator(_child_config()).run()
+
+        integrator_env.ensure_labels.assert_called_once()
+        (ensured_labels,) = integrator_env.ensure_labels.call_args.args
+        assert [label.name for label in ensured_labels] == [
+            "integration:parent-branch-stale"
+        ]
+        # 存在確認/作成がラベル付与より前に行われる。
+        assert call_order == ["ensure_labels", "add_label"]
+
+    def test_escalates_on_second_consecutive_occurrence(
+        self, integrator_env: IntegratorEnv
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        # 1回目の呼び出しで親Issueにマーカーラベルが付いた状態を模す。
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+
+        Integrator(_child_config()).run()
+
+        integrator_env.add_label.assert_any_call(1, "status:blocked-human-review")
+        assert any(
+            call.args[0] == 1 and "blocked-human-review" in call.args[1]
+            for call in integrator_env.add_comment.call_args_list
+        )
+        # 人間の確認が必要になったため、マーカーラベル自体は除去する。
+        integrator_env.remove_label.assert_any_call(
+            100, "integration:parent-branch-stale"
+        )
+
+    def test_marker_is_retained_when_escalation_fails(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: エスカレーション（子Issueへのstatus:blocked-human
+        # -review付与）が一時的なAPI障害等で失敗した場合、その子Issueは統合
+        # 対象から除外されないまま残る。この状態でマーカーを消してしまうと、
+        # 次のCAS拒否が誤って「1回目」として扱われ、再エスカレーションまで
+        # さらに2サイクル分遅延してしまう。エスカレーションが全て成功した
+        # 場合のみマーカーをクリアしなければならない。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+
+        def fail_child_escalation(issue_number, label):
+            if (issue_number, label) == (1, "status:blocked-human-review"):
+                raise RuntimeError("API rate limited")
+
+        integrator_env.add_label.side_effect = fail_child_escalation
+
+        Integrator(_child_config()).run()
+
+        assert not any(
+            call.args == (100, "integration:parent-branch-stale")
+            for call in integrator_env.remove_label.call_args_list
+        )
+
+    def test_successful_push_clears_the_marker_label(
+        self, integrator_env: IntegratorEnv
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        Integrator(_child_config()).run()
+
+        integrator_env.remove_label.assert_any_call(
+            100, "integration:parent-branch-stale"
+        )
+
+    def test_non_cas_push_failure_is_not_counted_as_staleness(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: 認証エラー・ネットワーク障害・ブランチ保護拒否等の
+        # non-fast-forward以外のpush失敗は、一時的な障害である可能性があり、
+        # 陳腐化としてカウント・エスカレーションしてはならない（さもないと
+        # 障害復旧後も手動でのラベル除去なしに自己修復できなくなる）。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="fatal: Authentication failed for 'https://github.com/...'",
+        )
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] == IntegrationStatus.PARENT_BRANCH_ADVANCED
+        integrator_env.add_label.assert_not_called()
+        integrator_env.get_issue_labels.assert_not_called()
+        assert not any(
+            call.args[0] == 100 and "陳腐化" in call.args[1]
+            for call in integrator_env.add_comment.call_args_list
+        )
+        # 既存の子Issueへの失敗通知は引き続き行われる。
+        integrator_env.add_comment.assert_any_call(1, ANY)
+
+    def test_non_cas_failure_clears_marker_so_streak_does_not_span_it(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: CAS拒否 → non-CAS失敗（認証エラー等） → CAS拒否、
+        # という順序で発生した場合、間にnon-CAS失敗を挟んでいるため「2サイクル
+        # 連続」ではない。non-CAS失敗の時点でマーカーをクリアしないと、1回目と
+        # 3回目のCAS拒否が誤って連続と判定されエスカレーションしてしまう。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        # 1回目: CASによる拒否 → マーカー付与。
+        self._fail_parent_push(integrator_env)
+        Integrator(_child_config()).run()
+        integrator_env.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
+
+        # 2回目: non-CAS理由（認証エラー）での失敗 → マーカーをクリアする。
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="fatal: Authentication failed for 'https://github.com/...'",
+        )
+        Integrator(_child_config()).run()
+        integrator_env.remove_label.assert_any_call(
+            100, "integration:parent-branch-stale"
+        )
+
+        # 3回目: 再びCASによる拒否 → 直前がnon-CAS失敗だったため「1回目」
+        # として扱われ、エスカレーションはしない。
+        integrator_env.get_issue_labels.return_value = ()
+        integrator_env.add_label.reset_mock()
+        self._fail_parent_push(integrator_env)
+        Integrator(_child_config()).run()
+
+        integrator_env.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
+        assert not any(
+            call.args == (1, "status:blocked-human-review")
+            for call in integrator_env.add_label.call_args_list
+        )
+
+    def test_marker_is_cleared_even_when_cycle_ends_before_reaching_automerge(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: 直前サイクルのCAS拒否でマーカーが付与された後、
+        # 次のサイクルがAutoMergeChildIntegrationStepへ到達する前（例:
+        # MergeAndTestStepでのCI/mergeそのものの失敗）で終わった場合、旧来は
+        # マーカーが一切クリアされずに残っていた。これを残したまま次のCAS拒否
+        # を検知すると、間に無関係なmerge失敗のサイクルを挟んでいるにも
+        # 関わらず誤って「2サイクル連続」と判定してしまう。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        # 直前サイクルでマーカーが既に付与されている状態を模す。
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+        # 今サイクルはmergeそのものが失敗し、AutoMergeChildIntegrationStepへは
+        # 到達しない（パイプラインがMergeAndTestStepの時点で止まる）。
+        integrator_env.fail_git(
+            lambda args: "merge" in args
+            and any("claude/issue-1-task-1" in a for a in args),
+            stderr=b"CONFLICT (content): Merge conflict",
+        )
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] != "success"
+        integrator_env.merge_pull_request.assert_not_called()
+        integrator_env.remove_label.assert_any_call(
+            100, "integration:parent-branch-stale"
+        )
+        assert not any(
+            call.args == (100, "integration:parent-branch-stale")
+            for call in integrator_env.add_label.call_args_list
+        )
 
 
 @pytest.mark.integration
@@ -348,7 +675,11 @@ def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
             text=True,
         ).stdout.strip()
         assert remote_parent == advanced_sha
-        fake_forge.add_label.assert_not_called()
+        # #437: 1回目の陳腐化では、まだ子Issueへの完了ラベルは付与しない。
+        # 親Issueへは（2回連続の判定に使う）マーカーラベルのみ付与する。
+        fake_forge.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
         fake_forge.close_issue.assert_not_called()
 
 

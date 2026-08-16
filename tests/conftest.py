@@ -108,6 +108,7 @@ def fake_forge() -> MagicMock:
     forge = MagicMock(spec=Forge)
     forge.check_auth.return_value = None
     forge.ensure_labels.return_value = BootstrapResult((), ())
+    forge.get_issue_labels.return_value = ()
     return forge
 
 
@@ -138,6 +139,8 @@ class IntegratorEnv:
     is_current_branch_tip_merged_into: MagicMock
     delete_branch: MagicMock
     branch_exists: MagicMock
+    get_issue_labels: MagicMock
+    ensure_labels: MagicMock
 
     def set_done_issues(
         self,
@@ -213,6 +216,8 @@ def integrator_env() -> Iterator[IntegratorEnv]:
         patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into") as tip,
         patch("orchestune.forge.GitHubForge.delete_branch") as delete_branch,
         patch("orchestune.forge.GitHubForge.branch_exists") as branch_exists,
+        patch("orchestune.forge.GitHubForge.get_issue_labels") as get_issue_labels,
+        patch("orchestune.forge.GitHubForge.ensure_labels") as ensure_labels,
     ):
         run.return_value = _completed(stdout=b"")
         list_issues.side_effect = lambda label, *a, **k: []
@@ -220,6 +225,8 @@ def integrator_env() -> Iterator[IntegratorEnv]:
         create_pr.return_value = 999
         tip.return_value = False
         branch_exists.return_value = True
+        get_issue_labels.return_value = ()
+        ensure_labels.return_value = BootstrapResult((), ())
         yield IntegratorEnv(
             run=run,
             list_issues_by_label=list_issues,
@@ -233,6 +240,8 @@ def integrator_env() -> Iterator[IntegratorEnv]:
             is_current_branch_tip_merged_into=tip,
             delete_branch=delete_branch,
             branch_exists=branch_exists,
+            get_issue_labels=get_issue_labels,
+            ensure_labels=ensure_labels,
         )
 
 

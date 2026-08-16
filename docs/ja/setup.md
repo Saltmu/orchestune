@@ -185,3 +185,25 @@ orchestune dispatch --dispatch-target auto
 > また、サブタスクごとの `git worktree` はソースコードの差分を分離するための境界であり、OSレベルのセキュリティ境界（サンドボックス）ではありません。完全権限で起動されたCLIプロセスは、実行ユーザーがアクセス可能な範囲のホームディレクトリ、認証情報、他のプロジェクトフォルダ、ネットワーク等に自由にアクセスできます。信頼できないリポジトリやIssueを処理する場合、または本番・共有環境で実行する場合は、コンテナや仮想マシン（VM）などのOSレベルの隔離層を併用することを強く推奨します。
 
 別途、許可設定ファイルを準備するステップは不要です。`orchestune bootstrap`は必須のGitHubラベルの起票のみを行います。
+
+---
+
+## 6. GitHub Actions上での定期実行とcross-runner直列化
+
+`orchestune dispatch` をGitHub Actionsのcron等で定期実行するワークフローを組む場合、`concurrency`グループの設定を強く推奨します。[アーキテクチャ §3](architecture.md#3-統合integrationと自動リベース)に記載の設計前提（#377）の通り、Integratorの排他は同一マシン上のファイルロック（`orchestune/integrator_worktree.py`の`file_lock`）でのみ成立しており、複数のCIランナー/マシンをまたいだ同時実行には効きません。`concurrency`グループを使えば、コード変更なしに、リポジトリ全体（＝全ランナー）で親Issue単位の直列化が得られます。
+
+```yaml
+concurrency:
+  # 親Issue単位でグループ化する。--parent-issueを指定しないフラットモードでは
+  # integration/temp-mainが共有資源になるため、'flat'という固定キーで直列化する。
+  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue || 'flat' }}
+  # 必須: trueにするとCI実行中のIntegratorが中断され、temp branchとworktreeが
+  # 残留する（`dispatch_gc`側の回収対象は増えるが、中断タイミング次第で親ブランチが
+  # 中途半端に進む可能性がある）。
+  cancel-in-progress: false
+```
+
+> [!NOTE]
+> GitHub Actionsの`concurrency`は「実行中1本 + 待機1本」しか保持せず、3本目以降にトリガーされた待機中のrunはキャンセルされます。本設計ではこれは無害です。理由は、Dispatcherが毎サイクルGitHub（Issueラベル/PR/ブランチ）から状態を再構成する自己修復設計であるため、キューでキャンセルされたrunは次回のcron tickと状態的に等価だからです。「サイクルが失われて処理が止まる」ことを意味するものではなく、次のトリガーで同じ状態から処理が再開されます。
+
+なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定例です。本リポジトリで実際にcron定期実行を有効化する際は、上記`concurrency`設定を含むワークフローファイルを別途`.github/workflows/`へ追加してください。
