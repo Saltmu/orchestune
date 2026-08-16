@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import call, patch
 
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_rebase import RebaseContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 
@@ -41,6 +42,24 @@ def _active(**overrides):
     )
     defaults.update(overrides)
     return ActiveWorktree(**defaults)
+
+
+def _context(
+    active: ActiveWorktree,
+    task: Task,
+    run_state: RunState,
+    config: DispatcherConfig,
+) -> RebaseContext:
+    return RebaseContext(
+        active=active,
+        active_task=task,
+        key="1",
+        run_state=run_state,
+        done_subtask_ids=set(),
+        ci_passed_pr_subtask_ids=set(),
+        subtask_branch_map={},
+        config=config,
+    )
 
 
 class TestWaitForProcessTerminate:
@@ -122,7 +141,7 @@ class TestApplyAutoRebase:
             apply=True,
         )
 
-        _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+        _apply_auto_rebase(_context(active, task, run_state, config), "parent-branch")
 
         # Assert base_branch updated to parent-branch
         assert active.base_branch == "parent-branch"
@@ -181,7 +200,9 @@ class TestApplyAutoRebase:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         posted_message = mock_comment.call_args.args[1]
         assert "push" in posted_message
@@ -223,7 +244,9 @@ class TestApplyAutoRebase:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         # Assert base_branch is still origin/main (not updated)
         assert active.base_branch == "origin/main"
@@ -269,7 +292,9 @@ class TestApplyAutoRebase:
             ),
             patch("orchestune.forge.GitHubForge.add_comment"),
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         assert call_order == [
             ("add", "status:manual-merge-required"),
@@ -341,7 +366,9 @@ class TestApplyAutoRebase:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         posted_message = mock_comment.call_args.args[1]
         assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
@@ -403,7 +430,9 @@ class TestApplyAutoRebase:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         posted_message = mock_comment.call_args.args[1]
         assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
@@ -462,7 +491,9 @@ class TestApplyAutoRebase:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         posted_message = mock_comment.call_args.args[1]
         assert "自動リベース中にコンフリクトが発生しました" in posted_message
@@ -501,7 +532,7 @@ class TestApplyAutoRebase:
             apply=True,
         )
 
-        _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+        _apply_auto_rebase(_context(active, task, run_state, config), "parent-branch")
 
         mock_backup.assert_called_once_with(
             active.worktree_path, "WIP: backup by Orchestune auto-rebase"
@@ -547,7 +578,9 @@ class TestApplyAutoRebase:
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         mock_backup.assert_called_once_with(
             active.worktree_path, "WIP: backup by Orchestune auto-rebase"
@@ -602,7 +635,9 @@ class TestApplyAutoRebase:
             ),
             patch("orchestune.forge.GitHubForge.add_comment"),
         ):
-            _apply_auto_rebase(active, task, "1", run_state, "parent-branch", config)
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
 
         assert call_order == [
             ("add", "status:manual-merge-required"),
