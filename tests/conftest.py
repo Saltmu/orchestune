@@ -327,3 +327,25 @@ def _guard_events_log_path(monkeypatch: pytest.MonkeyPatch):
             pytest.fail(
                 "Test modified 'events.jsonl' in the repository root instead of using tmp_path."
             )
+
+
+@pytest.fixture(autouse=True)
+def _guard_dispatch_cycle_ensure_parent_branch(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
+    """Ensure unit tests do not execute real git operations via unmocked ensure_parent_branch during dispatch cycles."""
+    if request.node.get_closest_marker("integration") is not None:
+        yield
+        return
+
+    def guarded_ensure(parent_issue_number: int) -> None:
+        pytest.fail(
+            f"Test '{request.node.name}' called unmocked `ensure_parent_branch({parent_issue_number})`. "
+            "Dispatch cycle tests must patch `orchestune.dispatch_cycle.ensure_parent_branch` "
+            "to prevent accidental git branch creation/push to remote origin."
+        )
+
+    monkeypatch.setattr(
+        "orchestune.dispatch_cycle.ensure_parent_branch", guarded_ensure
+    )
+    yield
