@@ -99,5 +99,6 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 ### Stage 4: Hand Off to Provision and Dispatch
 
 1. Once the user approves the plan, load and follow the [orchestune-provision skill](../orchestune-provision/SKILL.md) with the approved `decomposition_plan.md` as input. That skill creates the parent and child GitHub Issues (with Footprint metadata and status/priority/risk labels) via the `orchestune provision` CLI.
-2. **If the user only requested plan creation / issue provisioning**: Report the created Issues back to the user to conclude the task.
-3. **If the user requested execution / dispatch**: Hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) with the provisioned parent Issue number (`--parent-issue <N>`) to configure and run the dispatcher. Report the outcome (created Issues, dispatched tasks) back to the user.
+2. **Determine next step (default: continue to dispatch)**:
+   - **Explicit provisioning-only request**: If the user explicitly instructed to stop after creating Issues (e.g., "Issueの起票までに留めてください" / "plan or provision only"), report the created Issues back to the user and conclude the task.
+   - **Default / execution request**: Otherwise (the default flow promised in Trigger Conditions), immediately hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) with the provisioned parent Issue number (`--parent-issue <N>`) to configure and run the dispatcher. Report the outcome (created Issues, dispatched tasks) back to the user.
