@@ -279,7 +279,7 @@ class IntegrationMerger:
             fetch_error = e.stderr or ""
             return False, False, f"Failed to fetch branch: {fetch_error}"
 
-    def _merge_task_branch(self, branch_name: str) -> tuple[bool, str, str]:
+    def _merge_task_branch(self, branch_name: str) -> tuple[bool, str | None, str]:
         """Attempt to merge `origin/{branch_name}` into current temporary branch.
 
         Returns `(success, pre_merge_sha, error_message)`.
@@ -291,10 +291,10 @@ class IntegrationMerger:
         # 巻き添えで削除してしまう。merge試行前のHEAD SHAを保存しておき、
         # CI失敗時はそのSHAへ確実に戻す。
         try:
-            pre_merge_sha = self.current_head_sha()
+            pre_merge_sha: str | None = self.current_head_sha()
         except subprocess.CalledProcessError as e:
             head_error = e.stderr or ""
-            return False, "", f"Failed to capture pre-merge HEAD: {head_error}"
+            return False, None, f"Failed to capture pre-merge HEAD: {head_error}"
 
         try:
             run_git(
@@ -433,6 +433,7 @@ class IntegrationMerger:
                         unavailable_ids.add(task.subtask_id)
                         continue
 
+                    assert pre_merge_sha is not None
                     ci_ok, ci_reason, ci_out = self._verify_ci_and_rollback(
                         pre_merge_sha
                     )

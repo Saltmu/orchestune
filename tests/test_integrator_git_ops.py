@@ -439,6 +439,19 @@ class TestMergeTaskBranch:
         assert pre_merge_sha == "sha123"
         assert "Merge conflict" in err
 
+    def test_head_capture_failure_returns_none_sha(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch(
+            "orchestune.integrator_git_ops.run_git",
+            side_effect=subprocess.CalledProcessError(
+                1, ["rev-parse", "HEAD"], stderr=b"HEAD error"
+            ),
+        ):
+            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+        assert success is False
+        assert pre_merge_sha is None
+        assert "Failed to capture pre-merge HEAD" in err
+
 
 class TestVerifyCiAndRollback:
     def test_ci_success(self, tmp_path: Path):
