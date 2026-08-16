@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
 from orchestune.dispatch_worktree import file_lock
+from orchestune.forge import REQUIRED_LABELS
 from orchestune.git_cli import run_git
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
@@ -419,6 +420,17 @@ _CAS_REJECTION_MARKERS = ("non-fast-forward", "[rejected]", "fetch first")
 #: 失われない場所に状態を置くことで、この問題自体を発生させない。
 _PARENT_BRANCH_STALE_LABEL = "integration:parent-branch-stale"
 
+#: #437レビュー対応: `orchestune bootstrap`は`ensure_labels`の唯一の呼び出し元
+#: であり、`orchestune dispatch`からは自動的に再実行されない。そのため、この
+#: リリース以前に一度bootstrap済みのリポジトリには`_PARENT_BRANCH_STALE_LABEL`
+#: がまだ存在せず、`add_label`がリポジトリ側にラベルが無いことを理由に失敗し、
+#: マーカーが一切永続化されずエスカレーション自体が機能しなくなる。初回付与の
+#: 直前で`ensure_labels`により自己修復的にラベルを用意することでこれを防ぐ。
+#: `forge_admin.REQUIRED_LABELS`の定義を単一の情報源として再利用する。
+_PARENT_BRANCH_STALE_LABEL_SPEC = next(
+    label for label in REQUIRED_LABELS if label.name == _PARENT_BRANCH_STALE_LABEL
+)
+
 #: `clear_parent_branch_stale_marker`が`remove_label`を試行する回数。
 #: 一時的なAPI障害でマーカーが残置され、後の無関係なCAS拒否を誤って
 #: 「2サイクル連続」と誤判定させないための少数回リトライ（#437レビュー対応）。
@@ -688,6 +700,17 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return
 
         if not already_stale:
+            # #437レビュー対応: `orchestune bootstrap`済みの既存リポジトリには
+            # このラベル自体がまだ存在しない可能性があるため、初回付与の直前に
+            # 自己修復的に用意する（存在済みならno-op）。
+            try:
+                ctx.forge.ensure_labels((_PARENT_BRANCH_STALE_LABEL_SPEC,))
+            except Exception as ensure_error:
+                print(
+                    "Warning: Failed to ensure parent-branch-stale label exists: "
+                    f"{ensure_error}",
+                    file=sys.stderr,
+                )
             try:
                 ctx.forge.add_label(
                     ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL

@@ -391,6 +391,37 @@ class TestParentBranchStaleRetryEscalation:
             100, "integration:parent-branch-stale"
         )
 
+    def test_first_occurrence_ensures_the_marker_label_exists(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: `orchestune bootstrap`は`ensure_labels`の唯一の
+        # 呼び出し元で、`orchestune dispatch`からは自動で再実行されない。
+        # このリリース以前にbootstrap済みの既存リポジトリには
+        # `integration:parent-branch-stale`ラベル自体がまだ存在せず、
+        # 何もしなければ`add_label`が「そんなラベルは無い」と失敗して
+        # マーカーが一切永続化されない（＝エスカレーション機能が丸ごと
+        # 沈黙して働かなくなる）。初回付与の直前に自己修復的にラベルを
+        # 用意しなければならない。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        call_order: list[str] = []
+        integrator_env.ensure_labels.side_effect = lambda *a, **k: call_order.append(
+            "ensure_labels"
+        )
+        integrator_env.add_label.side_effect = lambda *a, **k: call_order.append(
+            "add_label"
+        )
+
+        Integrator(_child_config()).run()
+
+        integrator_env.ensure_labels.assert_called_once()
+        (ensured_labels,) = integrator_env.ensure_labels.call_args.args
+        assert [label.name for label in ensured_labels] == [
+            "integration:parent-branch-stale"
+        ]
+        # 存在確認/作成がラベル付与より前に行われる。
+        assert call_order == ["ensure_labels", "add_label"]
+
     def test_escalates_on_second_consecutive_occurrence(
         self, integrator_env: IntegratorEnv
     ):
