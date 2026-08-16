@@ -17,7 +17,7 @@ from orchestune.process_utils import default_ci_command
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _TASK_1_BRANCH = "claude/issue-1-task-1"
-_TASK_1_REFSPEC = f"{_TASK_1_BRANCH}:refs/remotes/origin/{_TASK_1_BRANCH}"
+_TASK_1_REFSPEC = f"+refs/heads/{_TASK_1_BRANCH}:refs/remotes/origin/{_TASK_1_BRANCH}"
 
 
 def _is_ci(args: list[str]) -> bool:

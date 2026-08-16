@@ -388,7 +388,10 @@ class TestCheckTaskBlocking:
 class TestFetchTaskBranch:
     def test_fetch_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator_git_ops.run_git", return_value=_ok([])):
+        with patch(
+            "orchestune.integrator_git_ops.fetch_remote_branch",
+            return_value="origin/feature",
+        ):
             success, already_merged, err = merger._fetch_task_branch("feature", "main")
         assert success is True
         assert already_merged is False
@@ -401,7 +404,7 @@ class TestFetchTaskBranch:
                 merger.forge, "is_current_branch_tip_merged_into", return_value=True
             ),
             patch(
-                "orchestune.integrator_git_ops.run_git",
+                "orchestune.integrator_git_ops.fetch_remote_branch",
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
                 ),
@@ -411,6 +414,24 @@ class TestFetchTaskBranch:
         assert success is True
         assert already_merged is True
         assert err == ""
+
+    def test_fetch_failure_not_merged(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with (
+            patch.object(
+                merger.forge, "is_current_branch_tip_merged_into", return_value=False
+            ),
+            patch(
+                "orchestune.integrator_git_ops.fetch_remote_branch",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["fetch"], stderr=b"fetch error"
+                ),
+            ),
+        ):
+            success, already_merged, err = merger._fetch_task_branch("feature", "main")
+        assert success is False
+        assert already_merged is False
+        assert "fetch error" in err
 
 
 class TestMergeTaskBranch:
