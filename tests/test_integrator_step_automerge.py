@@ -23,6 +23,7 @@ from orchestune.integrator import (
     Integrator,
     IntegratorConfig,
 )
+from orchestune.integrator_steps import _is_parent_branch_cas_rejection
 from orchestune.models import Task
 from tests.conftest import IntegratorEnv, make_done_issue
 
@@ -39,6 +40,42 @@ def _child_config() -> IntegratorConfig:
     return IntegratorConfig(
         apply=True, parent_issue_number=100, integration_run_id="test-run"
     )
+
+
+class TestIsParentBranchCasRejection:
+    """#437レビュー対応: non-fast-forward拒否と、認証・ネットワーク等の
+    他のpush失敗要因とを区別する判定ロジック。"""
+
+    def test_true_for_non_fast_forward_stderr(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="! [rejected] (non-fast-forward)"
+        )
+        assert _is_parent_branch_cas_rejection(error) is True
+
+    def test_true_for_fetch_first_stderr(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="! [rejected] (fetch first)"
+        )
+        assert _is_parent_branch_cas_rejection(error) is True
+
+    def test_false_for_authentication_failure(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="fatal: Authentication failed"
+        )
+        assert _is_parent_branch_cas_rejection(error) is False
+
+    def test_false_for_os_error(self):
+        assert _is_parent_branch_cas_rejection(OSError("network unreachable")) is False
+
+    def test_false_for_missing_stderr(self):
+        error = subprocess.CalledProcessError(1, ["git", "push"], stderr=None)
+        assert _is_parent_branch_cas_rejection(error) is False
+
+    def test_true_for_bytes_stderr(self):
+        error = subprocess.CalledProcessError(
+            1, ["git", "push"], stderr=b"! [rejected] (non-fast-forward)"
+        )
+        assert _is_parent_branch_cas_rejection(error) is True
 
 
 class TestLabelIncludedStep:
@@ -381,6 +418,39 @@ class TestParentBranchStaleRetryEscalation:
             Integrator(config).run()
 
         integrator_env.add_label.assert_not_called()
+
+    def test_non_cas_push_failure_is_not_counted_as_staleness(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ):
+        # #437レビュー対応: 認証エラー・ネットワーク障害・ブランチ保護拒否等の
+        # non-fast-forward以外のpush失敗は、一時的な障害である可能性があり、
+        # 陳腐化としてカウント・エスカレーションしてはならない（さもないと
+        # 障害復旧後も手動でのラベル除去なしに自己修復できなくなる）。
+        from orchestune.integrator_stale_state import load_stale_retry_state
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="fatal: Authentication failed for 'https://github.com/...'",
+        )
+        state_path = tmp_path / "stale.json"
+        config = _stale_config(state_path, max_retries=1)
+
+        for _ in range(3):
+            res = Integrator(config).run()
+
+        assert res["status"] == IntegrationStatus.PARENT_BRANCH_ADVANCED
+        integrator_env.add_label.assert_not_called()
+        assert load_stale_retry_state(state_path).counts == {}
+        assert not any(
+            call.args[0] == 100 and "陳腐化" in call.args[1]
+            for call in integrator_env.add_comment.call_args_list
+        )
+        # 既存の子Issueへの失敗通知は引き続き行われる。
+        integrator_env.add_comment.assert_any_call(1, ANY)
 
 
 @pytest.mark.integration

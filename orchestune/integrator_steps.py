@@ -406,6 +406,28 @@ def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
     return newly_included
 
 
+#: pushが拒否されたことを示すgitの標準的な文言。認証エラーやネットワーク障害等の
+#: 他のpush失敗と区別し、実際のnon-fast-forward（CAS拒否）だけを陳腐化として
+#: 検知するために使う。"fetch first"は、fetchしていない状態で先に別のpushが
+#: 入った場合にgitが出すバリエーション。
+_CAS_REJECTION_MARKERS = ("non-fast-forward", "[rejected]", "fetch first")
+
+
+def _is_parent_branch_cas_rejection(error: Exception) -> bool:
+    """#437レビュー対応: `error`が実際のnon-fast-forward（CAS）拒否によるpush
+    失敗かどうかを判定する。認証エラー・ネットワーク障害・ブランチ保護拒否等の
+    他の失敗要因まで陳腐化としてカウント・エスカレーションしてしまうと、一時
+    障害が解消してもエスカレーション済みの子Issueが自己修復できなくなるため、
+    ここで厳密に絞り込む。"""
+    if not isinstance(error, subprocess.CalledProcessError):
+        return False
+    stderr = error.stderr
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    text = stderr or ""
+    return any(marker in text for marker in _CAS_REJECTION_MARKERS)
+
+
 class AutoMergeChildIntegrationStep(IntegrationComponent):
     """non-force pushで子統合を親へ確定し、最終mainマージは人に委ねる。"""
 
@@ -443,7 +465,15 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
                 self._comment_on_merge_failure(ctx, error)
-                self._handle_parent_branch_staleness(ctx)
+                # #437レビュー対応: 認証エラー・ネットワーク障害・ブランチ保護
+                # 拒否等の一時的なpush失敗まで無条件に「陳腐化」としてカウント
+                # すると、一時障害が解消してもエスカレーション済みの子Issueが
+                # 手動でのラベル除去なしに自己修復できなくなる。実際に
+                # non-fast-forward（CAS拒否）だったpush失敗のみを陳腐化として
+                # 記録・カウントする。
+                if _is_parent_branch_cas_rejection(error):
+                    self._comment_on_parent_branch_staleness(ctx, error)
+                    self._handle_parent_branch_staleness(ctx)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": str(error),
@@ -548,28 +578,33 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
 
-        # #437: 個々の子Issueへのコメントに加え、親Issue側にも陳腐化イベントを
-        # 記録する。子Issueを1件ずつ追わなくても、親Issueだけを見れば衝突が
-        # 発生した事実を事後に説明できるようにするため。
-        if ctx.config.parent_issue_number is not None:
-            try:
-                ctx.forge.add_comment(
-                    ctx.config.parent_issue_number,
-                    (
-                        "⚠️ 親ブランチの陳腐化を検知しました（CAS拒否）\n\n"
-                        f"統合PR #{ctx.integration_pr_number} による "
-                        f"`{ctx.base_branch.removeprefix('origin/')}` への更新が、"
-                        f"第三者による先行pushのためnon-fast-forwardで拒否されました"
-                        f"（{error}）。親ブランチへの部分マージは残っていません。"
-                        "次回のディスパッチサイクルで自動的に再試行されます。"
-                    ),
-                )
-            except Exception as comment_error:
-                print(
-                    "Warning: Failed to comment on merge failure for parent issue "
-                    f"#{ctx.config.parent_issue_number}: {comment_error}",
-                    file=sys.stderr,
-                )
+    def _comment_on_parent_branch_staleness(
+        self, ctx: IntegrationContext, error: Exception
+    ) -> None:
+        """#437: 個々の子Issueへのコメントに加え、親Issue側にも陳腐化イベントを
+        記録する。子Issueを1件ずつ追わなくても、親Issueだけを見れば衝突が
+        発生した事実を事後に説明できるようにするため。実際にnon-fast-forward
+        （CAS拒否）と判定できた場合のみ呼び出される。"""
+        if ctx.config.parent_issue_number is None:
+            return
+        try:
+            ctx.forge.add_comment(
+                ctx.config.parent_issue_number,
+                (
+                    "⚠️ 親ブランチの陳腐化を検知しました（CAS拒否）\n\n"
+                    f"統合PR #{ctx.integration_pr_number} による "
+                    f"`{ctx.base_branch.removeprefix('origin/')}` への更新が、"
+                    f"第三者による先行pushのためnon-fast-forwardで拒否されました"
+                    f"（{error}）。親ブランチへの部分マージは残っていません。"
+                    "次回のディスパッチサイクルで自動的に再試行されます。"
+                ),
+            )
+        except Exception as comment_error:
+            print(
+                "Warning: Failed to comment on merge failure for parent issue "
+                f"#{ctx.config.parent_issue_number}: {comment_error}",
+                file=sys.stderr,
+            )
 
     def _handle_parent_branch_staleness(self, ctx: IntegrationContext) -> None:
         """#437: 連続陳腐化回数を記録し、上限到達時のみ対象の子Issueを
