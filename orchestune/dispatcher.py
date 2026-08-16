@@ -382,9 +382,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
     )
 
 
-def _run_dispatcher(
-    config: DispatcherConfig, args: argparse.Namespace
-) -> _DispatcherRunResult:
+def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
     report = run_dispatch_cycle(config)
     post_cycle_results: list[PhaseResult] = []
     integrator_run_report = None
@@ -399,7 +397,9 @@ def _run_dispatcher(
         semantic_review_enabled = _decide_semantic_review_enabled()
         if semantic_review_enabled:
             result = _poll_pending_not_needed_reviews(
-                args, forge=config.forge, auth_error=auth_error
+                config.not_needed_review_state_path,
+                forge=config.forge,
+                auth_error=auth_error,
             )
             post_cycle_results.append(result)
         result = _run_semantic_integrator(
@@ -459,7 +459,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         _config_error(parser, str(e))
 
     try:
-        result = _run_dispatcher(config, inputs.args)
+        result = _run_dispatcher(config)
         _emit_dispatcher_report(result)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)

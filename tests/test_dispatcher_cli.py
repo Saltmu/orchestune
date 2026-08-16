@@ -222,6 +222,7 @@ class TestDispatcherCliSingleResponsibility:
             "max_concurrent",
             "run_state_path",
             "events_log_path",
+            "not_needed_review_state_path",
             "dispatch_target",
             "routine_token",
             "allow_unsafe_agent_execution",

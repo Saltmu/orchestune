@@ -8,11 +8,11 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import CycleReport
@@ -87,7 +87,7 @@ def _run_best_effort_phase(
 
 
 def _poll_pending_not_needed_reviews(
-    args: argparse.Namespace,
+    state_path: Path,
     forge: Forge | None = None,
     auth_error: ForgeAuthError | None = None,
 ) -> PhaseResult:
@@ -97,9 +97,7 @@ def _poll_pending_not_needed_reviews(
     """
 
     def work() -> dict:
-        return process_pending_not_needed_reviews(
-            args.not_needed_review_state_path, forge=forge
-        )
+        return process_pending_not_needed_reviews(state_path, forge=forge)
 
     return _run_best_effort_phase(
         phase_name="poll_pending_not_needed_reviews",
