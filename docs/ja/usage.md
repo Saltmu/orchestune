@@ -191,7 +191,9 @@ orchestune-dispatch
 | `--ci-command <cmd>` | `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値） | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文のシェル風文字列。例: `'make ci'`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください（[セットアップガイドの「導入要件」](setup.md#0-導入要件prerequisites)参照）。`orchestune.toml`/`pyproject.toml`の`[tool.orchestune]`セクションでは`ci-command`キーとして指定できます。 |
 | `--deviation-buffer-lines <int>` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
 | `--max-launches-per-window <int>` | `1` | 指定した時間窓（`--window-seconds`）内で最大何回エージェントを起動できるかを制限する、APIバースト制御用オプション。 |
-| `--window-seconds <int>` | `3600` | バースト制限を適用する時間窓の秒数（デフォルトは1時間）。 |
+| `--window-seconds <int>` | `3600` | バースト制限およびトークン消費上限を適用する時間窓の秒数（デフォルトは1時間）。 |
+| `--max-tokens-per-window <int>` | - | 指定した時間窓（`--window-seconds`）内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止する。未指定時は無制限。 |
+| `--max-tokens-per-task <int>` | - | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送り `status:blocked-human-review` へエスカレーションする。未指定時は無制限。 |
 | `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のDAG再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 

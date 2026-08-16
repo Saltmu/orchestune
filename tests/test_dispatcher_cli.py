@@ -110,6 +110,27 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--no-apply"])
         assert args.apply is False
 
+    def test_max_tokens_args_defaults_to_none(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.max_tokens_per_window is None
+        assert args.max_tokens_per_task is None
+
+    def test_max_tokens_args_are_parsed(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(
+            [
+                "--max-tokens-per-window",
+                "50000",
+                "--max-tokens-per-task",
+                "10000",
+            ]
+        )
+        assert args.max_tokens_per_window == 50000
+        assert args.max_tokens_per_task == 10000
+
     def test_explicit_apply_flag_still_works(self):
         from orchestune.dispatcher import _build_arg_parser
 

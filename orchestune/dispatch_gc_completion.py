@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,7 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
 )
 from orchestune.git_cli import run_git
-from orchestune.models import PrRecord
+from orchestune.models import PrRecord, Usage
 from orchestune.process_utils import is_process_alive
 
 
@@ -72,11 +73,18 @@ def _apply_completed_worktree_outcome(
     config: DispatcherConfig,
     active_task: Task | None = None,
 ) -> dict:
+    handle = _active_dispatch_handle(active)
+    usage = (
+        config.dispatch_target.collect_usage(handle) if config.dispatch_target else None
+    )
+    usage_dict = dataclasses.asdict(usage) if isinstance(usage, Usage) else None
     event: dict = {
         "issue_number": active.issue_number,
         "worktree_path": active.worktree_path,
         "action": decision.action,
     }
+    if usage_dict is not None:
+        event["usage"] = usage_dict
     if decision.action == "completion_skipped_dirty_worktree":
         return event
     if decision.action == "completed_no_commits":
@@ -95,6 +103,27 @@ def _apply_completed_worktree_outcome(
         event["subtask_id"] = decision.subtask_id
         event["commit_sha"] = None
         return event
+    if (
+        config.max_tokens_per_task is not None
+        and isinstance(usage, Usage)
+        and usage.total_tokens > config.max_tokens_per_task
+    ):
+        if config.apply:
+            remove_worktree(active.worktree_path)
+            model_info = f"（モデル: {usage.model}）" if usage.model else ""
+            apply_human_review_escalation(
+                active.issue_number,
+                ("status:in-progress",),
+                f"サブタスクのトークン消費量が上限（{config.max_tokens_per_task:,} tokens）を超過しました"
+                f"{model_info}。\n実消費量: {usage.total_tokens:,} tokens "
+                f"(Input: {usage.input_tokens:,}, Output: {usage.output_tokens:,})。\n"
+                "タスクの分割粒度やモデルの適性を確認の上、必要であれば`status:queued`へ再設定してください。",
+                forge=config.resolved_forge,
+            )
+        event["action"] = "escalated_token_limit_exceeded"
+        event["subtask_id"] = decision.subtask_id
+        event["commit_sha"] = None
+        return event
     commit_sha = decision.commit_sha
     if config.apply:
         if active.external_id is None:
@@ -105,17 +134,6 @@ def _apply_completed_worktree_outcome(
             except Exception:
                 pass
         remove_worktree(active.worktree_path)
-        # #381レビュー対応(Codex P2): launch成功時のtransition_status_labelが
-        # add(status:in-progress)後のremove(status:queued/status:blocked)に
-        # 失敗すると、Issueにこれらの旧ラベルが取り残されたまま完了する
-        # ことがある。ここでstatus:in-progressだけを除去すると、Issueは
-        # status:done + 取り残されたstatus:queued（または status:blocked）
-        # を同時に持つことになる。前者の組み合わせは
-        # `_reconcile_dual_status_tasks`が「Integratorのロールバック
-        # (#254)」と誤認してstatus:doneを除去してしまい、完了済みタスクが
-        # 再キューイングされ二重実行されうる。完了確定時点で判明している
-        # 一次status:*ラベルはまとめて除去し、Issueをstatus:doneのみへ
-        # 確実に収束させる。
         stale_labels = (
             tuple(
                 label

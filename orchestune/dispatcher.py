@@ -149,6 +149,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="ローカルCLI（claude/agy/codex）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
     )
     parser.add_argument(
+        "--max-tokens-per-window",
+        type=int,
+        default=None,
+        help="#438: ウィンドウ内の総トークン消費上限（超過時は新規タスク起動を停止）",
+    )
+    parser.add_argument(
+        "--max-tokens-per-task",
+        type=int,
+        default=None,
+        help="#438: 単一サブタスクのトークン消費上限（超過時はstatus:blocked-human-reviewへエスカレーション）",
+    )
+    parser.add_argument(
         "--ci-command",
         default=None,
         help="#394: Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の"
@@ -323,6 +335,8 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             max_recompute_retries=args.max_recompute_retries,
             task_timeout_seconds=args.task_timeout_seconds,
             zombie_gc=args.zombie_gc,
+            max_tokens_per_window=args.max_tokens_per_window,
+            max_tokens_per_task=args.max_tokens_per_task,
             not_needed_review_state_path=args.not_needed_review_state_path,
             ci_command=shlex.split(args.ci_command) if args.ci_command else None,
             dag_ignore_patterns=dag_ignore_patterns,

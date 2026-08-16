@@ -33,6 +33,9 @@ class DispatcherConfig:
     max_recompute_retries: int = 2
     task_timeout_seconds: int = 0
     zombie_gc: bool = True
+    # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
+    max_tokens_per_window: int | None = None
+    max_tokens_per_task: int | None = None
     # #282: status:not-needed判定の独立検証レビュー（保留分）の永続化先。
     not_needed_review_state_path: Path = Path("not_needed_review_state.json")
     # #394: Integratorが統合ブランチ上で実行するCIコマンド。未指定（None）の場合、

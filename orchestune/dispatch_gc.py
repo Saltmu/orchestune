@@ -43,7 +43,7 @@ from orchestune.dispatch_gc_zombies import (
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
-from orchestune.models import PrRecord
+from orchestune.models import PrRecord, Usage
 from orchestune.process_utils import is_process_alive
 
 __all__ = [
@@ -272,6 +272,8 @@ def _rule_completed(
         if active_task is not None and active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
+            raw_usage = completion_event.get("usage")
+            usage_obj = Usage(**raw_usage) if raw_usage else None
             ctx.run_state.completed_worktrees.append(
                 CompletedWorktree(
                     issue_number=completion_active.issue_number,
@@ -283,6 +285,7 @@ def _rule_completed(
                     forced_serial=completion_active.forced_serial,
                     commit_sha=completion_event.get("commit_sha"),
                     base_branch=completion_active.base_branch,
+                    usage=usage_obj,
                 )
             )
             del ctx.run_state.active_worktrees[key]
@@ -291,7 +294,7 @@ def _rule_completed(
             completed_subtask_id=completed_subtask_id,
             terminal=True,
         )
-    if action == "completed_no_commits":
+    if action in ("completed_no_commits", "escalated_token_limit_exceeded"):
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
         return ActiveWorktreeRuleOutcome(

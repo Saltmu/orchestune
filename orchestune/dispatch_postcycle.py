@@ -196,6 +196,26 @@ def _noteworthy_deviation_events(report: CycleReport) -> list[dict]:
     ]
 
 
+def _format_completion_item(event: dict) -> str:
+    issue_num = event.get("issue_number")
+    subtask_id = event.get("subtask_id")
+    action = event.get("action", "completed")
+    usage = event.get("usage")
+
+    if not (issue_num and subtask_id):
+        return f"`{event}`"
+
+    prefix = f"Issue #{issue_num}（`{subtask_id}`）"
+    if usage and isinstance(usage, dict):
+        model = usage.get("model") or "不明"
+        tokens = usage.get("total_tokens")
+        tokens_str = f"{tokens:,} tokens" if tokens is not None else "不明"
+        return f"{prefix}: `{action}` [Model: `{model}`, Tokens: **{tokens_str}**]"
+    if "usage" in event:
+        return f"{prefix}: `{action}` [Model: `不明`, Tokens: **不明**]"
+    return f"{prefix}: `{action}`"
+
+
 def _format_event_log_comment(report: CycleReport, deviation_events: list[dict]) -> str:
     lines = ["## 🤖 Orchestune Dispatch Cycle Report\n"]
     lines.append(f"Quota slots available: **{report.quota_slots_available}**\n")
@@ -211,7 +231,7 @@ def _format_event_log_comment(report: CycleReport, deviation_events: list[dict])
         ),
         (
             "✅ 完了イベント（Completion）",
-            [f"`{event}`" for event in report.completion_events],
+            [_format_completion_item(event) for event in report.completion_events],
         ),
         (
             "⬆️ 昇格イベント（Promotion）",
