@@ -196,16 +196,6 @@ dispatcher having been run with `--parent-issue <N>` (see
   independent verification review for `status:not-needed`
   (`orchestune/integration_coordinator.py`). Used only to decide whether to
   close a verified Issue; not part of the `status:*` transitions.
-- `integration:parent-branch-stale`: marker label the integrator sets on the
-  parent Issue when a push to the parent branch is rejected as
-  non-fast-forward (a CAS rejection, `orchestune/integrator_steps.py`).
-  Living on a GitHub label rather than a local state file means the
-  detection survives across cycles even when each cycle runs on a fresh
-  runner (e.g. a scheduled GitHub Actions workflow, #437). It is cleared as
-  soon as a later push succeeds. If staleness is detected again while the
-  label is still set (i.e. two cycles in a row), that's treated as a likely
-  configuration/operational anomaly: the affected child Issues are escalated
-  to `status:blocked-human-review` and the label is cleared.
 - `priority:high` / `priority:medium` / `priority:low`: used for launch
   ordering, but do not participate in lifecycle transitions.
 - `risk:flagged` / `progress:partial`: visualization-only labels; they do not
