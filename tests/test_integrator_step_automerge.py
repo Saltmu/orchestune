@@ -462,6 +462,40 @@ class TestParentBranchStaleRetryEscalation:
             for call in integrator_env.add_label.call_args_list
         )
 
+    def test_marker_is_cleared_even_when_cycle_ends_before_reaching_automerge(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: 直前サイクルのCAS拒否でマーカーが付与された後、
+        # 次のサイクルがAutoMergeChildIntegrationStepへ到達する前（例:
+        # MergeAndTestStepでのCI/mergeそのものの失敗）で終わった場合、旧来は
+        # マーカーが一切クリアされずに残っていた。これを残したまま次のCAS拒否
+        # を検知すると、間に無関係なmerge失敗のサイクルを挟んでいるにも
+        # 関わらず誤って「2サイクル連続」と判定してしまう。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        # 直前サイクルでマーカーが既に付与されている状態を模す。
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+        # 今サイクルはmergeそのものが失敗し、AutoMergeChildIntegrationStepへは
+        # 到達しない（パイプラインがMergeAndTestStepの時点で止まる）。
+        integrator_env.fail_git(
+            lambda args: "merge" in args
+            and any("claude/issue-1-task-1" in a for a in args),
+            stderr=b"CONFLICT (content): Merge conflict",
+        )
+
+        res = Integrator(_child_config()).run()
+
+        assert res["status"] != "success"
+        integrator_env.merge_pull_request.assert_not_called()
+        integrator_env.remove_label.assert_any_call(
+            100, "integration:parent-branch-stale"
+        )
+        assert not any(
+            call.args == (100, "integration:parent-branch-stale")
+            for call in integrator_env.add_label.call_args_list
+        )
+
 
 @pytest.mark.integration
 def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):

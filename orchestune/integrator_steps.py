@@ -431,6 +431,45 @@ def _is_parent_branch_cas_rejection(error: Exception) -> bool:
     return any(marker in text for marker in _CAS_REJECTION_MARKERS)
 
 
+def clear_parent_branch_stale_marker(ctx: IntegrationContext) -> None:
+    """#437: `_PARENT_BRANCH_STALE_LABEL`マーカーを親Issueから除去する。
+
+    #437レビュー対応: このマーカーは「サイクルが実際にCAS拒否で終わったか」
+    だけを追う必要があるため、クリア自体は`IntegrationPipeline.execute`
+    （`orchestune/integrator.py`）から、パイプラインがどのステップで終わった
+    かに関わらず一律に呼ばれる。当初`AutoMergeChildIntegrationStep`内の
+    push成功時／non-CAS失敗時にのみクリアしていたが、`SetupWorktreeStep`・
+    `MergeAndTestStep`・`PushTempBranchStep`等、このステップに到達する前に
+    サイクルが終わるケースを見落としており、直前のCAS拒否のマーカーが古いまま
+    残ってしまっていた（レビュー指摘）。CAS拒否を確認したサイクルだけは
+    `ctx.parent_branch_cas_rejected_this_cycle`を立てることで、このクリア処理
+    をスキップし、マーカーの管理を`_handle_parent_branch_staleness`自身に
+    委ねる。
+
+    #437レビュー対応（既知の限度）: この除去はラベルの単純な上書きであり、
+    GitHub側にCAS（compare-and-swap）機構が無いため、他ランナーが同時に
+    マーカーを新規付与した直後にここが実行されると、その新しいイベントを
+    消してしまう可能性が理論上ある。分散ロックを避ける#437自身の設計方針
+    （footprintの事前検証により競合率が低い前提で悲観ロックより楽観的並行
+    制御を選ぶ）と同じ理由で、ここでも追加のロック機構は導入しない。
+    cross-runner競合そのものは、推奨される`concurrency`グループ設定
+    （#436, docs/ja/setup.md#6）により実運用上は発生しない前提であり、この
+    残存リスクはその設定を行わない場合にのみ顕在化する。
+    """
+    if ctx.config.parent_issue_number is None:
+        return
+    try:
+        ctx.forge.remove_label(
+            ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+        )
+    except Exception as label_error:
+        print(
+            "Warning: Failed to clear parent-branch-stale label on parent issue "
+            f"#{ctx.config.parent_issue_number}: {label_error}",
+            file=sys.stderr,
+        )
+
+
 class AutoMergeChildIntegrationStep(IntegrationComponent):
     """non-force pushで子統合を親へ確定し、最終mainマージは人に委ねる。"""
 
@@ -473,25 +512,18 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 # すると、一時障害が解消してもエスカレーション済みの子Issueが
                 # 手動でのラベル除去なしに自己修復できなくなる。実際に
                 # non-fast-forward（CAS拒否）だったpush失敗のみを陳腐化として
-                # 記録・カウントする。
+                # 記録・カウントする。`ctx.parent_branch_cas_rejected_this_cycle`
+                # がTrueのままなら、`IntegrationPipeline.execute`側のクリア処理を
+                # スキップさせ、マーカーの管理を`_handle_parent_branch_staleness`
+                # 自身に委ねる。
                 if _is_parent_branch_cas_rejection(error):
+                    ctx.parent_branch_cas_rejected_this_cycle = True
                     self._handle_parent_branch_staleness(ctx, error)
-                else:
-                    # #437レビュー対応: non-CAS失敗を挟むと「2サイクル連続の
-                    # CAS拒否」ではなくなるため、直前のCAS拒否で付与された
-                    # マーカーが残っていればクリアする。クリアしないと、
-                    # 間に無関係な一時障害を挟んだ2回の非連続CAS拒否が誤って
-                    # 「連続」と判定されエスカレーションしてしまう。
-                    self._clear_parent_branch_stale_marker(ctx)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": str(error),
                     "auto_merged": False,
                 }
-
-        # #437: 親branchの更新（またはその検証）に成功したため、陳腐化マーカー
-        # ラベルをクリアする（「連続」失敗の検知であり累積総数ではないため）。
-        self._clear_parent_branch_stale_marker(ctx)
 
         # 不要になったリモートブランチをクリーンアップ
         task_by_subtask_id = {
@@ -583,34 +615,6 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
 
-    def _clear_parent_branch_stale_marker(self, ctx: IntegrationContext) -> None:
-        """#437: `_PARENT_BRANCH_STALE_LABEL`マーカーを親Issueから除去する。
-        push成功時（＝陳腐化の連続が途切れた）と、non-CAS理由でのpush失敗時
-        （＝直前のCAS拒否と「連続」にならない）の両方から呼ばれる。
-
-        #437レビュー対応（既知の限度）: この除去はラベルの単純な上書きであり、
-        GitHub側にCAS（compare-and-swap）機構が無いため、他ランナーが同時に
-        マーカーを新規付与した直後にここが実行されると、その新しいイベントを
-        消してしまう可能性が理論上ある。分散ロックを避ける#437自身の設計方針
-        （footprintの事前検証により競合率が低い前提で悲観ロックより楽観的
-        並行制御を選ぶ）と同じ理由で、ここでも追加のロック機構は導入しない。
-        cross-runner競合そのものは、推奨される`concurrency`グループ設定
-        （#436, docs/ja/setup.md#6）により実運用上は発生しない前提であり、
-        この残存リスクはその設定を行わない場合にのみ顕在化する。
-        """
-        if ctx.config.parent_issue_number is None:
-            return
-        try:
-            ctx.forge.remove_label(
-                ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
-            )
-        except Exception as label_error:
-            print(
-                "Warning: Failed to clear parent-branch-stale label on "
-                f"parent issue #{ctx.config.parent_issue_number}: {label_error}",
-                file=sys.stderr,
-            )
-
     def _handle_parent_branch_staleness(
         self, ctx: IntegrationContext, error: Exception
     ) -> None:
@@ -677,7 +681,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
         # 2サイクル連続で陳腐化 → 設定/運用構成の異常の可能性が高いため、
         # 対象の子Issueをエスカレーションする。
-        self._clear_parent_branch_stale_marker(ctx)
+        clear_parent_branch_stale_marker(ctx)
 
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
