@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.integrator_git_ops import IntegrationMerger
+from orchestune.models import Task
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _TASK_1_BRANCH = "claude/issue-1-task-1"
@@ -320,3 +321,166 @@ class TestRunCiVenvDetection:
         # `poetry env info --path`が存在しないパスを返した場合は無視され、
         # original_root/.venvへフォールバックする。
         assert env["VIRTUAL_ENV"] == str((orig_root / ".venv").resolve())
+
+
+def _task(
+    issue_number: int = 1,
+    subtask_id: str = "t1",
+    depends_on: tuple[str, ...] = (),
+    status_labels: tuple[str, ...] = (),
+) -> Task:
+    return Task(
+        issue_number=issue_number,
+        subtask_id=subtask_id,
+        footprint=(),
+        symbols=(),
+        risk=False,
+        priority="medium",
+        progress_partial=False,
+        status_labels=status_labels,
+        created_at="2026-01-01T00:00:00Z",
+        depends_on=depends_on,
+    )
+
+
+class TestCheckTaskBlocking:
+    def _merger(self, tmp_path: Path) -> IntegrationMerger:
+        return IntegrationMerger(
+            repository_root=tmp_path,
+            original_root=tmp_path,
+            ci_command=["echo", "1"],
+        )
+
+    def test_blocks_on_escalation_label(self, tmp_path: Path):
+        merger = self._merger(tmp_path)
+        task = _task(
+            issue_number=1,
+            subtask_id="t1",
+            status_labels=("status:blocked-human-review",),
+        )
+        reason = merger._check_task_blocking(task, unavailable_ids=set())
+        assert reason is not None
+        assert "status:blocked-human-reviewへエスカレーション済み" in reason
+
+    def test_blocks_on_unavailable_dependency(self, tmp_path: Path):
+        merger = self._merger(tmp_path)
+        task = _task(
+            issue_number=2,
+            subtask_id="t2",
+            depends_on=("t1",),
+        )
+        reason = merger._check_task_blocking(task, unavailable_ids={"t1"})
+        assert reason is not None
+        assert "依存タスク t1 が失敗または依存失敗のため" in reason
+
+    def test_allows_non_blocked_task(self, tmp_path: Path):
+        merger = self._merger(tmp_path)
+        task = _task(
+            issue_number=3,
+            subtask_id="t3",
+            depends_on=("t0",),
+            status_labels=("status:done",),
+        )
+        reason = merger._check_task_blocking(task, unavailable_ids={"other"})
+        assert reason is None
+
+
+class TestFetchTaskBranch:
+    def test_fetch_success(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch("orchestune.integrator_git_ops.run_git", return_value=_ok([])):
+            success, already_merged, err = merger._fetch_task_branch("feature", "main")
+        assert success is True
+        assert already_merged is False
+        assert err == ""
+
+    def test_fetch_failure_already_merged(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with (
+            patch.object(
+                merger.forge, "is_current_branch_tip_merged_into", return_value=True
+            ),
+            patch(
+                "orchestune.integrator_git_ops.run_git",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["fetch"], stderr=b"fetch error"
+                ),
+            ),
+        ):
+            success, already_merged, err = merger._fetch_task_branch("feature", "main")
+        assert success is True
+        assert already_merged is True
+        assert err == ""
+
+
+class TestMergeTaskBranch:
+    def test_merge_success(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch("orchestune.integrator_git_ops.run_git") as mock_git:
+            mock_git.side_effect = [
+                _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
+                _ok(["merge"]),
+            ]
+            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+        assert success is True
+        assert pre_merge_sha == "sha123"
+        assert err == ""
+
+    def test_merge_conflict_aborts(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch("orchestune.integrator_git_ops.run_git") as mock_git:
+            mock_git.side_effect = [
+                _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
+                subprocess.CalledProcessError(1, ["merge"], stderr=b"CONFLICT"),
+                _ok(["merge", "--abort"]),
+            ]
+            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+        assert success is False
+        assert pre_merge_sha == "sha123"
+        assert "Merge conflict" in err
+
+
+class TestVerifyCiAndRollback:
+    def test_ci_success(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch.object(merger, "run_ci_with_flaky_check", return_value=(True, "")):
+            success, reason, out = merger._verify_ci_and_rollback("sha123")
+        assert success is True
+        assert reason == ""
+        assert out is None
+
+    def test_ci_failure_triggers_rollback(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with (
+            patch.object(
+                merger, "run_ci_with_flaky_check", return_value=(False, "ci failed")
+            ),
+            patch.object(merger, "rollback_to", return_value=True) as mock_rollback,
+        ):
+            success, reason, out = merger._verify_ci_and_rollback("sha123")
+        assert success is False
+        assert "CI verification failed" in reason
+        assert out == "ci failed"
+        mock_rollback.assert_called_once_with("sha123")
+
+
+class TestExecuteCiCommand:
+    def test_success(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch("subprocess.run", return_value=_ok([])):
+            passed, out = merger._execute_ci_command({})
+        assert passed is True
+        assert out == ""
+
+    def test_failure_formats_output(self, tmp_path: Path):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                1, ["echo"], output=b"out-text", stderr=b"err-text"
+            ),
+        ):
+            passed, out = merger._execute_ci_command({})
+        assert passed is False
+        assert "--- stdout ---\nout-text" in out
+        assert "--- stderr ---\nerr-text" in out

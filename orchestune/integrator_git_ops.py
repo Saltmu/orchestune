@@ -122,14 +122,7 @@ class IntegrationMerger:
                 return candidate
         return None
 
-    def run_ci_with_flaky_check(self) -> tuple[bool, str]:
-        # #208: 丸ごとの再実行はしない。既知のflakyテストは呼び出し先の
-        # pytest-rerunfailures（quarantineリストに基づく個別リトライ）が
-        # 内部で吸収するため、ここで通しの再実行を重ねる必要はない。
-        # quarantine対象外のテストが不安定な場合は、そのままCI失敗として
-        # 正しく検知させ、人間がquarantineリストへの追加を判断する。
-        ci_cmd = self.ci_command or default_ci_command()
-
+    def _prepare_ci_environment(self) -> tuple[dict[str, str], str | None]:
         env = os.environ.copy()
         env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 
@@ -144,7 +137,7 @@ class IntegrationMerger:
                     env=env,
                 )
             except (subprocess.CalledProcessError, OSError) as exc:
-                return False, f"Failed to install Poetry dependencies: {exc}"
+                return env, f"Failed to install Poetry dependencies: {exc}"
 
         venv_path = None
         if pyproject_path.exists():
@@ -176,6 +169,10 @@ class IntegrationMerger:
             if bin_path.exists():
                 env["PATH"] = f"{bin_path.resolve()}{os.pathsep}{env.get('PATH', '')}"
 
+        return env, None
+
+    def _execute_ci_command(self, env: dict[str, str]) -> tuple[bool, str]:
+        ci_cmd = self.ci_command or default_ci_command()
         try:
             subprocess.run(
                 ci_cmd,
@@ -189,6 +186,153 @@ class IntegrationMerger:
             stdout = (e.stdout or b"").decode(errors="replace")
             stderr = (e.stderr or b"").decode(errors="replace")
             return False, f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+
+    def run_ci_with_flaky_check(self) -> tuple[bool, str]:
+        # #208: 丸ごとの再実行はしない。既知のflakyテストは呼び出し先の
+        # pytest-rerunfailures（quarantineリストに基づく個別リトライ）が
+        # 内部で吸収するため、ここで通しの再実行を重ねる必要はない。
+        # quarantine対象外のテストが不安定な場合は、そのままCI失敗として
+        # 正しく検知させ、人間がquarantineリストへの追加を判断する。
+        env, error = self._prepare_ci_environment()
+        if error is not None:
+            return False, error
+        return self._execute_ci_command(env)
+
+    def _check_task_blocking(self, task: Task, unavailable_ids: set[str]) -> str | None:
+        # #437レビュー対応: status:blocked-human-review（親branchの
+        # 連続陳腐化等でエスカレーション済み）のタスクはここでマージ
+        # せずblocked扱いにする。`PrepareTasksStep`側で完全に除外して
+        # しまうと、このタスクに依存する後続タスク（特にスタッキングで
+        # 既にこのタスクの未マージコミットを含んだブランチを持つ後続
+        # タスク）が、下のブロック伝播（`unavailable_ids`）の対象から
+        # 漏れてそのまま独立にマージされてしまい、エスカレーションで
+        # 意図した人間の確認をブロックされたタスクの内容そのものが
+        # 迂回してparent branchへ入ってしまう。
+        escalated_labels = sorted(
+            label for label in TERMINAL_ESCALATION_LABELS if label in task.status_labels
+        )
+        if escalated_labels:
+            return (
+                f"{', '.join(escalated_labels)}へエスカレーション済みのため、"
+                "人間の確認が完了するまで統合を実行せずスキップしました。"
+            )
+
+        blocking_deps = sorted(dep for dep in task.depends_on if dep in unavailable_ids)
+        if blocking_deps:
+            return (
+                "依存タスク "
+                f"{', '.join(blocking_deps)} が失敗または依存失敗のため、"
+                "統合を実行せずスキップしました。"
+            )
+        return None
+
+    def _fetch_task_branch(
+        self, branch_name: str, base_branch: str
+    ) -> tuple[bool, bool, str]:
+        """Fetch remote task branch into remote-tracking ref.
+
+        Returns `(success, already_merged, error_message)`.
+        """
+        # actions/checkout のデフォルト（単一ブランチの浅いclone）では
+        # `origin/{branch_name}` のremote-trackingブランチが存在しないため、
+        # refspecを明示してfetchしないと後続のmergeが常に
+        # 「not something we can merge」で失敗する（内容衝突ではない）。
+        try:
+            run_git(
+                [
+                    "fetch",
+                    "origin",
+                    f"{branch_name}:refs/remotes/origin/{branch_name}",
+                ],
+                cwd=self.repository_root,
+                check=True,
+            )
+            return True, False, ""
+        except subprocess.CalledProcessError as e:
+            # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
+            # 場合だけ統合済みとして扱う。同名branchの過去PRだけでは、
+            # branch再利用後の新commitを見落とすため根拠にしない。
+            # branch削除/API障害を含む不確実なケースはfail closedにする。
+            base_branch_name = base_branch.removeprefix("origin/")
+            try:
+                already_merged = self.forge.is_current_branch_tip_merged_into(
+                    branch_name, base_branch_name
+                )
+            except Exception as lookup_error:
+                already_merged = False
+                print(
+                    "Warning: Failed to verify whether "
+                    f"{branch_name} was merged into {base_branch_name}: "
+                    f"{lookup_error}",
+                    file=sys.stderr,
+                )
+
+            if already_merged:
+                print(
+                    f"[Integrator] Branch {branch_name} could not be "
+                    "fetched, but its current remote tip is contained "
+                    f"in {base_branch_name}. "
+                    "Skipping integration merge."
+                )
+                return True, True, ""
+
+            fetch_error = e.stderr or ""
+            return False, False, f"Failed to fetch branch: {fetch_error}"
+
+    def _merge_task_branch(self, branch_name: str) -> tuple[bool, str, str]:
+        """Attempt to merge `origin/{branch_name}` into current temporary branch.
+
+        Returns `(success, pre_merge_sha, error_message)`.
+        """
+        # #53: mergeが新規コミットを作った（=1コミット戻せばよい）という
+        # 仮定に依存すると、対象ブランチの先端が既にHEADへ含まれている場合の
+        # `git merge --no-ff`が新規コミットを作らず"Already up to date"に
+        # なるケースで、CI失敗時のrollbackが直前の無関係なコミットを
+        # 巻き添えで削除してしまう。merge試行前のHEAD SHAを保存しておき、
+        # CI失敗時はそのSHAへ確実に戻す。
+        try:
+            pre_merge_sha = self.current_head_sha()
+        except subprocess.CalledProcessError as e:
+            head_error = e.stderr or ""
+            return False, "", f"Failed to capture pre-merge HEAD: {head_error}"
+
+        try:
+            run_git(
+                [
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    f"Temp merge {branch_name}",
+                    f"origin/{branch_name}",
+                ],
+                cwd=self.repository_root,
+                check=True,
+            )
+            return True, pre_merge_sha, ""
+        except subprocess.CalledProcessError as e:
+            self.abort_merge()
+            merge_error = e.stderr or ""
+            return False, pre_merge_sha, f"Merge conflict: {merge_error}"
+
+    def _verify_ci_and_rollback(
+        self, pre_merge_sha: str
+    ) -> tuple[bool, str, str | None]:
+        """Run CI and roll back to `pre_merge_sha` if CI verification fails.
+
+        Returns `(success, failure_reason, ci_output)`.
+        """
+        ci_success, ci_output = self.run_ci_with_flaky_check()
+        if ci_success:
+            return True, "", None
+
+        reason = "CI verification failed"
+        if not self.rollback_to(pre_merge_sha):
+            reason += (
+                ". さらに、merge前のコミット"
+                f"({pre_merge_sha})へのrollbackにも失敗しました。"
+                "統合ブランチの状態を手動で確認してください。"
+            )
+        return False, reason, ci_output
 
     def _recover_from_unexpected_task_error(
         self,
@@ -224,8 +368,8 @@ class IntegrationMerger:
     def merge_and_test_tasks(
         self, sorted_done_tasks: list[Task], base_branch: str, apply: bool
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]]:
-        merged_tasks = []
-        failed_tasks = []
+        merged_tasks: list[str] = []
+        failed_tasks: list[str] = []
         blocked_tasks: list[str] = []
         failed_reasons: dict[str, str] = {}
         blocked_reasons: dict[str, str] = {}
@@ -252,156 +396,48 @@ class IntegrationMerger:
             # merge直前のHEADを記録しておき、except側でロールバックに使う。
             captured_pre_merge_sha: str | None = None
             try:
-                # #437レビュー対応: status:blocked-human-review（親branchの
-                # 連続陳腐化等でエスカレーション済み）のタスクはここでマージ
-                # せずblocked扱いにする。`PrepareTasksStep`側で完全に除外して
-                # しまうと、このタスクに依存する後続タスク（特にスタッキングで
-                # 既にこのタスクの未マージコミットを含んだブランチを持つ後続
-                # タスク）が、下のブロック伝播（`unavailable_ids`）の対象から
-                # 漏れてそのまま独立にマージされてしまい、エスカレーションで
-                # 意図した人間の確認をブロックされたタスクの内容そのものが
-                # 迂回してparent branchへ入ってしまう。
-                escalated_labels = sorted(
-                    label
-                    for label in TERMINAL_ESCALATION_LABELS
-                    if label in task.status_labels
-                )
-                if escalated_labels:
-                    reason = (
-                        f"{', '.join(escalated_labels)}へエスカレーション済みのため、"
-                        "人間の確認が完了するまで統合を実行せずスキップしました。"
-                    )
+                blocked_reason = self._check_task_blocking(task, unavailable_ids)
+                if blocked_reason:
                     print(
-                        f"[Integrator] Skipping {task.subtask_id}: {reason}",
+                        f"[Integrator] Skipping {task.subtask_id}: {blocked_reason}",
                         file=sys.stderr,
                     )
-                    blocked_reasons[task.subtask_id] = reason
+                    blocked_reasons[task.subtask_id] = blocked_reason
                     blocked_tasks.append(task.subtask_id)
                     unavailable_ids.add(task.subtask_id)
                     continue
-
-                blocking_deps = sorted(
-                    dep for dep in task.depends_on if dep in unavailable_ids
-                )
-                if blocking_deps:
-                    reason = (
-                        "依存タスク "
-                        f"{', '.join(blocking_deps)} が失敗または依存失敗のため、"
-                        "統合を実行せずスキップしました。"
-                    )
-                    print(
-                        f"[Integrator] Skipping {task.subtask_id}: {reason}",
-                        file=sys.stderr,
-                    )
-                    blocked_reasons[task.subtask_id] = reason
-                    blocked_tasks.append(task.subtask_id)
-                    unavailable_ids.add(task.subtask_id)
-                    continue
-
-                branch_name = (
-                    f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
-                )
 
                 if apply:
-                    # actions/checkout のデフォルト（単一ブランチの浅いclone）では
-                    # `origin/{branch_name}` のremote-trackingブランチが存在しないため、
-                    # refspecを明示してfetchしないと後続のmergeが常に
-                    # 「not something we can merge」で失敗する（内容衝突ではない）。
-                    try:
-                        run_git(
-                            [
-                                "fetch",
-                                "origin",
-                                f"{branch_name}:refs/remotes/origin/{branch_name}",
-                            ],
-                            cwd=self.repository_root,
-                            check=True,
-                        )
-                    except subprocess.CalledProcessError as e:
-                        # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
-                        # 場合だけ統合済みとして扱う。同名branchの過去PRだけでは、
-                        # branch再利用後の新commitを見落とすため根拠にしない。
-                        # branch削除/API障害を含む不確実なケースはfail closedにする。
-                        base_branch_name = base_branch.removeprefix("origin/")
-                        try:
-                            already_merged = (
-                                self.forge.is_current_branch_tip_merged_into(
-                                    branch_name, base_branch_name
-                                )
-                            )
-                        except Exception as lookup_error:
-                            already_merged = False
-                            print(
-                                "Warning: Failed to verify whether "
-                                f"{branch_name} was merged into {base_branch_name}: "
-                                f"{lookup_error}",
-                                file=sys.stderr,
-                            )
+                    branch_name = (
+                        f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
+                    )
+                    fetch_ok, already_merged, fetch_err = self._fetch_task_branch(
+                        branch_name, base_branch
+                    )
+                    if not fetch_ok:
+                        handle_failure(task, fetch_err)
+                        failed_tasks.append(task.subtask_id)
+                        unavailable_ids.add(task.subtask_id)
+                        continue
+                    if already_merged:
+                        merged_tasks.append(task.subtask_id)
+                        continue
 
-                        if already_merged:
-                            print(
-                                f"[Integrator] Branch {branch_name} could not be "
-                                "fetched, but its current remote tip is contained "
-                                f"in {base_branch_name}. "
-                                "Skipping integration merge."
-                            )
-                            merged_tasks.append(task.subtask_id)
-                            continue
-
-                        fetch_error = e.stderr or ""
-                        handle_failure(task, f"Failed to fetch branch: {fetch_error}")
+                    merge_ok, pre_merge_sha, merge_err = self._merge_task_branch(
+                        branch_name
+                    )
+                    captured_pre_merge_sha = pre_merge_sha
+                    if not merge_ok:
+                        handle_failure(task, merge_err)
                         failed_tasks.append(task.subtask_id)
                         unavailable_ids.add(task.subtask_id)
                         continue
 
-                    # #53: mergeが新規コミットを作った（=1コミット戻せばよい）という
-                    # 仮定に依存すると、対象ブランチの先端が既にHEADへ含まれている場合の
-                    # `git merge --no-ff`が新規コミットを作らず"Already up to date"に
-                    # なるケースで、CI失敗時のrollbackが直前の無関係なコミットを
-                    # 巻き添えで削除してしまう。merge試行前のHEAD SHAを保存しておき、
-                    # CI失敗時はそのSHAへ確実に戻す。
-                    try:
-                        pre_merge_sha = self.current_head_sha()
-                        captured_pre_merge_sha = pre_merge_sha
-                    except subprocess.CalledProcessError as e:
-                        head_error = e.stderr or ""
-                        handle_failure(
-                            task, f"Failed to capture pre-merge HEAD: {head_error}"
-                        )
-                        failed_tasks.append(task.subtask_id)
-                        unavailable_ids.add(task.subtask_id)
-                        continue
-
-                    try:
-                        run_git(
-                            [
-                                "merge",
-                                "--no-ff",
-                                "-m",
-                                f"Temp merge {branch_name}",
-                                f"origin/{branch_name}",
-                            ],
-                            cwd=self.repository_root,
-                            check=True,
-                        )
-                    except subprocess.CalledProcessError as e:
-                        self.abort_merge()
-                        merge_error = e.stderr or ""
-                        handle_failure(task, f"Merge conflict: {merge_error}")
-                        failed_tasks.append(task.subtask_id)
-                        unavailable_ids.add(task.subtask_id)
-                        continue
-
-                    ci_success, ci_output = self.run_ci_with_flaky_check()
-                    if not ci_success:
-                        reason = "CI verification failed"
-                        if not self.rollback_to(pre_merge_sha):
-                            reason += (
-                                ". さらに、merge前のコミット"
-                                f"({pre_merge_sha})へのrollbackにも失敗しました。"
-                                "統合ブランチの状態を手動で確認してください。"
-                            )
-                        handle_failure(task, reason, ci_output=ci_output)
+                    ci_ok, ci_reason, ci_out = self._verify_ci_and_rollback(
+                        pre_merge_sha
+                    )
+                    if not ci_ok:
+                        handle_failure(task, ci_reason, ci_output=ci_out)
                         failed_tasks.append(task.subtask_id)
                         unavailable_ids.add(task.subtask_id)
                         continue
