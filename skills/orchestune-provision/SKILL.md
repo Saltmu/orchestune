@@ -24,8 +24,7 @@ output_schema:
 ## 前提
 
 * システムに `orchestune` CLIツール（`orchestune provision`, `orchestune bootstrap`）がインストールされていること。
-* GitHub CLI (`gh` command) がインストール・認証済み（`gh auth status`）であること。`gh`が利用できない環境での代替手順は、「`gh`が利用できない環境でのフォールバック」を参照。
-* 起票開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと。
+* 起票開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと（手順1を参照）。
 
 ## ワークフロー: Issue起票
 

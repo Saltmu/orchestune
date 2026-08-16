@@ -1,6 +1,6 @@
 ---
 name: "orchestune-dispatch"
-description: "Internal follow-up skill invoked by orchestune or orchestune-provision to schedule and dispatch eligible tasks to local/cloud coding agents."
+description: "Internal follow-up skill invoked by orchestune to schedule and dispatch eligible tasks to local/cloud coding agents."
 version: "1.0.0"
 category: "Development"
 input_schema:
@@ -17,7 +17,7 @@ output_schema:
 
 ## トリガー条件
 
-**通常はユーザーが直接呼び出すスキルではありません。** [orchestune スキル](../orchestune/SKILL.md)または[orchestune-provision スキル](../orchestune-provision/SKILL.md)が分解・起票完了後に内部で引き継ぐ形でロードします。
+**通常はユーザーが直接呼び出すスキルではありません。** [orchestune スキル](../orchestune/SKILL.md)が分解・起票完了後に内部で引き継ぐ形でロードします。
 
 例外的に、Issue起票済みのサブタスクに対してディスパッチだけを再実行・再開したい場合（例: 状態ファイル消失後の手動再開、cron再実行の確認）は、人間が直接このスキルを指定してロードしてよい。
 
@@ -30,14 +30,14 @@ output_schema:
 
 ## ワークフロー: ディスパッチャーのスケジュール実行
 
-1. ディスパッチャーを実行し、タスクをエージェントに割り振ります。親Issueが存在する場合は、必ず `--parent-issue <N>` を渡してください。これにより、子Issueのブランチが親ブランチ（`parent/issue-{番号}`）から分岐し、完了した子ブランチはIntegratorが人間の確認を待たずに親ブランチへ自動マージ・自動クローズするようになります（`parent/issue-{番号}` → `main` への最終マージのみ、引き続き人間が行います）。このフラグを渡さないと、親ブランチによる二層マージモデルが有効化されず、フラットモード（`main`への直接統合、常に人間によるマージ待ち）で動作してしまいます。
+1. ディスパッチャーを実行し、タスクをエージェントに割り振ります。対象タスクの親Issue番号（`decomposition_plan.md` の `parent_issue_number`、または再開対象の親Issue番号）を、必ず `--parent-issue` に渡してください。これにより、子Issueのブランチが親ブランチ（`parent/issue-{番号}`）から分岐し、完了した子ブランチはIntegratorが人間の確認を待たずに親ブランチへ自動マージ・自動クローズするようになります（`parent/issue-{番号}` → `main` への最終マージのみ、引き続き人間が行います）。このフラグを渡さないと、親ブランチによる二層マージモデルが有効化されず、フラットモード（`main`への直接統合、常に人間によるマージ待ち）で動作してしまいます。
 
    ```bash
    # ドライラン（影響を出さずにプレビューのみ）
-   orchestune-dispatch --no-apply --parent-issue <親Issue番号>
+   orchestune-dispatch --no-apply --parent-issue <decomposition_plan.mdのparent_issue_number>
 
    # 実際に適用して並列ワークスペースを起動
-   orchestune-dispatch --parent-issue <親Issue番号>
+   orchestune-dispatch --parent-issue <decomposition_plan.mdのparent_issue_number>
    ```
 
 2. 状態ファイル `run_state.json` が消失した場合（GitHub Actionsのキャッシュ切れなど）でも、ディスパッチャーは `status:in-progress` になっている GitHub Issue の情報とオープンな PR のヘッドブランチを元に、自動的に実行状態を修復・再構築（自己修復）してディスパッチを継続します。
