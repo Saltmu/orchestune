@@ -415,6 +415,53 @@ class TestParentBranchStaleRetryEscalation:
         # 既存の子Issueへの失敗通知は引き続き行われる。
         integrator_env.add_comment.assert_any_call(1, ANY)
 
+    def test_non_cas_failure_clears_marker_so_streak_does_not_span_it(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437レビュー対応: CAS拒否 → non-CAS失敗（認証エラー等） → CAS拒否、
+        # という順序で発生した場合、間にnon-CAS失敗を挟んでいるため「2サイクル
+        # 連続」ではない。non-CAS失敗の時点でマーカーをクリアしないと、1回目と
+        # 3回目のCAS拒否が誤って連続と判定されエスカレーションしてしまう。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        # 1回目: CASによる拒否 → マーカー付与。
+        self._fail_parent_push(integrator_env)
+        Integrator(_child_config()).run()
+        integrator_env.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
+
+        # 2回目: non-CAS理由（認証エラー）での失敗 → マーカーをクリアする。
+        integrator_env.get_issue_labels.return_value = (
+            "integration:parent-branch-stale",
+        )
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="fatal: Authentication failed for 'https://github.com/...'",
+        )
+        Integrator(_child_config()).run()
+        integrator_env.remove_label.assert_any_call(
+            100, "integration:parent-branch-stale"
+        )
+
+        # 3回目: 再びCASによる拒否 → 直前がnon-CAS失敗だったため「1回目」
+        # として扱われ、エスカレーションはしない。
+        integrator_env.get_issue_labels.return_value = ()
+        integrator_env.add_label.reset_mock()
+        self._fail_parent_push(integrator_env)
+        Integrator(_child_config()).run()
+
+        integrator_env.add_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
+        assert not any(
+            call.args == (1, "status:blocked-human-review")
+            for call in integrator_env.add_label.call_args_list
+        )
+
 
 @pytest.mark.integration
 def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
