@@ -13,11 +13,17 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
 from orchestune.dispatch_worktree import file_lock
 from orchestune.git_cli import run_git
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
+from orchestune.integrator_stale_state import (
+    parent_branch_stale_key,
+    record_parent_branch_stale_failure,
+    reset_parent_branch_stale_count,
+)
 from orchestune.integrator_tasks import get_sorted_done_tasks
 from orchestune.integrator_types import (
     IntegrationComponent,
@@ -71,7 +77,12 @@ class PrepareTasksStep(IntegrationComponent):
         ctx.active_done_tasks = [
             task
             for task in sorted_done_tasks
-            if task.issue_state != "CLOSED" and task.parent_state != "CLOSED"
+            if task.issue_state != "CLOSED"
+            and task.parent_state != "CLOSED"
+            # #437: 親branch更新の連続陳腐化でstatus:blocked-human-reviewへ
+            # エスカレーション済みのタスクは、人間の確認が入るまで統合対象から
+            # 除外する（そうしないと同じ陳腐化を毎サイクル無限に繰り返す）。
+            and "status:blocked-human-review" not in task.status_labels
         ]
 
         if not ctx.active_done_tasks:
@@ -432,11 +443,20 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
                 self._comment_on_merge_failure(ctx, error)
+                self._handle_parent_branch_staleness(ctx)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": str(error),
                     "auto_merged": False,
                 }
+
+        # #437: 親branchの更新（またはその検証）に成功したため、連続陳腐化の
+        # カウントをリセットする。「連続」失敗の検知であり累積総数ではないため。
+        if ctx.config.stale_state_path is not None:
+            reset_parent_branch_stale_count(
+                ctx.config.stale_state_path,
+                parent_branch_stale_key(ctx.config.parent_issue_number),
+            )
 
         # 不要になったリモートブランチをクリーンアップ
         task_by_subtask_id = {
@@ -525,6 +545,71 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 print(
                     "Warning: Failed to comment on merge failure for issue "
                     f"#{task.issue_number}: {comment_error}",
+                    file=sys.stderr,
+                )
+
+        # #437: 個々の子Issueへのコメントに加え、親Issue側にも陳腐化イベントを
+        # 記録する。子Issueを1件ずつ追わなくても、親Issueだけを見れば衝突が
+        # 発生した事実を事後に説明できるようにするため。
+        if ctx.config.parent_issue_number is not None:
+            try:
+                ctx.forge.add_comment(
+                    ctx.config.parent_issue_number,
+                    (
+                        "⚠️ 親ブランチの陳腐化を検知しました（CAS拒否）\n\n"
+                        f"統合PR #{ctx.integration_pr_number} による "
+                        f"`{ctx.base_branch.removeprefix('origin/')}` への更新が、"
+                        f"第三者による先行pushのためnon-fast-forwardで拒否されました"
+                        f"（{error}）。親ブランチへの部分マージは残っていません。"
+                        "次回のディスパッチサイクルで自動的に再試行されます。"
+                    ),
+                )
+            except Exception as comment_error:
+                print(
+                    "Warning: Failed to comment on merge failure for parent issue "
+                    f"#{ctx.config.parent_issue_number}: {comment_error}",
+                    file=sys.stderr,
+                )
+
+    def _handle_parent_branch_staleness(self, ctx: IntegrationContext) -> None:
+        """#437: 連続陳腐化回数を記録し、上限到達時のみ対象の子Issueを
+        `status:blocked-human-review`へエスカレーションする。"""
+        if ctx.config.stale_state_path is None:
+            return
+
+        retry_count = record_parent_branch_stale_failure(
+            ctx.config.stale_state_path,
+            parent_branch_stale_key(ctx.config.parent_issue_number),
+        )
+        if retry_count < ctx.config.max_parent_branch_stale_retries:
+            return
+
+        task_by_subtask_id = {
+            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
+        }
+        for subtask_id in ctx.merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is None:
+                continue
+            try:
+                apply_human_review_escalation(
+                    task.issue_number,
+                    task.status_labels,
+                    (
+                        "親ブランチの陳腐化（CAS拒否）が"
+                        f"{retry_count}回連続で発生したため、"
+                        "`status:blocked-human-review`へエスカレーションしました。"
+                        "設定または運用構成の異常（例: 意図しない第三者による"
+                        "親ブランチへの書き込み）の可能性があるため、"
+                        "人間による確認が必要です。"
+                    ),
+                    forge=ctx.forge,
+                )
+            except Exception as escalation_error:
+                print(
+                    "Warning: Failed to escalate issue "
+                    f"#{task.issue_number} to status:blocked-human-review: "
+                    f"{escalation_error}",
                     file=sys.stderr,
                 )
 

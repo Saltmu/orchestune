@@ -202,6 +202,24 @@ class TestAutoMergeChildIntegration:
         integrator_env.add_label.assert_not_called()
         integrator_env.add_comment.assert_any_call(1, ANY)
 
+    def test_staleness_is_also_recorded_on_the_parent_issue(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #437: 子Issueへのコメントだけでなく、親Issue側にも陳腐化イベントを
+        # 記録することで、親Issueだけを見ても衝突が起きた事実を説明できる。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="non-fast-forward",
+        )
+
+        Integrator(_child_config()).run()
+
+        integrator_env.add_comment.assert_any_call(100, ANY)
+
     def test_parent_update_uses_non_force_git_push(self, integrator_env: IntegratorEnv):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
@@ -264,6 +282,105 @@ class TestAutoMergeChildIntegration:
         assert res["status"] == "success"
         assert res["closed_issues"] == [1]
         integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+
+
+def _stale_config(stale_state_path: Path, max_retries: int = 3) -> IntegratorConfig:
+    return IntegratorConfig(
+        apply=True,
+        parent_issue_number=100,
+        integration_run_id="test-run",
+        stale_state_path=stale_state_path,
+        max_parent_branch_stale_retries=max_retries,
+    )
+
+
+class TestParentBranchStaleRetryEscalation:
+    """#437: 親branch更新の連続陳腐化がリトライ上限に達した場合、対象の
+    子Issueをstatus:blocked-human-reviewへエスカレーションする。"""
+
+    def _fail_parent_push(self, integrator_env: IntegratorEnv) -> None:
+        integrator_env.fail_git(
+            lambda args: (
+                args[:2] == ["git", "push"]
+                and "HEAD:refs/heads/parent/issue-100" in args
+            ),
+            stderr="non-fast-forward",
+        )
+
+    def test_does_not_escalate_below_retry_threshold(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        config = _stale_config(tmp_path / "stale.json", max_retries=3)
+
+        Integrator(config).run()
+        Integrator(config).run()
+
+        integrator_env.add_label.assert_not_called()
+
+    def test_escalates_once_retry_threshold_is_reached(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        config = _stale_config(tmp_path / "stale.json", max_retries=3)
+
+        Integrator(config).run()
+        Integrator(config).run()
+        Integrator(config).run()
+
+        integrator_env.add_label.assert_any_call(1, "status:blocked-human-review")
+        assert any(
+            call.args[0] == 1 and "blocked-human-review" in call.args[1]
+            for call in integrator_env.add_comment.call_args_list
+        )
+
+    def test_stale_state_file_tracks_consecutive_failures(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ):
+        from orchestune.integrator_stale_state import load_stale_retry_state
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        state_path = tmp_path / "stale.json"
+        config = _stale_config(state_path, max_retries=3)
+
+        Integrator(config).run()
+        Integrator(config).run()
+
+        assert load_stale_retry_state(state_path).counts == {"issue-100": 2}
+
+    def test_successful_push_resets_stale_count(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ):
+        from orchestune.integrator_stale_state import load_stale_retry_state
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        state_path = tmp_path / "stale.json"
+        config = _stale_config(state_path, max_retries=3)
+
+        self._fail_parent_push(integrator_env)
+        Integrator(config).run()
+        assert load_stale_retry_state(state_path).counts == {"issue-100": 1}
+
+        integrator_env.stub_git(lambda args: None)
+        Integrator(config).run()
+
+        assert load_stale_retry_state(state_path).counts == {}
+
+    def test_disabled_by_default_when_stale_state_path_is_none(
+        self, integrator_env: IntegratorEnv
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        self._fail_parent_push(integrator_env)
+        config = _child_config()
+        assert config.stale_state_path is None
+
+        for _ in range(5):
+            Integrator(config).run()
+
+        integrator_env.add_label.assert_not_called()
 
 
 @pytest.mark.integration

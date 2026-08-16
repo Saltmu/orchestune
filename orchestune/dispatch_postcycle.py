@@ -142,6 +142,12 @@ def _run_semantic_integrator(
             ci_command=config.ci_command,
             dag_ignore_patterns=config.dag_ignore_patterns,
             dag_similarity_threshold=config.dag_similarity_threshold,
+            # #437: run_state.jsonと同じディレクトリに配置し、親branch更新
+            # （CAS）の連続陳腐化回数をサイクルをまたいで永続化する。
+            stale_state_path=config.run_state_path.with_name(
+                "integrator_stale_state.json"
+            ),
+            max_parent_branch_stale_retries=config.max_parent_branch_stale_retries,
         )
         if semantic_review_enabled and isinstance(
             config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget

@@ -53,6 +53,42 @@ class TestDoneTaskSelection:
         assert any("claude/issue-3-task-3" in arg for arg in merge_calls[0].args[0])
 
 
+class TestBlockedHumanReviewExclusion:
+    """#437: 親branch陳腐化の連続によりstatus:blocked-human-reviewへ
+    エスカレーション済みのタスクは、人間の確認が入るまで統合対象から
+    除外され、同じ陳腐化への再試行ループが止まる。"""
+
+    def test_excludes_task_labeled_blocked_human_review(
+        self, integrator_env: IntegratorEnv
+    ):
+        blocked = make_done_issue(
+            1,
+            subtask_id="task-1",
+            labels=("status:done", "status:blocked-human-review"),
+        )
+        active = make_done_issue(2, subtask_id="task-2")
+        integrator_env.set_done_issues(blocked, active)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-2"]
+
+    def test_all_tasks_blocked_yields_no_done_tasks(
+        self, integrator_env: IntegratorEnv
+    ):
+        blocked = make_done_issue(
+            1,
+            subtask_id="task-1",
+            labels=("status:done", "status:blocked-human-review"),
+        )
+        integrator_env.set_done_issues(blocked)
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "no_done_tasks"
+
+
 class TestUnparsableDoneTask:
     """#54: Footprint YAMLから`subtask_id`を抽出できなかった`status:done`タスクが、
     警告もなく黙って処理対象から消えていた不具合の回帰テスト。"""

@@ -81,6 +81,14 @@ class IntegratorConfig:
     # 消した類似度エッジが既定閾値の再計算で復活・消失して統合順序
     # （topological_order）が検証時と食い違わないようにする。
     dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+    # #437: 親branch更新（CAS）の連続陳腐化回数を永続化するstate fileのパス。
+    # Noneの場合はリトライ上限・エスカレーション機構自体を無効化する
+    # （opt-in。既定を無効にすることで、この機能を使わない既存の呼び出し元・
+    # テストにディスクへの書き込みという副作用を発生させない）。
+    stale_state_path: Path | None = None
+    # #437: 同一親Issueに対する親branch更新の連続陳腐化がこの回数に達すると、
+    # `status:blocked-human-review`へエスカレーションする。
+    max_parent_branch_stale_retries: int = 3
 
     def __post_init__(self) -> None:
         if self.parent_issue_number is not None:

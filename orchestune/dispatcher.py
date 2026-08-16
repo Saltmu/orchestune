@@ -73,6 +73,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="DAG再計算のリトライ上限。超過時は強制直列化にフォールバックする（#200）",
     )
     parser.add_argument(
+        "--max-parent-branch-stale-retries",
+        type=int,
+        default=3,
+        help="親branch更新（CAS）の連続陳腐化のリトライ上限。超過時は対象の子Issueを"
+        "status:blocked-human-reviewへエスカレーションする（#437）",
+    )
+    parser.add_argument(
         "--task-timeout-seconds",
         type=int,
         default=0,
@@ -232,6 +239,7 @@ def _config_defaults(
         "max_launches_per_window",
         "deviation_buffer_lines",
         "max_recompute_retries",
+        "max_parent_branch_stale_retries",
         "task_timeout_seconds",
     }
     positive_int_keys = {"window_seconds", "parent_issue"}
@@ -321,6 +329,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             ),
             deviation_buffer_lines=args.deviation_buffer_lines,
             max_recompute_retries=args.max_recompute_retries,
+            max_parent_branch_stale_retries=args.max_parent_branch_stale_retries,
             task_timeout_seconds=args.task_timeout_seconds,
             zombie_gc=args.zombie_gc,
             not_needed_review_state_path=args.not_needed_review_state_path,
