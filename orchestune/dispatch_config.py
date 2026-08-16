@@ -31,9 +31,6 @@ class DispatcherConfig:
     forge: Forge | None = None
     deviation_buffer_lines: int = 5
     max_recompute_retries: int = 2
-    # #437: 親branch更新（CAS）の連続陳腐化がこの回数に達すると、対象の
-    # 子Issueをstatus:blocked-human-reviewへエスカレーションする。
-    max_parent_branch_stale_retries: int = 3
     task_timeout_seconds: int = 0
     zombie_gc: bool = True
     # #282: status:not-needed判定の独立検証レビュー（保留分）の永続化先。

@@ -19,11 +19,6 @@ from orchestune.dispatch_worktree import file_lock
 from orchestune.git_cli import run_git
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
-from orchestune.integrator_stale_state import (
-    parent_branch_stale_key,
-    record_parent_branch_stale_failure,
-    reset_parent_branch_stale_count,
-)
 from orchestune.integrator_tasks import get_sorted_done_tasks
 from orchestune.integrator_types import (
     IntegrationComponent,
@@ -412,6 +407,14 @@ def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
 #: 入った場合にgitが出すバリエーション。
 _CAS_REJECTION_MARKERS = ("non-fast-forward", "[rejected]", "fetch first")
 
+#: 親Issueに付与し、直前サイクルでも親branch pushがnon-fast-forward拒否されて
+#: いたことを示すマーカーラベル。#437レビュー対応: このカウントをローカルの
+#: state fileへ永続化すると、GitHub Actionsのスケジュール実行ではジョブごとに
+#: 新しいランナー（`actions/checkout`）を使うため、ファイルがサイクルをまたいで
+#: 残らずリトライ判定が機能しない。GitHub上のラベルという、ランナーをまたいでも
+#: 失われない場所に状態を置くことで、この問題自体を発生させない。
+_PARENT_BRANCH_STALE_LABEL = "integration:parent-branch-stale"
+
 
 def _is_parent_branch_cas_rejection(error: Exception) -> bool:
     """#437レビュー対応: `error`が実際のnon-fast-forward（CAS）拒否によるpush
@@ -472,21 +475,28 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 # non-fast-forward（CAS拒否）だったpush失敗のみを陳腐化として
                 # 記録・カウントする。
                 if _is_parent_branch_cas_rejection(error):
-                    self._comment_on_parent_branch_staleness(ctx, error)
-                    self._handle_parent_branch_staleness(ctx)
+                    self._handle_parent_branch_staleness(ctx, error)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": str(error),
                     "auto_merged": False,
                 }
 
-        # #437: 親branchの更新（またはその検証）に成功したため、連続陳腐化の
-        # カウントをリセットする。「連続」失敗の検知であり累積総数ではないため。
-        if ctx.config.stale_state_path is not None:
-            reset_parent_branch_stale_count(
-                ctx.config.stale_state_path,
-                parent_branch_stale_key(ctx.config.parent_issue_number),
-            )
+        # #437: 親branchの更新（またはその検証）に成功したため、陳腐化マーカー
+        # ラベルをクリアする（「連続」失敗の検知であり累積総数ではないため）。
+        # ラベルが付いていない場合`remove_label`は無害な no-op（#381の
+        # `transition_status_label`と同じ前提）なので、事前の存在確認は不要。
+        if ctx.config.parent_issue_number is not None:
+            try:
+                ctx.forge.remove_label(
+                    ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+                )
+            except Exception as label_error:
+                print(
+                    "Warning: Failed to clear parent-branch-stale label on "
+                    f"parent issue #{ctx.config.parent_issue_number}: {label_error}",
+                    file=sys.stderr,
+                )
 
         # 不要になったリモートブランチをクリーンアップ
         task_by_subtask_id = {
@@ -578,15 +588,25 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
 
-    def _comment_on_parent_branch_staleness(
+    def _handle_parent_branch_staleness(
         self, ctx: IntegrationContext, error: Exception
     ) -> None:
         """#437: 個々の子Issueへのコメントに加え、親Issue側にも陳腐化イベントを
-        記録する。子Issueを1件ずつ追わなくても、親Issueだけを見れば衝突が
-        発生した事実を事後に説明できるようにするため。実際にnon-fast-forward
-        （CAS拒否）と判定できた場合のみ呼び出される。"""
+        記録する。子Issueを1件ずつ追わなくても、親Issueだけを見れば衝突が発生
+        した事実を事後に説明できるようにするため。実際にnon-fast-forward
+        （CAS拒否）と判定できた場合のみ呼び出される。
+
+        直前サイクルでも同じ陳腐化が起きていたか（＝2サイクル連続）を、
+        `_PARENT_BRANCH_STALE_LABEL`マーカーラベルの有無で判定する。#437
+        レビュー対応: ローカルのstate fileへ回数を永続化する設計だと、GitHub
+        Actionsのスケジュール実行ではジョブごとに新しいランナーを使うため
+        サイクルをまたいでファイルが残らず、判定が機能しない。GitHub上の
+        ラベルという、ランナーをまたいでも失われない場所に状態を置くことで
+        この問題を回避する。2サイクル連続で検知した場合のみ、対象の子Issueを
+        `status:blocked-human-review`へエスカレーションする。"""
         if ctx.config.parent_issue_number is None:
             return
+
         try:
             ctx.forge.add_comment(
                 ctx.config.parent_issue_number,
@@ -606,18 +626,44 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 file=sys.stderr,
             )
 
-    def _handle_parent_branch_staleness(self, ctx: IntegrationContext) -> None:
-        """#437: 連続陳腐化回数を記録し、上限到達時のみ対象の子Issueを
-        `status:blocked-human-review`へエスカレーションする。"""
-        if ctx.config.stale_state_path is None:
+        try:
+            already_stale = _PARENT_BRANCH_STALE_LABEL in ctx.forge.get_issue_labels(
+                ctx.config.parent_issue_number
+            )
+        except Exception as label_error:
+            print(
+                "Warning: Failed to read labels for parent issue "
+                f"#{ctx.config.parent_issue_number}: {label_error}",
+                file=sys.stderr,
+            )
             return
 
-        retry_count = record_parent_branch_stale_failure(
-            ctx.config.stale_state_path,
-            parent_branch_stale_key(ctx.config.parent_issue_number),
-        )
-        if retry_count < ctx.config.max_parent_branch_stale_retries:
+        if not already_stale:
+            try:
+                ctx.forge.add_label(
+                    ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+                )
+            except Exception as label_error:
+                print(
+                    "Warning: Failed to mark parent issue "
+                    f"#{ctx.config.parent_issue_number} as parent-branch-stale: "
+                    f"{label_error}",
+                    file=sys.stderr,
+                )
             return
+
+        # 2サイクル連続で陳腐化 → 設定/運用構成の異常の可能性が高いため、
+        # 対象の子Issueをエスカレーションする。
+        try:
+            ctx.forge.remove_label(
+                ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+            )
+        except Exception as label_error:
+            print(
+                "Warning: Failed to clear parent-branch-stale label on "
+                f"parent issue #{ctx.config.parent_issue_number}: {label_error}",
+                file=sys.stderr,
+            )
 
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
@@ -631,12 +677,11 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     task.issue_number,
                     task.status_labels,
                     (
-                        "親ブランチの陳腐化（CAS拒否）が"
-                        f"{retry_count}回連続で発生したため、"
-                        "`status:blocked-human-review`へエスカレーションしました。"
-                        "設定または運用構成の異常（例: 意図しない第三者による"
-                        "親ブランチへの書き込み）の可能性があるため、"
-                        "人間による確認が必要です。"
+                        "親ブランチの陳腐化（CAS拒否）が2サイクル連続で"
+                        "発生したため、`status:blocked-human-review`へ"
+                        "エスカレーションしました。設定または運用構成の異常"
+                        "（例: 意図しない第三者による親ブランチへの書き込み）の"
+                        "可能性があるため、人間による確認が必要です。"
                     ),
                     forge=ctx.forge,
                 )

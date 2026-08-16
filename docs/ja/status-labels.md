@@ -203,6 +203,15 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   からその変更が消えてしまう）。本ラベルは、Integrator実行結果のうち「今回新たに
   含めたタスク」（`newly_included`）と「既に統合済みのタスク」を区別するための
   シグナルとしてのみ使われる。
+- `integration:parent-branch-stale`:
+  Integratorが親branchへのpushでnon-fast-forward（CAS）拒否を検知した際に
+  親Issueへ付与するマーカーラベル（`orchestune/integrator_steps.py`）。
+  ローカルのstate fileではなくGitHub上のラベルとして持たせることで、GitHub
+  Actionsのスケジュール実行のようにサイクルごとに異なるランナーが使われる
+  構成でも判定が失われない（#437）。次サイクルで押下pushが成功すれば除去される。
+  既に本ラベルが付いた状態でさらに陳腐化を検知した場合（＝2サイクル連続）は、
+  設定または運用構成の異常の可能性が高いとみなし、対象の子Issueを
+  `status:blocked-human-review`へエスカレーションしたうえで本ラベルを除去する。
 - `priority:high` / `priority:medium` / `priority:low`:
   起動順序の優先度付けに使われるが、ライフサイクル遷移には関与しない。
 - `risk:flagged` / `progress:partial`:
