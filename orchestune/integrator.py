@@ -71,7 +71,12 @@ class IntegrationPipeline(IntegrationComponent):
             # 途中で終わるケースを見落とす）。実際にCAS拒否を検知したサイクル
             # だけは`ctx.parent_branch_cas_rejected_this_cycle`でスキップし、
             # マーカーの管理を`AutoMergeChildIntegrationStep`自身に委ねる。
-            if not ctx.parent_branch_cas_rejected_this_cycle:
+            # #437レビュー対応: `apply=False`（dry-run）時は他の全ステップと
+            # 同様に一切のGitHub側変更を行わない契約のため、`ctx.config.apply`
+            # でもガードする。ガード無しだと、dry-runの実行が実運用（apply=True）
+            # で付与された陳腐化マーカーを誤って消してしまい、次の本物のCAS拒否
+            # が「1回目」として扱われてしまう。
+            if ctx.config.apply and not ctx.parent_branch_cas_rejected_this_cycle:
                 clear_parent_branch_stale_marker(ctx)
 
         final_report: IntegrationReport = copy.deepcopy(merged_report)
