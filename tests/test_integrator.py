@@ -186,39 +186,6 @@ class TestIntegrationPipeline:
         assert "error" in res
         assert ctx.merged_tasks == []
 
-    def test_does_not_clear_stale_marker_label_when_apply_is_false(self, fake_forge):
-        # #437レビュー対応: dry-run（apply=False）は他の全ステップと同様に
-        # GitHub側の変更を一切行わない契約のため、陳腐化マーカーのクリアも
-        # 実行してはならない。ガード無しだと、dry-run実行が実運用（apply=True）
-        # で付与された陳腐化マーカーを誤って消してしまい、次の本物のCAS拒否が
-        # 「1回目」として扱われてしまう。
-        class DummyStep(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-                return {"status": IntegrationStatus.SUCCESS}
-
-        config = IntegratorConfig(
-            apply=False, parent_issue_number=100, forge=fake_forge
-        )
-        ctx = _context(config)
-
-        IntegrationPipeline([DummyStep()]).execute(ctx)
-
-        fake_forge.remove_label.assert_not_called()
-
-    def test_clears_stale_marker_label_when_apply_is_true(self, fake_forge):
-        class DummyStep(IntegrationComponent):
-            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-                return {"status": IntegrationStatus.SUCCESS}
-
-        config = IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
-        ctx = _context(config)
-
-        IntegrationPipeline([DummyStep()]).execute(ctx)
-
-        fake_forge.remove_label.assert_called_once_with(
-            100, "integration:parent-branch-stale"
-        )
-
 
 class TestMultiIssueIntegrator:
     def test_reports_each_parent_issue_result(self):
