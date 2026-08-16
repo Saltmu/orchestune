@@ -14,9 +14,15 @@ from orchestune.issue_parsing import (
 )
 from orchestune.models import IssueRecord
 from orchestune.provisioning import (
+    PlanMetadata,
+    _build_provisioning_dag,
+    _build_subtask_issue_body,
     _derive_labels,
+    _link_subtask_relationships,
     _parent_body,
+    _provision_subtask,
     _render_issue_body,
+    _resolve_parent_issue,
     _subtask_id_from_body,
     main,
     provision_issues,
@@ -1006,3 +1012,177 @@ class TestRejectsInvalidIssueNumbers:
         )
         with pytest.raises(ValueError):
             provision_issues(path, forge=FakeForge(), template_path=template_path)
+
+
+class TestBuildProvisioningDag:
+    def test_builds_dag_with_config_and_threshold(self, tmp_path: Path):
+        (tmp_path / "orchestune.toml").write_text(
+            "[tool.orchestune]\ndag_similarity_threshold = 0.8\n",
+            encoding="utf-8",
+        )
+        subtasks = [
+            SubTask(
+                id="task-1",
+                description="task 1",
+                footprint=("a.py",),
+                symbols=(),
+                depends_on=(),
+                risk=False,
+                risk_reasons=(),
+            ),
+            SubTask(
+                id="task-2",
+                description="task 2",
+                footprint=("a.py",),
+                symbols=(),
+                depends_on=(),
+                risk=False,
+                risk_reasons=(),
+            ),
+        ]
+        dag = _build_provisioning_dag(subtasks, tmp_path)
+        assert set(dag.subtasks) == {"task-1", "task-2"}
+
+
+class TestBuildSubtaskIssueBody:
+    def test_renders_body_and_appends_missing_symbol_warning(self, tmp_path: Path):
+        file_path = tmp_path / "foo.py"
+        file_path.write_text("class Existing:\n    pass\n", encoding="utf-8")
+        subtask = SubTask(
+            id="task-a",
+            description="test subtask",
+            footprint=(str(file_path.relative_to(tmp_path)),),
+            symbols=("Existing", "MissingSymbol"),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+        body = _build_subtask_issue_body(subtask, _TEMPLATE, tmp_path)
+        assert "# [FEAT] task-a: test subtask" in body
+        assert "⚠️ **symbols未検出**" in body
+        assert "`MissingSymbol`" in body
+        assert "`Existing`" not in body.split("⚠️ **symbols未検出**")[1]
+
+
+class TestResolveParentIssue:
+    def test_creates_new_parent_and_persists_when_none_persisted(self, tmp_path: Path):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=None,
+            description="Epic details",
+        )
+        number = _resolve_parent_issue(forge, metadata, plan_path)
+        assert number in forge.issues
+        assert forge.issues[number]["title"] == "[EPIC] My Big Rock"
+        assert f"parent_issue_number: {number}" in plan_path.read_text(encoding="utf-8")
+
+    def test_recovers_orphaned_parent(self, tmp_path: Path):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        orphan_number = forge.create_issue(
+            "[EPIC] My Big Rock", _parent_body("My Big Rock")
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=None,
+            description="",
+        )
+        number = _resolve_parent_issue(forge, metadata, plan_path)
+        assert number == orphan_number
+        assert f"parent_issue_number: {orphan_number}" in plan_path.read_text(
+            encoding="utf-8"
+        )
+
+
+class TestProvisionSubtask:
+    def test_provisions_new_subtask_and_writes_to_plan(
+        self, tmp_path: Path, template_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'T'\nsubtasks:\n  - id: task-a\n    description: 'd'\n    issue_number: null\n---\n",
+            encoding="utf-8",
+        )
+        template = template_path.read_text(encoding="utf-8")
+        forge = FakeForge()
+        subtask = SubTask(
+            id="task-a",
+            description="desc a",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+        number, is_reused, is_done = _provision_subtask(
+            forge=forge,
+            subtask=subtask,
+            template=template,
+            repo_root=tmp_path,
+            plan_path=plan_path,
+            existing_by_subtask_id={},
+            dependencies_done={},
+        )
+        assert is_reused is False
+        assert is_done is False
+        assert number in forge.issues
+        assert f"issue_number: {number}" in plan_path.read_text(encoding="utf-8")
+
+    def test_reuses_existing_subtask_with_done_status(
+        self, tmp_path: Path, template_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text("---\ntitle: 'T'\n---\n", encoding="utf-8")
+        template = template_path.read_text(encoding="utf-8")
+        forge = FakeForge()
+        existing_number = forge.create_issue(
+            "[FEAT] task-a: d",
+            "```yaml\nsubtask_id: task-a\n```\n",
+            labels=("status:done",),
+        )
+        subtask = SubTask(
+            id="task-a",
+            description="desc a",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            issue_number=existing_number,
+        )
+        number, is_reused, is_done = _provision_subtask(
+            forge=forge,
+            subtask=subtask,
+            template=template,
+            repo_root=tmp_path,
+            plan_path=plan_path,
+            existing_by_subtask_id={},
+            dependencies_done={},
+        )
+        assert number == existing_number
+        assert is_reused is True
+        assert is_done is True
+
+
+class TestLinkSubtaskRelationships:
+    def test_links_sub_issue_and_blockers(self):
+        forge = FakeForge()
+        _link_subtask_relationships(
+            forge=forge,
+            parent_issue_number=100,
+            issue_number=102,
+            depends_on=("dep-1",),
+            resolved_numbers={"dep-1": 101},
+        )
+        assert forge.sub_issues[100] == [102]
+        assert forge.blocked_by[102] == [101]

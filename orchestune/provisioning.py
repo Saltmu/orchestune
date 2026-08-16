@@ -22,6 +22,7 @@ import yaml
 from orchestune.dag_graph import build_dag
 from orchestune.dag_models import (
     ConfigError,
+    DagResult,
     SubTask,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
@@ -278,6 +279,144 @@ def _index_sub_issues_by_subtask_id(
     return index
 
 
+def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResult:
+    orchestune_config = load_orchestune_config(repo_root)
+    ignore_patterns = compile_extra_ignore_patterns(
+        extract_dag_ignore_patterns(orchestune_config)
+    )
+    # #407: `orchestune-dag --threshold`で永続化された`dag_similarity_threshold`を
+    # 尊重する。そうしないと、`orchestune-dag`が意図的に消したエッジが既定閾値で
+    # 再計算されて復活し、Issue作成順（topological_order）が検証済みのプランと
+    # 食い違う、あるいは明示的な依存関係と組み合わさって偽のDagCycleErrorを
+    # 誘発しうる。
+    config_threshold = extract_dag_similarity_threshold(orchestune_config)
+    threshold = (
+        config_threshold
+        if config_threshold is not None
+        else DEFAULT_SIMILARITY_THRESHOLD
+    )
+    return build_dag(subtasks, ignore_patterns=ignore_patterns, threshold=threshold)
+
+
+def _build_subtask_issue_body(subtask: SubTask, template: str, repo_root: Path) -> str:
+    return _append_symbol_warning(
+        _render_issue_body(subtask, template), subtask, repo_root
+    )
+
+
+def _resolve_parent_issue(
+    forge: IssueForge, metadata: PlanMetadata, plan_path: str | Path
+) -> int:
+    parent_issue_number = metadata.parent_issue_number
+    parent_title = f"[EPIC] {metadata.title}"
+    if parent_issue_number is not None:
+        # A persisted parent number is verified the same way a persisted
+        # subtask number is below: it could be stale (e.g. the plan was
+        # copied to another repo and that number now belongs to an
+        # unrelated issue there), so it's trusted only after confirming it.
+        # `PARENT_MARKER` alone isn't enough proof: it's a single constant
+        # shared by every EPIC this module ever creates, so it can't tell
+        # this plan's own parent apart from an unrelated EPIC created for a
+        # *different* plan (e.g. a colliding issue number in another
+        # Orchestune-managed repo) — the title must match too, the same
+        # requirement the orphan-recovery search below already applies.
+        candidate = forge.get_issue(parent_issue_number)
+        if (
+            candidate is None
+            or candidate.title != parent_title
+            or PARENT_MARKER not in candidate.body
+        ):
+            parent_issue_number = None
+    if parent_issue_number is None:
+        # Recover an orphan from a prior run that created the parent issue
+        # but crashed (or failed to write) before persisting its number,
+        # rather than unconditionally creating a duplicate EPIC. An exact
+        # title match alone isn't enough proof of provenance (an unrelated
+        # issue could coincidentally share the title), so also require our
+        # own marker in the body before adopting it — and check every
+        # exact-title match, not just the first, in case an unrelated
+        # same-titled issue and our own orphaned parent both exist.
+        candidates = forge.find_open_issues_by_exact_title(parent_title)
+        marked_candidate = next(
+            (c for c in candidates if PARENT_MARKER in c.body), None
+        )
+        if marked_candidate is not None:
+            parent_issue_number = marked_candidate.number
+        else:
+            parent_issue_number = forge.create_issue(
+                parent_title, _parent_body(metadata.title, metadata.description)
+            )
+        write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
+    return parent_issue_number
+
+
+def _provision_subtask(
+    forge: IssueForge,
+    subtask: SubTask,
+    template: str,
+    repo_root: Path,
+    plan_path: str | Path,
+    existing_by_subtask_id: dict[str, int],
+    dependencies_done: dict[str, bool],
+) -> tuple[int, bool, bool]:
+    """Resolve an existing issue or create a new one for a subtask.
+
+    Returns a tuple of `(issue_number, is_reused, is_done)`.
+    """
+    # A persisted issue_number could be stale (e.g. the plan was copied
+    # to another repo and that number now belongs to an unrelated
+    # issue), so it isn't trusted outright: fetch it and check its body
+    # actually carries this subtask's marker before reusing it — the
+    # same test used for the subtask_id-search fallback below. This
+    # check works even if the issue hasn't been linked to the parent
+    # yet (a crash between create_issue and add_sub_issue), since the
+    # marker is written at creation time regardless of linkage.
+    number = None
+    if subtask.issue_number is not None:
+        candidate = forge.get_issue(subtask.issue_number)
+        if (
+            candidate is not None
+            and _subtask_id_from_body(candidate.body) == subtask.id
+        ):
+            number = subtask.issue_number
+    if number is None:
+        number = existing_by_subtask_id.get(subtask.id)
+
+    if number is not None:
+        labels = forge.get_issue_labels(number)
+        return number, True, "status:done" in labels
+
+    all_deps_done = all(dependencies_done.get(dep, False) for dep in subtask.depends_on)
+    labels = _derive_labels(subtask, dependencies_done=all_deps_done)
+    body = _build_subtask_issue_body(subtask, template, repo_root)
+    number = forge.create_issue(_issue_title(subtask), body, labels=labels)
+    # Persist before the fallible relationship calls below: if
+    # add_sub_issue/set_blocked_by then fails, a retry must find this
+    # issue via `subtask.issue_number` rather than orphan-create a
+    # duplicate (it isn't linked as a sub-issue yet, so the
+    # subtask_id search over the parent's children can't find it).
+    write_issue_numbers(plan_path, {subtask.id: number})
+    return number, False, False
+
+
+def _link_subtask_relationships(
+    forge: IssueForge,
+    parent_issue_number: int,
+    issue_number: int,
+    depends_on: Sequence[str],
+    resolved_numbers: dict[str, int],
+) -> None:
+    """Reconcile parent/blocked-by relationships unconditionally, not just
+    on creation: a prior run may have created this issue (or an earlier
+    dependency's set_blocked_by call) and then failed before finishing
+    all of them, in which case a reused issue can still be missing some.
+    Both operations are idempotent (`--set-parent` / `--add-blocked-by`).
+    """
+    forge.add_sub_issue(parent_issue_number, issue_number)
+    for dependency_id in depends_on:
+        forge.set_blocked_by(issue_number, resolved_numbers[dependency_id])
+
+
 def _preview_only(
     subtasks: list[SubTask], dag_order: list[str], template: str, repo_root: Path
 ) -> ProvisionResult:
@@ -286,11 +425,7 @@ def _preview_only(
         IssuePreview(
             subtask_id=subtask_id,
             title=_issue_title(by_id[subtask_id]),
-            body=_append_symbol_warning(
-                _render_issue_body(by_id[subtask_id], template),
-                by_id[subtask_id],
-                repo_root,
-            ),
+            body=_build_subtask_issue_body(by_id[subtask_id], template, repo_root),
             labels=_derive_labels(by_id[subtask_id], dependencies_done=False),
             already_has_issue=by_id[subtask_id].issue_number is not None,
         )
@@ -339,22 +474,7 @@ def provision_issues(
             "decomposition_plan.md に必須の 'title' フィールドがありません"
         )
 
-    orchestune_config = load_orchestune_config(resolved_repo_root)
-    ignore_patterns = compile_extra_ignore_patterns(
-        extract_dag_ignore_patterns(orchestune_config)
-    )
-    # #407: `orchestune-dag --threshold`で永続化された`dag_similarity_threshold`を
-    # 尊重する。そうしないと、`orchestune-dag`が意図的に消したエッジが既定閾値で
-    # 再計算されて復活し、Issue作成順（topological_order）が検証済みのプランと
-    # 食い違う、あるいは明示的な依存関係と組み合わさって偽のDagCycleErrorを
-    # 誘発しうる。
-    config_threshold = extract_dag_similarity_threshold(orchestune_config)
-    threshold = (
-        config_threshold
-        if config_threshold is not None
-        else DEFAULT_SIMILARITY_THRESHOLD
-    )
-    dag = build_dag(subtasks, ignore_patterns=ignore_patterns, threshold=threshold)
+    dag = _build_provisioning_dag(subtasks, resolved_repo_root)
     template = Path(template_path).read_text(encoding="utf-8")
     _validate_template_identity_marker(template, template_path)
 
@@ -364,48 +484,7 @@ def provision_issues(
         )
 
     resolved_forge = forge or GitHubForge()
-
-    parent_issue_number = metadata.parent_issue_number
-    parent_title = f"[EPIC] {metadata.title}"
-    if parent_issue_number is not None:
-        # A persisted parent number is verified the same way a persisted
-        # subtask number is below: it could be stale (e.g. the plan was
-        # copied to another repo and that number now belongs to an
-        # unrelated issue there), so it's trusted only after confirming it.
-        # `PARENT_MARKER` alone isn't enough proof: it's a single constant
-        # shared by every EPIC this module ever creates, so it can't tell
-        # this plan's own parent apart from an unrelated EPIC created for a
-        # *different* plan (e.g. a colliding issue number in another
-        # Orchestune-managed repo) — the title must match too, the same
-        # requirement the orphan-recovery search below already applies.
-        candidate = resolved_forge.get_issue(parent_issue_number)
-        if (
-            candidate is None
-            or candidate.title != parent_title
-            or PARENT_MARKER not in candidate.body
-        ):
-            parent_issue_number = None
-    if parent_issue_number is None:
-        # Recover an orphan from a prior run that created the parent issue
-        # but crashed (or failed to write) before persisting its number,
-        # rather than unconditionally creating a duplicate EPIC. An exact
-        # title match alone isn't enough proof of provenance (an unrelated
-        # issue could coincidentally share the title), so also require our
-        # own marker in the body before adopting it — and check every
-        # exact-title match, not just the first, in case an unrelated
-        # same-titled issue and our own orphaned parent both exist.
-        candidates = resolved_forge.find_open_issues_by_exact_title(parent_title)
-        marked_candidate = next(
-            (c for c in candidates if PARENT_MARKER in c.body), None
-        )
-        if marked_candidate is not None:
-            parent_issue_number = marked_candidate.number
-        else:
-            parent_issue_number = resolved_forge.create_issue(
-                parent_title, _parent_body(metadata.title, metadata.description)
-            )
-        write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
-
+    parent_issue_number = _resolve_parent_issue(resolved_forge, metadata, plan_path)
     existing_by_subtask_id = _index_sub_issues_by_subtask_id(
         resolved_forge, parent_issue_number
     )
@@ -417,58 +496,28 @@ def provision_issues(
 
     for subtask_id in dag.topological_order:
         subtask = dag.subtasks[subtask_id]
-        # A persisted issue_number could be stale (e.g. the plan was copied
-        # to another repo and that number now belongs to an unrelated
-        # issue), so it isn't trusted outright: fetch it and check its body
-        # actually carries this subtask's marker before reusing it — the
-        # same test used for the subtask_id-search fallback below. This
-        # check works even if the issue hasn't been linked to the parent
-        # yet (a crash between create_issue and add_sub_issue), since the
-        # marker is written at creation time regardless of linkage.
-        number = None
-        if subtask.issue_number is not None:
-            candidate = resolved_forge.get_issue(subtask.issue_number)
-            if (
-                candidate is not None
-                and _subtask_id_from_body(candidate.body) == subtask_id
-            ):
-                number = subtask.issue_number
-        if number is None:
-            number = existing_by_subtask_id.get(subtask_id)
-
-        if number is not None:
+        number, is_reused, is_done = _provision_subtask(
+            resolved_forge,
+            subtask,
+            template,
+            resolved_repo_root,
+            plan_path,
+            existing_by_subtask_id,
+            dependencies_done,
+        )
+        if is_reused:
             reused[subtask_id] = number
-            labels = resolved_forge.get_issue_labels(number)
-            dependencies_done[subtask_id] = "status:done" in labels
         else:
-            all_deps_done = all(
-                dependencies_done.get(dep, False) for dep in subtask.depends_on
-            )
-            labels = _derive_labels(subtask, dependencies_done=all_deps_done)
-            body = _append_symbol_warning(
-                _render_issue_body(subtask, template), subtask, resolved_repo_root
-            )
-            number = resolved_forge.create_issue(
-                _issue_title(subtask), body, labels=labels
-            )
-            # Persist before the fallible relationship calls below: if
-            # add_sub_issue/set_blocked_by then fails, a retry must find this
-            # issue via `subtask.issue_number` rather than orphan-create a
-            # duplicate (it isn't linked as a sub-issue yet, so the
-            # subtask_id search over the parent's children can't find it).
-            write_issue_numbers(plan_path, {subtask_id: number})
             created[subtask_id] = number
-            dependencies_done[subtask_id] = False
+        dependencies_done[subtask_id] = is_done
 
-        # Reconcile parent/blocked-by relationships unconditionally, not just
-        # on creation: a prior run may have created this issue (or an earlier
-        # dependency's set_blocked_by call) and then failed before finishing
-        # all of them, in which case a reused issue can still be missing some.
-        # Both operations are idempotent (`--set-parent` / `--add-blocked-by`).
-        resolved_forge.add_sub_issue(parent_issue_number, number)
-        for dependency_id in subtask.depends_on:
-            resolved_forge.set_blocked_by(number, resolved_numbers[dependency_id])
-
+        _link_subtask_relationships(
+            resolved_forge,
+            parent_issue_number,
+            number,
+            subtask.depends_on,
+            resolved_numbers,
+        )
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
 
