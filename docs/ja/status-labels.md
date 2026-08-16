@@ -60,7 +60,7 @@ stateDiagram-v2
 ## 各遷移の詳細
 
 ### 1. 初期付与: `status:queued` / `status:blocked`
-- 発生元: `skills/orchestune-dispatch/SKILL.md`（Issue起票時、`gh issue create`）
+- 発生元: `skills/orchestune-provision/SKILL.md`（Issue起票時、`gh issue create` / `orchestune provision`）
 - 条件: 依存関係（`depends_on`）が未解決の先行タスクを持つ場合は`status:blocked`、
   依存が無い/全て解決済みの場合は`status:queued`。
 - **actor権限検証（#119）**: `status:queued`が起動候補として実際に採用されるには、

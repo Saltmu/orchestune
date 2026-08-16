@@ -1,6 +1,6 @@
 ---
 name: "orchestune"
-description: "Single entry-point skill for a 'big rock' (large task): decompose it into subtasks, build/validate a dependency DAG, iterate with the user until approved, then hand off to orchestune-dispatch for Issue creation and dispatch."
+description: "Single entry-point skill for a 'big rock' (large task): decompose it into subtasks, build/validate a dependency DAG, iterate with the user until approved, then hand off to orchestune-provision for Issue creation and orchestune-dispatch for parallel dispatch."
 version: "1.0.0"
 category: "Development"
 input_schema:
@@ -13,11 +13,11 @@ output_schema:
 
 # Orchestune Core Skill
 
-This is the **single user-facing entry point** for Orchestune. It understands a "big rock" (large-scale development task) presented by a user, decomposes it into subtasks (Decomposition), calculates and validates the dependency graph (DAG) via the `orchestune-dag` CLI, and iterates with the user until the plan is approved. Once approved, it hands off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md), which creates the GitHub Issues and configures the dispatcher — the user never needs to invoke that skill directly.
+This is the **single user-facing entry point** for Orchestune. It understands a "big rock" (large-scale development task) presented by a user, decomposes it into subtasks (Decomposition), calculates and validates the dependency graph (DAG) via the `orchestune-dag` CLI, and iterates with the user until the plan is approved. Once approved, it hands off to the [orchestune-provision skill](../orchestune-provision/SKILL.md) for GitHub Issue creation, and optionally to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) for parallel dispatch — the user never needs to invoke those skills directly.
 
 ## Trigger Conditions
 
-Load this skill **when a user presents a 'big rock' task and requests task decomposition, implementation roadmap creation, or parallel development.** This is the only skill a user needs to invoke to go from task description to running parallel dispatch — do not ask the user to separately invoke `orchestune-dag` or `orchestune-dispatch`; drive both internally as described below.
+Load this skill **when a user presents a 'big rock' task and requests task decomposition, implementation roadmap creation, or parallel development.** This is the only skill a user needs to invoke to go from task description to running parallel dispatch — do not ask the user to separately invoke `orchestune-dag`, `orchestune-provision`, or `orchestune-dispatch`; drive them internally as described below.
 
 **Do not load it for small tasks.** Orchestune optimizes the finished work produced per unit of AI usage quota, not wall-clock speed on a single task; decomposition, Issue provisioning, and dispatch all cost quota of their own. If the task yields fewer than roughly three genuinely independent subtasks, implementing it directly is both faster and cheaper — say so and implement it directly instead.
 
@@ -43,7 +43,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    ```markdown
    ---
    title: "One-line summary of the 'big rock' itself"
-   parent_issue_number: null  # filled in by orchestune-dispatch once the parent issue exists
+   parent_issue_number: null  # filled in by orchestune-provision once the parent issue exists
    subtasks:
      - id: task-a
        description: "Implement feature XX"
@@ -64,14 +64,14 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
        risk: false         # true if touching API keys, credentials, or risky subprocesses
        shared_contract: null  # e.g. "format-registry" — tag subtasks sharing an unestablished extension point (see Stage 1 "Shared-contract gate")
        writes_shared_contract: false  # true if this subtask's footprint writes to the shared_contract file under a name orchestune-dag's category patterns won't recognize (usually unnecessary — footprint matches are auto-detected)
-       issue_number: null  # filled in by orchestune-dispatch once this subtask's issue exists
+       issue_number: null  # filled in by orchestune-provision once this subtask's issue exists
    ---
 
    # Decomposition Plan
    (The section below the frontmatter is free text to explain the design approach or background)
    ```
 
-   The top-level `title` is required — `orchestune-dispatch` uses it to create the parent tracking issue for the whole "big rock" (see that skill's Stage A). `parent_issue_number` and each subtask's `issue_number` start as `null`; do not set them yourself — `orchestune-dispatch` writes the created (or reused) issue numbers back into this file so that re-running the workflow after a partial failure reuses the same issues instead of creating duplicates.
+   The top-level `title` is required — `orchestune-provision` uses it to create the parent tracking issue for the whole "big rock". `parent_issue_number` and each subtask's `issue_number` start as `null`; do not set them yourself — `orchestune-provision` writes the created (or reused) issue numbers back into this file so that re-running the workflow after a partial failure reuses the same issues instead of creating duplicates.
 
 ### Stage 2: Validate DAG
 
@@ -96,7 +96,8 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 1. Organize the validation results of `orchestune-dag` (topological order, parallel leaf subtasks, conflict risks, etc.) and present them to the user.
 2. Ask for approval. If the user requests changes instead (feedback), revise `decomposition_plan.md` accordingly and return to **Stage 2** to re-validate — repeat this loop until the user explicitly approves the plan.
 
-### Stage 4: Hand Off to Dispatch
+### Stage 4: Hand Off to Provision and Dispatch
 
-1. Once the user approves the plan, load and follow the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) with the approved `decomposition_plan.md` as input. That skill is responsible for creating the GitHub Issues (with `Footprint` metadata and `status`/`priority`/`risk` labels) and running the `orchestune-dispatch` CLI to configure/start dispatch.
-2. Report the outcome (created Issues, dispatch status) back to the user to conclude the task.
+1. Once the user approves the plan, load and follow the [orchestune-provision skill](../orchestune-provision/SKILL.md) with the approved `decomposition_plan.md` as input. That skill creates the parent and child GitHub Issues (with Footprint metadata and status/priority/risk labels) via the `orchestune provision` CLI.
+2. **If the user only requested plan creation / issue provisioning**: Report the created Issues back to the user to conclude the task.
+3. **If the user requested execution / dispatch**: Hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) with the provisioned parent Issue number (`--parent-issue <N>`) to configure and run the dispatcher. Report the outcome (created Issues, dispatched tasks) back to the user.

@@ -114,7 +114,7 @@ orchestune provision --plan decomposition_plan.md
 
 * **ラベル**: `depends_on` が空、または依存先サブタスクが全て `status:done` なら `status:queued`、未解決の依存があれば `status:blocked`。`priority` に応じて `priority:high`/`medium`/`low`、`risk: true` なら `risk:flagged`。
 * **冪等性の判定順**: (1) そのサブタスクの `issue_number` が設定済みならそれを再利用、(2) 未設定なら親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの `subtask_id` と照合して一致すれば再利用、(3) どちらもなければ新規作成。
-* 実行には `gh` CLIのインストール・認証が必要です（`orchestune bootstrap` で事前確認）。`gh` が使えない環境でのフォールバックは [orchestune-dispatch スキル](../../skills/orchestune-dispatch/SKILL.md) を参照してください。
+* 実行には `gh` CLIのインストール・認証が必要です（`orchestune bootstrap` で事前確認）。`gh` が使えない環境でのフォールバックは [orchestune-provision スキル](../../skills/orchestune-provision/SKILL.md) を参照してください。
 
 ---
 

@@ -57,7 +57,7 @@ orchestune setup
 
 ## Usage
 
-In practice, you don't type the commands below yourself. You describe the task to your AI agent in natural language (e.g. "decompose this feature with orchestune"), and the `orchestune` skill drives the whole pipeline internally — including handing off to `orchestune-dispatch` — calling these CLI commands as tool calls on your behalf. They're shown here to make each stage concrete, and because you may still want to run a step manually in exceptional cases (e.g. resuming dispatch after local state is lost).
+In practice, you don't type the commands below yourself. You describe the task to your AI agent in natural language (e.g. "decompose this feature with orchestune"), and the `orchestune` skill drives the whole pipeline internally — including handing off to `orchestune-provision` or `orchestune-dispatch` — calling these CLI commands as tool calls on your behalf. They're shown here to make each stage concrete, and because you may still want to run a step manually in exceptional cases (e.g. resuming dispatch after local state is lost).
 
 1. **Decompose and validate**: Your agent turns the large task into a reviewable `decomposition_plan.md`, then validates its dependency DAG and conflict risks — you review and approve the plan.
 2. **Provision**: Once you approve, your agent creates dependency-linked parent and child GitHub Issues from the plan.
