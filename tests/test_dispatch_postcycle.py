@@ -7,7 +7,6 @@
 合わせて分離している。
 """
 
-import argparse
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -126,25 +125,25 @@ class TestPollPendingNotNeededReviews:
     """#150/#282: 保留中のstatus:not-needed検証レビューのポーリング（ベストエフォート）。"""
 
     def test_returns_report_on_success(self, tmp_path):
-        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        state_path = tmp_path / "s.json"
         with patch(
             "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
             return_value={"processed": 1},
         ) as mock_poll:
-            result = _poll_pending_not_needed_reviews(args)
+            result = _poll_pending_not_needed_reviews(state_path)
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.SUCCESS
         assert result.report == {"processed": 1}
-        mock_poll.assert_called_once_with(args.not_needed_review_state_path, forge=ANY)
+        mock_poll.assert_called_once_with(state_path, forge=ANY)
 
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
-        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        state_path = tmp_path / "s.json"
         with patch(
             "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
             side_effect=RuntimeError("boom"),
         ):
-            result = _poll_pending_not_needed_reviews(args)
+            result = _poll_pending_not_needed_reviews(state_path)
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.RETRYABLE_FAILURE
@@ -153,9 +152,9 @@ class TestPollPendingNotNeededReviews:
         assert "boom" in capsys.readouterr().err
 
     def test_returns_fatal_failure_on_forge_auth_error(self, tmp_path, capsys):
-        args = argparse.Namespace(not_needed_review_state_path=tmp_path / "s.json")
+        state_path = tmp_path / "s.json"
         result = _poll_pending_not_needed_reviews(
-            args, auth_error=ForgeAuthError("auth-failed")
+            state_path, auth_error=ForgeAuthError("auth-failed")
         )
 
         assert isinstance(result, PhaseResult)

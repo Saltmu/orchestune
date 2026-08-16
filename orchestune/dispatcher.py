@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -35,11 +36,7 @@ from orchestune.dispatch_targets import (
 from orchestune.forge import ForgeAuthError, GitHubForge
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="スケジューラ駆動ディスパッチャー: 1サイクル分の選出・dispatchを実行する"
-        "（既定でラベル更新・worktree作成・エージェント起動まで行う。dry-runには--no-applyを指定）"
-    )
+def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--apply",
         action=argparse.BooleanOptionalAction,
@@ -50,15 +47,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-concurrent", type=int, default=2)
     parser.add_argument("--max-launches-per-window", type=int, default=1)
     parser.add_argument("--window-seconds", type=int, default=3600)
-    parser.add_argument("--run-state-path", type=Path, default=Path("run_state.json"))
-    parser.add_argument("--worktree-root", type=Path, default=Path("worktrees"))
-    parser.add_argument("--log-dir", type=Path, default=Path("logs"))
-    parser.add_argument(
-        "--events-log-path",
-        type=Path,
-        default=Path("events.jsonl"),
-        help="#239: KPI集計用の構造化イベントログ（JSON Lines）の出力先",
-    )
     parser.add_argument("--parent-issue", type=int, default=None)
     parser.add_argument(
         "--deviation-buffer-lines",
@@ -84,6 +72,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="ゾンビプロセスの検知・回収を行うかどうか（デフォルト: True）",
     )
+
+
+def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--run-state-path", type=Path, default=Path("run_state.json"))
+    parser.add_argument("--worktree-root", type=Path, default=Path("worktrees"))
+    parser.add_argument("--log-dir", type=Path, default=Path("logs"))
+    parser.add_argument(
+        "--events-log-path",
+        type=Path,
+        default=Path("events.jsonl"),
+        help="#239: KPI集計用の構造化イベントログ（JSON Lines）の出力先",
+    )
+    parser.add_argument(
+        "--not-needed-review-state-path",
+        type=Path,
+        default=Path("not_needed_review_state.json"),
+        help="#282: 保留中のstatus:not-needed検証レビュー（合否ポーリング・自動クローズ待ち）の永続化先",
+    )
+
+
+def _add_dispatch_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dispatch-target",
         choices=[
@@ -137,12 +146,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Codex Cloudのenvironment ID（未指定時はORCHESTUNE_CODEX_CLOUD_ENV環境変数を使用）",
     )
-    parser.add_argument(
-        "--not-needed-review-state-path",
-        type=Path,
-        default=Path("not_needed_review_state.json"),
-        help="#282: 保留中のstatus:not-needed検証レビュー（合否ポーリング・自動クローズ待ち）の永続化先",
-    )
+
+
+def _add_safety_and_budget_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--allow-unsafe-agent-execution",
         action="store_true",
@@ -168,6 +174,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "未指定時はOrchestune自身のリポジトリ固有の既定値"
         "（./scripts/local-ci.sh）にフォールバックする。",
     )
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="スケジューラ駆動ディスパッチャー: 1サイクル分の選出・dispatchを実行する"
+        "（既定でラベル更新・worktree作成・エージェント起動まで行う。dry-runには--no-applyを指定）"
+    )
+    _add_execution_arguments(parser)
+    _add_storage_arguments(parser)
+    _add_dispatch_target_arguments(parser)
+    _add_safety_and_budget_arguments(parser)
     return parser
 
 
@@ -283,9 +300,25 @@ def _config_defaults(
     return defaults
 
 
-def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
-    parser = _build_arg_parser()
+@dataclass(frozen=True)
+class _DispatcherInputs:
+    args: argparse.Namespace
+    dag_ignore_patterns: tuple[re.Pattern[str], ...]
+    dag_similarity_threshold: float
 
+
+@dataclass(frozen=True)
+class _DispatcherRunResult:
+    report: Any
+    post_cycle_results: list[PhaseResult]
+    integrator_run_report: Any
+
+
+def _load_dispatcher_inputs(
+    parser: argparse.ArgumentParser,
+    argv: list[str] | None,
+    cwd: Path | None,
+) -> _DispatcherInputs:
     try:
         config_data = load_config_file(cwd)
     except ValueError as e:
@@ -305,101 +338,133 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
         if config_dag_similarity_threshold is not None
         else DEFAULT_SIMILARITY_THRESHOLD
     )
+    return _DispatcherInputs(
+        args=parser.parse_args(argv),
+        dag_ignore_patterns=dag_ignore_patterns,
+        dag_similarity_threshold=dag_similarity_threshold,
+    )
 
-    args = parser.parse_args(argv)
+
+def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
+    args = inputs.args
     dispatch_target_name = args.dispatch_target or resolve_default_dispatch_target_name(
         os.environ
     )
+    return DispatcherConfig(
+        max_concurrent=args.max_concurrent,
+        max_launches_per_window=args.max_launches_per_window,
+        window_seconds=args.window_seconds,
+        run_state_path=args.run_state_path,
+        worktree_root=args.worktree_root,
+        log_dir=args.log_dir,
+        events_log_path=args.events_log_path,
+        parent_issue_number=args.parent_issue,
+        apply=args.apply,
+        dispatch_target=build_dispatch_target(
+            dispatch_target_name,
+            args.routine_id,
+            args.routine_token,
+            args.log_dir,
+            local_cmd=args.local_cmd,
+            codex_cloud_env=args.codex_cloud_env,
+            allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
+        ),
+        deviation_buffer_lines=args.deviation_buffer_lines,
+        max_recompute_retries=args.max_recompute_retries,
+        task_timeout_seconds=args.task_timeout_seconds,
+        zombie_gc=args.zombie_gc,
+        max_tokens_per_window=args.max_tokens_per_window,
+        max_tokens_per_task=args.max_tokens_per_task,
+        not_needed_review_state_path=args.not_needed_review_state_path,
+        ci_command=shlex.split(args.ci_command) if args.ci_command else None,
+        dag_ignore_patterns=inputs.dag_ignore_patterns,
+        dag_similarity_threshold=inputs.dag_similarity_threshold,
+    )
 
-    try:
-        config = DispatcherConfig(
-            max_concurrent=args.max_concurrent,
-            max_launches_per_window=args.max_launches_per_window,
-            window_seconds=args.window_seconds,
-            run_state_path=args.run_state_path,
-            worktree_root=args.worktree_root,
-            log_dir=args.log_dir,
-            events_log_path=args.events_log_path,
-            parent_issue_number=args.parent_issue,
-            apply=args.apply,
-            dispatch_target=build_dispatch_target(
-                dispatch_target_name,
-                args.routine_id,
-                args.routine_token,
-                args.log_dir,
-                local_cmd=args.local_cmd,
-                codex_cloud_env=args.codex_cloud_env,
-                allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
-            ),
-            deviation_buffer_lines=args.deviation_buffer_lines,
-            max_recompute_retries=args.max_recompute_retries,
-            task_timeout_seconds=args.task_timeout_seconds,
-            zombie_gc=args.zombie_gc,
-            max_tokens_per_window=args.max_tokens_per_window,
-            max_tokens_per_task=args.max_tokens_per_task,
-            not_needed_review_state_path=args.not_needed_review_state_path,
-            ci_command=shlex.split(args.ci_command) if args.ci_command else None,
-            dag_ignore_patterns=dag_ignore_patterns,
-            dag_similarity_threshold=dag_similarity_threshold,
-        )
-    except ValueError as e:
-        _config_error(parser, str(e))
-    report = None
+
+def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
+    report = run_dispatch_cycle(config)
     post_cycle_results: list[PhaseResult] = []
     integrator_run_report = None
+
+    if config.apply:
+        auth_error = None
+        try:
+            GitHubForge().check_auth()
+        except ForgeAuthError as e:
+            auth_error = e
+
+        semantic_review_enabled = _decide_semantic_review_enabled()
+        if semantic_review_enabled:
+            result = _poll_pending_not_needed_reviews(
+                config.not_needed_review_state_path,
+                forge=config.forge,
+                auth_error=auth_error,
+            )
+            post_cycle_results.append(result)
+        result = _run_semantic_integrator(
+            config, semantic_review_enabled, auth_error=auth_error
+        )
+        post_cycle_results.append(result)
+        integrator_run_report = result.report
+        if config.parent_issue_number is not None:
+            post_cycle_results.append(
+                _process_parent_completion(config, auth_error=auth_error)
+            )
+            post_cycle_results.append(
+                _post_event_log_comment(config, report, auth_error=auth_error)
+            )
+
+    return _DispatcherRunResult(
+        report=report,
+        post_cycle_results=post_cycle_results,
+        integrator_run_report=integrator_run_report,
+    )
+
+
+def _emit_dispatcher_report(result: _DispatcherRunResult) -> None:
+    final_dict = _report_to_dict(result.report)
+    final_dict["post_cycle_results"] = [
+        phase.to_dict() for phase in result.post_cycle_results
+    ]
+    print(json.dumps(final_dict, ensure_ascii=False, indent=2))
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        write_github_step_summary(
+            cycle_report=result.report,
+            integrator_report=result.integrator_run_report,
+            summary_path=summary_path,
+            post_cycle_results=result.post_cycle_results,
+        )
+
+
+def _post_cycle_exit_code(results: list[PhaseResult]) -> int:
+    exit_code = 0
+    for result in results:
+        if result.status == PhaseStatus.FATAL_FAILURE:
+            exit_code = 1
+        elif result.status == PhaseStatus.RETRYABLE_FAILURE and exit_code != 1:
+            exit_code = 2
+    return exit_code
+
+
+def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
+    parser = _build_arg_parser()
+    inputs = _load_dispatcher_inputs(parser, argv, cwd)
+
     try:
-        report = run_dispatch_cycle(config)
+        config = _build_dispatcher_config(inputs)
+    except ValueError as e:
+        _config_error(parser, str(e))
 
-        if config.apply:
-            auth_error = None
-            try:
-                GitHubForge().check_auth()
-            except ForgeAuthError as e:
-                auth_error = e
-
-            semantic_review_enabled = _decide_semantic_review_enabled()
-            if semantic_review_enabled:
-                r1 = _poll_pending_not_needed_reviews(
-                    args, forge=config.forge, auth_error=auth_error
-                )
-                post_cycle_results.append(r1)
-            r2 = _run_semantic_integrator(
-                config, semantic_review_enabled, auth_error=auth_error
-            )
-            post_cycle_results.append(r2)
-            integrator_run_report = r2.report
-            if config.parent_issue_number is not None:
-                r3 = _process_parent_completion(config, auth_error=auth_error)
-                post_cycle_results.append(r3)
-                r4 = _post_event_log_comment(config, report, auth_error=auth_error)
-                post_cycle_results.append(r4)
-
-        # 機械判定可能なレポート（標準出力のJSON）に後処理結果を統合する
-        final_dict = _report_to_dict(report)
-        final_dict["post_cycle_results"] = [res.to_dict() for res in post_cycle_results]
-        print(json.dumps(final_dict, ensure_ascii=False, indent=2))
-
-        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-        if summary_path:
-            write_github_step_summary(
-                cycle_report=report,
-                integrator_report=integrator_run_report,
-                summary_path=summary_path,
-                post_cycle_results=post_cycle_results,
-            )
+    try:
+        result = _run_dispatcher(config)
+        _emit_dispatcher_report(result)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-
-    # 終了コードの決定
-    exit_code = 0
-    for res in post_cycle_results:
-        if res.status == PhaseStatus.FATAL_FAILURE:
-            exit_code = 1
-        elif res.status == PhaseStatus.RETRYABLE_FAILURE and exit_code != 1:
-            exit_code = 2
-
-    return exit_code
+    return _post_cycle_exit_code(result.post_cycle_results)
 
 
 if __name__ == "__main__":
