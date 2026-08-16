@@ -1,4 +1,4 @@
-"""Codifies `decomposition_plan.md` -> GitHub Issue provisioning (Stage A).
+"""Codifies `decomposition_plan.md` -> GitHub Issue provisioning.
 
 Turns the prose procedure in `skills/orchestune-provision/SKILL.md` into a
 deterministic, idempotent, resumable transformation: an approved plan's
