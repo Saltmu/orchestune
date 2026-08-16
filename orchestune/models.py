@@ -10,6 +10,15 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Usage:
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    model: str | None = None
+    cost_usd: float | None = None
+
+
+@dataclass(frozen=True)
 class Task:
     issue_number: int
     subtask_id: str

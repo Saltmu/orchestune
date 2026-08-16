@@ -609,6 +609,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             config.max_concurrent,
             config.max_launches_per_window,
             config.window_seconds,
+            max_tokens_per_window=config.max_tokens_per_window,
         )
         selected = select_next_tasks(
             candidate_tasks,
@@ -617,6 +618,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             config.max_concurrent,
             config.max_launches_per_window,
             config.window_seconds,
+            max_tokens_per_window=config.max_tokens_per_window,
         )
         selected = _finalize_launch(
             selected, task_to_base_branch, candidate_tasks, ctx, now, config

@@ -31,10 +31,24 @@ def quota_available(
     max_concurrent: int,
     max_launches_per_window: int,
     window_seconds: int,
+    max_tokens_per_window: int | None = None,
 ) -> int:
     concurrent_remaining = max(0, max_concurrent - len(run_state.active_worktrees))
     recent_launches = [t for t in run_state.launch_history if now - t < window_seconds]
     rate_remaining = max(0, max_launches_per_window - len(recent_launches))
+    if max_tokens_per_window is not None:
+        recent_completed = [
+            w
+            for w in run_state.completed_worktrees
+            if now - w.completed_at < window_seconds
+        ]
+        tokens_consumed = sum(
+            w.usage.total_tokens
+            for w in recent_completed
+            if w.usage is not None and w.usage.total_tokens is not None
+        )
+        if tokens_consumed >= max_tokens_per_window:
+            return 0
     return min(concurrent_remaining, rate_remaining)
 
 
@@ -84,6 +98,7 @@ def select_next_tasks(
     max_concurrent: int,
     max_launches_per_window: int,
     window_seconds: int,
+    max_tokens_per_window: int | None = None,
 ) -> list[Task]:
     active_issue_numbers = {int(k) for k in run_state.active_worktrees}
     eligible = [
@@ -95,7 +110,12 @@ def select_next_tasks(
         and t.issue_number not in active_issue_numbers
     ]
     slots = quota_available(
-        run_state, now, max_concurrent, max_launches_per_window, window_seconds
+        run_state,
+        now,
+        max_concurrent,
+        max_launches_per_window,
+        window_seconds,
+        max_tokens_per_window=max_tokens_per_window,
     )
     scored = sorted(
         eligible,

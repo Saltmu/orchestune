@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.json_state import read_json_with_recovery, write_json_atomic
+from orchestune.models import Usage
 
 
 @dataclass
@@ -41,6 +42,7 @@ class CompletedWorktree:
     forced_serial: bool = False
     commit_sha: str | None = None
     base_branch: str = "origin/main"
+    usage: Usage | None = None
 
 
 @dataclass
@@ -82,6 +84,7 @@ def load_run_state(path: str | Path) -> RunState:
             forced_serial=value.get("forced_serial", False),
             commit_sha=value.get("commit_sha"),
             base_branch=value.get("base_branch", "origin/main"),
+            usage=Usage(**value["usage"]) if value.get("usage") else None,
         )
         for value in data.get("completed_worktrees", [])
     ]

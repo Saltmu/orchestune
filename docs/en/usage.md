@@ -191,7 +191,9 @@ orchestune-dispatch
 | `--ci-command <cmd>` | `./scripts/local-ci.sh` (specific to Orchestune's own repository) | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex, e.g. `'make ci'`). Set this explicitly if your repository's CI entrypoint differs (see [Setup Guide § Prerequisites](setup.md#0-prerequisites)). In `orchestune.toml`/`pyproject.toml`'s `[tool.orchestune]` section, use the `ci-command` key. |
 | `--deviation-buffer-lines <int>` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
 | `--max-launches-per-window <int>` | `1` | Rate limiting: maximum number of agent launches allowed in `--window-seconds`. |
-| `--window-seconds <int>` | `3600` | The sliding window duration in seconds for launch rate-limiting (default is 1 hour). |
+| `--window-seconds <int>` | `3600` | The sliding window duration in seconds for launch rate-limiting and token quotas (default is 1 hour). |
+| `--max-tokens-per-window <int>` | - | Quota limit: maximum total tokens consumed across completed tasks within `--window-seconds`. When reached, new task launches are paused. Unlimited if omitted. |
+| `--max-tokens-per-task <int>` | - | Per-task limit: maximum token consumption allowed for a single subtask. If exceeded upon completion, automatic completion is halted and escalated to `status:blocked-human-review`. Unlimited if omitted. |
 | `--max-recompute-retries <int>` | `2` | Maximum DAG recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
 | `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
 
