@@ -13,6 +13,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
 from orchestune.dispatch_worktree import file_lock
 from orchestune.git_cli import run_git
@@ -71,7 +72,12 @@ class PrepareTasksStep(IntegrationComponent):
         ctx.active_done_tasks = [
             task
             for task in sorted_done_tasks
-            if task.issue_state != "CLOSED" and task.parent_state != "CLOSED"
+            if task.issue_state != "CLOSED"
+            and task.parent_state != "CLOSED"
+            # #437: 親branch更新の連続陳腐化でstatus:blocked-human-reviewへ
+            # エスカレーション済みのタスクは、人間の確認が入るまで統合対象から
+            # 除外する（そうしないと同じ陳腐化を毎サイクル無限に繰り返す）。
+            and "status:blocked-human-review" not in task.status_labels
         ]
 
         if not ctx.active_done_tasks:
@@ -395,6 +401,93 @@ def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
     return newly_included
 
 
+#: pushが拒否されたことを示すgitの標準的な文言。認証エラーやネットワーク障害等の
+#: 他のpush失敗と区別し、実際のnon-fast-forward（CAS拒否）だけを陳腐化として
+#: 検知するために使う。"fetch first"は、fetchしていない状態で先に別のpushが
+#: 入った場合にgitが出すバリエーション。
+_CAS_REJECTION_MARKERS = ("non-fast-forward", "[rejected]", "fetch first")
+
+#: 親Issueに付与し、直前サイクルでも親branch pushがnon-fast-forward拒否されて
+#: いたことを示すマーカーラベル。#437レビュー対応: このカウントをローカルの
+#: state fileへ永続化すると、GitHub Actionsのスケジュール実行ではジョブごとに
+#: 新しいランナー（`actions/checkout`）を使うため、ファイルがサイクルをまたいで
+#: 残らずリトライ判定が機能しない。GitHub上のラベルという、ランナーをまたいでも
+#: 失われない場所に状態を置くことで、この問題自体を発生させない。
+_PARENT_BRANCH_STALE_LABEL = "integration:parent-branch-stale"
+
+#: `clear_parent_branch_stale_marker`が`remove_label`を試行する回数。
+#: 一時的なAPI障害でマーカーが残置され、後の無関係なCAS拒否を誤って
+#: 「2サイクル連続」と誤判定させないための少数回リトライ（#437レビュー対応）。
+_CLEAR_STALE_MARKER_ATTEMPTS = 3
+
+
+def _is_parent_branch_cas_rejection(error: Exception) -> bool:
+    """#437レビュー対応: `error`が実際のnon-fast-forward（CAS）拒否によるpush
+    失敗かどうかを判定する。認証エラー・ネットワーク障害・ブランチ保護拒否等の
+    他の失敗要因まで陳腐化としてカウント・エスカレーションしてしまうと、一時
+    障害が解消してもエスカレーション済みの子Issueが自己修復できなくなるため、
+    ここで厳密に絞り込む。"""
+    if not isinstance(error, subprocess.CalledProcessError):
+        return False
+    stderr = error.stderr
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    text = stderr or ""
+    return any(marker in text for marker in _CAS_REJECTION_MARKERS)
+
+
+def clear_parent_branch_stale_marker(ctx: IntegrationContext) -> None:
+    """#437: `_PARENT_BRANCH_STALE_LABEL`マーカーを親Issueから除去する。
+
+    #437レビュー対応: このマーカーは「サイクルが実際にCAS拒否で終わったか」
+    だけを追う必要があるため、クリア自体は`IntegrationPipeline.execute`
+    （`orchestune/integrator.py`）から、パイプラインがどのステップで終わった
+    かに関わらず一律に呼ばれる。当初`AutoMergeChildIntegrationStep`内の
+    push成功時／non-CAS失敗時にのみクリアしていたが、`SetupWorktreeStep`・
+    `MergeAndTestStep`・`PushTempBranchStep`等、このステップに到達する前に
+    サイクルが終わるケースを見落としており、直前のCAS拒否のマーカーが古いまま
+    残ってしまっていた（レビュー指摘）。CAS拒否を確認したサイクルだけは
+    `ctx.parent_branch_cas_rejected_this_cycle`を立てることで、このクリア処理
+    をスキップし、マーカーの管理を`_handle_parent_branch_staleness`自身に
+    委ねる。
+
+    #437レビュー対応（既知の限度）: この除去はラベルの単純な上書きであり、
+    GitHub側にCAS（compare-and-swap）機構が無いため、他ランナーが同時に
+    マーカーを新規付与した直後にここが実行されると、その新しいイベントを
+    消してしまう可能性が理論上ある。分散ロックを避ける#437自身の設計方針
+    （footprintの事前検証により競合率が低い前提で悲観ロックより楽観的並行
+    制御を選ぶ）と同じ理由で、ここでも追加のロック機構は導入しない。
+    cross-runner競合そのものは、推奨される`concurrency`グループ設定
+    （#436, docs/ja/setup.md#6）により実運用上は発生しない前提であり、この
+    残存リスクはその設定を行わない場合にのみ顕在化する。
+
+    #437レビュー対応: `remove_label`が一時的なAPI障害で失敗した場合、単に
+    警告を出すだけで古いマーカーを残置すると、後で発生する無関係なCAS拒否が
+    誤って「2サイクル連続」と判定され誤エスカレーションしうる（読み取り側の
+    レース＝上記の既知の限度とは異なり、これは書き込みの単純な失敗であり、
+    リトライで解消できる）。少数回・短い間隔でリトライする。
+    """
+    if ctx.config.parent_issue_number is None:
+        return
+    last_error: Exception | None = None
+    for attempt in range(_CLEAR_STALE_MARKER_ATTEMPTS):
+        try:
+            ctx.forge.remove_label(
+                ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+            )
+            return
+        except Exception as label_error:
+            last_error = label_error
+            if attempt + 1 < _CLEAR_STALE_MARKER_ATTEMPTS:
+                time.sleep(0.05 * (attempt + 1))
+    print(
+        "Warning: Failed to clear parent-branch-stale label on parent issue "
+        f"#{ctx.config.parent_issue_number} after {_CLEAR_STALE_MARKER_ATTEMPTS} "
+        f"attempts: {last_error}",
+        file=sys.stderr,
+    )
+
+
 class AutoMergeChildIntegrationStep(IntegrationComponent):
     """non-force pushで子統合を親へ確定し、最終mainマージは人に委ねる。"""
 
@@ -432,6 +525,18 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
                 self._comment_on_merge_failure(ctx, error)
+                # #437レビュー対応: 認証エラー・ネットワーク障害・ブランチ保護
+                # 拒否等の一時的なpush失敗まで無条件に「陳腐化」としてカウント
+                # すると、一時障害が解消してもエスカレーション済みの子Issueが
+                # 手動でのラベル除去なしに自己修復できなくなる。実際に
+                # non-fast-forward（CAS拒否）だったpush失敗のみを陳腐化として
+                # 記録・カウントする。`ctx.parent_branch_cas_rejected_this_cycle`
+                # がTrueのままなら、`IntegrationPipeline.execute`側のクリア処理を
+                # スキップさせ、マーカーの管理を`_handle_parent_branch_staleness`
+                # 自身に委ねる。
+                if _is_parent_branch_cas_rejection(error):
+                    ctx.parent_branch_cas_rejected_this_cycle = True
+                    self._handle_parent_branch_staleness(ctx, error)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": str(error),
@@ -527,6 +632,111 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     f"#{task.issue_number}: {comment_error}",
                     file=sys.stderr,
                 )
+
+    def _handle_parent_branch_staleness(
+        self, ctx: IntegrationContext, error: Exception
+    ) -> None:
+        """#437: 個々の子Issueへのコメントに加え、親Issue側にも陳腐化イベントを
+        記録する。子Issueを1件ずつ追わなくても、親Issueだけを見れば衝突が発生
+        した事実を事後に説明できるようにするため。実際にnon-fast-forward
+        （CAS拒否）と判定できた場合のみ呼び出される。
+
+        直前サイクルでも同じ陳腐化が起きていたか（＝2サイクル連続）を、
+        `_PARENT_BRANCH_STALE_LABEL`マーカーラベルの有無で判定する。#437
+        レビュー対応: ローカルのstate fileへ回数を永続化する設計だと、GitHub
+        Actionsのスケジュール実行ではジョブごとに新しいランナーを使うため
+        サイクルをまたいでファイルが残らず、判定が機能しない。GitHub上の
+        ラベルという、ランナーをまたいでも失われない場所に状態を置くことで
+        この問題を回避する。2サイクル連続で検知した場合のみ、対象の子Issueを
+        `status:blocked-human-review`へエスカレーションする。"""
+        if ctx.config.parent_issue_number is None:
+            return
+
+        try:
+            ctx.forge.add_comment(
+                ctx.config.parent_issue_number,
+                (
+                    "⚠️ 親ブランチの陳腐化を検知しました（CAS拒否）\n\n"
+                    f"統合PR #{ctx.integration_pr_number} による "
+                    f"`{ctx.base_branch.removeprefix('origin/')}` への更新が、"
+                    f"第三者による先行pushのためnon-fast-forwardで拒否されました"
+                    f"（{error}）。親ブランチへの部分マージは残っていません。"
+                    "次回のディスパッチサイクルで自動的に再試行されます。"
+                ),
+            )
+        except Exception as comment_error:
+            print(
+                "Warning: Failed to comment on merge failure for parent issue "
+                f"#{ctx.config.parent_issue_number}: {comment_error}",
+                file=sys.stderr,
+            )
+
+        try:
+            already_stale = _PARENT_BRANCH_STALE_LABEL in ctx.forge.get_issue_labels(
+                ctx.config.parent_issue_number
+            )
+        except Exception as label_error:
+            print(
+                "Warning: Failed to read labels for parent issue "
+                f"#{ctx.config.parent_issue_number}: {label_error}",
+                file=sys.stderr,
+            )
+            return
+
+        if not already_stale:
+            try:
+                ctx.forge.add_label(
+                    ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+                )
+            except Exception as label_error:
+                print(
+                    "Warning: Failed to mark parent issue "
+                    f"#{ctx.config.parent_issue_number} as parent-branch-stale: "
+                    f"{label_error}",
+                    file=sys.stderr,
+                )
+            return
+
+        # 2サイクル連続で陳腐化 → 設定/運用構成の異常の可能性が高いため、
+        # 対象の子Issueをエスカレーションする。
+        # #437レビュー対応: マーカーのクリアは、対象の子Issueすべてのエスカレー
+        # ションが成功した後にのみ行う。先にクリアしてしまうと、一時的な
+        # GitHub API障害等で一部のエスカレーションが失敗した場合、その子Issue
+        # は統合対象に残ったままなのにマーカーだけが消え、次のCAS拒否が誤って
+        # 「1回目」として扱われて再エスカレーションまでさらに2サイクル分
+        # 遅延してしまう。
+        task_by_subtask_id = {
+            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
+        }
+        all_escalations_succeeded = True
+        for subtask_id in ctx.merged_tasks:
+            task = task_by_subtask_id.get(subtask_id)
+            if task is None:
+                continue
+            try:
+                apply_human_review_escalation(
+                    task.issue_number,
+                    task.status_labels,
+                    (
+                        "親ブランチの陳腐化（CAS拒否）が2サイクル連続で"
+                        "発生したため、`status:blocked-human-review`へ"
+                        "エスカレーションしました。設定または運用構成の異常"
+                        "（例: 意図しない第三者による親ブランチへの書き込み）の"
+                        "可能性があるため、人間による確認が必要です。"
+                    ),
+                    forge=ctx.forge,
+                )
+            except Exception as escalation_error:
+                all_escalations_succeeded = False
+                print(
+                    "Warning: Failed to escalate issue "
+                    f"#{task.issue_number} to status:blocked-human-review: "
+                    f"{escalation_error}",
+                    file=sys.stderr,
+                )
+
+        if all_escalations_succeeded:
+            clear_parent_branch_stale_marker(ctx)
 
     def _close_merged_child_issues(self, ctx: IntegrationContext) -> list[int]:
         closed_issues: list[int] = []
