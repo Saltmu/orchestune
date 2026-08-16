@@ -15,10 +15,25 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import sys
+import time
+from collections.abc import Iterator
 from ctypes import wintypes
+from pathlib import Path
+from typing import IO, Any
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
 
 if sys.platform == "win32":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -28,6 +43,123 @@ else:
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _STILL_ACTIVE = 259
 _ERROR_ACCESS_DENIED = 5
+
+
+class _LockContention(Exception):
+    """Internal signal for backend-specific lock contention."""
+
+
+class FileLock:
+    """Cross-platform exclusive file lock with bounded non-blocking retries."""
+
+    def __init__(
+        self,
+        lock_path: Path,
+        *,
+        timeout: float = 0.0,
+        poll_interval: float = 0.05,
+    ) -> None:
+        if timeout < 0:
+            raise ValueError("timeout must be greater than or equal to zero")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than zero")
+        self.lock_path = lock_path
+        self.timeout = timeout
+        self.poll_interval = poll_interval
+        self._lock_fd: IO[str] | None = None
+        self._backend: Any | None = None
+
+    def _try_acquire(self, lock_fd: IO[str]) -> None:
+        if fcntl is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            except BlockingIOError:
+                raise _LockContention from None
+            self._backend = fcntl
+            return
+
+        assert msvcrt is not None
+        lock_fd.seek(0)
+        try:
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        except PermissionError:
+            raise _LockContention from None
+        self._backend = msvcrt
+
+    def acquire(self) -> FileLock:
+        """Acquire the lock, retrying contention until the configured timeout."""
+        if self._lock_fd is not None:
+            raise RuntimeError(f"File lock is already acquired ({self.lock_path})")
+        if fcntl is None and msvcrt is None:
+            raise RuntimeError(
+                "Neither fcntl nor msvcrt is supported on this platform. "
+                "File locking is required."
+            )
+
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = open(self.lock_path, "w" if fcntl is not None else "a+")
+        if fcntl is None:
+            lock_fd.write(" ")
+            lock_fd.flush()
+            lock_fd.seek(0)
+        deadline = time.monotonic() + self.timeout
+
+        while True:
+            try:
+                self._try_acquire(lock_fd)
+            except _LockContention:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    lock_fd.close()
+                    raise RuntimeError(
+                        "Another instance is already running "
+                        f"(locked on {self.lock_path})"
+                    ) from None
+                time.sleep(min(self.poll_interval, remaining))
+                continue
+            except Exception:
+                lock_fd.close()
+                raise
+
+            self._lock_fd = lock_fd
+            return self
+
+    def release(self) -> None:
+        """Release the native lock and close its descriptor."""
+        lock_fd = self._lock_fd
+        backend = self._backend
+        if lock_fd is None:
+            return
+        try:
+            if backend is fcntl and fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            elif backend is not None:
+                lock_fd.seek(0)
+                backend.locking(lock_fd.fileno(), backend.LK_UNLCK, 1)
+        except Exception:
+            pass
+        finally:
+            lock_fd.close()
+            self._lock_fd = None
+            self._backend = None
+
+    def __enter__(self) -> FileLock:
+        return self.acquire()
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.release()
+
+
+@contextlib.contextmanager
+def file_lock(
+    lock_path: Path,
+    *,
+    timeout: float = 0.0,
+    poll_interval: float = 0.05,
+) -> Iterator[None]:
+    """Hold an exclusive file lock for the duration of the context."""
+    with FileLock(lock_path, timeout=timeout, poll_interval=poll_interval):
+        yield
 
 
 def default_ci_command() -> list[str]:
