@@ -229,6 +229,7 @@ class TestRunDispatchCycleFootprintRecompute:
             blocked_subtask_id="task-b",
         )
         with (
+            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
@@ -385,6 +386,7 @@ class TestRunDispatchCycleFootprintRecompute:
             return selected
 
         with (
+            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
@@ -481,6 +483,7 @@ class TestRunDispatchCycleFootprintRecompute:
             return selected
 
         with (
+            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
@@ -535,6 +538,7 @@ class TestRunDispatchCycleFootprintRecompute:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         with (
+            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
