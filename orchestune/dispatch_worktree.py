@@ -1,28 +1,17 @@
 from __future__ import annotations
 
-import contextlib
 import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
-
-try:
-    import msvcrt
-except ImportError:
-    msvcrt = None  # type: ignore[assignment]
 
 from orchestune import dispatch_gc
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_targets import BranchReachabilityError, DispatchTarget
 from orchestune.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.process_utils import file_lock as file_lock
 from orchestune.validation import validate_ref_name
 
 
@@ -214,67 +203,3 @@ def create_worktree_and_launch(
         external_url=external_url,
         dispatch_started_at=dispatch_started_at,
     )
-
-
-@contextlib.contextmanager
-def file_lock(lock_path: Path) -> Iterator[None]:
-    if fcntl is None and msvcrt is None:
-        raise RuntimeError(
-            "Neither fcntl nor msvcrt is supported on this platform. File locking is required."
-        )
-
-    # #274レビュー対応(P2): mkdir/openの失敗(ディスクフルやACLによる
-    # PermissionError等)を、ロック競合(flock/lockingのPermissionError・
-    # BlockingIOError)と同じ「他インスタンス実行中」扱いにしてしまうと、
-    # 本当の設定・環境エラーが握り潰されてしまう。ロック取得(mkdir/open)と
-    # ロック競合判定(flock/locking)を別のtry/exceptに分離し、後者でのみ
-    # RuntimeErrorへ変換する。
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_fd = open(lock_path, "w" if fcntl is not None else "a+")
-
-    try:
-        if fcntl is not None:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
-            except BlockingIOError:
-                raise RuntimeError(
-                    f"Another instance is already running (locked on {lock_path})"
-                ) from None
-        else:
-            assert msvcrt is not None
-            lock_fd.write(" ")
-            lock_fd.flush()
-            lock_fd.seek(0)
-            try:
-                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-            except PermissionError:
-                raise RuntimeError(
-                    f"Another instance is already running (locked on {lock_path})"
-                ) from None
-    except Exception:
-        lock_fd.close()
-        raise
-
-    # #227: ロック取得成功後のbody実行は別のtry/finallyに分離する。
-    # ロック取得(mkdir/open/flock)の例外処理と同じtry内でyieldしていると、
-    # body側で発生した例外がこのgeneratorへ再スローされ、下のexcept Exceptionに
-    # 捕捉されて再度yieldしてしまい、Pythonが
-    # `RuntimeError: generator didn't stop after throw()` を送出して
-    # 元の例外を握り潰してしまう（body側の例外はロック取得の失敗ではないため
-    # ここで処理すべきではない）。
-    try:
-        yield
-    finally:
-        if fcntl is not None:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        else:
-            assert msvcrt is not None
-            try:
-                lock_fd.seek(0)
-                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
-            except Exception:
-                pass
-        lock_fd.close()

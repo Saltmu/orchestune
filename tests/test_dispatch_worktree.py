@@ -554,8 +554,8 @@ class TestFileLock:
         """fcntlおよびmsvcrtの両方がNoneの場合、RuntimeErrorを発生させて終了する。"""
         lock_path = tmp_path / "test.lock"
         with (
-            patch("orchestune.dispatch_worktree.fcntl", None),
-            patch("orchestune.dispatch_worktree.msvcrt", None),
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", None),
         ):
             executed = False
             with pytest.raises(
@@ -570,8 +570,8 @@ class TestFileLock:
         lock_path = tmp_path / "test.lock"
         mock_msvcrt = MagicMock()
         with (
-            patch("orchestune.dispatch_worktree.fcntl", None),
-            patch("orchestune.dispatch_worktree.msvcrt", mock_msvcrt),
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", mock_msvcrt),
         ):
             executed = False
             with file_lock(lock_path):
@@ -590,8 +590,8 @@ class TestFileLock:
         mock_msvcrt = MagicMock()
         mock_msvcrt.locking.side_effect = PermissionError("Permission denied")
         with (
-            patch("orchestune.dispatch_worktree.fcntl", None),
-            patch("orchestune.dispatch_worktree.msvcrt", mock_msvcrt),
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", mock_msvcrt),
         ):
             executed = False
             with pytest.raises(
@@ -612,7 +612,7 @@ class TestFileLock:
         mock_fcntl.flock.side_effect = BlockingIOError(
             "Resource temporarily unavailable"
         )
-        with patch("orchestune.dispatch_worktree.fcntl", mock_fcntl):
+        with patch("orchestune.process_utils.fcntl", mock_fcntl):
             executed = False
             with pytest.raises(
                 RuntimeError, match="Another instance is already running"
@@ -628,7 +628,7 @@ class TestFileLock:
         lock_path = tmp_path / "test.lock"
         with (
             patch(
-                "orchestune.dispatch_worktree.open",
+                "orchestune.process_utils.open",
                 side_effect=PermissionError("Permission denied"),
                 create=True,
             ),
@@ -645,10 +645,10 @@ class TestFileLock:
         lock_path = tmp_path / "test.lock"
         mock_msvcrt = MagicMock()
         with (
-            patch("orchestune.dispatch_worktree.fcntl", None),
-            patch("orchestune.dispatch_worktree.msvcrt", mock_msvcrt),
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", mock_msvcrt),
             patch(
-                "orchestune.dispatch_worktree.open",
+                "orchestune.process_utils.open",
                 side_effect=PermissionError("Permission denied"),
                 create=True,
             ),

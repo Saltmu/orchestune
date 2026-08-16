@@ -1,6 +1,122 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.process_utils import is_process_alive
+import pytest
+
+from orchestune.process_utils import FileLock, file_lock, is_process_alive
+
+
+class TestFileLock:
+    @pytest.mark.uses_real_file_lock
+    def test_lock_is_exclusive_and_released_after_context_exit(self, tmp_path: Path):
+        lock_path = tmp_path / "shared.lock"
+
+        with file_lock(lock_path):
+            with pytest.raises(RuntimeError, match="Another instance"):
+                with file_lock(lock_path):
+                    pass
+
+        with file_lock(lock_path):
+            pass
+
+    def test_retries_contention_until_lock_is_acquired(self, tmp_path: Path):
+        mock_fcntl = MagicMock()
+        mock_fcntl.LOCK_EX = 1
+        mock_fcntl.LOCK_NB = 2
+        mock_fcntl.LOCK_UN = 4
+        mock_fcntl.flock.side_effect = [BlockingIOError, None, None]
+
+        with (
+            patch("orchestune.process_utils.fcntl", mock_fcntl),
+            patch("orchestune.process_utils.msvcrt", None),
+            patch(
+                "orchestune.process_utils.time.monotonic",
+                side_effect=[10.0, 10.0],
+            ),
+            patch("orchestune.process_utils.time.sleep") as mock_sleep,
+        ):
+            with file_lock(tmp_path / "retry.lock", timeout=1.0, poll_interval=0.2):
+                pass
+
+        mock_sleep.assert_called_once_with(0.2)
+        assert mock_fcntl.flock.call_count == 3
+
+    def test_timeout_closes_file_and_raises_runtime_error(self, tmp_path: Path):
+        mock_fcntl = MagicMock()
+        mock_fcntl.LOCK_EX = 1
+        mock_fcntl.LOCK_NB = 2
+        mock_fcntl.flock.side_effect = BlockingIOError
+
+        with (
+            patch("orchestune.process_utils.fcntl", mock_fcntl),
+            patch("orchestune.process_utils.msvcrt", None),
+            patch(
+                "orchestune.process_utils.time.monotonic",
+                side_effect=[10.0, 10.0, 10.5],
+            ),
+            patch("orchestune.process_utils.time.sleep") as mock_sleep,
+        ):
+            lock = FileLock(tmp_path / "timeout.lock", timeout=0.5, poll_interval=0.2)
+            with pytest.raises(RuntimeError, match="Another instance"):
+                lock.acquire()
+
+        assert lock._lock_fd is None
+        mock_sleep.assert_called_once_with(0.2)
+
+    def test_context_body_exception_is_propagated_and_lock_released(
+        self, tmp_path: Path
+    ):
+        lock_path = tmp_path / "body-error.lock"
+
+        with pytest.raises(ValueError, match="body failed"):
+            with file_lock(lock_path):
+                raise ValueError("body failed")
+
+        with file_lock(lock_path):
+            pass
+
+    def test_msvcrt_backend_locks_and_unlocks_one_byte(self, tmp_path: Path):
+        mock_msvcrt = MagicMock()
+
+        with (
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", mock_msvcrt),
+        ):
+            with file_lock(tmp_path / "windows.lock"):
+                pass
+
+        assert mock_msvcrt.locking.call_count == 2
+        assert mock_msvcrt.locking.call_args_list[0].args[1:] == (
+            mock_msvcrt.LK_NBLCK,
+            1,
+        )
+        assert mock_msvcrt.locking.call_args_list[1].args[1:] == (
+            mock_msvcrt.LK_UNLCK,
+            1,
+        )
+
+    def test_unsupported_platform_raises_runtime_error(self, tmp_path: Path):
+        with (
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", None),
+            pytest.raises(RuntimeError, match="Neither fcntl nor msvcrt is supported"),
+        ):
+            with file_lock(tmp_path / "unsupported.lock"):
+                pass
+
+    @pytest.mark.parametrize(
+        ("timeout", "poll_interval"),
+        [(-0.1, 0.1), (0.1, 0.0), (0.1, -0.1)],
+    )
+    def test_invalid_timing_configuration_is_rejected(
+        self, tmp_path: Path, timeout: float, poll_interval: float
+    ):
+        with pytest.raises(ValueError):
+            FileLock(
+                tmp_path / "invalid.lock",
+                timeout=timeout,
+                poll_interval=poll_interval,
+            )
 
 
 class TestIsProcessAlivePosix:
