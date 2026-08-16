@@ -415,6 +415,11 @@ _CAS_REJECTION_MARKERS = ("non-fast-forward", "[rejected]", "fetch first")
 #: 失われない場所に状態を置くことで、この問題自体を発生させない。
 _PARENT_BRANCH_STALE_LABEL = "integration:parent-branch-stale"
 
+#: `clear_parent_branch_stale_marker`が`remove_label`を試行する回数。
+#: 一時的なAPI障害でマーカーが残置され、後の無関係なCAS拒否を誤って
+#: 「2サイクル連続」と誤判定させないための少数回リトライ（#437レビュー対応）。
+_CLEAR_STALE_MARKER_ATTEMPTS = 3
+
 
 def _is_parent_branch_cas_rejection(error: Exception) -> bool:
     """#437レビュー対応: `error`が実際のnon-fast-forward（CAS）拒否によるpush
@@ -455,19 +460,32 @@ def clear_parent_branch_stale_marker(ctx: IntegrationContext) -> None:
     cross-runner競合そのものは、推奨される`concurrency`グループ設定
     （#436, docs/ja/setup.md#6）により実運用上は発生しない前提であり、この
     残存リスクはその設定を行わない場合にのみ顕在化する。
+
+    #437レビュー対応: `remove_label`が一時的なAPI障害で失敗した場合、単に
+    警告を出すだけで古いマーカーを残置すると、後で発生する無関係なCAS拒否が
+    誤って「2サイクル連続」と判定され誤エスカレーションしうる（読み取り側の
+    レース＝上記の既知の限度とは異なり、これは書き込みの単純な失敗であり、
+    リトライで解消できる）。少数回・短い間隔でリトライする。
     """
     if ctx.config.parent_issue_number is None:
         return
-    try:
-        ctx.forge.remove_label(
-            ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
-        )
-    except Exception as label_error:
-        print(
-            "Warning: Failed to clear parent-branch-stale label on parent issue "
-            f"#{ctx.config.parent_issue_number}: {label_error}",
-            file=sys.stderr,
-        )
+    last_error: Exception | None = None
+    for attempt in range(_CLEAR_STALE_MARKER_ATTEMPTS):
+        try:
+            ctx.forge.remove_label(
+                ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
+            )
+            return
+        except Exception as label_error:
+            last_error = label_error
+            if attempt + 1 < _CLEAR_STALE_MARKER_ATTEMPTS:
+                time.sleep(0.05 * (attempt + 1))
+    print(
+        "Warning: Failed to clear parent-branch-stale label on parent issue "
+        f"#{ctx.config.parent_issue_number} after {_CLEAR_STALE_MARKER_ATTEMPTS} "
+        f"attempts: {last_error}",
+        file=sys.stderr,
+    )
 
 
 class AutoMergeChildIntegrationStep(IntegrationComponent):

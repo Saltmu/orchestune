@@ -23,7 +23,10 @@ from orchestune.integrator import (
     Integrator,
     IntegratorConfig,
 )
-from orchestune.integrator_steps import _is_parent_branch_cas_rejection
+from orchestune.integrator_steps import (
+    _is_parent_branch_cas_rejection,
+    clear_parent_branch_stale_marker,
+)
 from orchestune.models import Task
 from tests.conftest import IntegratorEnv, make_done_issue
 
@@ -76,6 +79,40 @@ class TestIsParentBranchCasRejection:
             1, ["git", "push"], stderr=b"! [rejected] (non-fast-forward)"
         )
         assert _is_parent_branch_cas_rejection(error) is True
+
+
+class TestClearParentBranchStaleMarkerRetries:
+    """#437レビュー対応: `remove_label`が一時的なAPI障害で失敗した場合、
+    古いマーカーを残置すると、後で発生する無関係なCAS拒否を誤って
+    「2サイクル連続」と誤判定させてしまう。少数回リトライして解消する。"""
+
+    def _ctx(self, forge) -> IntegrationContext:
+        config = IntegratorConfig(apply=True, parent_issue_number=100, forge=forge)
+        return IntegrationContext(
+            config=config,
+            repository_root=Path("."),
+            original_root=Path("."),
+            base_branch="origin/parent/issue-100",
+            temp_branch="temp-branch",
+        )
+
+    def test_succeeds_after_transient_failures(self, fake_forge):
+        fake_forge.remove_label.side_effect = [
+            RuntimeError("API rate limited"),
+            RuntimeError("API rate limited"),
+            None,
+        ]
+
+        clear_parent_branch_stale_marker(self._ctx(fake_forge))
+
+        assert fake_forge.remove_label.call_count == 3
+
+    def test_gives_up_after_exhausting_attempts(self, fake_forge):
+        fake_forge.remove_label.side_effect = RuntimeError("API rate limited")
+
+        clear_parent_branch_stale_marker(self._ctx(fake_forge))
+
+        assert fake_forge.remove_label.call_count == 3
 
 
 class TestLabelIncludedStep:
