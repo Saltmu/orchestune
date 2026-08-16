@@ -211,9 +211,7 @@ def _format_completion_item(event: dict) -> str:
         tokens = usage.get("total_tokens")
         tokens_str = f"{tokens:,} tokens" if tokens is not None else "不明"
         return f"{prefix}: `{action}` [Model: `{model}`, Tokens: **{tokens_str}**]"
-    if "usage" in event:
-        return f"{prefix}: `{action}` [Model: `不明`, Tokens: **不明**]"
-    return f"{prefix}: `{action}`"
+    return f"{prefix}: `{action}` [Model: `不明`, Tokens: **不明**]"
 
 
 def _format_event_log_comment(report: CycleReport, deviation_events: list[dict]) -> str:
