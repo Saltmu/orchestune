@@ -45,6 +45,10 @@ _STILL_ACTIVE = 259
 _ERROR_ACCESS_DENIED = 5
 
 
+class _LockContention(Exception):
+    """Internal signal for backend-specific lock contention."""
+
+
 class FileLock:
     """Cross-platform exclusive file lock with bounded non-blocking retries."""
 
@@ -67,15 +71,19 @@ class FileLock:
 
     def _try_acquire(self, lock_fd: IO[str]) -> None:
         if fcntl is not None:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            except BlockingIOError:
+                raise _LockContention from None
             self._backend = fcntl
             return
 
         assert msvcrt is not None
-        lock_fd.write(" ")
-        lock_fd.flush()
         lock_fd.seek(0)
-        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        try:
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        except PermissionError:
+            raise _LockContention from None
         self._backend = msvcrt
 
     def acquire(self) -> FileLock:
@@ -90,12 +98,16 @@ class FileLock:
 
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = open(self.lock_path, "w" if fcntl is not None else "a+")
+        if fcntl is None:
+            lock_fd.write(" ")
+            lock_fd.flush()
+            lock_fd.seek(0)
         deadline = time.monotonic() + self.timeout
 
         while True:
             try:
                 self._try_acquire(lock_fd)
-            except (BlockingIOError, PermissionError):
+            except _LockContention:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     lock_fd.close()

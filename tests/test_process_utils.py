@@ -63,6 +63,20 @@ class TestFileLock:
         assert lock._lock_fd is None
         mock_sleep.assert_called_once_with(0.2)
 
+    def test_fcntl_permission_error_propagates_unchanged(self, tmp_path: Path):
+        mock_fcntl = MagicMock()
+        mock_fcntl.LOCK_EX = 1
+        mock_fcntl.LOCK_NB = 2
+        mock_fcntl.flock.side_effect = PermissionError("operation not permitted")
+
+        with (
+            patch("orchestune.process_utils.fcntl", mock_fcntl),
+            patch("orchestune.process_utils.msvcrt", None),
+            pytest.raises(PermissionError, match="operation not permitted"),
+        ):
+            with file_lock(tmp_path / "permission.lock"):
+                pass
+
     def test_context_body_exception_is_propagated_and_lock_released(
         self, tmp_path: Path
     ):
@@ -94,6 +108,25 @@ class TestFileLock:
             mock_msvcrt.LK_UNLCK,
             1,
         )
+
+    def test_msvcrt_retry_does_not_grow_lock_file(self, tmp_path: Path):
+        lock_path = tmp_path / "windows-retry.lock"
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.locking.side_effect = [PermissionError, None, None]
+
+        with (
+            patch("orchestune.process_utils.fcntl", None),
+            patch("orchestune.process_utils.msvcrt", mock_msvcrt),
+            patch(
+                "orchestune.process_utils.time.monotonic",
+                side_effect=[10.0, 10.0],
+            ),
+            patch("orchestune.process_utils.time.sleep"),
+        ):
+            with file_lock(lock_path, timeout=1.0):
+                pass
+
+        assert lock_path.stat().st_size == 1
 
     def test_unsupported_platform_raises_runtime_error(self, tmp_path: Path):
         with (
