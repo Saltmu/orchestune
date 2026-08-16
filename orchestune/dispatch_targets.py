@@ -48,7 +48,7 @@ CLAUDE_CLI_LOCAL_CMD_TEMPLATE = (
     "標準開発ワークフローに従って実装してください。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--permission-mode bypassPermissions "
-    "--output-format json"
+    "--output-format stream-json"
 )
 
 AGY_CLI_LOCAL_CMD_TEMPLATE = (
@@ -324,13 +324,31 @@ class LocalProcessDispatchTarget(DispatchTarget):
 def _extract_usage_from_dict(data: Any) -> Usage | None:
     if not isinstance(data, dict):
         return None
-    usage_data = data.get("usage")
-    if isinstance(usage_data, dict):
+    usage_data = data.get("usage") if isinstance(data.get("usage"), dict) else data
+    if not isinstance(usage_data, dict):
+        return None
+    if "input_tokens" not in usage_data and "output_tokens" not in usage_data:
+        return None
+    try:
         input_tokens = int(usage_data.get("input_tokens", 0))
         output_tokens = int(usage_data.get("output_tokens", 0))
         total_tokens = int(usage_data.get("total_tokens", input_tokens + output_tokens))
-        model = str(data["model"]) if data.get("model") is not None else None
-        cost_val = data.get("total_cost_combined") or data.get("cost_usd")
+        model = (
+            str(data["model"])
+            if data.get("model") is not None
+            else (
+                str(usage_data["model"])
+                if usage_data.get("model") is not None
+                else None
+            )
+        )
+        cost_val = data.get("total_cost_combined")
+        if cost_val is None:
+            cost_val = data.get("cost_usd")
+        if cost_val is None and usage_data is not data:
+            cost_val = usage_data.get("total_cost_combined")
+        if cost_val is None and usage_data is not data:
+            cost_val = usage_data.get("cost_usd")
         cost_usd = float(cost_val) if cost_val is not None else None
         return Usage(
             input_tokens=input_tokens,
@@ -339,21 +357,8 @@ def _extract_usage_from_dict(data: Any) -> Usage | None:
             model=model,
             cost_usd=cost_usd,
         )
-    if "input_tokens" in data and "output_tokens" in data:
-        input_tokens = int(data.get("input_tokens", 0))
-        output_tokens = int(data.get("output_tokens", 0))
-        total_tokens = int(data.get("total_tokens", input_tokens + output_tokens))
-        model = str(data["model"]) if data.get("model") is not None else None
-        cost_val = data.get("total_cost_combined") or data.get("cost_usd")
-        cost_usd = float(cost_val) if cost_val is not None else None
-        return Usage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            model=model,
-            cost_usd=cost_usd,
-        )
-    return None
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_usage_from_log(log_path: Path) -> Usage | None:

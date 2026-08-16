@@ -63,8 +63,26 @@ class TestDispatchTargetCollectUsage:
         target = _DummyDispatchTarget()
         assert target.collect_usage(DispatchHandle()) is None
 
-    def test_claude_template_includes_json_output_format(self):
-        assert "--output-format json" in CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+    def test_claude_template_includes_stream_json_output_format(self):
+        assert "--output-format stream-json" in CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_extract_usage_preserves_zero_cost(self, tmp_path):
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True)
+        slug = "claude-issue-99-task-z"
+        log_file = log_dir / f"{slug}.log"
+        sample_json = {
+            "type": "result",
+            "total_cost_combined": 0.0,
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+            "model": "claude-3-7-sonnet",
+        }
+        log_file.write_text(json.dumps(sample_json) + "\n", encoding="utf-8")
+        target = LocalProcessDispatchTarget(log_dir=log_dir)
+        handle = DispatchHandle(branch_name="claude/issue-99-task-z")
+        usage = target.collect_usage(handle)
+        assert usage is not None
+        assert usage.cost_usd == 0.0
 
     def test_local_process_collect_usage_parses_json_log(self, tmp_path):
         log_dir = tmp_path / "logs"
@@ -367,6 +385,104 @@ class TestTaskTokenLimitEscalation:
         comment = forge.add_comment.call_args.args[1]
         assert "11,000" in comment or "11000" in comment
         assert "claude-3-7-sonnet" in comment
+
+    def test_escalated_worktree_is_recorded_in_completed_worktrees_and_throttles_window_quota(
+        self, tmp_path
+    ):
+        from orchestune.dispatch_gc import _rule_completed
+        from orchestune.dispatch_rules import CycleContext
+
+        active = ActiveWorktree(
+            issue_number=42,
+            branch="claude/issue-42-task-x",
+            worktree_path=str(tmp_path / "wt"),
+            pid=None,
+            started_at=100.0,
+            declared_footprint=(),
+        )
+        (tmp_path / "wt").mkdir(parents=True)
+        task = Task(
+            issue_number=42,
+            subtask_id="task-x",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        forge = MagicMock()
+        target = MagicMock()
+        target.collect_usage.return_value = Usage(
+            input_tokens=15000,
+            output_tokens=5000,
+            total_tokens=20000,
+            model="claude-3-7-sonnet",
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            forge=forge,
+            dispatch_target=target,
+            worktree_root=tmp_path / "worktrees",
+            max_tokens_per_task=10000,
+            max_tokens_per_window=15000,
+        )
+        run_state = RunState(
+            active_worktrees={"42": active}, launch_history=[], completed_worktrees=[]
+        )
+        ctx = CycleContext(
+            config=config,
+            run_state=run_state,
+            tasks_by_issue={42: task},
+            issue_number_by_subtask_id={"task-x": 42},
+            prs=[],
+            pr_by_branch={},
+            done_subtask_ids=set(),
+            ci_passed_pr_subtask_ids=set(),
+            changes_requested_subtask_ids=set(),
+            subtask_branch_map={},
+        )
+
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=(True, "abcdef123456"),
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+        ):
+            outcome = _rule_completed(ctx, "42", active, task)
+
+        assert outcome is not None
+        assert outcome.completion_event["action"] == "escalated_token_limit_exceeded"
+        # 帳簿からactiveは消え、completed_worktreesにusage付きで記録されていること
+        assert "42" not in run_state.active_worktrees
+        assert len(run_state.completed_worktrees) == 1
+        cw = run_state.completed_worktrees[0]
+        assert cw.issue_number == 42
+        assert cw.usage is not None
+        assert cw.usage.total_tokens == 20000
+
+        # quota_available がこのエスカレーションタスクの消費量を計算してスロットを 0 に制限すること
+        assert (
+            quota_available(
+                run_state,
+                now=150.0,
+                max_concurrent=5,
+                max_launches_per_window=5,
+                window_seconds=3600,
+                max_tokens_per_window=config.max_tokens_per_window,
+            )
+            == 0
+        )
 
 
 class TestPostcycleCycleReportFormatting:

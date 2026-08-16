@@ -134,6 +134,17 @@ def _apply_completed_worktree_outcome(
             except Exception:
                 pass
         remove_worktree(active.worktree_path)
+        # #381レビュー対応(Codex P2): launch成功時のtransition_status_labelが
+        # add(status:in-progress)後のremove(status:queued/status:blocked)に
+        # 失敗すると、Issueにこれらの旧ラベルが取り残されたまま完了する
+        # ことがある。ここでstatus:in-progressだけを除去すると、Issueは
+        # status:done + 取り残されたstatus:queued（または status:blocked）
+        # を同時に持つことになる。前者の組み合わせは
+        # `_reconcile_dual_status_tasks`が「Integratorのロールバック
+        # (#254)」と誤認してstatus:doneを除去してしまい、完了済みタスクが
+        # 再キューイングされ二重実行されうる。完了確定時点で判明している
+        # 一次status:*ラベルはまとめて除去し、Issueをstatus:doneのみへ
+        # 確実に収束させる。
         stale_labels = (
             tuple(
                 label

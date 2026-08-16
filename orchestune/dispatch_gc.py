@@ -267,9 +267,9 @@ def _rule_completed(
         completion_active, active_task, ctx.config
     )
     action = completion_event["action"]
-    if action == "completed":
+    if action in ("completed", "escalated_token_limit_exceeded"):
         completed_subtask_id = None
-        if active_task is not None and active_task.subtask_id:
+        if action == "completed" and active_task is not None and active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
             raw_usage = completion_event.get("usage")
@@ -294,7 +294,7 @@ def _rule_completed(
             completed_subtask_id=completed_subtask_id,
             terminal=True,
         )
-    if action in ("completed_no_commits", "escalated_token_limit_exceeded"):
+    if action == "completed_no_commits":
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
         return ActiveWorktreeRuleOutcome(
