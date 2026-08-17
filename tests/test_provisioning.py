@@ -1530,9 +1530,7 @@ class TestResolveParentIssue:
             title="My Big Rock", parent_issue_number=None, description=""
         )
         with pytest.raises(RuntimeError, match="--parent-issue 999"):
-            _resolve_parent_issue(
-                forge, metadata, plan_path, explicit_parent_issue=999
-            )
+            _resolve_parent_issue(forge, metadata, plan_path, explicit_parent_issue=999)
 
     def test_explicit_parent_issue_overrides_stale_persisted_value(
         self, tmp_path: Path
