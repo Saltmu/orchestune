@@ -41,7 +41,9 @@ from orchestune.issue_parsing import (
     PARENT_MARKER,
     backfill_parent_issue_number,
     effective_parent_number,
+    ensure_parent_marker,
     find_children_by_parent,
+    is_epic_issue,
     parent_issue_number_from_body,
 )
 from orchestune.models import IssueRecord
@@ -392,9 +394,50 @@ def _build_subtask_issue_body(
     )
 
 
-def _resolve_parent_issue(
-    forge: IssueForge, metadata: PlanMetadata, plan_path: str | Path
+def _resolve_explicit_parent_issue(
+    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
 ) -> int:
+    """`--parent-issue`で明示指定された既存Issueを親として採用する。
+
+    `_resolve_parent_issue`の通常経路と異なり、`metadata.title`とのタイトル
+    一致は要求しない（人間が事前に起票したEPICのタイトルは、plan由来の
+    タイトルとは一般に一致しないため）。まだ`is_epic_issue`の形（`[EPIC] `
+    プレフィックス + `PARENT_MARKER`）を満たしていなければ、既存の内容は
+    保持したままその場で正規化する。この経路は`--parent-issue`が渡された
+    実行のたびに毎回通る必要がある（永続化された`parent_issue_number`だけを
+    根拠にした自動認識はしない） — `dispatch --parent-issue`と同じ運用。
+    """
+    issue = forge.get_issue(parent_issue_number)
+    if issue is None:
+        raise RuntimeError(
+            f"--parent-issue {parent_issue_number} does not exist; "
+            "refusing to provision subtasks under it."
+        )
+    if not is_epic_issue(issue):
+        new_title = (
+            issue.title
+            if issue.title.startswith("[EPIC] ")
+            else f"[EPIC] {issue.title}"
+        )
+        if new_title != issue.title:
+            forge.update_issue_title(parent_issue_number, new_title)
+        if PARENT_MARKER not in issue.body:
+            forge.update_issue_body(
+                parent_issue_number, ensure_parent_marker(issue.body)
+            )
+    write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
+    return parent_issue_number
+
+
+def _resolve_parent_issue(
+    forge: IssueForge,
+    metadata: PlanMetadata,
+    plan_path: str | Path,
+    *,
+    explicit_parent_issue: int | None = None,
+) -> int:
+    if explicit_parent_issue is not None:
+        return _resolve_explicit_parent_issue(forge, explicit_parent_issue, plan_path)
     parent_issue_number = metadata.parent_issue_number
     parent_title = f"[EPIC] {metadata.title}"
     if parent_issue_number is not None:
@@ -666,6 +709,7 @@ def provision_issues(
     apply: bool = True,
     template_path: str | Path = ".github/issue_template.md",
     repo_root: str | Path | None = None,
+    parent_issue: int | None = None,
 ) -> ProvisionResult:
     """Provision GitHub Issues for every subtask in an approved decomposition plan.
 
@@ -686,6 +730,11 @@ def provision_issues(
     what `orchestune-dag --plan ...` validated, or — if that edge only
     closes a cycle together with an explicit dependency — raise an
     unresolvable `DagCycleError` that validation didn't predict.
+
+    `parent_issue` (default: None) attaches subtasks to a pre-existing Issue
+    as their EPIC parent instead of creating/reusing one derived from
+    `metadata.title`, normalizing it in place if needed. See
+    `_resolve_explicit_parent_issue`.
     """
     resolved_repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
     subtasks, metadata = _load_plan(plan_path)
@@ -708,7 +757,9 @@ def provision_issues(
         )
 
     resolved_forge = forge or GitHubForge()
-    parent_issue_number = _resolve_parent_issue(resolved_forge, metadata, plan_path)
+    parent_issue_number = _resolve_parent_issue(
+        resolved_forge, metadata, plan_path, explicit_parent_issue=parent_issue
+    )
     existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
         resolved_forge, parent_issue_number
     )
@@ -829,6 +880,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--apply", dest="apply", action="store_true", default=True)
     parser.add_argument("--no-apply", dest="apply", action="store_false")
+    parser.add_argument(
+        "--parent-issue",
+        type=int,
+        default=None,
+        help=(
+            "Attach subtasks to this existing Issue as their EPIC parent "
+            "instead of creating/reusing one derived from the plan's title. "
+            "The Issue is normalized in place ('[EPIC] ' title prefix and "
+            "parent marker added if missing) if it isn't already EPIC-shaped. "
+            "Must be passed on every `provision` (and `dispatch`) run for "
+            "this plan, since a pre-existing Issue's title won't match the "
+            "plan-derived title the persisted-parent auto-recovery relies on."
+        ),
+    )
     return parser
 
 
@@ -850,6 +915,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             apply=args.apply,
             template_path=args.template,
             repo_root=repo_root,
+            parent_issue=args.parent_issue,
         )
     except ConfigError as error:
         # #428: config-derived errors (orchestune.toml / pyproject.toml

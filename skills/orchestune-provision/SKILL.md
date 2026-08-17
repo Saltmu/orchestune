@@ -13,41 +13,47 @@ output_schema:
 
 # Orchestune Provision Skill
 
-本スキルは、**`orchestune`スキルで承認済みの`decomposition_plan.md`**を受け取り、`orchestune provision` CLIによる各サブタスクのGitHub Issue起票および親子・依存関係の構築を行います。
+This skill takes an **approved `decomposition_plan.md` from the `orchestune` skill** and files each subtask as a GitHub Issue via the `orchestune provision` CLI, wiring up the parent/child and dependency relationships.
 
-## トリガー条件
+## Trigger conditions
 
-**通常はユーザーが直接呼び出すスキルではありません。** [orchestune スキル](../orchestune/SKILL.md)が分解案の承認後に内部で引き継ぐ形でロードします。
+**This is not normally a skill users invoke directly.** The [orchestune skill](../orchestune/SKILL.md) loads it internally as a handoff once a decomposition plan has been approved.
 
-例外的に、未起票の`decomposition_plan.md`からIssue起票のみを手動実行したい場合は、人間が直接このスキルを指定してロードしてよい。
+As an exception, a human may load this skill directly if they only want to manually run Issue provisioning against an unfiled `decomposition_plan.md`.
 
-## 前提
+## Prerequisites
 
-* システムに `orchestune` CLIツール（`orchestune provision`, `orchestune bootstrap`）がインストールされていること。
-* 起票開始前に`orchestune bootstrap`を実行し、gh認証状態と必須ラベルの存在を確認しておくこと（手順1を参照）。
+* The `orchestune` CLI tool (`orchestune provision`, `orchestune bootstrap`) must be installed on the system.
+* Run `orchestune bootstrap` before provisioning starts to confirm `gh` authentication and the required labels exist (see step 1).
 
-## ワークフロー: Issue起票
+## Workflow: Issue provisioning
 
-`decomposition_plan.md`からのIssue起票は`orchestune provision`コマンドに完全にコード化されている（#306）。承認済みplanがあれば起票は決定的な変換であり、エージェントが手順を解釈する必要はない。
+Filing Issues from `decomposition_plan.md` is fully codified into the `orchestune provision` command (#306). Given an approved plan, provisioning is a deterministic transformation — no agent needs to interpret the procedure.
 
-1. **事前準備**: `orchestune bootstrap` を実行し、gh認証と必須ラベル（`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`）の存在を確認・起票します。失敗した場合（exit 1）はここで停止し、案内に従って認証設定等を行ってから再実行してください。
-2. **プレビュー**: 書き込み前に内容を確認します。
+1. **Pre-flight**: Run `orchestune bootstrap` to confirm `gh` authentication and the presence of the required labels (`status:*`, `priority:*`, `risk:flagged`, `progress:partial`, `not-needed-review:*`), filing any that are missing. If it fails (exit 1), stop here and follow its guidance (e.g. set up authentication) before retrying.
+2. **Preview**: Check the content before writing anything.
    ```bash
    orchestune provision --plan decomposition_plan.md --no-apply
    ```
-   生成される各Issueのタイトル・ラベル・本文が出力される。GitHubへの書き込みは行われない。
-3. **起票**: 問題なければ実際に適用します。
+   This prints each Issue's title, labels, and body that would be created, without writing to GitHub.
+3. **Provision**: If it looks right, apply it for real.
    ```bash
    orchestune provision --plan decomposition_plan.md
    ```
-   `title`から親Issue（`[EPIC] <title>`）を起票し、`decomposition_plan.md`の`depends_on`のトポロジカル順で各サブタスクIssueを起票して`--parent`/`--blocked-by`相当の関係を`gh issue edit --set-parent`/`--add-blocked-by`で設定する。起票済みのIssue番号は起票の都度`decomposition_plan.md`のフロントマター（`parent_issue_number`、各サブタスクの`issue_number`）へ書き戻される。**冪等かつ部分失敗から再開可能**: 既に`issue_number`が設定済みのサブタスク、または親Issue配下の既存子Issueの本文に埋め込まれたFootprint YAMLの`subtask_id`が一致するサブタスクは、再作成されず既存のIssue番号がそのまま再利用される。各サブタスクIssueのFootprint YAMLには親番号（`parent_issue_number`）も常に埋め込まれるため、`add_sub_issue`/`set_blocked_by`が失敗する（後述のnative関係非対応など）縮退環境でも、この本文metadataを頼りに`--parent-issue`モードのDispatcherが対象Issueを発見でき、`orchestune provision`自体は中断せず完走する（`ProvisionResult.degraded_subtask_ids`で縮退したサブタスクを報告する）。詳細な導出規則（ラベル付与規則、`.github/issue_template.md`のプレースホルダー置換規則等）は`orchestune/provisioning.py`のdocstringおよび`docs/ja/usage.md`を参照。
-4. **起票したIssue一覧を[orchestune スキル](../orchestune/SKILL.md)に返し、ユーザーへの報告、または[orchestune-dispatch スキル](../orchestune-dispatch/SKILL.md)へのハンドオフに用いさせます。**
+   This files the parent Issue (`[EPIC] <title>`) from `title`, then files each subtask Issue in the topological order of `decomposition_plan.md`'s `depends_on`, setting the `--parent`/`--blocked-by`-equivalent relationships via `gh issue edit --set-parent`/`--add-blocked-by`. Each filed Issue number is written back into `decomposition_plan.md`'s frontmatter (`parent_issue_number`, and each subtask's `issue_number`) as it's created. **Idempotent and resumable from a partial failure**: a subtask whose `issue_number` is already set, or whose `subtask_id` matches a Footprint YAML block embedded in an existing child Issue under the parent, is not recreated — the existing Issue number is reused as-is. Each subtask Issue's Footprint YAML also always embeds the parent number (`parent_issue_number`), so even in a degraded environment where `add_sub_issue`/`set_blocked_by` fails (e.g. no native-relationship support), a `--parent-issue`-mode Dispatcher can still discover the target Issue via this body metadata, and `orchestune provision` itself completes without aborting (degraded subtasks are reported via `ProvisionResult.degraded_subtask_ids`). See the docstrings in `orchestune/provisioning.py` and `docs/ja/usage.md` for the exact derivation rules (label rules, `.github/issue_template.md` placeholder substitution, etc.).
 
-### `gh` が利用できない環境でのフォールバック（手動起票）
+   **Attaching to a pre-existing EPIC Issue**: if the EPIC Issue was already filed ahead of time (by hand, or via plain GitHub — not by Orchestune), pass `--parent-issue <N>` instead of relying on `title` to create/reuse one:
+   ```bash
+   orchestune provision --plan decomposition_plan.md --parent-issue <N>
+   ```
+   The target Issue is normalized in place if it doesn't already look like an Orchestune EPIC (a `"[EPIC] "` title prefix and parent marker are added as needed, preserving its existing content) — no title match against the plan's `title` is required. `--parent-issue` must be passed on **every** `provision` (and `dispatch`) run for this plan: because a pre-existing Issue's title generally won't match the plan-derived `"[EPIC] " + title`, the persisted `parent_issue_number` alone can't be auto-recognized on a later run without the flag.
+4. **Return the list of filed Issues to the [orchestune skill](../orchestune/SKILL.md)**, for it to report to the user or hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md).
 
-`orchestune provision`は内部で`gh` CLIを呼び出す。`gh`自体がインストール・認証できない環境では、GitHub MCPサーバーを使うか、ユーザーにWeb UIでの手動起票を案内すること。この場合、以下の対応関係を守って手作業で代替する：
+### Fallback for environments without `gh` (manual filing)
 
-* 親Issue: `decomposition_plan.md`の`title`から`[EPIC] <title>`のタイトルで起票し、確定した番号を`parent_issue_number`へ書き戻す。
-* 各サブタスクIssue: `.github/issue_template.md`のプレースホルダー（`{{subtask_id}}`, `{{subtask_id_yaml}}`, `{{description}}`, `{{overview}}`, `{{proposed_changes}}`, `{{acceptance_criteria}}`, `{{verification_plan}}`, `{{footprint}}`, `{{symbols}}`, `{{depends_on}}`, `{{parent_issue_number}}`）へサブタスクの情報を埋め込み、確定した番号を各サブタスクの`issue_number`へ書き戻す。`{{subtask_id}}`は見出し等の表示用（生の値）、`{{subtask_id_yaml}}`はFootprint YAMLブロック内専用（`:`や`#`を含むIDでも安全な、YAMLスカラーとしてクォート済みの値）で、両者は必ず使い分けること。`{{parent_issue_number}}`は親Issueの番号（未確定なら`null`）で、native関係が使えない環境でDispatcherが子Issueを発見するための必須フォールバックなので省略しないこと。
-* **ラベル付与を必ず行うこと**: `dispatch_cycle._group_by_status`はステータスラベル（`status:queued`/`status:blocked`等）が付いていないIssueを一切拾わないため、ラベルを付け忘れるとディスパッチ実行時にそのサブタスクが永久にディスパッチされない。`depends_on`が空、またはその依存先が全て完了済みなら`status:queued`、そうでなければ`status:blocked`を付与する。加えて`priority:{subtask.priority}`（`decomposition_plan.md`の`priority`。未指定時は`medium`）を必ず、`risk`が真の場合は`risk:flagged`も付与する（導出規則は`orchestune/provisioning.py`の`_derive_labels`と同一）。
-* GitHub MCPによるIssue起票ではnativeの`blocked_by`/`parent`関係を設定できない場合がある。この場合もFootprint YAMLの`depends_on`を必ず保持すること。ディスパッチャーはこの値を依存判定と自己修復時のブランチスタッキング復元に使用する。GitHub上の関係を可視化したい場合は、起票後にWeb UIまたは`gh issue edit --set-parent`/`--add-blocked-by`でnativeの関係を追加する。
+`orchestune provision` calls the `gh` CLI internally. In an environment where `gh` itself can't be installed or authenticated, use the GitHub MCP server, or guide the user through manual filing via the Web UI instead. In that case, replicate the following mapping by hand:
+
+* Parent Issue: file it with the title `[EPIC] <title>` from `decomposition_plan.md`'s `title`, then write the resulting number back into `parent_issue_number`.
+* Each subtask Issue: fill `.github/issue_template.md`'s placeholders (`{{subtask_id}}`, `{{subtask_id_yaml}}`, `{{description}}`, `{{overview}}`, `{{proposed_changes}}`, `{{acceptance_criteria}}`, `{{verification_plan}}`, `{{footprint}}`, `{{symbols}}`, `{{depends_on}}`, `{{parent_issue_number}}`) from the subtask's fields, then write the resulting number back into that subtask's `issue_number`. `{{subtask_id}}` is for display use (headings, etc. — the raw value), while `{{subtask_id_yaml}}` is for use inside the Footprint YAML block only (a YAML-scalar-quoted value that's safe even for IDs containing `:` or `#`) — always use the correct one for its context. `{{parent_issue_number}}` is the parent Issue's number (`null` if not yet resolved); don't omit it, since it's the required fallback the Dispatcher uses to discover child Issues in environments where native relationships aren't available.
+* **Always set labels**: `dispatch_cycle._group_by_status` never picks up an Issue that has no status label (`status:queued`/`status:blocked`/etc.), so forgetting to label a subtask means it's never dispatched, permanently. Set `status:queued` if `depends_on` is empty or every dependency is already done, otherwise `status:blocked`. Also always set `priority:{subtask.priority}` (from `decomposition_plan.md`'s `priority`; `medium` if unset), and `risk:flagged` if `risk` is true (these derivation rules mirror `_derive_labels` in `orchestune/provisioning.py`).
+* Filing Issues via the GitHub MCP may not be able to set native `blocked_by`/`parent` relationships. Even so, always preserve Footprint YAML's `depends_on` — the Dispatcher uses this value for dependency resolution and for restoring branch stacking during self-healing. If you want the GitHub-native relationships visible too, add them after filing via the Web UI or `gh issue edit --set-parent`/`--add-blocked-by`.
