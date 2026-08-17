@@ -318,8 +318,9 @@ L1の境界は、単一の具象クライアントではなく3つの `Protocol`
 受け付け、共有フィクスチャ `fake_forge` がその実体を提供します。
 
 ただしこの移行は途上です。`patch("orchestune.forge.GitHubForge.<メソッド>")` は
-現在も約500箇所残っています（特に `test_dispatch_cycle.py` /
-`test_dispatch_gc.py` / `test_parent_completion.py`）。これらはプロトコル導入
-以前から存在するテスト群です。どちらの方式でも `gh` が実行されないという
-肝心の不変条件は守られており、注入は「新規テストが向かうべき方向」であって、
-スイート全体の現状を表したものではありません。
+現在も約490箇所残っています（特に `test_dispatch_cycle.py` /
+`test_dispatch_gc.py`）。これらはプロトコル導入以前から存在するテスト群です。
+`test_parent_completion.py` / `test_integration_coordinator.py` は`fake_forge`
+注入へ移行済みです。どちらの方式でも `gh` が実行されないという肝心の不変条件は
+守られており、注入は「新規テストが向かうべき方向」であって、スイート全体の
+現状を表したものではありません。
