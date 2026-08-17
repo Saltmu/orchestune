@@ -8,7 +8,7 @@ from pathlib import Path
 
 from orchestune.dispatch_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
-from orchestune.git_cli import run_git
+from orchestune.git_cli import fetch_remote_branch, run_git
 from orchestune.integrator_pr import handle_merge_failure
 from orchestune.models import Task
 from orchestune.process_utils import default_ci_command
@@ -238,17 +238,9 @@ class IntegrationMerger:
         # refspecを明示してfetchしないと後続のmergeが常に
         # 「not something we can merge」で失敗する（内容衝突ではない）。
         try:
-            run_git(
-                [
-                    "fetch",
-                    "origin",
-                    f"{branch_name}:refs/remotes/origin/{branch_name}",
-                ],
-                cwd=self.repository_root,
-                check=True,
-            )
+            fetch_remote_branch(self.repository_root, branch_name)
             return True, False, ""
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, ValueError, OSError) as e:
             # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
             # 場合だけ統合済みとして扱う。同名branchの過去PRだけでは、
             # branch再利用後の新commitを見落とすため根拠にしない。
@@ -276,7 +268,7 @@ class IntegrationMerger:
                 )
                 return True, True, ""
 
-            fetch_error = e.stderr or ""
+            fetch_error = getattr(e, "stderr", None) or str(e)
             return False, False, f"Failed to fetch branch: {fetch_error}"
 
     def _merge_task_branch(self, branch_name: str) -> tuple[bool, str | None, str]:
