@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -226,19 +226,14 @@ class TestProcessPendingNotNeededReviews:
     def _state_with(self, *entries: PendingNotNeededReview, path):
         save_not_needed_review_state(NotNeededReviewState(pending=list(entries)), path)
 
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
-    def test_no_pending_reviews_is_a_noop(self, mock_labels, tmp_path):
+    def test_no_pending_reviews_is_a_noop(self, fake_forge: MagicMock, tmp_path):
         path = tmp_path / "state.json"
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
         assert result == {"closed": [], "reopened": [], "still_pending": 0}
-        mock_labels.assert_not_called()
+        fake_forge.get_issue_labels.assert_not_called()
 
-    @patch("orchestune.forge.GitHubForge.get_issue_state")
-    @patch("orchestune.forge.GitHubForge.close_issue")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_verified_label_closes_issue_and_mentions_human(
-        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         path = tmp_path / "state.json"
         self._state_with(
@@ -247,21 +242,23 @@ class TestProcessPendingNotNeededReviews:
             ),
             path=path,
         )
-        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
-        mock_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        fake_forge.get_issue_state.return_value = "OPEN"
         call_order: list[str] = []
-        mock_close.side_effect = lambda *a, **kw: call_order.append("close")
-        mock_remove.side_effect = lambda *a, **kw: call_order.append("remove")
+        fake_forge.close_issue.side_effect = lambda *a, **kw: call_order.append("close")
+        fake_forge.remove_label.side_effect = lambda *a, **kw: call_order.append(
+            "remove"
+        )
 
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
-        mock_close.assert_called_once()
-        close_args = mock_close.call_args.args
-        close_kwargs = mock_close.call_args.kwargs
+        fake_forge.close_issue.assert_called_once()
+        close_args = fake_forge.close_issue.call_args.args
+        close_kwargs = fake_forge.close_issue.call_args.kwargs
         assert close_args[0] == 250
         assert close_args[1] == "not planned"
         assert "@Saltmu" in close_kwargs["comment"]
-        mock_remove.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
+        fake_forge.remove_label.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
         # close_issueがremove_labelより先に呼ばれること（#205: クローズ成功確定前に
         # 完了シグナルを消費しない）。
         assert call_order == ["close", "remove"]
@@ -269,12 +266,8 @@ class TestProcessPendingNotNeededReviews:
         assert result["still_pending"] == 0
         assert load_not_needed_review_state(path).pending == []
 
-    @patch("orchestune.forge.GitHubForge.get_issue_state")
-    @patch("orchestune.forge.GitHubForge.close_issue")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_close_failure_keeps_passed_label_unconsumed_and_entry_pending(
-        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         """#205: close_issueが失敗した場合、passedラベルが消費されず、エントリは
         pendingのまま残って次サイクルで再試行されること。"""
@@ -283,23 +276,19 @@ class TestProcessPendingNotNeededReviews:
             issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
         )
         self._state_with(entry, path=path)
-        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
-        mock_state.return_value = "OPEN"
-        mock_close.side_effect = RuntimeError("gh api error")
+        fake_forge.get_issue_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.close_issue.side_effect = RuntimeError("gh api error")
 
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
-        mock_remove.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
         assert result["closed"] == []
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
-    @patch("orchestune.forge.GitHubForge.get_issue_state")
-    @patch("orchestune.forge.GitHubForge.close_issue")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_one_entry_failure_does_not_block_others_from_saving(
-        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         """#205: 1エントリの失敗が、他エントリの処理結果の状態保存を巻き込まない
         こと。"""
@@ -311,26 +300,22 @@ class TestProcessPendingNotNeededReviews:
             issue_number=200, subtask_id="fails", dispatched_at=1.0
         )
         self._state_with(ok_entry, failing_entry, path=path)
-        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
-        mock_state.return_value = "OPEN"
-        mock_close.side_effect = lambda issue_number, *a, **kw: (
+        fake_forge.get_issue_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.close_issue.side_effect = lambda issue_number, *a, **kw: (
             (_ for _ in ()).throw(RuntimeError("gh api error"))
             if issue_number == 200
             else None
         )
 
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
         assert result["closed"] == [100]
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [failing_entry]
 
-    @patch("orchestune.forge.GitHubForge.get_issue_state")
-    @patch("orchestune.forge.GitHubForge.close_issue")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_remove_label_failure_after_close_retries_without_double_closing(
-        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         """#205: クローズ成功後にremove_labelが失敗しても、次サイクルの再試行で
         二重クローズが発生しないこと（冪等）。"""
@@ -339,36 +324,33 @@ class TestProcessPendingNotNeededReviews:
             issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
         )
         self._state_with(entry, path=path)
-        mock_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
-        mock_state.return_value = "OPEN"
-        mock_remove.side_effect = RuntimeError("gh api error")
+        fake_forge.get_issue_labels.return_value = (NOT_NEEDED_VERIFIED_LABEL,)
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.remove_label.side_effect = RuntimeError("gh api error")
 
-        first_result = process_pending_not_needed_reviews(path)
+        first_result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
-        mock_close.assert_called_once()
+        fake_forge.close_issue.assert_called_once()
         assert first_result["closed"] == []
         assert first_result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
         # 次サイクル: 実際にはクローズは成功済みなのでIssueはCLOSED、
         # ラベルはまだ消費できていないのでpassedラベルは残ったまま。
-        mock_close.reset_mock()
-        mock_remove.reset_mock(side_effect=True)
-        mock_state.return_value = "CLOSED"
+        fake_forge.close_issue.reset_mock()
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        fake_forge.get_issue_state.return_value = "CLOSED"
 
-        second_result = process_pending_not_needed_reviews(path)
+        second_result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
-        mock_close.assert_not_called()
-        mock_remove.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
+        fake_forge.close_issue.assert_not_called()
+        fake_forge.remove_label.assert_called_once_with(250, NOT_NEEDED_VERIFIED_LABEL)
         assert second_result["closed"] == [250]
         assert second_result["still_pending"] == 0
         assert load_not_needed_review_state(path).pending == []
 
-    @patch("orchestune.forge.GitHubForge.close_issue")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_rejected_label_clears_without_closing(
-        self, mock_labels, mock_remove, mock_close, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         path = tmp_path / "state.json"
         self._state_with(
@@ -377,46 +359,47 @@ class TestProcessPendingNotNeededReviews:
             ),
             path=path,
         )
-        mock_labels.return_value = (NOT_NEEDED_REJECTED_LABEL,)
+        fake_forge.get_issue_labels.return_value = (NOT_NEEDED_REJECTED_LABEL,)
 
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
-        mock_close.assert_not_called()
-        mock_remove.assert_called_once_with(250, NOT_NEEDED_REJECTED_LABEL)
+        fake_forge.close_issue.assert_not_called()
+        fake_forge.remove_label.assert_called_once_with(250, NOT_NEEDED_REJECTED_LABEL)
         assert result["reopened"] == [250]
         assert load_not_needed_review_state(path).pending == []
 
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
-    def test_neither_label_present_keeps_entry_pending(self, mock_labels, tmp_path):
+    def test_neither_label_present_keeps_entry_pending(
+        self, fake_forge: MagicMock, tmp_path
+    ):
         path = tmp_path / "state.json"
         entry = PendingNotNeededReview(
             issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
         )
         self._state_with(entry, path=path)
-        mock_labels.return_value = ("status:not-needed",)
+        fake_forge.get_issue_labels.return_value = ("status:not-needed",)
 
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
-    def test_label_polling_failure_keeps_entry_pending(self, mock_labels, tmp_path):
+    def test_label_polling_failure_keeps_entry_pending(
+        self, fake_forge: MagicMock, tmp_path
+    ):
         path = tmp_path / "state.json"
         entry = PendingNotNeededReview(
             issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
         )
         self._state_with(entry, path=path)
-        mock_labels.side_effect = RuntimeError("gh api error")
+        fake_forge.get_issue_labels.side_effect = RuntimeError("gh api error")
 
-        result = process_pending_not_needed_reviews(path)
+        result = process_pending_not_needed_reviews(path, forge=fake_forge)
 
         assert result["still_pending"] == 1
         assert load_not_needed_review_state(path).pending == [entry]
 
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_base_exception_mid_loop_preserves_full_pending_state(
-        self, mock_labels, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         """#226: BaseException（割り込み・強制終了）でループが中断した場合、
         状態ファイルを切り詰めず、未処理エントリを含む全pendingエントリを温存する
@@ -440,21 +423,17 @@ class TestProcessPendingNotNeededReviews:
                 raise KeyboardInterrupt()
             return ("status:not-needed",)
 
-        mock_labels.side_effect = labels_side_effect
+        fake_forge.get_issue_labels.side_effect = labels_side_effect
 
         with pytest.raises(KeyboardInterrupt):
-            process_pending_not_needed_reviews(path)
+            process_pending_not_needed_reviews(path, forge=fake_forge)
 
         # 中断時でも、まだ消費していないエントリ（未処理・要再試行）は温存される。
         remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
         assert remaining == {100, 200}
 
-    @patch("orchestune.forge.GitHubForge.get_issue_state")
-    @patch("orchestune.forge.GitHubForge.close_issue")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.get_issue_labels")
     def test_base_exception_after_consuming_entry_drops_only_consumed(
-        self, mock_labels, mock_remove, mock_close, mock_state, tmp_path
+        self, fake_forge: MagicMock, tmp_path
     ):
         """#226/PR#227レビュー: 割り込み前に passed で正常消費（クローズ＋ラベル削除）
         済みのエントリは、中断時の台帳保存でも除外され、後続の未処理エントリのみが
@@ -469,21 +448,21 @@ class TestProcessPendingNotNeededReviews:
             issue_number=200, subtask_id="interrupted", dispatched_at=1.0
         )
         self._state_with(consumed, interrupted, path=path)
-        mock_state.return_value = "OPEN"
+        fake_forge.get_issue_state.return_value = "OPEN"
 
         def labels_side_effect(issue_number):
             if issue_number == 100:
                 return (NOT_NEEDED_VERIFIED_LABEL,)
             raise KeyboardInterrupt()
 
-        mock_labels.side_effect = labels_side_effect
+        fake_forge.get_issue_labels.side_effect = labels_side_effect
 
         with pytest.raises(KeyboardInterrupt):
-            process_pending_not_needed_reviews(path)
+            process_pending_not_needed_reviews(path, forge=fake_forge)
 
         # #100 はクローズ＋passedラベル削除まで成功済み（消費済み）なので台帳から除外し、
         # 割り込みで未処理の #200 のみを残す。
-        mock_close.assert_called_once()
-        mock_remove.assert_called_once_with(100, NOT_NEEDED_VERIFIED_LABEL)
+        fake_forge.close_issue.assert_called_once()
+        fake_forge.remove_label.assert_called_once_with(100, NOT_NEEDED_VERIFIED_LABEL)
         remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
         assert remaining == {200}
