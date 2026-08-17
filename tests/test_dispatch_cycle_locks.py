@@ -10,12 +10,12 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import (
+from orchestune.dispatch_cycle import run_dispatch_cycle
+from orchestune.dispatch_locks import ExternalLockScanResult
+from orchestune.dispatch_phase_rebase import (
     _apply_external_lock_sync,
     _decide_external_lock_sync,
-    run_dispatch_cycle,
 )
-from orchestune.dispatch_locks import ExternalLockScanResult
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import (
     ActiveWorktree,
@@ -115,7 +115,7 @@ class TestDecideExternalLockSync:
         run_state = RunState(active_worktrees={})
         with (
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=[],
             ),
         ):
@@ -128,7 +128,7 @@ class TestDecideExternalLockSync:
         task = _task(issue_number=1, footprint=("src/foo.py",))
         with (
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/feature/foo@bar"],
             ),
         ):
@@ -148,11 +148,11 @@ class TestDecideExternalLockSync:
         queued_task = _task(issue_number=2, footprint=("src/bar.py",))
         with (
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/feat/x"],
             ),
             patch(
-                "orchestune.dispatch_cycle.branch_changed_files",
+                "orchestune.dispatch_phase_rebase.branch_changed_files",
                 return_value=None,
             ),
         ):
@@ -248,12 +248,12 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-a"],
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
-                "orchestune.dispatch_cycle.branch_changed_files",
+                "orchestune.dispatch_phase_rebase.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
             _patch_gc_process_alive(return_value=True),
@@ -282,7 +282,7 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/feature/foo"],
             ),
             patch(
@@ -294,7 +294,7 @@ class TestRunDispatchCycleBranchNormalization:
                 ],
             ),
             patch(
-                "orchestune.dispatch_cycle.branch_changed_files"
+                "orchestune.dispatch_phase_rebase.branch_changed_files"
             ) as mock_branch_files,
         ):
             run_dispatch_cycle(config)
@@ -316,12 +316,12 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/someone-elses-branch"],
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
-                "orchestune.dispatch_cycle.branch_changed_files",
+                "orchestune.dispatch_phase_rebase.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
         ):

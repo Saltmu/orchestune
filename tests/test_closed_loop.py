@@ -401,11 +401,11 @@ def test_closed_loop_flow():
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
         patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
-            "orchestune.dispatch_cycle.list_remote_branches",
+            "orchestune.dispatch_phase_rebase.list_remote_branches",
             dummy_github.list_remote_branches,
         ),
         patch(
-            "orchestune.dispatch_cycle.branch_changed_files",
+            "orchestune.dispatch_phase_rebase.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
         patch(
@@ -664,11 +664,11 @@ def test_closed_loop_dag_recomputation_serialization():
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
         patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
-            "orchestune.dispatch_cycle.list_remote_branches",
+            "orchestune.dispatch_phase_rebase.list_remote_branches",
             dummy_github.list_remote_branches,
         ),
         patch(
-            "orchestune.dispatch_cycle.branch_changed_files",
+            "orchestune.dispatch_phase_rebase.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
         patch(

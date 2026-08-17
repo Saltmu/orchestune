@@ -268,7 +268,7 @@ class TestBranchStacking:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -344,7 +344,7 @@ class TestBranchStacking:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -429,7 +429,7 @@ class TestBranchStacking:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -524,7 +524,7 @@ class TestBranchStacking:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=[
                     "origin/claude/issue-1-task-1",
                     "origin/claude/issue-2-task-2",
@@ -609,7 +609,7 @@ class TestBranchStacking:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=[
                     "origin/claude/issue-1-task-1",
                     "origin/claude/issue-2-task-2",
@@ -722,7 +722,7 @@ class TestBranchStacking:
                 ),
             ),
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -825,7 +825,7 @@ class TestBranchStacking:
                 ),
             ),
             patch(
-                "orchestune.dispatch_cycle.list_remote_branches",
+                "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
