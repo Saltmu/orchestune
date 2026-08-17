@@ -399,27 +399,37 @@ def _resolve_parent_issue(
 
 def _backfill_reused_issue_parent_metadata(
     forge: IssueForge, candidate: IssueRecord, parent_issue_number: int
-) -> None:
+) -> bool:
     """#485 review (P2): a reused Issue can predate `parent_issue_number`
     (created by an older template, or by a run before this field existed).
     Left unpatched, that Issue has neither a native parent (if
     `add_sub_issue` is now unavailable) nor a metadata fallback the
-    parent-scoped Dispatcher can find it by. Best-effort: if the forge
-    can't write issue bodies either, leave it — native `add_sub_issue`
-    (tried separately, right after this) is still the primary mechanism
-    and this is purely a fallback safety net for when that's unavailable.
+    parent-scoped Dispatcher can find it by.
+
+    Returns whether the body now carries correct `parent_issue_number`
+    metadata (already correct, or successfully backfilled). `False` means
+    the metadata fallback cannot be relied on for this issue — the caller
+    (`provision_issues`) must then confirm native `add_sub_issue` linking
+    actually succeeded, or this subtask has no discovery mechanism left at
+    all (#485 review round 4, P2).
     """
     new_body = backfill_parent_issue_number(candidate.body, parent_issue_number)
     if new_body is None:
-        return
+        # Either already correct, or the Footprint fence can't be
+        # re-parsed here — but `candidate` only reaches this call after
+        # `_subtask_id_from_body` already parsed the same fence
+        # successfully, so in practice this is always "already correct".
+        return True
     try:
         forge.update_issue_body(candidate.number, new_body)
+        return True
     except (RelationshipUnavailableError, AttributeError, NotImplementedError) as e:
         print(
             f"Warning: could not backfill parent_issue_number into "
             f"#{candidate.number}'s body: {e}",
             file=sys.stderr,
         )
+        return False
 
 
 def _provision_subtask(
@@ -431,10 +441,17 @@ def _provision_subtask(
     existing_by_subtask_id: dict[str, IssueRecord],
     dependencies_done: dict[str, bool],
     parent_issue_number: int,
-) -> tuple[int, bool, bool]:
+) -> tuple[int, bool, bool, bool]:
     """Resolve an existing issue or create a new one for a subtask.
 
-    Returns a tuple of `(issue_number, is_reused, is_done)`.
+    Returns a tuple of `(issue_number, is_reused, is_done,
+    has_parent_metadata)`. `has_parent_metadata` is `True` for a newly
+    created issue (the body is always rendered with it) and for a reused
+    issue whose body already carries or was successfully backfilled with
+    it; `False` only for a reused issue where it's missing/stale *and* the
+    backfill write failed — the caller must then verify native
+    `add_sub_issue` linking succeeds, since neither discovery mechanism is
+    otherwise available for this subtask.
     """
     # A persisted issue_number could be stale (e.g. the plan was copied
     # to another repo and that number now belongs to an unrelated
@@ -459,11 +476,12 @@ def _provision_subtask(
 
     if number is not None:
         labels = forge.get_issue_labels(number)
+        has_parent_metadata = True
         if candidate is not None:
-            _backfill_reused_issue_parent_metadata(
+            has_parent_metadata = _backfill_reused_issue_parent_metadata(
                 forge, candidate, parent_issue_number
             )
-        return number, True, "status:done" in labels
+        return number, True, "status:done" in labels, has_parent_metadata
 
     all_deps_done = all(dependencies_done.get(dep, False) for dep in subtask.depends_on)
     labels = _derive_labels(subtask, dependencies_done=all_deps_done)
@@ -475,7 +493,7 @@ def _provision_subtask(
     # duplicate (it isn't linked as a sub-issue yet, so the
     # subtask_id search over the parent's children can't find it).
     write_issue_numbers(plan_path, {subtask.id: number})
-    return number, False, False
+    return number, False, False, True
 
 
 @dataclass(frozen=True)
@@ -635,7 +653,7 @@ def provision_issues(
 
     for subtask_id in dag.topological_order:
         subtask = dag.subtasks[subtask_id]
-        number, is_reused, is_done = _provision_subtask(
+        number, is_reused, is_done, has_parent_metadata = _provision_subtask(
             resolved_forge,
             subtask,
             template,
@@ -658,6 +676,19 @@ def provision_issues(
             subtask.depends_on,
             resolved_numbers,
         )
+        if not has_parent_metadata and not link_result.parent_linked:
+            # #485 review round 4 (P2): a reused issue whose body metadata
+            # couldn't be backfilled AND whose native `add_sub_issue` also
+            # failed has no discovery mechanism left at all — reporting
+            # this as merely "degraded" would be misleading (that implies
+            # the fallback works). Fail loudly instead of letting
+            # `--parent-issue` Dispatcher and `process_parent_completion`
+            # silently never see this subtask.
+            raise RelationshipUnavailableError(
+                f"#{number} ({subtask_id}) has neither a native parent link "
+                f"nor discoverable parent_issue_number body metadata; "
+                "this forge cannot reliably link it to its parent Issue"
+            )
         if link_result.degraded:
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number

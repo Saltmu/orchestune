@@ -387,6 +387,44 @@ class TestProvisionIssuesDegradedMode:
         assert second.reused["task-a"] == first.created["task-a"]
         assert second.reused["task-b"] == first.created["task-b"]
 
+    def test_raises_when_reused_issue_has_neither_native_link_nor_metadata_fallback(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#485 review round 4 (P2): a legacy issue (body predates
+        parent_issue_number) reused on a forge that can't write native
+        `add_sub_issue` *or* `update_issue_body` has no way for the
+        parent-scoped Dispatcher to ever find it. Reporting this as
+        "degraded" (as if the metadata fallback covers it) would be
+        actively misleading, so provisioning must fail loudly instead."""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'T'\nsubtasks:\n"
+            "  - id: task-a\n    description: 'd'\n    issue_number: 555\n---\n",
+            encoding="utf-8",
+        )
+
+        class FullyDegradedForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("sub_issue_write not exposed")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("issue_dependency_write not exposed")
+
+            def update_issue_body(self, issue_number, body) -> None:
+                raise RelationshipUnavailableError("body edit not exposed")
+
+        forge = FullyDegradedForge()
+        forge.issues[555] = {
+            "title": "[FEAT] task-a: d",
+            # No `parent_issue_number` field: this predates the field.
+            "body": "```yaml\nsubtask_id: task-a\n```\n",
+            "labels": ["status:queued"],
+        }
+        forge._next_number = 556
+
+        with pytest.raises(RelationshipUnavailableError):
+            provision_issues(plan_path, forge=forge, template_path=template_path)
+
     def test_print_result_reports_degraded_operating_mode(self, capsys):
         result = ProvisionResult(
             parent_issue_number=100,
@@ -1263,7 +1301,7 @@ class TestProvisionSubtask:
             risk=False,
             risk_reasons=(),
         )
-        number, is_reused, is_done = _provision_subtask(
+        number, is_reused, is_done, has_parent_metadata = _provision_subtask(
             forge=forge,
             subtask=subtask,
             template=template,
@@ -1275,6 +1313,7 @@ class TestProvisionSubtask:
         )
         assert is_reused is False
         assert is_done is False
+        assert has_parent_metadata is True
         assert number in forge.issues
         assert f"issue_number: {number}" in plan_path.read_text(encoding="utf-8")
 
@@ -1300,7 +1339,7 @@ class TestProvisionSubtask:
             risk_reasons=(),
             issue_number=existing_number,
         )
-        number, is_reused, is_done = _provision_subtask(
+        number, is_reused, is_done, has_parent_metadata = _provision_subtask(
             forge=forge,
             subtask=subtask,
             template=template,
@@ -1313,6 +1352,7 @@ class TestProvisionSubtask:
         assert number == existing_number
         assert is_reused is True
         assert is_done is True
+        assert has_parent_metadata is True
         # #485 review (P2): a reused issue created before parent_issue_number
         # existed (or by an older template) gets it backfilled on reuse, so
         # the metadata fallback can still find it if native linking fails.
@@ -1388,7 +1428,7 @@ class TestProvisionSubtask:
             risk_reasons=(),
             issue_number=existing_number,
         )
-        number, is_reused, _ = _provision_subtask(
+        number, is_reused, _, has_parent_metadata = _provision_subtask(
             forge=forge,
             subtask=subtask,
             template=template,
@@ -1400,6 +1440,11 @@ class TestProvisionSubtask:
         )
         assert number == existing_number
         assert is_reused is True
+        # #485 review round 4 (P2): the caller (provision_issues) must be
+        # told the backfill failed, so it can check whether native linking
+        # covers this subtask instead — reusing it "successfully" here
+        # doesn't mean it's actually discoverable.
+        assert has_parent_metadata is False
 
 
 class TestLinkSubtaskRelationships:
