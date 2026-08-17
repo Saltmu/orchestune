@@ -246,6 +246,13 @@ class GitHubIssueMixin:
         url = stdout.strip().splitlines()[-1]
         return int(url.rstrip("/").rsplit("/", 1)[-1])
 
+    def update_issue_body(self, issue_number: int | str, body: str) -> None:
+        number = validate_issue_number(issue_number)
+        self._run(
+            ["gh", "issue", "edit", str(number), "--body-file", "-"],
+            input_text=body,
+        )
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
@@ -290,6 +297,50 @@ class GitHubIssueMixin:
             if entry.get("title") == title
         ]
 
+    def find_issues_by_parent_metadata(
+        self, parent_issue_number: int | str
+    ) -> list[IssueRecord]:
+        """#485: ネイティブSub-issue関係が使えない環境向けのフォールバック。
+
+        `gh issue list --search`は本文の部分文字列マッチ（`in:body`）しか
+        できず"12"が"120"にもヒットするような誤検出がありうるため、
+        検索結果はFootprint YAMLフェンスの`parent_issue_number`を
+        `parent_issue_number_from_body`（呼び出し元）で厳密に再検証する
+        前提の候補集合として返す。
+        """
+        number = validate_issue_number(parent_issue_number)
+        stdout = self._run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--search",
+                f"in:body parent_issue_number: {number}",
+                "--state",
+                "all",
+                "--json",
+                "number,title,body,labels,createdAt,parent,blockedBy,state",
+                "--limit",
+                "1000",
+            ]
+        )
+        raw_issues = json.loads(stdout)
+        return [
+            IssueRecord(
+                number=raw["number"],
+                title=raw["title"],
+                body=raw["body"],
+                labels=tuple(entry["name"] for entry in raw.get("labels", [])),
+                created_at=raw["createdAt"],
+                state=raw.get("state", "OPEN"),
+                parent=raw.get("parent"),
+                blocked_by=tuple(
+                    node["number"] for node in raw.get("blockedBy", {}).get("nodes", [])
+                ),
+            )
+            for raw in raw_issues
+        ]
+
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
         number = validate_issue_number(issue_number)
         try:
@@ -300,7 +351,7 @@ class GitHubIssueMixin:
                     "view",
                     str(number),
                     "--json",
-                    "number,title,body,state,labels,createdAt",
+                    "number,title,body,state,labels,createdAt,parent,blockedBy",
                 ]
             )
         except subprocess.CalledProcessError as exc:
@@ -316,4 +367,13 @@ class GitHubIssueMixin:
             labels=tuple(entry["name"] for entry in raw.get("labels", [])),
             created_at=raw.get("createdAt") or "",
             state=raw.get("state", "OPEN"),
+            # #485 review round 5 (P2): provisioning's reuse path needs to
+            # know a candidate's *already-established* native parent (not
+            # just whether it can currently re-write one) to avoid
+            # wrongly concluding a legacy issue has no discovery mechanism
+            # left just because the current forge can't re-assert it.
+            parent=raw.get("parent"),
+            blocked_by=tuple(
+                node["number"] for node in raw.get("blockedBy", {}).get("nodes", [])
+            ),
         )

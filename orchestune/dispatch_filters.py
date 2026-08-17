@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord
 
 
@@ -87,6 +88,4 @@ def _filter_by_parent(
     """`parent_issue_number`が指定されている場合、親Issueが一致するものだけに絞る。"""
     if parent_issue_number is None:
         return issues
-    return [
-        i for i in issues if i.parent and i.parent.get("number") == parent_issue_number
-    ]
+    return [i for i in issues if effective_parent_number(i) == parent_issue_number]

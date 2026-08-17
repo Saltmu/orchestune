@@ -12,6 +12,7 @@ from orchestune.dispatch_recovery import _extract_raw_subtask_id
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import parse_task_from_issue
 from orchestune.dispatch_state import RunState
+from orchestune.issue_parsing import find_children_by_parent
 from orchestune.models import IssueRecord
 
 
@@ -96,9 +97,10 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
     `forge.list_sub_issues`による親Issue起点のfast pathを使う。
     """
     if config.parent_issue_number is not None:
-        return _group_by_status(
-            config.resolved_forge.list_sub_issues(config.parent_issue_number)
+        result = find_children_by_parent(
+            config.resolved_forge, config.parent_issue_number
         )
+        return _group_by_status(result.issues)
 
     return IssuesByStatus(
         queued=config.resolved_forge.list_issues_by_label("status:queued"),

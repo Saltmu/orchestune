@@ -109,6 +109,10 @@ def fake_forge() -> MagicMock:
     forge.check_auth.return_value = None
     forge.ensure_labels.return_value = BootstrapResult((), ())
     forge.get_issue_labels.return_value = ()
+    # #485: default to "no extra metadata-only children" so
+    # `find_children_by_parent` degrades to plain `list_sub_issues` results
+    # unless a test explicitly configures this to exercise the fallback.
+    forge.find_issues_by_parent_metadata.return_value = []
     return forge
 
 

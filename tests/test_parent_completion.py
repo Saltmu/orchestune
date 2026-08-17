@@ -296,3 +296,26 @@ class TestProcessParentCompletionWithFakeForge:
         fake_forge.list_sub_issues.assert_called_once_with(100)
         fake_forge.get_merged_pr_timestamp.assert_not_called()
         fake_forge.close_issue.assert_not_called()
+
+    def test_sees_metadata_only_children_not_natively_linked(
+        self, fake_forge: MagicMock
+    ):
+        """#485 review (P1): a child created without a native sub-issue
+        link (relationship writes were unavailable) must still block
+        completion, or the parent could be closed/final-PR'd while that
+        child is still open."""
+        fake_forge.list_sub_issues.return_value = []
+        fake_forge.find_issues_by_parent_metadata.return_value = [
+            IssueRecord(
+                number=101,
+                title="Issue 101",
+                body="```yaml\nparent_issue_number: 100\n```\n",
+                labels=(),
+                created_at="2026-07-13T00:00:00Z",
+                state="OPEN",
+            )
+        ]
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert res == {"status": "waiting_on_children", "open_children": [101]}

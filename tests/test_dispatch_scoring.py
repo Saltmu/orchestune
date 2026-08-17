@@ -192,6 +192,35 @@ class TestParseTaskFromIssue:
         task = parse_task_from_issue(issue)
         assert task.parent_number == 100
 
+    def test_falls_back_to_body_metadata_for_parent_number_when_native_absent(self):
+        # #485: MCP-only環境等でネイティブSub-issue関係を作れなかった
+        # Issueでも、Footprint YAMLフェンスのparent_issue_numberから
+        # 親を復元できる。
+        issue = IssueRecord(
+            number=13,
+            title="t",
+            body="```yaml\nsubtask_id: task-a\nparent_issue_number: 55\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+            parent=None,
+        )
+        task = parse_task_from_issue(issue)
+        assert task.parent_number == 55
+        assert task.parent_state is None
+
+    def test_native_parent_takes_precedence_over_body_metadata(self):
+        issue = IssueRecord(
+            number=14,
+            title="t",
+            body="```yaml\nsubtask_id: task-a\nparent_issue_number: 55\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+            parent={"number": 100, "state": "OPEN"},
+        )
+        task = parse_task_from_issue(issue)
+        assert task.parent_number == 100
+        assert task.parent_state == "OPEN"
+
     def test_parses_depends_on_from_blocked_by(self):
         issue = IssueRecord(
             number=11,
