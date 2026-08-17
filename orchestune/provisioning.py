@@ -40,6 +40,7 @@ from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,
     find_children_by_parent,
+    parent_issue_number_from_body,
 )
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.symbol_verification import find_missing_symbols
@@ -281,6 +282,25 @@ def _validate_template_identity_marker(
             f"{template_path} から subtask_id を再照合できません"
             "（'{{subtask_id_yaml}}' がFootprint YAMLフェンス内の"
             "'subtask_id:' として描画されていません）。冪等性が壊れます"
+        )
+
+    # #485 review (P1): a custom `--template` missing `{{parent_issue_number}}`
+    # would silently render bodies without it. Provisioning would then report
+    # success (possibly even "full", not degraded) while the parent-metadata
+    # fallback — the only way to discover the issue when native sub-issue
+    # linking is unavailable — has nothing to find. Probe with a concrete
+    # number (not None/null) so a template that drops the placeholder text
+    # entirely, or one that only ever emits the `parent_issue_number: null`
+    # literal, both fail this check instead of only the latter.
+    probe_parent_number = 999999
+    probe_rendered = _render_issue_body(probe, template, probe_parent_number)
+    if parent_issue_number_from_body(probe_rendered) != probe_parent_number:
+        raise ValueError(
+            f"{template_path} から parent_issue_number を再照合できません"
+            "（'{{parent_issue_number}}' がFootprint YAMLフェンス内の"
+            "'parent_issue_number:' として描画されていません）。ネイティブ"
+            "Sub-issue関係が使えない環境でDispatcherが子Issueを発見できなく"
+            "なります"
         )
 
 

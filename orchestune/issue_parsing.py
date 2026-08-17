@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.models import IssueRecord, Task
 
 if TYPE_CHECKING:
@@ -64,19 +65,24 @@ def find_children_by_parent(
     """`parent_issue_number`配下の子Issueを、ネイティブSub-issue関係を起点に、
     本文metadataフォールバックで補完して返す（#485）。
 
-    `forge`が`find_issues_by_parent_metadata`の呼び出しに失敗した場合
-    （後方互換のため未実装のforge実装を含む）は、ネイティブの結果だけを
-    黙って返す（既存の`gh`ベース運用は完全動作のまま変わらない）。
+    `forge`が構造的にこの検索をサポートしない場合（`MetadataSearchUnavailableError`、
+    または後方互換のため未実装のforge実装が送出する`AttributeError`/
+    `NotImplementedError`）は、ネイティブの結果だけを黙って返す（既存の
+    `gh`ベース運用は完全動作のまま変わらない）。それ以外の失敗（`gh`認証切れ・
+    レート制限・ネットワーク瞬断などの一時的なもの）は伝播させ、呼び出し元の
+    再試行に委ねる — 黙って握りつぶすと、metadataでしか発見できないIssueが
+    一時的に消え、`provisioning.py`のdedup fallbackが誤って重複作成しうる。
     """
     native = forge.list_sub_issues(parent_issue_number)
     seen = {issue.number for issue in native}
 
     try:
         candidates = forge.find_issues_by_parent_metadata(parent_issue_number)
-    except Exception as e:
+    except (MetadataSearchUnavailableError, AttributeError, NotImplementedError) as e:
         print(
-            f"Warning: parent-metadata fallback search for #{parent_issue_number} "
-            f"failed: {e}",
+            f"Warning: this forge does not support parent-metadata search; "
+            f"falling back to native sub-issue relationships only for "
+            f"#{parent_issue_number}: {e}",
             file=sys.stderr,
         )
         return native
@@ -102,6 +108,53 @@ def is_epic_issue(issue: IssueRecord) -> bool:
     return issue.title.startswith("[EPIC] ") and PARENT_MARKER in issue.body
 
 
+def _native_depends_on(
+    issue: IssueRecord, issue_to_subtask_id: dict[int, str] | None
+) -> tuple[str, ...]:
+    if issue_to_subtask_id is None or not issue.blocked_by:
+        return ()
+    return tuple(
+        issue_to_subtask_id[num]
+        for num in issue.blocked_by
+        if num in issue_to_subtask_id
+    )
+
+
+def _body_depends_on(match: re.Match | None, yaml_error: bool) -> tuple[str, ...]:
+    if not match or yaml_error:
+        return ()
+    try:
+        data = yaml.safe_load(match.group(1))
+        if isinstance(data, dict):
+            return tuple(str(d) for d in (data.get("depends_on") or []))
+    except Exception:
+        pass
+    return ()
+
+
+def _resolve_depends_on(
+    issue: IssueRecord,
+    issue_to_subtask_id: dict[int, str] | None,
+    match: re.Match | None,
+    yaml_error: bool,
+) -> tuple[str, ...]:
+    """#485 review (P1): a task can have some dependencies linked via native
+    `blocked_by` and others not (e.g. one `set_blocked_by` call raised
+    `RelationshipUnavailableError` after an earlier one succeeded for the
+    same issue). Treating a non-empty native list as fully authoritative
+    then silently drops the unlinked dependency, letting the task be
+    promoted the moment only the linked one finishes. The body's
+    `depends_on` is always the complete, authoritative list (rendered
+    directly from `subtask.depends_on` at creation time), so union it in
+    rather than discarding it whenever any native entry exists.
+    """
+    depends_on = _native_depends_on(issue, issue_to_subtask_id)
+    for dep in _body_depends_on(match, yaml_error):
+        if dep not in depends_on:
+            depends_on += (dep,)
+    return depends_on
+
+
 def parse_task_from_issue(
     issue: IssueRecord,
     issue_to_subtask_id: dict[int, str] | None = None,
@@ -109,7 +162,6 @@ def parse_task_from_issue(
     subtask_id = ""
     footprint: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
-    depends_on: tuple[str, ...] = ()
     yaml_error = False
 
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
@@ -127,20 +179,7 @@ def parse_task_from_issue(
             )
             yaml_error = True
 
-    if issue_to_subtask_id is not None and issue.blocked_by:
-        depends_on = tuple(
-            issue_to_subtask_id[num]
-            for num in issue.blocked_by
-            if num in issue_to_subtask_id
-        )
-    else:
-        if match and not yaml_error:
-            try:
-                data = yaml.safe_load(match.group(1))
-                if isinstance(data, dict):
-                    depends_on = tuple(str(d) for d in (data.get("depends_on") or []))
-            except Exception:
-                pass
+    depends_on = _resolve_depends_on(issue, issue_to_subtask_id, match, yaml_error)
 
     priority = "medium"
     has_unknown_priority_label = False

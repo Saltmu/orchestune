@@ -232,6 +232,10 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
+            patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
@@ -304,6 +308,10 @@ class TestRunDispatchCycleFootprintRecompute:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
@@ -384,6 +392,10 @@ class TestRunDispatchCycleFootprintRecompute:
         with (
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
@@ -476,6 +488,10 @@ class TestRunDispatchCycleFootprintRecompute:
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
+            patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
@@ -532,6 +548,10 @@ class TestRunDispatchCycleFootprintRecompute:
         with (
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
+            patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),

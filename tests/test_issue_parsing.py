@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.issue_parsing import (
     find_children_by_parent,
     parent_issue_number_from_body,
@@ -51,9 +54,14 @@ class _MetadataAwareForge(_NativeOnlyForge):
         return self._candidates
 
 
-class _BrokenMetadataForge(_NativeOnlyForge):
+class _UnsupportedMetadataForge(_NativeOnlyForge):
     def find_issues_by_parent_metadata(self, parent_issue_number):
-        raise RuntimeError("MCP does not expose issue search")
+        raise MetadataSearchUnavailableError("MCP does not expose issue search")
+
+
+class _FlakyMetadataForge(_NativeOnlyForge):
+    def find_issues_by_parent_metadata(self, parent_issue_number):
+        raise RuntimeError("gh: rate limit exceeded")
 
 
 def _issue(number, parent_issue_number, subtask_id="task-a"):
@@ -97,8 +105,20 @@ class TestFindChildrenByParent:
 
         assert find_children_by_parent(forge, 100) == []
 
-    def test_falls_back_to_native_only_when_metadata_search_raises(self):
+    def test_falls_back_to_native_only_when_metadata_search_is_unsupported(self):
         native = [_issue(1, 100)]
-        forge = _BrokenMetadataForge(native)
+        forge = _UnsupportedMetadataForge(native)
 
         assert find_children_by_parent(forge, 100) == native
+
+    def test_propagates_operational_metadata_search_failures(self):
+        """#485 review (P1): a transient/operational failure (auth expired,
+        rate limit, network) must not be silently downgraded to
+        native-only — that can make a metadata-only child temporarily
+        disappear from a parent-scoped cycle, and provisioning's own
+        dedup could then recreate it as a duplicate."""
+        native = [_issue(1, 100)]
+        forge = _FlakyMetadataForge(native)
+
+        with pytest.raises(RuntimeError):
+            find_children_by_parent(forge, 100)

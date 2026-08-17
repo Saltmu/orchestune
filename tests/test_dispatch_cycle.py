@@ -611,6 +611,10 @@ class TestRunDispatchCycle:
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
+            patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
@@ -761,6 +765,10 @@ class TestRunDispatchCycleParentIssueValidation:
                 "orchestune.dispatch_phase_rebase.ensure_parent_branch"
             ) as mock_ensure,
             patch("orchestune.forge.GitHubForge.list_sub_issues", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
             patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
@@ -779,6 +787,10 @@ class TestRunDispatchCycleParentIssueValidation:
                 "orchestune.dispatch_phase_rebase.ensure_parent_branch"
             ) as mock_ensure,
             patch("orchestune.forge.GitHubForge.list_sub_issues", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),

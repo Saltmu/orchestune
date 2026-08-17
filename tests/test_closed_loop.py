@@ -150,6 +150,13 @@ class DummyGitHub:
             if issue.parent and issue.parent.get("number") == number
         ]
 
+    def find_issues_by_parent_metadata(
+        self, parent_issue_number: int | str
+    ) -> list[IssueRecord]:
+        """#485: this dummy has no body-metadata search backend; every
+        issue in this closed-loop test is linked via native `parent`."""
+        return []
+
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
         return self.issues.get(int(issue_number))
 
@@ -656,6 +663,10 @@ def test_closed_loop_dag_recomputation_serialization():
         patch(
             "orchestune.forge.GitHubForge.list_sub_issues",
             dummy_github.list_sub_issues,
+        ),
+        patch(
+            "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+            dummy_github.find_issues_by_parent_metadata,
         ),
         patch("orchestune.forge.GitHubForge.get_issue", dummy_github.get_issue),
         patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
