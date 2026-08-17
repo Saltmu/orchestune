@@ -1632,6 +1632,47 @@ class TestProvisionSubtask:
         # doesn't mean it's actually discoverable.
         assert has_parent_metadata is False
 
+    def test_rewrites_an_invalid_bodyparent_value_that_coerces_equal_via_python(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#485 review round 9 (P2): `parent_issue_number: true` in the
+        body must actually be rewritten for parent #1, not skipped as
+        "already correct" just because `True == 1` in Python — the strict
+        parser (`parent_issue_number_from_body`) rejects booleans, so
+        skipping the write here would leave the body permanently
+        undiscoverable while `has_parent_metadata` wrongly reports True."""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text("---\ntitle: 'T'\n---\n", encoding="utf-8")
+        template = template_path.read_text(encoding="utf-8")
+        forge = FakeForge()
+        existing_number = forge.create_issue(
+            "[FEAT] task-a: d",
+            "```yaml\nsubtask_id: task-a\nparent_issue_number: true\n```\n",
+            labels=("status:queued",),
+        )
+        subtask = SubTask(
+            id="task-a",
+            description="desc a",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            issue_number=existing_number,
+        )
+        number, is_reused, _, has_parent_metadata = _provision_subtask(
+            forge=forge,
+            subtask=subtask,
+            template=template,
+            repo_root=tmp_path,
+            plan_path=plan_path,
+            existing_by_subtask_id={},
+            dependencies_done={},
+            parent_issue_number=1,
+        )
+        assert has_parent_metadata is True
+        assert "parent_issue_number: 1\n" in forge.issues[existing_number]["body"]
+
 
 class TestLinkSubtaskRelationships:
     def test_links_sub_issue_and_blockers(self):
