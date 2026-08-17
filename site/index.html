@@ -5,7 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orchestune — Delegate large dev tasks to AI agents, with every subtask traceable</title>
 <meta name="description" content="Orchestune turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple AI agents, and keeps every branch, PR, and CI outcome traceable back to the original task.">
+<link rel="canonical" href="https://saltmu.github.io/orchestune/">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22><circle cx=%2212%22 cy=%2212%22 r=%2211%22 fill=%22%238a3d2b%22/></svg>">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Orchestune">
+<meta property="og:url" content="https://saltmu.github.io/orchestune/">
+<meta property="og:title" content="Orchestune — Delegate large dev tasks to AI agents, with every subtask traceable">
+<meta property="og:description" content="Orchestune turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple AI agents, and keeps every branch, PR, and CI outcome traceable back to the original task.">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="ja_JP">
+
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Orchestune — Delegate large dev tasks to AI agents, with every subtask traceable">
+<meta name="twitter:description" content="Orchestune turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple AI agents, and keeps every branch, PR, and CI outcome traceable back to the original task.">
+
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -165,7 +179,7 @@
         <h2 data-i18n="en">You just describe the task in chat</h2>
         <h2 data-i18n="ja">チャットでタスクを伝えるだけ</h2>
         <p data-i18n="en">No CLI flags to remember. Describe the task in plain language, and a reviewable decomposition_plan.md shows up right there in the conversation.</p>
-        <p data-i18n="ja">コマンドのオプションを覚える必要はありません。自然言語でタスクを伝えると、会話の中でそのままレビュー可能な decomposition_plan.md が提示されます。</p>
+        <p data-i18n="ja">コマンドのオプションを覚える必要はありません。自然言語でタスクを伝えると、会話の中でそのままレビュー可能なタスク分解計画（decomposition_plan.md）が提示されます。</p>
       </div>
 
       <div class="chat-mockup">
@@ -190,7 +204,8 @@
 
             <div class="chat-file">
               <div class="chat-file-head">
-                <span class="chat-file-name mono">decomposition_plan.md</span>
+                <span class="chat-file-name mono" data-i18n="en">decomposition_plan.md</span>
+                <span class="chat-file-name mono" data-i18n="ja">タスク分解計画（decomposition_plan.md）</span>
                 <button class="copy-btn" data-copy="subtasks:
   - id: backend-todo-api
     description: &quot;Todo REST API (Express)&quot;
