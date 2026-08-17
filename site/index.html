@@ -326,15 +326,15 @@
           <div class="step-num mono">03</div>
           <h3 data-i18n="en">Dispatch</h3>
           <h3 data-i18n="ja">ディスパッチ</h3>
-          <p data-i18n="en">Each subtask runs in an isolated worktree, with rate limits on launches and token spend per window. If an agent's edits deviate from its declared footprint, the DAG is recomputed automatically, falling back to forced serialization if that keeps happening.</p>
-          <p data-i18n="ja">各サブタスクは隔離されたworktreeで実行され、起動数とトークン消費量にウィンドウ単位のレート制限がかかります。エージェントの変更が宣言済みのfootprintから逸脱した場合はDAGを自動的に再計算し、それでも収まらなければ強制的に直列実行へフォールバックします。</p>
+          <p data-i18n="en">Each subtask runs in its own isolated worktree. If an agent's edits deviate from its declared footprint, the DAG is recomputed automatically, falling back to forced serialization if that keeps happening.</p>
+          <p data-i18n="ja">各サブタスクは、それぞれ隔離されたworktreeで実行されます。エージェントの変更が宣言済みのfootprintから逸脱した場合はDAGを自動的に再計算し、それでも収まらなければ強制的に直列実行へフォールバックします。</p>
         </div>
         <div class="step">
           <div class="step-num mono">04</div>
           <h3 data-i18n="en">Trace &amp; integrate</h3>
           <h3 data-i18n="ja">追跡と統合</h3>
-          <p data-i18n="en">Dependent branches auto-rebase onto whichever dependency branch has already passed CI — not just the latest main. With a parent issue, child branches merge into it automatically; only the final parent-to-main merge needs a human, and state stays self-healing by reconstructing everything from GitHub Issues and PRs.</p>
-          <p data-i18n="ja">依存先ブランチのうち、既にCIを通過しているブランチに対して自動的にリベースされます（最新のmainにではなく）。親Issueがある場合、子ブランチは親ブランチへ自動マージされ、親からmainへの最終マージだけ人間の判断が必要です。状態は常にGitHubのIssueとPRから復元されるため、自己修復します。</p>
+          <p data-i18n="en">Dependent branches auto-rebase onto whichever dependency branch has already passed CI — not just the latest main. Child branches merge into the parent branch automatically as they complete; only the final parent-to-main merge needs a human, and state stays self-healing by reconstructing everything from GitHub Issues and PRs.</p>
+          <p data-i18n="ja">依存先ブランチのうち、既にCIを通過しているブランチに対して自動的にリベースされます（最新のmainにではなく）。子ブランチは完了するたびに親ブランチへ自動マージされ、親からmainへの最終マージだけ人間の判断が必要です。状態は常にGitHubのIssueとPRから復元されるため、自己修復します。</p>
         </div>
       </div>
 
