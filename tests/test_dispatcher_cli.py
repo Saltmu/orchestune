@@ -1086,7 +1086,9 @@ class TestDispatcherConfigLoading:
         # 2回起動済み（max_launches_per_window=2）のため新規起動がブロックされる
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             mock_list.side_effect = lambda label, **_: (

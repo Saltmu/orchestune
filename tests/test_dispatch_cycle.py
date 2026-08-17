@@ -19,16 +19,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import (
-    CycleContext,
+from orchestune.dispatch_cycle import run_dispatch_cycle
+from orchestune.dispatch_cycle_context import (
     IssuesByStatus,
-    _determine_candidate_tasks,
     _fetch_issues,
-    _finalize_launch,
     _group_by_status,
-    run_dispatch_cycle,
 )
 from orchestune.dispatch_locks import ExternalLockScanResult
+from orchestune.dispatch_phase_scheduling import (
+    _determine_candidate_tasks,
+    _finalize_launch,
+)
+from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import (
     ActiveWorktree,
@@ -409,7 +411,8 @@ class TestFinalizeLaunch:
         ctx = _ctx(run_state=RunState(active_worktrees={}), prs=[pr], config=config)
 
         with patch(
-            "orchestune.dispatch_cycle._launch_selected_tasks", return_value=[]
+            "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
+            return_value=[],
         ) as mock_launch:
             _finalize_launch([], {}, [], ctx, 1000.0, config)
 
@@ -432,7 +435,9 @@ class TestRunDispatchCycle:
         queued_issue = _full_issue(1)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -467,7 +472,9 @@ class TestRunDispatchCycle:
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
@@ -504,7 +511,9 @@ class TestRunDispatchCycle:
         before = time.time()
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             run_dispatch_cycle(config)
@@ -527,7 +536,9 @@ class TestRunDispatchCycle:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             run_dispatch_cycle(config)
@@ -559,7 +570,9 @@ class TestRunDispatchCycle:
         queued_issue = _full_issue(1)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             _patch_gc_process_alive(return_value=True),
         ):
@@ -597,7 +610,9 @@ class TestRunDispatchCycle:
 
         with (
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             mock_list.return_value = [sub_issue_1]
@@ -634,7 +649,9 @@ class TestRunDispatchCycle:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -685,7 +702,9 @@ class TestRunDispatchCycleParentIssueValidation:
             patch(
                 "orchestune.forge.GitHubForge.get_issue", return_value=non_epic_issue
             ),
-            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch(
+                "orchestune.dispatch_phase_rebase.ensure_parent_branch"
+            ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError, match="181"):
                 run_dispatch_cycle(config)
@@ -696,7 +715,9 @@ class TestRunDispatchCycleParentIssueValidation:
         config = self._config(tmp_path)
         with (
             patch("orchestune.forge.GitHubForge.get_issue", return_value=None),
-            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch(
+                "orchestune.dispatch_phase_rebase.ensure_parent_branch"
+            ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError, match="181"):
                 run_dispatch_cycle(config)
@@ -708,7 +729,9 @@ class TestRunDispatchCycleParentIssueValidation:
         issue = self._issue(title="[EPIC] Some plan", body="no marker here")
         with (
             patch("orchestune.forge.GitHubForge.get_issue", return_value=issue),
-            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch(
+                "orchestune.dispatch_phase_rebase.ensure_parent_branch"
+            ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError):
                 run_dispatch_cycle(config)
@@ -720,7 +743,9 @@ class TestRunDispatchCycleParentIssueValidation:
         issue = self._issue(title="[BUG] some bug", body=f"...\n{PARENT_MARKER}")
         with (
             patch("orchestune.forge.GitHubForge.get_issue", return_value=issue),
-            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch(
+                "orchestune.dispatch_phase_rebase.ensure_parent_branch"
+            ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError):
                 run_dispatch_cycle(config)
@@ -732,10 +757,14 @@ class TestRunDispatchCycleParentIssueValidation:
         epic_issue = self._issue(title="[EPIC] Some plan", body=f"...\n{PARENT_MARKER}")
         with (
             patch("orchestune.forge.GitHubForge.get_issue", return_value=epic_issue),
-            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch(
+                "orchestune.dispatch_phase_rebase.ensure_parent_branch"
+            ) as mock_ensure,
             patch("orchestune.forge.GitHubForge.list_sub_issues", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             run_dispatch_cycle(config)
@@ -746,9 +775,13 @@ class TestRunDispatchCycleParentIssueValidation:
         config = self._config(tmp_path, apply=False)
         with (
             patch("orchestune.forge.GitHubForge.get_issue") as mock_get_issue,
-            patch("orchestune.dispatch_cycle.ensure_parent_branch") as mock_ensure,
+            patch(
+                "orchestune.dispatch_phase_rebase.ensure_parent_branch"
+            ) as mock_ensure,
             patch("orchestune.forge.GitHubForge.list_sub_issues", return_value=[]),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             run_dispatch_cycle(config)
@@ -775,7 +808,9 @@ class TestRunDispatchCycleActorVerification:
         queued_issue = _full_issue(1, subtask_id="task-1")
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -817,7 +852,9 @@ class TestRunDispatchCycleActorVerification:
         queued_issue = _full_issue(1, subtask_id="task-1")
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,

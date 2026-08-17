@@ -144,7 +144,9 @@ class TestRunDispatchCycleCompletion:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
@@ -208,7 +210,9 @@ class TestRunDispatchCycleCompletion:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
@@ -253,7 +257,9 @@ class TestRunDispatchCycleCompletion:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
@@ -290,7 +296,9 @@ class TestRunDispatchCycleCompletion:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             # Completion now also consults the all-state PR list to rule out an
             # abandoned (closed-unmerged) PR before finalizing.
@@ -333,7 +341,9 @@ class TestRunDispatchCycleCompletion:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             # Completion now also consults the all-state PR list to rule out an
             # abandoned (closed-unmerged) PR before finalizing as "completed".
@@ -386,7 +396,9 @@ class TestRunDispatchCycleCompletion:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             # Completion now also consults the all-state PR list to rule out an
             # abandoned (closed-unmerged) PR before finalizing.
@@ -442,7 +454,9 @@ class TestRunDispatchCycleCompletion:
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
@@ -531,7 +545,9 @@ class TestRunDispatchCycleNotNeeded:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
@@ -576,7 +592,9 @@ class TestRunDispatchCycleNotNeeded:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
@@ -618,7 +636,9 @@ class TestRunDispatchCycleNotNeeded:
         )
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,

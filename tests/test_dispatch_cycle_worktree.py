@@ -14,13 +14,11 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import (
-    CycleContext,
-    _group_by_status,
-    _process_active_worktrees,
-    run_dispatch_cycle,
-)
+from orchestune.dispatch_cycle import run_dispatch_cycle
+from orchestune.dispatch_cycle_context import _group_by_status
 from orchestune.dispatch_locks import ExternalLockScanResult
+from orchestune.dispatch_phase_reconciliation import _process_active_worktrees
+from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import (
     ActiveWorktree,
@@ -260,7 +258,7 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch_cycle._fetch_issues",
                 return_value=_group_by_status([]),
             ),
-            patch("orchestune.dispatch_cycle._self_heal_run_state"),
+            patch("orchestune.dispatch_cycle.run_self_heal_phase"),
             patch("orchestune.dispatch_cycle._build_cycle_context", return_value=ctx),
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
             _patch_gc_process_alive(return_value=False),
@@ -271,9 +269,12 @@ class TestProcessActiveWorktrees:
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.dispatch_cycle._promote_blocked_tasks", return_value=[]),
             patch(
-                "orchestune.dispatch_cycle._handle_blocked_recompute_recovery",
+                "orchestune.dispatch_phase_reconciliation._promote_blocked_tasks",
+                return_value=[],
+            ),
+            patch(
+                "orchestune.dispatch_phase_reconciliation._handle_blocked_recompute_recovery",
                 return_value=[],
             ),
             patch(
@@ -281,10 +282,12 @@ class TestProcessActiveWorktrees:
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
-                "orchestune.dispatch_cycle._determine_candidate_tasks",
+                "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
                 return_value=([], {}),
             ),
-            patch("orchestune.dispatch_cycle._finalize_launch", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_scheduling._finalize_launch", return_value=[]
+            ),
         ):
             report = run_dispatch_cycle(config)
 

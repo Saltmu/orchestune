@@ -229,13 +229,15 @@ class TestRunDispatchCycleFootprintRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
+            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
@@ -306,7 +308,9 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -378,20 +382,22 @@ class TestRunDispatchCycleFootprintRecompute:
             return ctx.selected
 
         with (
-            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
+            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_cycle._launch_selected_tasks",
+                "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
                 side_effect=_launch_stub,
             ),
             patch(
@@ -467,17 +473,19 @@ class TestRunDispatchCycleFootprintRecompute:
             return ctx.selected
 
         with (
-            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
+            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_cycle._launch_selected_tasks",
+                "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
                 side_effect=_launch_stub,
             ),
             patch(
@@ -522,13 +530,15 @@ class TestRunDispatchCycleFootprintRecompute:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         with (
-            patch("orchestune.dispatch_cycle.ensure_parent_branch"),
+            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
             patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
             patch(
                 "orchestune.forge.GitHubForge.get_issue",
                 return_value=self._epic_issue(),
             ),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,

@@ -177,7 +177,9 @@ class TestRecoveredActiveTask:
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_comment"),
@@ -231,7 +233,9 @@ class TestRecoveredActiveTask:
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[pr]),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[pr]),
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
@@ -278,7 +282,7 @@ class TestDispatcherLocking:
                         return_value=[],
                     ),
                     patch(
-                        "orchestune.dispatch_cycle.list_remote_branches",
+                        "orchestune.dispatch_phase_rebase.list_remote_branches",
                         return_value=[],
                     ),
                     patch(
@@ -315,7 +319,9 @@ class TestLaunchOrderingCrashSafety:
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch(
@@ -389,7 +395,9 @@ class TestStaleActiveEntryReconciliation:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -415,7 +423,7 @@ class TestStaleActiveEntryReconciliation:
 
 class TestPreventDuplicateSessions:
     @patch("orchestune.forge.GitHubForge.list_issues_by_label")
-    @patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[])
+    @patch("orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[])
     @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch("orchestune.forge.GitHubForge.remove_label")
     @patch("orchestune.forge.GitHubForge.add_label")
@@ -474,7 +482,7 @@ class TestPreventDuplicateSessions:
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
     @patch("orchestune.forge.GitHubForge.list_issues_by_label")
-    @patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[])
+    @patch("orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[])
     @patch("orchestune.forge.GitHubForge.list_open_prs")
     @patch("orchestune.forge.GitHubForge.remove_label")
     @patch("orchestune.forge.GitHubForge.add_label")
@@ -577,7 +585,9 @@ class TestPreventDuplicateSessions:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch(
                 "orchestune.forge.GitHubForge.list_open_prs",
                 return_value=[
@@ -654,7 +664,9 @@ class TestPreventDuplicateSessions:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch(
                 "orchestune.forge.GitHubForge.list_open_prs",
                 return_value=[

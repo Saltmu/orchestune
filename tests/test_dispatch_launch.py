@@ -2,13 +2,13 @@ import tempfile
 from pathlib import Path
 
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import CycleContext
 from orchestune.dispatch_launch import (
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
     _decide_yaml_error_tasks,
     _get_stack_eligible_tasks,
 )
+from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import CompletedWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord

@@ -341,11 +341,11 @@ def _guard_dispatch_cycle_ensure_parent_branch(
     def guarded_ensure(parent_issue_number: int) -> None:
         pytest.fail(
             f"Test '{request.node.name}' called unmocked `ensure_parent_branch({parent_issue_number})`. "
-            "Dispatch cycle tests must patch `orchestune.dispatch_cycle.ensure_parent_branch` "
+            "Dispatch cycle tests must patch `orchestune.dispatch_phase_rebase.ensure_parent_branch` "
             "to prevent accidental git branch creation/push to remote origin."
         )
 
     monkeypatch.setattr(
-        "orchestune.dispatch_cycle.ensure_parent_branch", guarded_ensure
+        "orchestune.dispatch_phase_rebase.ensure_parent_branch", guarded_ensure
     )
     yield

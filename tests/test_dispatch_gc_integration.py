@@ -51,7 +51,9 @@ class TestGC:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
@@ -125,7 +127,9 @@ class TestGC:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
@@ -193,7 +197,9 @@ class TestGC:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
@@ -261,7 +267,9 @@ class TestGC:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
             patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
@@ -317,7 +325,9 @@ class TestGC:
 
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.dispatch_cycle.list_remote_branches", return_value=[]),
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
