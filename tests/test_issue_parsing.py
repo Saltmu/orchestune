@@ -132,6 +132,25 @@ class TestFindChildrenByParent:
 
         assert find_children_by_parent(forge, 100) == []
 
+    def test_rejects_candidates_whose_native_parent_disagrees_with_stale_body(self):
+        """#485 review (P2): an issue natively reparented elsewhere, whose
+        body still carries the old parent_issue_number (never rewritten),
+        must not match the old parent via the metadata fallback — or it
+        would indefinitely block that old parent's completion under the
+        wrong scope."""
+        native: list[IssueRecord] = []
+        reparented = IssueRecord(
+            number=2,
+            title="[FEAT] task-b",
+            body="```yaml\nsubtask_id: task-b\nparent_issue_number: 100\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            parent={"number": 200},
+        )
+        forge = _MetadataAwareForge(native, [reparented])
+
+        assert find_children_by_parent(forge, 100) == []
+
     def test_falls_back_to_native_only_when_metadata_search_is_unsupported(self):
         native = [_issue(1, 100)]
         forge = _UnsupportedMetadataForge(native)

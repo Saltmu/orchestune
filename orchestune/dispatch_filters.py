@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.issue_parsing import parent_issue_number_from_body
+from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord
 
 
@@ -82,22 +82,10 @@ def _filter_deviation_blocked_candidates(
     ]
 
 
-def _effective_parent_number(issue: IssueRecord) -> int | None:
-    """ネイティブSub-issue関係を優先し、無ければ本文metadataにフォールバックする。
-
-    #485: ネイティブ関係を作れないMCP-only縮退環境で起票されたIssueは
-    `issue.parent`を持たないため、これが無いと親子Dispatcherモードから
-    常に除外されてしまう。
-    """
-    if issue.parent and issue.parent.get("number") is not None:
-        return issue.parent.get("number")
-    return parent_issue_number_from_body(issue.body)
-
-
 def _filter_by_parent(
     issues: list[IssueRecord], parent_issue_number: int | None
 ) -> list[IssueRecord]:
     """`parent_issue_number`が指定されている場合、親Issueが一致するものだけに絞る。"""
     if parent_issue_number is None:
         return issues
-    return [i for i in issues if _effective_parent_number(i) == parent_issue_number]
+    return [i for i in issues if effective_parent_number(i) == parent_issue_number]

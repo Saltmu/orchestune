@@ -10,13 +10,20 @@ from orchestune.integrator_tasks import get_sorted_done_tasks
 from orchestune.models import IssueRecord
 
 
-def _done_issue(number: int, subtask_id: str) -> IssueRecord:
+def _done_issue(
+    number: int, subtask_id: str, *, parent: dict | None = None, parent_in_body=None
+) -> IssueRecord:
+    body_lines = ["```yaml", f"subtask_id: {subtask_id}", "footprint: []"]
+    if parent_in_body is not None:
+        body_lines.append(f"parent_issue_number: {parent_in_body}")
+    body_lines.append("```\n")
     return IssueRecord(
         number=number,
         title=f"Issue {number}",
-        body=("```yaml\n" f"subtask_id: {subtask_id}\n" "footprint: []\n" "```\n"),
+        body="\n".join(body_lines),
         labels=("status:done",),
         created_at="2026-07-13T00:00:00Z",
+        parent=parent,
     )
 
 
@@ -41,6 +48,44 @@ def test_sorts_done_tasks_using_injected_fake_forge():
     sorted_done, unparsable = get_sorted_done_tasks(None, forge=fake_forge)
 
     assert unparsable == []
+    assert [task.subtask_id for task in sorted_done] == ["task-1"]
+
+
+def test_parent_scoped_filter_includes_metadata_only_children():
+    """#485 review (P1): a child created while native sub-issue linking was
+    unavailable has no `IssueRecord.parent`, only the body's
+    `parent_issue_number`. It must still be scoped into
+    `get_sorted_done_tasks(parent_issue_number=...)`, or the integrator
+    never merges/closes it and `process_parent_completion` waits forever."""
+    metadata_only_done = _done_issue(1, "task-1", parent=None, parent_in_body=100)
+    fake_forge = MagicMock()
+    fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
+        [metadata_only_done] if label == "status:done" else []
+    )
+
+    sorted_done, unparsable = get_sorted_done_tasks(100, forge=fake_forge)
+
+    assert unparsable == []
+    assert [task.subtask_id for task in sorted_done] == ["task-1"]
+
+
+def test_parent_scoped_filter_prefers_native_parent_over_stale_body_metadata():
+    """#485 review (P2): once natively reparented, `issue.parent` is
+    authoritative even if the body's `parent_issue_number` is stale (never
+    rewritten) — otherwise the issue could indefinitely block the old
+    parent's completion under the wrong scope."""
+    reparented_done = _done_issue(
+        1, "task-1", parent={"number": 200}, parent_in_body=100
+    )
+    fake_forge = MagicMock()
+    fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
+        [reparented_done] if label == "status:done" else []
+    )
+
+    sorted_done, _ = get_sorted_done_tasks(100, forge=fake_forge)
+    assert sorted_done == []
+
+    sorted_done, _ = get_sorted_done_tasks(200, forge=fake_forge)
     assert [task.subtask_id for task in sorted_done] == ["task-1"]
 
 

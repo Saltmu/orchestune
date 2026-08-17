@@ -8,7 +8,11 @@ from orchestune.dag_graph import build_dag
 from orchestune.dag_models import SubTask
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    effective_parent_number,
+    parse_task_from_issue,
+)
 from orchestune.models import IssueRecord, Task
 
 
@@ -69,16 +73,18 @@ def get_sorted_done_tasks(
         all_issues.extend(forge.list_issues_by_label(label, state=state))
 
     # parent_issue_number が指定されている場合、親Issueが一致する子Issueのみにフィルタリングする
+    # #485 review (P1): ネイティブ`parent`だけでなく本文metadataフォールバック
+    # も見る`effective_parent_number`を使う。そうしないと、ネイティブ
+    # Sub-issueリンクが張れなかった（縮退時に作成された）metadata-onlyな
+    # 子IssueがここでNO_DONE_TASKS相当として除外され、そのPRが親branchへ
+    # 一生マージ・クローズされず、`process_parent_completion`側もその子を
+    # 「まだopen」として永久に完了待ちし続けてしまう。
     if parent_issue_number is not None:
         done_issues = [
-            i
-            for i in done_issues
-            if i.parent and i.parent.get("number") == parent_issue_number
+            i for i in done_issues if effective_parent_number(i) == parent_issue_number
         ]
         all_issues = [
-            i
-            for i in all_issues
-            if i.parent and i.parent.get("number") == parent_issue_number
+            i for i in all_issues if effective_parent_number(i) == parent_issue_number
         ]
 
     seen_numbers = set()

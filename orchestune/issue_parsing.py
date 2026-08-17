@@ -59,6 +59,22 @@ def parent_issue_number_from_body(body: str) -> int | None:
         return None
 
 
+def effective_parent_number(issue: IssueRecord) -> int | None:
+    """ネイティブSub-issue関係(`issue.parent`)を優先し、無い場合のみ本文
+    metadataにフォールバックする（#485）。
+
+    ネイティブ関係がある場合はそれを唯一の正とみなし、本文metadataは一切
+    参照しない: Issueがネイティブに再親化された後も、本文の
+    `parent_issue_number`が古いまま更新されていないケースがありうるため
+    （#485 review P2）、本文metadataを「ネイティブが無い場合のみの
+    フォールバック」以上の意味で使うと、旧親の完了判定やprovisioningの
+    再利用インデックスが誤って古い親の下にこのIssueを含めてしまう。
+    """
+    if issue.parent and issue.parent.get("number") is not None:
+        return issue.parent.get("number")
+    return parent_issue_number_from_body(issue.body)
+
+
 def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | None:
     """#485 review (P2): a reused Issue can predate this field (created by
     an older template, or by a prior run before `parent_issue_number` was
@@ -116,12 +132,19 @@ def find_children_by_parent(
         )
         return native
 
+    # #485 review (P2): re-verify with `effective_parent_number`, not a raw
+    # body-metadata read — a candidate returned by `gh search`'s substring
+    # match could have since been natively reparented elsewhere while its
+    # body still carries the old `parent_issue_number` (never rewritten).
+    # `effective_parent_number` treats a present native `parent` as
+    # authoritative, so such a stale-body candidate is correctly rejected
+    # here instead of indefinitely blocking the old parent's completion.
     target_number = int(parent_issue_number)
     extra: list[IssueRecord] = [
         candidate
         for candidate in candidates
         if candidate.number not in seen
-        and parent_issue_number_from_body(candidate.body) == target_number
+        and effective_parent_number(candidate) == target_number
     ]
     return native + extra
 
