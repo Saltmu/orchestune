@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestune — Delegate large dev tasks to AI agents, with every subtask traceable</title>
+<meta name="description" content="Orchestune turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple AI agents, and keeps every branch, PR, and CI outcome traceable back to the original task.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22><circle cx=%2212%22 cy=%2212%22 r=%2211%22 fill=%22%238a3d2b%22/></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="#top">
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 2c-2.2 0-4 2.1-4 5 0 2.1 1 3.9 2.5 4.6-.3.5-.5 1-.5 1.6 0 1.9 1.8 3.4 4 3.4v9.6c0 1.6-1.3 2.8-2.8 2.8-1.3 0-2.4-.9-2.7-2.1" stroke="url(#g)" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="16" cy="7" r="3.2" stroke="url(#g)" stroke-width="1.8"/>
+        <defs>
+          <linearGradient id="g" x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#f0a94a"/>
+            <stop offset="1" stop-color="#8a3d2b"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      Orchestune
+      <span class="beta-tag">Beta</span>
+    </a>
+    <nav class="site-nav" id="site-nav">
+      <a href="#problem" data-i18n="en">The Problem</a>
+      <a href="#problem" data-i18n="ja">課題</a>
+      <a href="#features" data-i18n="en">Features</a>
+      <a href="#features" data-i18n="ja">機能</a>
+      <a href="#in-action" data-i18n="en">In Action</a>
+      <a href="#in-action" data-i18n="ja">使用感</a>
+      <a href="#how-it-works" data-i18n="en">How It Works</a>
+      <a href="#how-it-works" data-i18n="ja">仕組み</a>
+      <a href="#get-started" data-i18n="en">Get Started</a>
+      <a href="#get-started" data-i18n="ja">はじめる</a>
+    </nav>
+    <div class="header-actions">
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="en">EN</button>
+        <button type="button" data-lang-btn="ja">日本語</button>
+      </div>
+      <a class="btn btn-outline btn-sm" href="https://github.com/Saltmu/orchestune" target="_blank" rel="noopener">
+        <span data-i18n="en">GitHub</span><span data-i18n="ja">GitHub</span>
+      </a>
+      <button class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="container">
+      <span class="eyebrow" data-i18n="en">A Skill for Agentic AI Development</span>
+      <span class="eyebrow" data-i18n="ja">Agentic AI開発向けのスキル</span>
+
+      <h1 data-i18n="en">Delegate large dev tasks to AI agents — <span class="accent">with every subtask traceable.</span></h1>
+      <h1 data-i18n="ja">大きな開発タスクをAIエージェントに任せながら、<span class="accent">すべてを追跡可能に。</span></h1>
+
+      <p class="lead" data-i18n="en">Orchestune turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple AI agents, and links the resulting branches, pull requests, and CI outcomes back to the original task.</p>
+      <p class="lead" data-i18n="ja">承認された分解計画を依存関係付きのGitHub Issueへ変換し、複数のAIエージェントによる自律的な実装を協調します。生成されたブランチ、プルリクエスト、CI結果は元のタスクに紐づけられます。</p>
+
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#get-started">
+          <span data-i18n="en">Get Started</span><span data-i18n="ja">はじめる</span>
+        </a>
+        <a class="btn btn-outline" href="https://github.com/Saltmu/orchestune" target="_blank" rel="noopener">
+          <span data-i18n="en">Star on GitHub</span><span data-i18n="ja">GitHubでスター</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section id="problem">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">The Problem</div>
+        <div class="kicker" data-i18n="ja">課題</div>
+        <h2 data-i18n="en">Delegating a big task to an AI agent is easy. Trusting the result isn't.</h2>
+        <h2 data-i18n="ja">大きなタスクをAIエージェントに任せるのは簡単。でも、結果を信頼するのは別の話。</h2>
+        <p data-i18n="en">Once a task grows past a single prompt, dependencies, file conflicts, and progress become invisible — and by the time they surface, the rework has already cost you quota and time.</p>
+        <p data-i18n="ja">タスクが単一のプロンプトを超えて大きくなると、依存関係・ファイル競合・進捗が見えなくなります。それらが表面化する頃には、手戻りがすでにクオーターと時間を消費した後です。</p>
+      </div>
+
+      <div class="compare-grid">
+        <div class="compare-card compare-without">
+          <div class="compare-label" data-i18n="en">Without Orchestune</div>
+          <div class="compare-label" data-i18n="ja">Orchestuneなしだと</div>
+          <ul>
+            <li data-i18n="en">Conflicts surface only after agents have already written overlapping code</li>
+            <li data-i18n="ja">競合は、エージェントが重複したコードを書き終えた後に初めて表面化する</li>
+            <li data-i18n="en">Progress lives in your head — the pipeline stalls the moment you step away</li>
+            <li data-i18n="ja">進捗は自分の頭の中にしかなく、席を外した瞬間にパイプラインが止まる</li>
+            <li data-i18n="en">A wrongly scoped subtask means redoing the work — and burning quota twice</li>
+            <li data-i18n="ja">スコープを誤ったサブタスクはやり直しになり、クオーターを二重に消費する</li>
+          </ul>
+        </div>
+        <div class="compare-card compare-with">
+          <div class="compare-label" data-i18n="en">With Orchestune</div>
+          <div class="compare-label" data-i18n="ja">Orchestuneがあれば</div>
+          <ul>
+            <li data-i18n="en">Conflicts and unsafe parallel work are caught before any code is written</li>
+            <li data-i18n="ja">競合や危険な並列実行を、コードを書く前に検出する</li>
+            <li data-i18n="en">State lives in GitHub Issues and PRs — self-healing, no babysitting required</li>
+            <li data-i18n="ja">状態はGitHubのIssueとPRに残り、自己修復するため見守り不要</li>
+            <li data-i18n="en">A reviewable plan surfaces scope problems before agents ever start</li>
+            <li data-i18n="ja">レビュー可能な計画により、エージェントが着手する前にスコープの問題が見える</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">The Solution</div>
+        <div class="kicker" data-i18n="ja">解決策</div>
+        <h2 data-i18n="en">Orchestune keeps every subtask, dependency, and result traceable.</h2>
+        <h2 data-i18n="ja">Orchestuneは、すべてのサブタスク・依存関係・結果を追跡可能に保ちます。</h2>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="num">1</div>
+          <h3 data-i18n="en">Decompose large tasks into traceable work units</h3>
+          <h3 data-i18n="ja">大きなタスクを追跡可能な作業単位へ分解</h3>
+          <p data-i18n="en">Creates a reviewable plan in which every subtask has an explicit scope, acceptance criteria, verification steps, dependencies, and expected file or symbol footprint.</p>
+          <p data-i18n="ja">各サブタスクの実装範囲、受け入れ基準、検証手順、依存関係、変更予定のファイルやシンボルを含む、レビュー可能な分解計画を作成します。</p>
+        </div>
+        <div class="feature-card">
+          <div class="num">2</div>
+          <h3 data-i18n="en">Validate dependencies and conflicts before implementation</h3>
+          <h3 data-i18n="ja">実装開始前に依存関係と競合を検証</h3>
+          <p data-i18n="en">Builds a DAG from the plan and detects dependency cycles, overlapping files or symbols, shared-contract risks, and unsafe parallel work before agents modify the codebase.</p>
+          <p data-i18n="ja">計画からDAGを構築し、循環依存、ファイルやシンボルの重複、共有拡張点のリスク、危険な並列実行を、AIがコードを変更する前に検出します。</p>
+        </div>
+        <div class="feature-card">
+          <div class="num">3</div>
+          <h3 data-i18n="en">Provision an auditable execution plan on GitHub</h3>
+          <h3 data-i18n="ja">実行計画をGitHub上の追跡可能なIssueへ変換</h3>
+          <p data-i18n="en">Converts the approved plan into parent and child Issues with dependency links, status labels, and implementation context, preserving why each unit of work exists.</p>
+          <p data-i18n="ja">承認された計画から、依存関係、ステータスラベル、実装に必要な文脈を持つ親Issueと子Issueを起票し、各作業の目的を記録します。</p>
+        </div>
+        <div class="feature-card">
+          <div class="num">4</div>
+          <h3 data-i18n="en">Coordinate autonomous implementation and integration</h3>
+          <h3 data-i18n="ja">AIによる自律的な実装と統合を協調</h3>
+          <p data-i18n="en">Dispatches ready Issues to local or cloud coding agents, reconstructs progress from GitHub Issues and PRs, and coordinates downstream rebases and integration.</p>
+          <p data-i18n="ja">着手可能なIssueをローカルまたはクラウドのAIコーディングエージェントへ割り当て、GitHub IssueとPRから進捗を復元しながら、下流ブランチのリベースと統合を調整します。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="in-action">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">What It Feels Like</div>
+        <div class="kicker" data-i18n="ja">使用感</div>
+        <h2 data-i18n="en">You just describe the task in chat</h2>
+        <h2 data-i18n="ja">チャットでタスクを伝えるだけ</h2>
+        <p data-i18n="en">No CLI flags to remember. Describe the task in plain language, and a reviewable decomposition_plan.md shows up right there in the conversation.</p>
+        <p data-i18n="ja">コマンドのオプションを覚える必要はありません。自然言語でタスクを伝えると、会話の中でそのままレビュー可能な decomposition_plan.md が提示されます。</p>
+      </div>
+
+      <div class="chat-mockup">
+        <div class="chat-message user">
+          <div class="chat-avatar">You</div>
+          <div class="chat-bubble">
+            <p data-i18n="en">Build a Todo app: a simple web frontend, with the backend in JS.</p>
+            <p data-i18n="ja">シンプルなWebフロントエンド、バックエンドがJSのTodo管理ツールを作って</p>
+          </div>
+        </div>
+
+        <div class="chat-message agent">
+          <div class="chat-avatar">AI</div>
+          <div class="chat-bubble">
+            <p data-i18n="en">Here's the breakdown — 3 subtasks, 2 can run in parallel once the API contract lands:</p>
+            <p data-i18n="ja">分解案を作成しました。3つのサブタスクのうち、API契約が固まれば2つは並列で進められます。</p>
+            <ul class="plan-list">
+              <li><span class="plan-tag">1</span><span data-i18n="en">backend — Todo REST API (Express)</span><span data-i18n="ja">backend — Todo REST API（Express）</span></li>
+              <li><span class="plan-tag">2</span><span data-i18n="en">frontend — list / add / complete UI</span><span data-i18n="ja">frontend — 一覧・追加・完了のUI</span></li>
+              <li><span class="plan-tag">3</span><span data-i18n="en">integration — wire frontend to API, e2e check</span><span data-i18n="ja">integration — フロントとAPIの結線・E2E確認</span></li>
+            </ul>
+
+            <div class="chat-file">
+              <div class="chat-file-head">
+                <span class="chat-file-name mono">decomposition_plan.md</span>
+                <button class="copy-btn" data-copy="subtasks:
+  - id: backend-todo-api
+    description: &quot;Todo REST API (Express)&quot;
+    footprint: [server/routes/todos.js]
+    depends_on: []
+    acceptance_criteria:
+      - &quot;CRUD endpoints return correct status codes&quot;
+
+  - id: frontend-todo-ui
+    description: &quot;List / add / complete UI&quot;
+    footprint: [src/components/TodoList.jsx]
+    depends_on: []
+
+  - id: integration-e2e
+    description: &quot;Wire frontend to API, e2e check&quot;
+    footprint: [src/api/client.js]
+    depends_on: [backend-todo-api, frontend-todo-ui]">Copy</button>
+              </div>
+              <pre class="chat-file-code"><code>subtasks:
+  - id: backend-todo-api
+    description: <span class="i18n-inline" data-i18n="en">"Todo REST API (Express)"</span><span class="i18n-inline" data-i18n="ja">"Todo REST API（Express）"</span>
+    footprint: [server/routes/todos.js]
+    depends_on: []
+    acceptance_criteria:
+      - <span class="i18n-inline" data-i18n="en">"CRUD endpoints return correct status codes"</span><span class="i18n-inline" data-i18n="ja">"CRUDエンドポイントが正しいステータスコードを返す"</span>
+
+  - id: frontend-todo-ui
+    description: <span class="i18n-inline" data-i18n="en">"List / add / complete UI"</span><span class="i18n-inline" data-i18n="ja">"一覧・追加・完了のUI"</span>
+    footprint: [src/components/TodoList.jsx]
+    depends_on: []
+
+  - id: integration-e2e
+    description: <span class="i18n-inline" data-i18n="en">"Wire frontend to API, e2e check"</span><span class="i18n-inline" data-i18n="ja">"フロントとAPIの結線・E2E確認"</span>
+    footprint: [src/api/client.js]
+    <span class="prompt">depends_on: [backend-todo-api, frontend-todo-ui]</span></code></pre>
+            </div>
+
+            <p class="plan-ask" data-i18n="en">The <code class="mono">depends_on</code> line is what tells subtask 3 to wait. Shall I go ahead?</p>
+            <p class="plan-ask" data-i18n="ja"><code class="mono">depends_on</code>の行が、サブタスク3が待つべきことを伝えています。この計画で進めてよいですか？</p>
+          </div>
+        </div>
+
+        <div class="chat-message user">
+          <div class="chat-avatar">You</div>
+          <div class="chat-bubble">
+            <p data-i18n="en">Looks good, go ahead.</p>
+            <p data-i18n="ja">それでお願い</p>
+          </div>
+        </div>
+
+        <div class="chat-message agent">
+          <div class="chat-avatar">AI</div>
+          <div class="chat-bubble">
+            <p data-i18n="en">Creating the Issues and dispatching agents now — I'll keep working while you're away.</p>
+            <p data-i18n="ja">Issueを作成し、エージェントをディスパッチしました。あなたが離席していても作業を続けます。</p>
+            <ul class="status-list">
+              <li><span class="status-dot done"></span><span data-i18n="en">backend — PR #124 opened, CI passed</span><span data-i18n="ja">backend — PR #124 作成、CI通過</span></li>
+              <li><span class="status-dot done"></span><span data-i18n="en">frontend — PR #125 opened, CI passed</span><span data-i18n="ja">frontend — PR #125 作成、CI通過</span></li>
+              <li><span class="status-dot pending"></span><span data-i18n="en">integration — rebasing onto #124 &amp; #125</span><span data-i18n="ja">integration — #124・#125 の上にリベース中</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="philosophy" id="philosophy">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">Design Philosophy</div>
+        <div class="kicker" data-i18n="ja">設計思想</div>
+        <h2 data-i18n="en">Quota efficiency, not wall-clock speed</h2>
+        <h2 data-i18n="ja">実時間の速さではなく、クオーター効率</h2>
+      </div>
+      <div class="philosophy-body">
+        <p data-i18n="en">Orchestune is for individual developers and small teams working with AI coding agents. The scarce resource here is not wall-clock time — it is <strong>your AI usage quota</strong> (a subscription's session/weekly allowance) and the hours a human can actually be at the desk.</p>
+        <p data-i18n="ja">Orchestuneは、AIコーディングエージェントを使う個人開発者と少人数チームのためのものです。ここでの希少資源は実時間ではなく、<strong>AI利用クオーター</strong>（サブスクリプションのセッション/週次の使用枠）と、人間が席にいられる時間です。</p>
+
+        <ul class="philosophy-list">
+          <li data-i18n="en"><strong>Rework is the main waste.</strong> Conflict-prevention analysis and the shared-contract gate trade a small up-front planning cost for avoided rework.</li>
+          <li data-i18n="ja"><strong>手戻りが最大の無駄。</strong> 競合防止の分析と共有拡張点のゲートは、わずかな事前計画コストと引き換えに手戻りを回避します。</li>
+          <li data-i18n="en"><strong>Parallelism is the mechanism, not the goal.</strong> Independent subtasks let several agents burn quota at once instead of one agent burning it in sequence.</li>
+          <li data-i18n="ja"><strong>並列性は目的ではなく手段。</strong> 独立したサブタスクにより、複数のエージェントが同時にクオーターを消費できます（1つのエージェントが順番に消費するのではなく）。</li>
+          <li data-i18n="en"><strong>Unattended operation converts parallelism into quota efficiency.</strong> State is self-healing from GitHub, and human judgment is confined to two approval gates.</li>
+          <li data-i18n="ja"><strong>無人での実行が、並列性をクオーター効率へ変換する。</strong> 状態はGitHubから自己修復し、人間の判断は2つの承認ゲートに限定されます。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">How It Works</div>
+        <div class="kicker" data-i18n="ja">仕組み</div>
+        <h2 data-i18n="en">From a big idea to merged, traceable work</h2>
+        <h2 data-i18n="ja">大きなアイデアから、統合され追跡可能な成果物へ</h2>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-num mono">01</div>
+          <h3 data-i18n="en">Decompose &amp; validate</h3>
+          <h3 data-i18n="ja">分解と検証</h3>
+          <p data-i18n="en">Your agent turns the task into a reviewable decomposition plan, then validates its dependency DAG and conflict risks. You review and approve.</p>
+          <p data-i18n="ja">エージェントがタスクをレビュー可能な分解計画に変換し、依存DAGと競合リスクを検証します。あなたはその計画をレビューして承認します。</p>
+        </div>
+        <div class="step">
+          <div class="step-num mono">02</div>
+          <h3 data-i18n="en">Provision</h3>
+          <h3 data-i18n="ja">Issue起票</h3>
+          <p data-i18n="en">Once approved, your agent creates dependency-linked parent and child GitHub Issues from the plan.</p>
+          <p data-i18n="ja">承認後、エージェントが依存関係で結ばれたGitHubの親Issueと子Issueを作成します。</p>
+        </div>
+        <div class="step">
+          <div class="step-num mono">03</div>
+          <h3 data-i18n="en">Dispatch</h3>
+          <h3 data-i18n="ja">ディスパッチ</h3>
+          <p data-i18n="en">Your agent starts eligible subtasks in isolated worktrees using local or cloud coding agents.</p>
+          <p data-i18n="ja">着手可能なサブタスクを、分離されたworktreeでローカルまたはクラウドのAIコーディングエージェントへ割り当てます。</p>
+        </div>
+        <div class="step">
+          <div class="step-num mono">04</div>
+          <h3 data-i18n="en">Trace &amp; integrate</h3>
+          <h3 data-i18n="ja">追跡と統合</h3>
+          <p data-i18n="en">Each subtask is tracked through its Issue, branch, PR, and CI result while Orchestune coordinates dependent work and integration.</p>
+          <p data-i18n="ja">各サブタスクのIssue、ブランチ、PR、CI結果を追跡しながら、Orchestuneが依存タスクと統合を調整します。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="get-started">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">Getting Started</div>
+        <div class="kicker" data-i18n="ja">はじめかた</div>
+        <h2 data-i18n="en">Install Orchestune</h2>
+        <h2 data-i18n="ja">Orchestuneをインストール</h2>
+        <p data-i18n="en">Requires Python 3.12+, Poetry, and the GitHub CLI.</p>
+        <p data-i18n="ja">Python 3.12以上、Poetry、GitHub CLIが必要です。</p>
+      </div>
+
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="install-label" data-i18n="en">1. Install globally (recommended, via pipx)</div>
+          <div class="install-label" data-i18n="ja">1. グローバルにインストール（推奨・pipx使用）</div>
+          <pre class="code-block"><code>pipx install git+https://github.com/Saltmu/orchestune.git</code><button class="copy-btn" data-copy="pipx install git+https://github.com/Saltmu/orchestune.git">Copy</button></pre>
+        </div>
+        <div class="install-step">
+          <div class="install-label" data-i18n="en">2. Link Orchestune skills to your AI assistants (Claude Code, Codex CLI, Antigravity)</div>
+          <div class="install-label" data-i18n="ja">2. AIアシスタント（Claude Code, Codex CLI, Antigravity）へスキルを登録</div>
+          <pre class="code-block"><code>orchestune setup</code><button class="copy-btn" data-copy="orchestune setup">Copy</button></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="commands">
+    <div class="container">
+      <div class="section-head">
+        <div class="kicker" data-i18n="en">Under the Hood</div>
+        <div class="kicker" data-i18n="ja">舞台裏</div>
+        <h2 data-i18n="en">What the skill runs on your behalf</h2>
+        <h2 data-i18n="ja">その裏でスキルが実行しているコマンド</h2>
+        <p data-i18n="en">You never type these yourself — the orchestune skill calls them for you. Shown here to make each stage concrete, and for the rare manual recovery.</p>
+        <p data-i18n="ja">これらを人間が自分で打つことはありません。orchestuneスキルが代行実行します。各段階を具体的に示すため、また例外的な手動復旧のために掲載しています。</p>
+      </div>
+
+      <div class="commands-grid">
+        <pre class="code-block"><code><span class="comment"># <span data-i18n="en">1. Validate the decomposition plan's DAG</span><span data-i18n="ja">1. 分解計画のDAGを検証</span></span>
+<span class="prompt">$</span> orchestune dag --plan decomposition_plan.md</code><button class="copy-btn" data-copy="orchestune dag --plan decomposition_plan.md">Copy</button></pre>
+
+        <pre class="code-block"><code><span class="comment"># <span data-i18n="en">2. Preview, then create, GitHub Issues from the plan</span><span data-i18n="ja">2. 計画からGitHub Issueをプレビューし、その後起票</span></span>
+<span class="prompt">$</span> orchestune provision --plan decomposition_plan.md --no-apply
+<span class="prompt">$</span> orchestune provision --plan decomposition_plan.md</code><button class="copy-btn" data-copy="orchestune provision --plan decomposition_plan.md --no-apply
+orchestune provision --plan decomposition_plan.md">Copy</button></pre>
+
+        <pre class="code-block"><code><span class="comment"># <span data-i18n="en">3. Start the dispatcher (dry-run, then execute)</span><span data-i18n="ja">3. ディスパッチャーの起動（ドライラン、その後実行）</span></span>
+<span class="prompt">$</span> orchestune dispatch --no-apply
+<span class="prompt">$</span> orchestune dispatch</code><button class="copy-btn" data-copy="orchestune dispatch --no-apply
+orchestune dispatch">Copy</button></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="container">
+      <div class="cta-box">
+        <h2 data-i18n="en">Ready to keep your AI agents traceable?</h2>
+        <h2 data-i18n="ja">AIエージェントの作業を追跡可能にしませんか？</h2>
+        <p data-i18n="en">Orchestune is open source under the MIT License and provided as a skill for Claude Code, Codex CLI, and Antigravity.</p>
+        <p data-i18n="ja">OrchestuneはMITライセンスのオープンソースで、Claude Code・Codex CLI・Antigravity向けのスキルとして提供されます。</p>
+        <div class="cta-actions">
+          <a class="btn btn-primary" href="https://github.com/Saltmu/orchestune" target="_blank" rel="noopener">
+            <span data-i18n="en">View on GitHub</span><span data-i18n="ja">GitHubで見る</span>
+          </a>
+          <a class="btn btn-outline" href="https://github.com/Saltmu/orchestune/blob/main/docs/en/setup.md" target="_blank" rel="noopener" data-i18n="en">Read the Setup Guide</a>
+          <a class="btn btn-outline" href="https://github.com/Saltmu/orchestune/blob/main/docs/ja/setup.md" target="_blank" rel="noopener" data-i18n="ja">セットアップガイドを読む</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-links">
+      <a href="https://github.com/Saltmu/orchestune" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Saltmu/orchestune/issues" target="_blank" rel="noopener" data-i18n="en">Issues</a>
+      <a href="https://github.com/Saltmu/orchestune/issues" target="_blank" rel="noopener" data-i18n="ja">Issue</a>
+      <a href="https://github.com/Saltmu/orchestune/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" data-i18n="en">Contributing</a>
+      <a href="https://github.com/Saltmu/orchestune/blob/main/CONTRIBUTING.ja.md" target="_blank" rel="noopener" data-i18n="ja">コントリビュート</a>
+      <a href="https://github.com/Saltmu/orchestune/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </div>
+    <div class="footer-note">
+      <span data-i18n="en">© 2026 Saltmu · Built for parallel AI coding agents</span>
+      <span data-i18n="ja">© 2026 Saltmu · 並列で動くAIコーディングエージェントのために</span>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
