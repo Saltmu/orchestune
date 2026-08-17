@@ -20,6 +20,7 @@ import sys
 
 from orchestune.forge import Forge, GitHubForge
 from orchestune.integrator_pr import ensure_parent_final_pr
+from orchestune.issue_parsing import find_children_by_parent
 
 
 def _is_current_parent_branch_merged(
@@ -116,7 +117,11 @@ def process_parent_completion(
     # openな子Issueが1件でもあれば、親Issueを再open後に新しい作業が
     # 進行中であることを意味するため、historical記録の有無に関わらず
     # closeしてはならない。
-    children = forge.list_sub_issues(parent_issue_number)
+    # #485 review (P1): a metadata-only child (native sub-issue linking was
+    # unavailable when it was created) would otherwise be invisible here,
+    # letting this treat the parent as already complete — creating the final
+    # PR too early, or even closing the parent while that child is still open.
+    children = find_children_by_parent(forge, parent_issue_number)
     open_children = [child.number for child in children if child.state != "CLOSED"]
     if open_children:
         return {"status": "waiting_on_children", "open_children": open_children}

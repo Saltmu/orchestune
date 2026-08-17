@@ -6,6 +6,7 @@ import pytest
 
 from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.issue_parsing import (
+    backfill_parent_issue_number,
     find_children_by_parent,
     parent_issue_number_from_body,
 )
@@ -31,6 +32,32 @@ class TestParentIssueNumberFromBody:
     def test_returns_none_on_malformed_yaml(self):
         body = "```yaml\n: not valid: yaml: [\n```\n"
         assert parent_issue_number_from_body(body) is None
+
+
+class TestBackfillParentIssueNumber:
+    def test_adds_missing_field_preserving_rest_of_body(self):
+        body = (
+            "# [FEAT] task-a: d\n\nSome human-written notes.\n\n"
+            "```yaml\nsubtask_id: task-a\nfootprint: [src/foo.py]\n```\n"
+        )
+        result = backfill_parent_issue_number(body, 100)
+        assert result is not None
+        assert "Some human-written notes." in result
+        assert parent_issue_number_from_body(result) == 100
+        assert "subtask_id: task-a" in result
+
+    def test_corrects_a_stale_value(self):
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: 999\n```\n"
+        result = backfill_parent_issue_number(body, 100)
+        assert result is not None
+        assert parent_issue_number_from_body(result) == 100
+
+    def test_returns_none_when_already_correct(self):
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: 100\n```\n"
+        assert backfill_parent_issue_number(body, 100) is None
+
+    def test_returns_none_when_no_footprint_block(self):
+        assert backfill_parent_issue_number("no yaml here", 100) is None
 
 
 class _NativeOnlyForge:

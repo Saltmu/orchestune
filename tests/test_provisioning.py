@@ -90,6 +90,9 @@ class FakeForge:
         self.create_issue_calls.append((title, body, tuple(labels)))
         return number
 
+    def update_issue_body(self, issue_number: int | str, body: str) -> None:
+        self.issues[int(issue_number)]["body"] = body
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
@@ -1310,6 +1313,93 @@ class TestProvisionSubtask:
         assert number == existing_number
         assert is_reused is True
         assert is_done is True
+        # #485 review (P2): a reused issue created before parent_issue_number
+        # existed (or by an older template) gets it backfilled on reuse, so
+        # the metadata fallback can still find it if native linking fails.
+        assert "parent_issue_number: 1" in forge.issues[existing_number]["body"]
+
+    def test_does_not_rewrite_body_when_parent_metadata_already_correct(
+        self, tmp_path: Path, template_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text("---\ntitle: 'T'\n---\n", encoding="utf-8")
+        template = template_path.read_text(encoding="utf-8")
+
+        class RecordingForge(FakeForge):
+            def __init__(self) -> None:
+                super().__init__()
+                self.update_issue_body_calls: list[int] = []
+
+            def update_issue_body(self, issue_number: int | str, body: str) -> None:
+                self.update_issue_body_calls.append(int(issue_number))
+
+        forge = RecordingForge()
+        existing_number = forge.create_issue(
+            "[FEAT] task-a: d",
+            "```yaml\nsubtask_id: task-a\nparent_issue_number: 1\n```\n",
+            labels=("status:queued",),
+        )
+        subtask = SubTask(
+            id="task-a",
+            description="desc a",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            issue_number=existing_number,
+        )
+        _provision_subtask(
+            forge=forge,
+            subtask=subtask,
+            template=template,
+            repo_root=tmp_path,
+            plan_path=plan_path,
+            existing_by_subtask_id={},
+            dependencies_done={},
+            parent_issue_number=1,
+        )
+        assert forge.update_issue_body_calls == []
+
+    def test_backfill_failure_from_unsupported_forge_does_not_abort_reuse(
+        self, tmp_path: Path, template_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text("---\ntitle: 'T'\n---\n", encoding="utf-8")
+        template = template_path.read_text(encoding="utf-8")
+
+        class NoBodyUpdateForge(FakeForge):
+            def update_issue_body(self, issue_number, body) -> None:
+                raise RelationshipUnavailableError("body edit not exposed")
+
+        forge = NoBodyUpdateForge()
+        existing_number = forge.create_issue(
+            "[FEAT] task-a: d",
+            "```yaml\nsubtask_id: task-a\n```\n",
+            labels=("status:queued",),
+        )
+        subtask = SubTask(
+            id="task-a",
+            description="desc a",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            issue_number=existing_number,
+        )
+        number, is_reused, _ = _provision_subtask(
+            forge=forge,
+            subtask=subtask,
+            template=template,
+            repo_root=tmp_path,
+            plan_path=plan_path,
+            existing_by_subtask_id={},
+            dependencies_done={},
+            parent_issue_number=1,
+        )
+        assert number == existing_number
+        assert is_reused is True
 
 
 class TestLinkSubtaskRelationships:

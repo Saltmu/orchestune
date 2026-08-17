@@ -59,6 +59,35 @@ def parent_issue_number_from_body(body: str) -> int | None:
         return None
 
 
+def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | None:
+    """#485 review (P2): a reused Issue can predate this field (created by
+    an older template, or by a prior run before `parent_issue_number` was
+    added to `.github/issue_template.md`). Returns `body` with the
+    Footprint YAML fence's `parent_issue_number` set/corrected, or `None`
+    if it's already correct (nothing to write) or the fence can't be
+    parsed at all (nothing safe to patch).
+
+    Only the Footprint fence is touched — the rest of the body (which may
+    carry human edits) is left byte-for-byte identical, unlike re-rendering
+    the whole body from the template would.
+    """
+    match = FOOTPRINT_BLOCK_PATTERN.search(body)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("parent_issue_number") == parent_issue_number:
+        return None
+    data["parent_issue_number"] = parent_issue_number
+    new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    start, end = match.span(1)
+    return body[:start] + new_block + body[end:]
+
+
 def find_children_by_parent(
     forge: IssueForge, parent_issue_number: int | str
 ) -> list[IssueRecord]:

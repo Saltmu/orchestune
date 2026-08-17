@@ -39,9 +39,11 @@ from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableErr
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,
+    backfill_parent_issue_number,
     find_children_by_parent,
     parent_issue_number_from_body,
 )
+from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.symbol_verification import find_missing_symbols
 from orchestune.validation import validate_issue_number
@@ -306,14 +308,16 @@ def _validate_template_identity_marker(
 
 def _index_sub_issues_by_subtask_id(
     forge: IssueForge, parent_issue_number: int
-) -> dict[str, int]:
-    index: dict[str, int] = {}
+) -> dict[str, IssueRecord]:
+    """Returns the full `IssueRecord` (not just the number) so a reuse can
+    inspect/backfill its body without an extra `get_issue` round trip."""
+    index: dict[str, IssueRecord] = {}
     # #485: ネイティブSub-issue関係を作れなかった過去実行のIssueも本文
     # metadataのparent_issue_numberから見つけて再利用対象に含める。
     for record in find_children_by_parent(forge, parent_issue_number):
         subtask_id = _subtask_id_from_body(record.body)
         if subtask_id:
-            index.setdefault(subtask_id, record.number)
+            index.setdefault(subtask_id, record)
     return index
 
 
@@ -393,13 +397,38 @@ def _resolve_parent_issue(
     return parent_issue_number
 
 
+def _backfill_reused_issue_parent_metadata(
+    forge: IssueForge, candidate: IssueRecord, parent_issue_number: int
+) -> None:
+    """#485 review (P2): a reused Issue can predate `parent_issue_number`
+    (created by an older template, or by a run before this field existed).
+    Left unpatched, that Issue has neither a native parent (if
+    `add_sub_issue` is now unavailable) nor a metadata fallback the
+    parent-scoped Dispatcher can find it by. Best-effort: if the forge
+    can't write issue bodies either, leave it — native `add_sub_issue`
+    (tried separately, right after this) is still the primary mechanism
+    and this is purely a fallback safety net for when that's unavailable.
+    """
+    new_body = backfill_parent_issue_number(candidate.body, parent_issue_number)
+    if new_body is None:
+        return
+    try:
+        forge.update_issue_body(candidate.number, new_body)
+    except (RelationshipUnavailableError, AttributeError, NotImplementedError) as e:
+        print(
+            f"Warning: could not backfill parent_issue_number into "
+            f"#{candidate.number}'s body: {e}",
+            file=sys.stderr,
+        )
+
+
 def _provision_subtask(
     forge: IssueForge,
     subtask: SubTask,
     template: str,
     repo_root: Path,
     plan_path: str | Path,
-    existing_by_subtask_id: dict[str, int],
+    existing_by_subtask_id: dict[str, IssueRecord],
     dependencies_done: dict[str, bool],
     parent_issue_number: int,
 ) -> tuple[int, bool, bool]:
@@ -416,18 +445,24 @@ def _provision_subtask(
     # yet (a crash between create_issue and add_sub_issue), since the
     # marker is written at creation time regardless of linkage.
     number = None
+    candidate: IssueRecord | None = None
     if subtask.issue_number is not None:
-        candidate = forge.get_issue(subtask.issue_number)
-        if (
-            candidate is not None
-            and _subtask_id_from_body(candidate.body) == subtask.id
-        ):
+        fetched = forge.get_issue(subtask.issue_number)
+        if fetched is not None and _subtask_id_from_body(fetched.body) == subtask.id:
             number = subtask.issue_number
+            candidate = fetched
     if number is None:
-        number = existing_by_subtask_id.get(subtask.id)
+        existing = existing_by_subtask_id.get(subtask.id)
+        if existing is not None:
+            number = existing.number
+            candidate = existing
 
     if number is not None:
         labels = forge.get_issue_labels(number)
+        if candidate is not None:
+            _backfill_reused_issue_parent_metadata(
+                forge, candidate, parent_issue_number
+            )
         return number, True, "status:done" in labels
 
     all_deps_done = all(dependencies_done.get(dep, False) for dep in subtask.depends_on)

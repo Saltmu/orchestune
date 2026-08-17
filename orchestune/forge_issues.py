@@ -246,6 +246,13 @@ class GitHubIssueMixin:
         url = stdout.strip().splitlines()[-1]
         return int(url.rstrip("/").rsplit("/", 1)[-1])
 
+    def update_issue_body(self, issue_number: int | str, body: str) -> None:
+        number = validate_issue_number(issue_number)
+        self._run(
+            ["gh", "issue", "edit", str(number), "--body-file", "-"],
+            input_text=body,
+        )
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:

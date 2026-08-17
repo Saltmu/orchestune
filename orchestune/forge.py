@@ -22,8 +22,9 @@ from orchestune.models import IssueRecord, PrRecord
 
 
 class RelationshipUnavailableError(ForgeError):
-    """#485: `add_sub_issue`/`set_blocked_by`のようなGitHub関係操作を、この
-    `Forge`実装が構造的にサポートしていないことを示す。
+    """#485: `add_sub_issue`/`set_blocked_by`/`update_issue_body`のような
+    GitHub関係・metadata書き込み操作を、この`Forge`実装が構造的にサポート
+    していないことを示す。
 
     `gh` CLIやGitHub MCPの通常のAPI呼び出し失敗（ネットワーク瞬断、権限、
     一時的なレート制限など）とは意味が異なる: そうした失敗は呼び出し元に
@@ -79,6 +80,8 @@ class IssueForge(Protocol):
     def create_issue(
         self, title: str, body: str, labels: Sequence[str] = ()
     ) -> int: ...
+
+    def update_issue_body(self, issue_number: int | str, body: str) -> None: ...
 
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
