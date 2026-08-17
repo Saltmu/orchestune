@@ -625,6 +625,87 @@ class TestApplyTaskLaunchesRunStatePersistence:
         assert any(cw.issue_number == 99 for cw in persisted.completed_worktrees)
 
 
+class TestLaunchSelectedTasks:
+    """#476: build_dispatch_target/_launch_selected_tasksの多引数をDTOへ集約した
+    リファクタリング後も、decide+applyの薄いラッパーとしての挙動が維持されることを
+    LaunchContext経由の呼び出しで検証する。"""
+
+    def test_launches_selected_task_via_launch_context(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import LaunchContext, _launch_selected_tasks
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = _task(1, subtask_id="task-1")
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+        ctx = LaunchContext(
+            selected=[task],
+            task_to_base_branch={},
+            candidate_tasks=[task],
+            run_state=run_state,
+            now=1000.0,
+            config=config,
+            open_prs=[],
+        )
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            selected = _launch_selected_tasks(ctx)
+
+        assert selected == [task]
+        assert "1" in run_state.active_worktrees
+
+    def test_blocks_yaml_error_candidate_not_included_in_selected(self, tmp_path):
+        from unittest.mock import patch
+
+        from orchestune.dispatch_launch import LaunchContext, _launch_selected_tasks
+
+        bad_task = _task(1, subtask_id="bad-task", yaml_error=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        run_state = RunState(active_worktrees={})
+        ctx = LaunchContext(
+            selected=[],
+            task_to_base_branch={},
+            candidate_tasks=[bad_task],
+            run_state=run_state,
+            now=1000.0,
+            config=config,
+        )
+
+        with (
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            selected = _launch_selected_tasks(ctx)
+
+        assert selected == []
+        assert mock_add_label.called
+
+
 class TestGetStackEligibleTasks:
     def test_uses_context_tasks_by_issue_over_raw_yaml_depends_on(self):
         """Issue #252: _get_stack_eligible_tasks が parse_task_from_issue で raw YAML を

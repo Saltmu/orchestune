@@ -30,6 +30,7 @@ from orchestune.dispatch_postcycle import (
 from orchestune.dispatch_report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
 from orchestune.dispatch_targets import (
+    TargetBuildConfig,
     build_dispatch_target,
     resolve_default_dispatch_target_name,
 )
@@ -361,13 +362,15 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         parent_issue_number=args.parent_issue,
         apply=args.apply,
         dispatch_target=build_dispatch_target(
-            dispatch_target_name,
-            args.routine_id,
-            args.routine_token,
-            args.log_dir,
-            local_cmd=args.local_cmd,
-            codex_cloud_env=args.codex_cloud_env,
-            allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
+            TargetBuildConfig(
+                dispatch_target_name,
+                args.routine_id,
+                args.routine_token,
+                args.log_dir,
+                local_cmd=args.local_cmd,
+                codex_cloud_env=args.codex_cloud_env,
+                allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
+            )
         ),
         deviation_buffer_lines=args.deviation_buffer_lines,
         max_recompute_retries=args.max_recompute_retries,

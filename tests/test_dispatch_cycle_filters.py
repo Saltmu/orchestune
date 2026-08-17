@@ -373,17 +373,9 @@ class TestRunDispatchCycleFootprintRecompute:
             footprint=("src/bar.py",),
         )
 
-        def _launch_stub(
-            selected,
-            _task_to_base_branch,
-            _candidate_tasks,
-            run_state,
-            _now,
-            config,
-            open_prs=None,
-        ):
-            save_run_state(run_state, config.run_state_path)
-            return selected
+        def _launch_stub(ctx):
+            save_run_state(ctx.run_state, ctx.config.run_state_path)
+            return ctx.selected
 
         with (
             patch("orchestune.dispatch_cycle.ensure_parent_branch"),
@@ -470,17 +462,9 @@ class TestRunDispatchCycleFootprintRecompute:
             footprint=("src/qux.py",),
         )
 
-        def _launch_stub(
-            selected,
-            _task_to_base_branch,
-            _candidate_tasks,
-            run_state,
-            _now,
-            config,
-            open_prs=None,
-        ):
-            save_run_state(run_state, config.run_state_path)
-            return selected
+        def _launch_stub(ctx):
+            save_run_state(ctx.run_state, ctx.config.run_state_path)
+            return ctx.selected
 
         with (
             patch("orchestune.dispatch_cycle.ensure_parent_branch"),

@@ -15,6 +15,7 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
     DispatchTarget,
     LocalProcessDispatchTarget,
+    TargetBuildConfig,
     _push_branch_and_verify,
     build_dispatch_target,
     default_dry_run_command_builder,
@@ -901,7 +902,9 @@ class TestDetectInstalledLocalCli:
 
 class TestBuildDispatchTarget:
     def test_local_name_returns_local_process_target(self, tmp_path):
-        target = build_dispatch_target("local", None, None, tmp_path / "logs")
+        target = build_dispatch_target(
+            TargetBuildConfig("local", None, None, tmp_path / "logs")
+        )
         assert isinstance(target, LocalProcessDispatchTarget)
 
     def test_cloud_routine_with_credentials_returns_cloud_target(
@@ -910,23 +913,27 @@ class TestBuildDispatchTarget:
         monkeypatch.delenv("ORCHESTUNE_ROUTINE_ID", raising=False)
         monkeypatch.delenv("ORCHESTUNE_ROUTINE_TOKEN", raising=False)
         target = build_dispatch_target(
-            "cloud-routine", "trig_1", "token", tmp_path / "logs"
+            TargetBuildConfig("cloud-routine", "trig_1", "token", tmp_path / "logs")
         )
         assert isinstance(target, ClaudeCodeCloudRoutineDispatchTarget)
 
     def test_cloud_routine_resolves_credentials_from_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ORCHESTUNE_ROUTINE_ID", "trig_env")
         monkeypatch.setenv("ORCHESTUNE_ROUTINE_TOKEN", "token_env")
-        target = build_dispatch_target("cloud-routine", None, None, tmp_path / "logs")
+        target = build_dispatch_target(
+            TargetBuildConfig("cloud-routine", None, None, tmp_path / "logs")
+        )
         assert isinstance(target, ClaudeCodeCloudRoutineDispatchTarget)
 
     def test_builds_codex_cloud_target_with_explicit_environment(self, tmp_path):
         target = build_dispatch_target(
-            "codex-cloud",
-            None,
-            None,
-            tmp_path / "logs",
-            codex_cloud_env="env_123",
+            TargetBuildConfig(
+                "codex-cloud",
+                None,
+                None,
+                tmp_path / "logs",
+                codex_cloud_env="env_123",
+            )
         )
         assert isinstance(target, CodexCloudDispatchTarget)
 
@@ -934,7 +941,9 @@ class TestBuildDispatchTarget:
         self, tmp_path, monkeypatch, capsys
     ):
         monkeypatch.delenv("ORCHESTUNE_CODEX_CLOUD_ENV", raising=False)
-        target = build_dispatch_target("codex-cloud", None, None, tmp_path / "logs")
+        target = build_dispatch_target(
+            TargetBuildConfig("codex-cloud", None, None, tmp_path / "logs")
+        )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd is None
         assert "ORCHESTUNE_CODEX_CLOUD_ENV" in capsys.readouterr().err
@@ -944,59 +953,81 @@ class TestBuildDispatchTarget:
     ):
         monkeypatch.delenv("ORCHESTUNE_ROUTINE_ID", raising=False)
         monkeypatch.delenv("ORCHESTUNE_ROUTINE_TOKEN", raising=False)
-        target = build_dispatch_target("cloud-routine", None, None, tmp_path / "logs")
+        target = build_dispatch_target(
+            TargetBuildConfig("cloud-routine", None, None, tmp_path / "logs")
+        )
         assert isinstance(target, LocalProcessDispatchTarget)
 
     def test_local_with_local_cmd_propagates_to_target(self, tmp_path):
         target = build_dispatch_target(
-            "local", None, None, tmp_path / "logs", local_cmd="agy {issue_number}"
+            TargetBuildConfig(
+                "local", None, None, tmp_path / "logs", local_cmd="agy {issue_number}"
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "agy {issue_number}"
 
     def test_claude_cli_without_local_cmd_uses_preset_template(self, tmp_path):
         target = build_dispatch_target(
-            "claude-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
 
     def test_claude_cli_preset_bypasses_permission_prompts(self, tmp_path):
         target = build_dispatch_target(
-            "claude-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert "--permission-mode bypassPermissions" in target._local_cmd
 
     def test_claude_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
         target = build_dispatch_target(
-            "claude-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            local_cmd="claude -p 'custom {issue_number}'",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="claude -p 'custom {issue_number}'",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "claude -p 'custom {issue_number}'"
 
     def test_agy_cli_without_local_cmd_uses_preset_template(self, tmp_path):
         target = build_dispatch_target(
-            "agy-cli", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+            TargetBuildConfig(
+                "agy-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == AGY_CLI_LOCAL_CMD_TEMPLATE
 
     def test_agy_cli_preset_bypasses_permission_prompts(self, tmp_path):
         target = build_dispatch_target(
-            "agy-cli", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+            TargetBuildConfig(
+                "agy-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert "--sandbox" in target._local_cmd
         assert "--dangerously-skip-permissions" in target._local_cmd
@@ -1005,74 +1036,92 @@ class TestBuildDispatchTarget:
         # #157: 非対話型のバックグラウンド起動ではplanning_modeの承認待ちで
         # 停止してしまうため、プロンプト側で自動実行であることを明示する。
         target = build_dispatch_target(
-            "claude-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert "非対話" in target._local_cmd
         assert "承認待ちで停止せず" in target._local_cmd
 
     def test_agy_cli_preset_instructs_noninteractive_execution(self, tmp_path):
         target = build_dispatch_target(
-            "agy-cli", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+            TargetBuildConfig(
+                "agy-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert "非対話" in target._local_cmd
         assert "承認待ちで停止せず" in target._local_cmd
 
     def test_agy_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
         target = build_dispatch_target(
-            "agy-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            local_cmd="agy -p 'custom {issue_number}'",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "agy-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="agy -p 'custom {issue_number}'",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "agy -p 'custom {issue_number}'"
 
     def test_codex_cli_without_local_cmd_uses_preset_template(self, tmp_path):
         target = build_dispatch_target(
-            "codex-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "codex-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
 
     def test_codex_cli_preset_bypasses_approvals_and_sandbox(self, tmp_path):
         target = build_dispatch_target(
-            "codex-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "codex-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert "--dangerously-bypass-approvals-and-sandbox" in target._local_cmd
 
     def test_codex_cli_preset_instructs_noninteractive_execution(self, tmp_path):
         target = build_dispatch_target(
-            "codex-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "codex-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert "非対話" in target._local_cmd
         assert "承認待ちで停止せず" in target._local_cmd
 
     def test_codex_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
         target = build_dispatch_target(
-            "codex-cli",
-            None,
-            None,
-            tmp_path / "logs",
-            local_cmd="codex exec 'custom {issue_number}'",
-            allow_unsafe_agent_execution=True,
+            TargetBuildConfig(
+                "codex-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="codex exec 'custom {issue_number}'",
+                allow_unsafe_agent_execution=True,
+            )
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "codex exec 'custom {issue_number}'"
@@ -1083,7 +1132,13 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             target = build_dispatch_target(
-                "auto", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+                TargetBuildConfig(
+                    "auto",
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    allow_unsafe_agent_execution=True,
+                )
             )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
@@ -1094,7 +1149,13 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: f"/usr/bin/{name}",
         ):
             target = build_dispatch_target(
-                "auto", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+                TargetBuildConfig(
+                    "auto",
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    allow_unsafe_agent_execution=True,
+                )
             )
         assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
 
@@ -1104,7 +1165,13 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: "/usr/bin/agy" if name == "agy" else None,
         ):
             target = build_dispatch_target(
-                "auto", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+                TargetBuildConfig(
+                    "auto",
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    allow_unsafe_agent_execution=True,
+                )
             )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == AGY_CLI_LOCAL_CMD_TEMPLATE
@@ -1115,7 +1182,13 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: "/usr/bin/codex" if name == "codex" else None,
         ):
             target = build_dispatch_target(
-                "auto", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+                TargetBuildConfig(
+                    "auto",
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    allow_unsafe_agent_execution=True,
+                )
             )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
@@ -1124,7 +1197,9 @@ class TestBuildDispatchTarget:
         self, tmp_path, capsys
     ):
         with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
-            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+            target = build_dispatch_target(
+                TargetBuildConfig("auto", None, None, tmp_path / "logs")
+            )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd is None
         captured = capsys.readouterr()
@@ -1138,19 +1213,23 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             target = build_dispatch_target(
-                "auto",
-                None,
-                None,
-                tmp_path / "logs",
-                local_cmd="claude -p 'custom {issue_number}'",
-                allow_unsafe_agent_execution=True,
+                TargetBuildConfig(
+                    "auto",
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    local_cmd="claude -p 'custom {issue_number}'",
+                    allow_unsafe_agent_execution=True,
+                )
             )
         assert target._local_cmd == "claude -p 'custom {issue_number}'"
 
     def test_auto_with_explicit_local_cmd_used_even_when_none_detected(self, tmp_path):
         with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
             target = build_dispatch_target(
-                "auto", None, None, tmp_path / "logs", local_cmd="custom-cmd"
+                TargetBuildConfig(
+                    "auto", None, None, tmp_path / "logs", local_cmd="custom-cmd"
+                )
             )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == "custom-cmd"
@@ -1158,7 +1237,9 @@ class TestBuildDispatchTarget:
     def test_unsafe_cli_without_allow_unsafe_flag_raises_error(self, tmp_path):
         for target_name in ["claude-cli", "agy-cli", "codex-cli"]:
             with pytest.raises(ValueError) as excinfo:
-                build_dispatch_target(target_name, None, None, tmp_path / "logs")
+                build_dispatch_target(
+                    TargetBuildConfig(target_name, None, None, tmp_path / "logs")
+                )
             assert "完全権限実行となります" in str(excinfo.value)
             assert "--allow-unsafe-agent-execution" in str(excinfo.value)
 
@@ -1170,17 +1251,21 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             with pytest.raises(ValueError) as excinfo:
-                build_dispatch_target("auto", None, None, tmp_path / "logs")
+                build_dispatch_target(
+                    TargetBuildConfig("auto", None, None, tmp_path / "logs")
+                )
             assert "完全権限実行となります" in str(excinfo.value)
 
     def test_unsafe_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
         for target_name in ["claude-cli", "agy-cli", "codex-cli"]:
             target = build_dispatch_target(
-                target_name,
-                None,
-                None,
-                tmp_path / "logs",
-                allow_unsafe_agent_execution=True,
+                TargetBuildConfig(
+                    target_name,
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    allow_unsafe_agent_execution=True,
+                )
             )
             assert isinstance(target, LocalProcessDispatchTarget)
 
@@ -1190,7 +1275,13 @@ class TestBuildDispatchTarget:
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             target = build_dispatch_target(
-                "auto", None, None, tmp_path / "logs", allow_unsafe_agent_execution=True
+                TargetBuildConfig(
+                    "auto",
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    allow_unsafe_agent_execution=True,
+                )
             )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CLAUDE_CLI_LOCAL_CMD_TEMPLATE
@@ -1199,7 +1290,9 @@ class TestBuildDispatchTarget:
         self, tmp_path
     ):
         with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
-            target = build_dispatch_target("auto", None, None, tmp_path / "logs")
+            target = build_dispatch_target(
+                TargetBuildConfig("auto", None, None, tmp_path / "logs")
+            )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd is None
 
