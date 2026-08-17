@@ -40,6 +40,7 @@ from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,
     backfill_parent_issue_number,
+    effective_parent_number,
     find_children_by_parent,
     parent_issue_number_from_body,
 )
@@ -397,28 +398,42 @@ def _resolve_parent_issue(
     return parent_issue_number
 
 
-def _backfill_reused_issue_parent_metadata(
+def _ensure_reused_issue_is_discoverable(
     forge: IssueForge, candidate: IssueRecord, parent_issue_number: int
 ) -> bool:
-    """#485 review (P2): a reused Issue can predate `parent_issue_number`
+    """#485 review (P2 x2): a reused Issue can predate `parent_issue_number`
     (created by an older template, or by a run before this field existed).
     Left unpatched, that Issue has neither a native parent (if
     `add_sub_issue` is now unavailable) nor a metadata fallback the
     parent-scoped Dispatcher can find it by.
 
-    Returns whether the body now carries correct `parent_issue_number`
-    metadata (already correct, or successfully backfilled). `False` means
-    the metadata fallback cannot be relied on for this issue — the caller
+    Before attempting any write, check whether `candidate` is *already*
+    discoverable via `effective_parent_number` — most importantly, an
+    already-established native `parent` from a prior run. Skipping
+    straight to a body backfill attempt (and failing it) would otherwise
+    wrongly report "no discovery mechanism" for an issue that's already a
+    real native child; the current forge merely being unable to *re-write*
+    a relationship that already exists on GitHub doesn't mean it's gone
+    (#485 review round 5, P2).
+
+    Returns whether the issue is (now) discoverable at all: already
+    correct, successfully backfilled, or `False` if it wasn't already
+    correct and the backfill write failed — the caller
     (`provision_issues`) must then confirm native `add_sub_issue` linking
-    actually succeeded, or this subtask has no discovery mechanism left at
-    all (#485 review round 4, P2).
+    actually succeeds this run, or this subtask has no discovery mechanism
+    left (#485 review round 4, P2).
     """
+    if effective_parent_number(candidate) == parent_issue_number:
+        return True
+
     new_body = backfill_parent_issue_number(candidate.body, parent_issue_number)
     if new_body is None:
-        # Either already correct, or the Footprint fence can't be
-        # re-parsed here — but `candidate` only reaches this call after
+        # `effective_parent_number` above already ruled out "already
+        # correct" for this candidate, so a `None` here means the
+        # Footprint fence itself couldn't be re-parsed — which can't
+        # actually happen given `candidate` only reaches this call after
         # `_subtask_id_from_body` already parsed the same fence
-        # successfully, so in practice this is always "already correct".
+        # successfully. Kept purely as a defensive fallback.
         return True
     try:
         forge.update_issue_body(candidate.number, new_body)
@@ -478,7 +493,7 @@ def _provision_subtask(
         labels = forge.get_issue_labels(number)
         has_parent_metadata = True
         if candidate is not None:
-            has_parent_metadata = _backfill_reused_issue_parent_metadata(
+            has_parent_metadata = _ensure_reused_issue_is_discoverable(
                 forge, candidate, parent_issue_number
             )
         return number, True, "status:done" in labels, has_parent_metadata

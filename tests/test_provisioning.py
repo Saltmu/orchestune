@@ -116,6 +116,9 @@ class FakeForge:
                 body=self.issues[number]["body"],
                 labels=tuple(self.issues[number]["labels"]),
                 created_at="",
+                # A record only reaches here via a real native sub-issue
+                # relationship, so it has a native parent by definition.
+                parent={"number": int(parent_issue_number)},
             )
             for number in numbers
         ]
@@ -140,12 +143,22 @@ class FakeForge:
         entry = self.issues.get(int(issue_number))
         if entry is None:
             return None
+        number = int(issue_number)
+        native_parent = next(
+            (
+                {"number": parent}
+                for parent, children in self.sub_issues.items()
+                if number in children
+            ),
+            None,
+        )
         return IssueRecord(
-            number=int(issue_number),
+            number=number,
             title=entry["title"],
             body=entry["body"],
             labels=tuple(entry["labels"]),
             created_at="",
+            parent=native_parent,
         )
 
     def find_issues_by_parent_metadata(
@@ -424,6 +437,54 @@ class TestProvisionIssuesDegradedMode:
 
         with pytest.raises(RelationshipUnavailableError):
             provision_issues(plan_path, forge=forge, template_path=template_path)
+
+    def test_does_not_raise_when_reused_issue_already_has_a_native_parent_link(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#485 review round 5 (P2): a legacy issue already natively linked
+        to its parent from a prior run (discovered here via `list_sub_issues`)
+        remains discoverable even if the *current* forge can't re-write
+        `add_sub_issue`/`update_issue_body` — the existing native relationship
+        on GitHub doesn't disappear just because this run can't re-assert it.
+        Provisioning must not raise for it."""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'T'\nsubtasks:\n"
+            "  - id: task-a\n    description: 'd'\n    issue_number: null\n---\n",
+            encoding="utf-8",
+        )
+
+        class ReadOnlyForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("sub_issue_write not exposed")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("issue_dependency_write not exposed")
+
+            def update_issue_body(self, issue_number, body) -> None:
+                raise RelationshipUnavailableError("body edit not exposed")
+
+        forge = ReadOnlyForge()
+        parent_number = forge.create_issue(
+            "[EPIC] T", f"...\n{PARENT_MARKER}", labels=()
+        )
+        # Simulate a legacy issue already natively linked from a prior run
+        # (predates `parent_issue_number` in the body).
+        child_number = forge.create_issue(
+            "[FEAT] task-a: d",
+            "```yaml\nsubtask_id: task-a\n```\n",
+            labels=("status:queued",),
+        )
+        forge.sub_issues[parent_number] = [child_number]
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.applied is True
+        assert result.reused == {"task-a": child_number}
+        assert result.created == {}
+        # No body write was ever attempted: the native link already made
+        # it discoverable, so there was nothing to backfill.
+        assert "parent_issue_number" not in forge.issues[child_number]["body"]
 
     def test_print_result_reports_degraded_operating_mode(self, capsys):
         result = ProvisionResult(

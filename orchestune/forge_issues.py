@@ -351,7 +351,7 @@ class GitHubIssueMixin:
                     "view",
                     str(number),
                     "--json",
-                    "number,title,body,state,labels,createdAt",
+                    "number,title,body,state,labels,createdAt,parent,blockedBy",
                 ]
             )
         except subprocess.CalledProcessError as exc:
@@ -367,4 +367,13 @@ class GitHubIssueMixin:
             labels=tuple(entry["name"] for entry in raw.get("labels", [])),
             created_at=raw.get("createdAt") or "",
             state=raw.get("state", "OPEN"),
+            # #485 review round 5 (P2): provisioning's reuse path needs to
+            # know a candidate's *already-established* native parent (not
+            # just whether it can currently re-write one) to avoid
+            # wrongly concluding a legacy issue has no discovery mechanism
+            # left just because the current forge can't re-assert it.
+            parent=raw.get("parent"),
+            blocked_by=tuple(
+                node["number"] for node in raw.get("blockedBy", {}).get("nodes", [])
+            ),
         )

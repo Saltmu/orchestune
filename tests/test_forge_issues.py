@@ -598,6 +598,27 @@ class TestGetIssue:
         assert called_args[:3] == ["gh", "issue", "view"]
         assert "42" in called_args
 
+    def test_includes_native_parent_and_blocked_by(self, forge: GitHubForge, gh_run):
+        """#485 review round 5 (P2): provisioning's reuse path needs to see
+        an already-established native `parent` to avoid wrongly concluding
+        a legacy issue has no discovery mechanism when the current forge
+        merely can't *re-write* one that already exists."""
+        gh_run.stdout(
+            '{"number": 42, "title": "t", "body": "b", "state": "OPEN", '
+            '"labels": [], "createdAt": "2026-01-01T00:00:00Z", '
+            '"parent": {"number": 100}, '
+            '"blockedBy": {"nodes": [{"number": 10}, {"number": 11}]}}'
+        )
+
+        result = forge.get_issue(42)
+
+        assert result is not None
+        assert result.parent == {"number": 100}
+        assert result.blocked_by == (10, 11)
+        called_args = gh_run.call_args.args[0]
+        assert "parent" in called_args[called_args.index("--json") + 1]
+        assert "blockedBy" in called_args[called_args.index("--json") + 1]
+
     def test_returns_none_on_404(self, forge: GitHubForge, gh_run):
         gh_run.side_effect = subprocess.CalledProcessError(
             1,
