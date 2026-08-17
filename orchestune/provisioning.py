@@ -742,6 +742,14 @@ def provision_issues(
         raise ValueError(
             "decomposition_plan.md に必須の 'title' フィールドがありません"
         )
+    # codex review (PR #506): validate `parent_issue` up front, before the
+    # `--no-apply` early return, so an invalid value (e.g. 0 or negative)
+    # can't produce a successful dry-run preview for an invocation that the
+    # corresponding `--apply` run would deterministically reject via
+    # `_resolve_explicit_parent_issue` -> `forge.get_issue` ->
+    # `validate_issue_number`.
+    if parent_issue is not None:
+        parent_issue = validate_issue_number(parent_issue)
 
     dag = _build_provisioning_dag(subtasks, resolved_repo_root)
     template = Path(template_path).read_text(encoding="utf-8")

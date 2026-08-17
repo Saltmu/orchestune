@@ -1171,6 +1171,27 @@ class TestProvisionIssuesNoApply:
         for preview in result.previews:
             assert "parent_issue_number: 999" in preview.body
 
+    def test_no_apply_rejects_invalid_parent_issue_before_previewing(
+        self, plan_path: Path, template_path: Path
+    ):
+        """codex review (PR #506): a `--no-apply --parent-issue 0` dry run
+        must fail the same way the corresponding `--apply` run would,
+        instead of successfully previewing an invocation that can never
+        actually be applied."""
+
+        class ExplodingForge:
+            def __getattr__(self, name):
+                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+
+        with pytest.raises(ValueError):
+            provision_issues(
+                plan_path,
+                forge=ExplodingForge(),
+                apply=False,
+                template_path=template_path,
+                parent_issue=0,
+            )
+
 
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
