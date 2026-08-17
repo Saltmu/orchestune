@@ -81,6 +81,26 @@ class TestBackfillParentIssueNumber:
     def test_returns_none_when_no_footprint_block(self):
         assert backfill_parent_issue_number("no yaml here", 100) is None
 
+    def test_rewrites_a_boolean_value_matching_via_python_equality(self):
+        """#485 review round 9 (P2): `True == 1` in Python, so a raw `==`
+        against the parsed YAML value would wrongly treat
+        `parent_issue_number: true` as "already correct" for parent #1
+        even though `parent_issue_number_from_body` rejects booleans. Must
+        actually rewrite it instead of silently no-oping."""
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: true\n```\n"
+        result = backfill_parent_issue_number(body, 1)
+        assert result is not None
+        assert parent_issue_number_from_body(result) == 1
+
+    def test_rewrites_a_fractional_value_matching_via_python_equality(self):
+        """`100.0 == 100` in Python, so a raw `==` would wrongly treat
+        `parent_issue_number: 100.0` as already correct even though the
+        strict parser rejects non-integral values."""
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: 100.0\n```\n"
+        result = backfill_parent_issue_number(body, 100)
+        assert result is not None
+        assert parent_issue_number_from_body(result) == 100
+
 
 class _NativeOnlyForge:
     """`find_issues_by_parent_metadata`を実装しない旧来のForge。"""

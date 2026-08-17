@@ -44,6 +44,27 @@ def _parse_footprint_block(body: str) -> dict | None:
 _INTEGER_STRING_PATTERN = re.compile(r"-?\d+")
 
 
+def _validated_parent_issue_number(value: object) -> int | None:
+    """Strictly coerce a raw (already YAML-parsed) `parent_issue_number`
+    value, or reject it as `None` if it isn't unambiguously an integer.
+
+    #485 review round 8 (P2): `int(100.9)` truncates instead of rejecting
+    a malformed non-integral value, and `int(True)` == 1 would silently
+    accept a YAML boolean as a valid issue number. Only accept an actual
+    `int` (excluding `bool`, a subclass of `int`) or a digit-only string
+    (rejecting a numeric-looking-but-fractional string like `"100.9"`).
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and _INTEGER_STRING_PATTERN.fullmatch(value.strip()):
+        return int(value)
+    return None
+
+
 def parent_issue_number_from_body(body: str) -> int | None:
     """#485: ネイティブSub-issue関係が使えない環境向けに、Footprint YAML
     フェンスへ永続化された`parent_issue_number`を読み取るフォールバック。
@@ -54,21 +75,7 @@ def parent_issue_number_from_body(body: str) -> int | None:
     data = _parse_footprint_block(body)
     if not data:
         return None
-    value = data.get("parent_issue_number")
-    if value is None or value == "":
-        return None
-    # #485 review round 8 (P2): `int(100.9)` truncates instead of rejecting
-    # a malformed non-integral value, and `int(True)` == 1 would silently
-    # accept a YAML boolean as a valid issue number. Only accept an actual
-    # `int` (excluding `bool`, a subclass of `int`) or a digit-only string
-    # (rejecting a numeric-looking-but-fractional string like `"100.9"`).
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and _INTEGER_STRING_PATTERN.fullmatch(value.strip()):
-        return int(value)
-    return None
+    return _validated_parent_issue_number(data.get("parent_issue_number"))
 
 
 def effective_parent_number(issue: IssueRecord) -> int | None:
@@ -108,7 +115,17 @@ def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | N
         return None
     if not isinstance(data, dict):
         return None
-    if data.get("parent_issue_number") == parent_issue_number:
+    # #485 review round 9 (P2): compare via the same strict validator
+    # `parent_issue_number_from_body` uses, not a raw `==` against the
+    # freshly-parsed YAML value. A raw comparison would treat
+    # `parent_issue_number: true` as "already correct" for parent #1
+    # (`True == 1` in Python) or `100.0` as correct for #100, even though
+    # the strict parser rejects both — silently skipping the backfill for
+    # a body that isn't actually valid, discoverable metadata.
+    if (
+        _validated_parent_issue_number(data.get("parent_issue_number"))
+        == parent_issue_number
+    ):
         return None
     data["parent_issue_number"] = parent_issue_number
     new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
