@@ -301,8 +301,10 @@
       <div class="section-head">
         <div class="kicker" data-i18n="en">How It Works</div>
         <div class="kicker" data-i18n="ja">仕組み</div>
-        <h2 data-i18n="en">From a big idea to merged, traceable work</h2>
-        <h2 data-i18n="ja">大きなアイデアから、統合され追跡可能な成果物へ</h2>
+        <h2 data-i18n="en">The mechanics behind each stage</h2>
+        <h2 data-i18n="ja">各段階を支える仕組み</h2>
+        <p data-i18n="en">The features above describe what you get. Here's what's actually running underneath.</p>
+        <p data-i18n="ja">上の「解決策」が「何が得られるか」だとすると、ここではその裏で実際に動いている仕組みを説明します。</p>
       </div>
 
       <div class="steps">
@@ -310,31 +312,36 @@
           <div class="step-num mono">01</div>
           <h3 data-i18n="en">Decompose &amp; validate</h3>
           <h3 data-i18n="ja">分解と検証</h3>
-          <p data-i18n="en">Your agent turns the task into a reviewable decomposition plan, then validates its dependency DAG and conflict risks. You review and approve.</p>
-          <p data-i18n="ja">エージェントがタスクをレビュー可能な分解計画に変換し、依存DAGと競合リスクを検証します。あなたはその計画をレビューして承認します。</p>
+          <p data-i18n="en">Subtask footprints and symbols are compared with weighted similarity scoring to catch overlapping edits, and the DAG gets implicit dependency edges to keep parallel work safe. Shared extension points that don't exist yet (registries, CLI wiring) are gated explicitly via a <code class="mono">shared_contract</code> tag, since plain path matching can't catch those.</p>
+          <p data-i18n="ja">サブタスクのfootprintとsymbolsを重み付き類似度で比較して重複編集を検出し、DAGに暗黙的な依存エッジを追加して並列実行の安全性を確保します。まだ存在しない共有拡張点（レジストリやCLI配線など）は、パスの単純な一致では検出できないため、<code class="mono">shared_contract</code>タグで明示的にゲートします。</p>
         </div>
         <div class="step">
           <div class="step-num mono">02</div>
           <h3 data-i18n="en">Provision</h3>
           <h3 data-i18n="ja">Issue起票</h3>
-          <p data-i18n="en">Once approved, your agent creates dependency-linked parent and child GitHub Issues from the plan.</p>
-          <p data-i18n="ja">承認後、エージェントが依存関係で結ばれたGitHubの親Issueと子Issueを作成します。</p>
+          <p data-i18n="en">Filing is idempotent and resumable: issues are created in <code class="mono">depends_on</code> topological order, reusing any issue already filed for a subtask, so a partial failure never duplicates work on retry. Parent/child and blocked-by relationships are set natively, so GitHub itself tracks the dependency graph.</p>
+          <p data-i18n="ja">起票は冪等かつ再開可能です。Issueは<code class="mono">depends_on</code>のトポロジカル順に作成され、既に起票済みのサブタスクは再利用されるため、途中で失敗しても再実行で重複作成されません。親子関係とブロック関係はGitHubネイティブの機能で設定され、依存グラフ自体をGitHub上で追跡できます。</p>
         </div>
         <div class="step">
           <div class="step-num mono">03</div>
           <h3 data-i18n="en">Dispatch</h3>
           <h3 data-i18n="ja">ディスパッチ</h3>
-          <p data-i18n="en">Your agent starts eligible subtasks in isolated worktrees using local or cloud coding agents.</p>
-          <p data-i18n="ja">着手可能なサブタスクを、分離されたworktreeでローカルまたはクラウドのAIコーディングエージェントへ割り当てます。</p>
+          <p data-i18n="en">Each subtask runs in an isolated worktree, with rate limits on launches and token spend per window. If an agent's edits deviate from its declared footprint, the DAG is recomputed automatically, falling back to forced serialization if that keeps happening.</p>
+          <p data-i18n="ja">各サブタスクは隔離されたworktreeで実行され、起動数とトークン消費量にウィンドウ単位のレート制限がかかります。エージェントの変更が宣言済みのfootprintから逸脱した場合はDAGを自動的に再計算し、それでも収まらなければ強制的に直列実行へフォールバックします。</p>
         </div>
         <div class="step">
           <div class="step-num mono">04</div>
           <h3 data-i18n="en">Trace &amp; integrate</h3>
           <h3 data-i18n="ja">追跡と統合</h3>
-          <p data-i18n="en">Each subtask is tracked through its Issue, branch, PR, and CI result while Orchestune coordinates dependent work and integration.</p>
-          <p data-i18n="ja">各サブタスクのIssue、ブランチ、PR、CI結果を追跡しながら、Orchestuneが依存タスクと統合を調整します。</p>
+          <p data-i18n="en">Dependent branches auto-rebase onto whichever dependency branch has already passed CI — not just the latest main. With a parent issue, child branches merge into it automatically; only the final parent-to-main merge needs a human, and state stays self-healing by reconstructing everything from GitHub Issues and PRs.</p>
+          <p data-i18n="ja">依存先ブランチのうち、既にCIを通過しているブランチに対して自動的にリベースされます（最新のmainにではなく）。親Issueがある場合、子ブランチは親ブランチへ自動マージされ、親からmainへの最終マージだけ人間の判断が必要です。状態は常にGitHubのIssueとPRから復元されるため、自己修復します。</p>
         </div>
       </div>
+
+      <p class="how-it-works-more">
+        <a href="https://github.com/Saltmu/orchestune/blob/main/docs/en/architecture.md" target="_blank" rel="noopener" data-i18n="en">Read more in Architecture &amp; Design →</a>
+        <a href="https://github.com/Saltmu/orchestune/blob/main/docs/ja/architecture.md" target="_blank" rel="noopener" data-i18n="ja">詳細はこちら：アーキテクチャと設計思想 →</a>
+      </p>
     </div>
   </section>
 
