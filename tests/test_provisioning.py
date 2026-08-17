@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from orchestune.dag_models import SubTask
+from orchestune.forge import RelationshipUnavailableError
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,
@@ -15,11 +16,13 @@ from orchestune.issue_parsing import (
 from orchestune.models import IssueRecord
 from orchestune.provisioning import (
     PlanMetadata,
+    ProvisionResult,
     _build_provisioning_dag,
     _build_subtask_issue_body,
     _derive_labels,
     _link_subtask_relationships,
     _parent_body,
+    _print_result,
     _provision_subtask,
     _render_issue_body,
     _resolve_parent_issue,
@@ -39,6 +42,7 @@ _TEMPLATE = (
     "footprint: {{footprint}}\n"
     "symbols: {{symbols}}\n"
     "depends_on: {{depends_on}}\n"
+    "parent_issue_number: {{parent_issue_number}}\n"
     "```\n"
 )
 
@@ -140,6 +144,13 @@ class FakeForge:
             labels=tuple(entry["labels"]),
             created_at="",
         )
+
+    def find_issues_by_parent_metadata(
+        self, parent_issue_number: int | str
+    ) -> list[IssueRecord]:
+        """No metadata-search backend by default (mirrors a plain `gh`-based
+        forge); subclasses override this to exercise the #485 fallback."""
+        return []
 
     # --- Unused by provisioning.py; present only for IssueForge conformance. ---
 
@@ -301,6 +312,103 @@ class TestRenderIssueBodySubtaskIdSafety:
 
         assert "Preserve {{overview}} in the template" in body
         assert "Preserve THE REAL OVERVIEW in the template" not in body
+
+
+class TestProvisionIssuesDegradedMode:
+    """#485: forgeがネイティブSub-issue/blocked_by関係を提供しない場合でも
+    provisioningは中断せず、本文metadataフォールバックで完走する。"""
+
+    def test_completes_and_reports_degraded_subtask_ids_when_relationships_unavailable(
+        self, plan_path: Path, template_path: Path
+    ):
+        class DegradedForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("sub_issue_write not exposed")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("issue_dependency_write not exposed")
+
+        forge = DegradedForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert result.applied is True
+        assert set(result.created) == {"task-a", "task-b"}
+        assert set(result.degraded_subtask_ids) == {"task-a", "task-b"}
+        # Relationships were never established natively...
+        assert forge.sub_issues == {}
+        assert forge.blocked_by == {}
+        # ...but the parent number and dependency are still in the body.
+        task_b_number = result.created["task-b"]
+        assert (
+            f"parent_issue_number: {result.parent_issue_number}"
+            in forge.issues[task_b_number]["body"]
+        )
+        assert "depends_on: [task-a]" in forge.issues[task_b_number]["body"]
+
+    def test_resumes_via_body_metadata_when_forge_only_supports_metadata_search(
+        self, plan_path: Path, template_path: Path
+    ):
+        """A forge that never linked native sub-issues (prior run was fully
+        degraded) but *does* support `find_issues_by_parent_metadata` must
+        still find those already-created issues on resume, instead of
+        creating duplicates."""
+
+        class MetadataSearchForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("unavailable")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("unavailable")
+
+            def find_issues_by_parent_metadata(self, parent_issue_number):
+                # No native sub_issues dict entries exist (never linked), so
+                # simulate a body-metadata index scan over every issue.
+                return [
+                    IssueRecord(
+                        number=number,
+                        title=entry["title"],
+                        body=entry["body"],
+                        labels=tuple(entry["labels"]),
+                        created_at="",
+                    )
+                    for number, entry in self.issues.items()
+                ]
+
+        forge = MetadataSearchForge()
+        first = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert set(first.created) == {"task-a", "task-b"}
+
+        second = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert second.created == {}
+        assert set(second.reused) == {"task-a", "task-b"}
+        assert second.reused["task-a"] == first.created["task-a"]
+        assert second.reused["task-b"] == first.created["task-b"]
+
+    def test_print_result_reports_degraded_operating_mode(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={"task-a": 101},
+            reused={},
+            degraded_subtask_ids=("task-a",),
+        )
+        _print_result(result)
+        captured = capsys.readouterr()
+        assert "Operating mode: degraded/parent-metadata" in captured.out
+        assert "task-a" in captured.out
+
+    def test_print_result_reports_full_operating_mode_when_nothing_degraded(
+        self, capsys
+    ):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={"task-a": 101},
+            reused={},
+        )
+        _print_result(result)
+        captured = capsys.readouterr()
+        assert "Operating mode: full" in captured.out
 
 
 class TestProvisionIssuesApply:
@@ -1063,6 +1171,34 @@ class TestBuildSubtaskIssueBody:
         assert "`MissingSymbol`" in body
         assert "`Existing`" not in body.split("⚠️ **symbols未検出**")[1]
 
+    def test_persists_parent_issue_number_in_body_metadata(self, tmp_path: Path):
+        """#485: 親番号を本文metadataにも永続化しておくことで、ネイティブ
+        Sub-issue関係を作れない環境でもDispatcherが子Issueを発見できる。"""
+        subtask = SubTask(
+            id="task-a",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+        body = _build_subtask_issue_body(subtask, _TEMPLATE, tmp_path, 100)
+        assert "parent_issue_number: 100" in body
+
+    def test_omits_parent_issue_number_when_not_yet_resolved(self, tmp_path: Path):
+        subtask = SubTask(
+            id="task-a",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+        body = _build_subtask_issue_body(subtask, _TEMPLATE, tmp_path)
+        assert "parent_issue_number: null" in body
+
 
 class TestResolveParentIssue:
     def test_creates_new_parent_and_persists_when_none_persisted(self, tmp_path: Path):
@@ -1132,6 +1268,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
+            parent_issue_number=1,
         )
         assert is_reused is False
         assert is_done is False
@@ -1168,6 +1305,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
+            parent_issue_number=1,
         )
         assert number == existing_number
         assert is_reused is True
@@ -1177,7 +1315,7 @@ class TestProvisionSubtask:
 class TestLinkSubtaskRelationships:
     def test_links_sub_issue_and_blockers(self):
         forge = FakeForge()
-        _link_subtask_relationships(
+        result = _link_subtask_relationships(
             forge=forge,
             parent_issue_number=100,
             issue_number=102,
@@ -1186,3 +1324,70 @@ class TestLinkSubtaskRelationships:
         )
         assert forge.sub_issues[100] == [102]
         assert forge.blocked_by[102] == [101]
+        assert result.degraded is False
+
+    def test_degrades_gracefully_when_forge_signals_relationship_unavailable(self):
+        """#485: a forge (e.g. an MCP without sub_issue_write/
+        issue_dependency_write) that raises `RelationshipUnavailableError`
+        must not abort provisioning — it degrades to the body-metadata
+        fallback and reports which relationships were not linked natively."""
+
+        class DegradedForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("sub_issue_write not exposed")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("issue_dependency_write not exposed")
+
+        forge = DegradedForge()
+        result = _link_subtask_relationships(
+            forge=forge,
+            parent_issue_number=100,
+            issue_number=102,
+            depends_on=("dep-1",),
+            resolved_numbers={"dep-1": 101},
+        )
+        assert result.parent_linked is False
+        assert result.unresolved_dependencies == ("dep-1",)
+        assert result.degraded is True
+        assert forge.sub_issues == {}
+        assert forge.blocked_by == {}
+
+    def test_other_exceptions_still_propagate_for_retry(self):
+        """#323: a transient failure (not a structural capability gap) must
+        still abort the run so a rerun can pick up where it left off —
+        swallowing it unconditionally would silently corrupt the DAG's
+        dependency ordering instead of retrying."""
+
+        class FlakyForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RuntimeError("simulated transient failure")
+
+        forge = FlakyForge()
+        with pytest.raises(RuntimeError):
+            _link_subtask_relationships(
+                forge=forge,
+                parent_issue_number=100,
+                issue_number=102,
+                depends_on=(),
+                resolved_numbers={},
+            )
+
+    def test_partial_dependency_failure_reports_only_the_failed_ones(self):
+        class PartiallyDegradedForge(FakeForge):
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                if blocking_issue_number == 101:
+                    raise RelationshipUnavailableError("unavailable")
+                super().set_blocked_by(issue_number, blocking_issue_number)
+
+        forge = PartiallyDegradedForge()
+        result = _link_subtask_relationships(
+            forge=forge,
+            parent_issue_number=100,
+            issue_number=103,
+            depends_on=("dep-1", "dep-2"),
+            resolved_numbers={"dep-1": 101, "dep-2": 102},
+        )
+        assert result.parent_linked is True
+        assert result.unresolved_dependencies == ("dep-1",)
+        assert forge.blocked_by[103] == [102]

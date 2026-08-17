@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import re
 import sys
+from typing import TYPE_CHECKING
 
 import yaml
 
 from orchestune.models import IssueRecord, Task
+
+if TYPE_CHECKING:
+    from orchestune.forge import IssueForge
 
 BASE_PRIORITY = {"low": 1.0, "medium": 2.0, "high": 3.0}
 
@@ -21,6 +25,70 @@ FOOTPRINT_BLOCK_PATTERN = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 # that `dispatch_cycle.py` (L3) can validate a `--parent-issue` number against
 # it without depending on the entrypoint-layer `provisioning` module.
 PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
+
+
+def _parse_footprint_block(body: str) -> dict | None:
+    """Footprint YAMLフェンスをdictとして返す（存在しない/壊れている場合はNone）。"""
+    match = FOOTPRINT_BLOCK_PATTERN.search(body)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def parent_issue_number_from_body(body: str) -> int | None:
+    """#485: ネイティブSub-issue関係が使えない環境向けに、Footprint YAML
+    フェンスへ永続化された`parent_issue_number`を読み取るフォールバック。
+
+    ネイティブの`issue.parent`が利用できる場合はそちらを優先すべきで、
+    これは`gh`/GitHub MCPが関係操作を提供しない縮退時にのみ使われる。
+    """
+    data = _parse_footprint_block(body)
+    if not data:
+        return None
+    value = data.get("parent_issue_number")
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def find_children_by_parent(
+    forge: IssueForge, parent_issue_number: int | str
+) -> list[IssueRecord]:
+    """`parent_issue_number`配下の子Issueを、ネイティブSub-issue関係を起点に、
+    本文metadataフォールバックで補完して返す（#485）。
+
+    `forge`が`find_issues_by_parent_metadata`の呼び出しに失敗した場合
+    （後方互換のため未実装のforge実装を含む）は、ネイティブの結果だけを
+    黙って返す（既存の`gh`ベース運用は完全動作のまま変わらない）。
+    """
+    native = forge.list_sub_issues(parent_issue_number)
+    seen = {issue.number for issue in native}
+
+    try:
+        candidates = forge.find_issues_by_parent_metadata(parent_issue_number)
+    except Exception as e:
+        print(
+            f"Warning: parent-metadata fallback search for #{parent_issue_number} "
+            f"failed: {e}",
+            file=sys.stderr,
+        )
+        return native
+
+    target_number = int(parent_issue_number)
+    extra: list[IssueRecord] = [
+        candidate
+        for candidate in candidates
+        if candidate.number not in seen
+        and parent_issue_number_from_body(candidate.body) == target_number
+    ]
+    return native + extra
 
 
 def is_epic_issue(issue: IssueRecord) -> bool:
@@ -103,6 +171,11 @@ def parse_task_from_issue(
     if issue.parent:
         parent_number = issue.parent.get("number")
         parent_state = issue.parent.get("state")
+    else:
+        # #485: ネイティブSub-issue関係が無い（MCP-only縮退環境で作成された）
+        # Issueでも、本文metadataから親を復元する。closed判定は分からないため
+        # `parent_state`はNoneのままとする(=未closedとして扱う、安全側)。
+        parent_number = parent_issue_number_from_body(issue.body)
 
     return Task(
         issue_number=issue.number,

@@ -290,6 +290,50 @@ class GitHubIssueMixin:
             if entry.get("title") == title
         ]
 
+    def find_issues_by_parent_metadata(
+        self, parent_issue_number: int | str
+    ) -> list[IssueRecord]:
+        """#485: ネイティブSub-issue関係が使えない環境向けのフォールバック。
+
+        `gh issue list --search`は本文の部分文字列マッチ（`in:body`）しか
+        できず"12"が"120"にもヒットするような誤検出がありうるため、
+        検索結果はFootprint YAMLフェンスの`parent_issue_number`を
+        `parent_issue_number_from_body`（呼び出し元）で厳密に再検証する
+        前提の候補集合として返す。
+        """
+        number = validate_issue_number(parent_issue_number)
+        stdout = self._run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--search",
+                f"in:body parent_issue_number: {number}",
+                "--state",
+                "all",
+                "--json",
+                "number,title,body,labels,createdAt,parent,blockedBy,state",
+                "--limit",
+                "1000",
+            ]
+        )
+        raw_issues = json.loads(stdout)
+        return [
+            IssueRecord(
+                number=raw["number"],
+                title=raw["title"],
+                body=raw["body"],
+                labels=tuple(entry["name"] for entry in raw.get("labels", [])),
+                created_at=raw["createdAt"],
+                state=raw.get("state", "OPEN"),
+                parent=raw.get("parent"),
+                blocked_by=tuple(
+                    node["number"] for node in raw.get("blockedBy", {}).get("nodes", [])
+                ),
+            )
+            for raw in raw_issues
+        ]
+
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
         number = validate_issue_number(issue_number)
         try:

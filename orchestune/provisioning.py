@@ -35,8 +35,12 @@ from orchestune.dag_parsing import (
     parse_decomposition_plan,
 )
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.forge import GitHubForge, IssueForge
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, PARENT_MARKER
+from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    PARENT_MARKER,
+    find_children_by_parent,
+)
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.symbol_verification import find_missing_symbols
 from orchestune.validation import validate_issue_number
@@ -52,6 +56,7 @@ _PLACEHOLDERS = (
     "footprint",
     "symbols",
     "depends_on",
+    "parent_issue_number",
 )
 _PLACEHOLDER_PATTERN = re.compile(
     "{{(" + "|".join(re.escape(name) for name in _PLACEHOLDERS) + ")}}"
@@ -81,6 +86,9 @@ class ProvisionResult:
     created: dict[str, int]
     reused: dict[str, int]
     previews: tuple[IssuePreview, ...] = ()
+    # #485: ネイティブSub-issue/blocked_by関係のリンクに失敗し、本文metadata
+    # フォールバックのみで縮退したsubtask_idの一覧（起動時/完了時に報告する）。
+    degraded_subtask_ids: tuple[str, ...] = ()
 
 
 def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
@@ -168,7 +176,9 @@ def _bullet_list(items: Sequence[str]) -> str:
     return "\n".join(f"- {item}" for item in items) if items else "特になし"
 
 
-def _render_issue_body(subtask: SubTask, template: str) -> str:
+def _render_issue_body(
+    subtask: SubTask, template: str, parent_issue_number: int | None = None
+) -> str:
     values = {
         "subtask_id": subtask.id,
         "subtask_id_yaml": _yaml_scalar(subtask.id),
@@ -180,6 +190,12 @@ def _render_issue_body(subtask: SubTask, template: str) -> str:
         "footprint": _yaml_inline_list(subtask.footprint),
         "symbols": _yaml_inline_list(subtask.symbols),
         "depends_on": _yaml_inline_list(subtask.depends_on),
+        # #485: ネイティブSub-issue関係が使えない環境でも`--parent-issue`
+        # モードが子Issueを発見できるよう、親番号を本文metadataにも
+        # 永続化する（`add_sub_issue`が成功したかどうかに関わらず常に書く）。
+        "parent_issue_number": (
+            "null" if parent_issue_number is None else str(parent_issue_number)
+        ),
     }
     # A single-pass substitution (not one `.replace()` call per placeholder):
     # a field's own value could otherwise contain a literal `{{token}}` (a
@@ -272,7 +288,9 @@ def _index_sub_issues_by_subtask_id(
     forge: IssueForge, parent_issue_number: int
 ) -> dict[str, int]:
     index: dict[str, int] = {}
-    for record in forge.list_sub_issues(parent_issue_number):
+    # #485: ネイティブSub-issue関係を作れなかった過去実行のIssueも本文
+    # metadataのparent_issue_numberから見つけて再利用対象に含める。
+    for record in find_children_by_parent(forge, parent_issue_number):
         subtask_id = _subtask_id_from_body(record.body)
         if subtask_id:
             index.setdefault(subtask_id, record.number)
@@ -298,9 +316,14 @@ def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResu
     return build_dag(subtasks, ignore_patterns=ignore_patterns, threshold=threshold)
 
 
-def _build_subtask_issue_body(subtask: SubTask, template: str, repo_root: Path) -> str:
+def _build_subtask_issue_body(
+    subtask: SubTask,
+    template: str,
+    repo_root: Path,
+    parent_issue_number: int | None = None,
+) -> str:
     return _append_symbol_warning(
-        _render_issue_body(subtask, template), subtask, repo_root
+        _render_issue_body(subtask, template, parent_issue_number), subtask, repo_root
     )
 
 
@@ -358,6 +381,7 @@ def _provision_subtask(
     plan_path: str | Path,
     existing_by_subtask_id: dict[str, int],
     dependencies_done: dict[str, bool],
+    parent_issue_number: int,
 ) -> tuple[int, bool, bool]:
     """Resolve an existing issue or create a new one for a subtask.
 
@@ -388,7 +412,7 @@ def _provision_subtask(
 
     all_deps_done = all(dependencies_done.get(dep, False) for dep in subtask.depends_on)
     labels = _derive_labels(subtask, dependencies_done=all_deps_done)
-    body = _build_subtask_issue_body(subtask, template, repo_root)
+    body = _build_subtask_issue_body(subtask, template, repo_root, parent_issue_number)
     number = forge.create_issue(_issue_title(subtask), body, labels=labels)
     # Persist before the fallible relationship calls below: if
     # add_sub_issue/set_blocked_by then fails, a retry must find this
@@ -399,33 +423,88 @@ def _provision_subtask(
     return number, False, False
 
 
+@dataclass(frozen=True)
+class RelationshipLinkResult:
+    parent_linked: bool
+    unresolved_dependencies: tuple[str, ...]
+
+    @property
+    def degraded(self) -> bool:
+        return not self.parent_linked or bool(self.unresolved_dependencies)
+
+
 def _link_subtask_relationships(
     forge: IssueForge,
     parent_issue_number: int,
     issue_number: int,
     depends_on: Sequence[str],
     resolved_numbers: dict[str, int],
-) -> None:
+) -> RelationshipLinkResult:
     """Reconcile parent/blocked-by relationships unconditionally, not just
     on creation: a prior run may have created this issue (or an earlier
     dependency's set_blocked_by call) and then failed before finishing
     all of them, in which case a reused issue can still be missing some.
     Both operations are idempotent (`--set-parent` / `--add-blocked-by`).
+
+    #485: `forge`がネイティブ関係操作を構造的にサポートしない場合
+    （`RelationshipUnavailableError`、またはそもそもメソッドを実装して
+    いない）は、provisioning全体を中断せず、既に本文metadataへ永続化済み
+    (`_render_issue_body`)のparent_issue_number/depends_onへフォールバック
+    したまま処理を続行する。それ以外の失敗（ネットワーク瞬断・権限不足・
+    レート制限などの一時的なgh/API呼び出しエラー）は、今まで通り呼び出し
+    元に伝播させ、再実行時の再試行に委ねる（このモジュールの冪等性は
+    その前提の上に成り立っている。#323参照）。
     """
-    forge.add_sub_issue(parent_issue_number, issue_number)
+    unavailable_errors = (
+        RelationshipUnavailableError,
+        AttributeError,
+        NotImplementedError,
+    )
+
+    parent_linked = True
+    try:
+        forge.add_sub_issue(parent_issue_number, issue_number)
+    except unavailable_errors as e:
+        parent_linked = False
+        print(
+            f"Warning: this forge does not support native sub-issue linking; "
+            f"#{issue_number} relies on body metadata for parent #{parent_issue_number} "
+            f"instead: {e}",
+            file=sys.stderr,
+        )
+
+    unresolved: list[str] = []
     for dependency_id in depends_on:
-        forge.set_blocked_by(issue_number, resolved_numbers[dependency_id])
+        try:
+            forge.set_blocked_by(issue_number, resolved_numbers[dependency_id])
+        except unavailable_errors as e:
+            unresolved.append(dependency_id)
+            print(
+                f"Warning: this forge does not support native blocked_by linking; "
+                f"#{issue_number} relies on body depends_on for {dependency_id} "
+                f"(#{resolved_numbers[dependency_id]}) instead: {e}",
+                file=sys.stderr,
+            )
+    return RelationshipLinkResult(
+        parent_linked=parent_linked, unresolved_dependencies=tuple(unresolved)
+    )
 
 
 def _preview_only(
-    subtasks: list[SubTask], dag_order: list[str], template: str, repo_root: Path
+    subtasks: list[SubTask],
+    dag_order: list[str],
+    template: str,
+    repo_root: Path,
+    parent_issue_number: int | None = None,
 ) -> ProvisionResult:
     by_id = {subtask.id: subtask for subtask in subtasks}
     previews = tuple(
         IssuePreview(
             subtask_id=subtask_id,
             title=_issue_title(by_id[subtask_id]),
-            body=_build_subtask_issue_body(by_id[subtask_id], template, repo_root),
+            body=_build_subtask_issue_body(
+                by_id[subtask_id], template, repo_root, parent_issue_number
+            ),
             labels=_derive_labels(by_id[subtask_id], dependencies_done=False),
             already_has_issue=by_id[subtask_id].issue_number is not None,
         )
@@ -480,7 +559,11 @@ def provision_issues(
 
     if not apply:
         return _preview_only(
-            subtasks, dag.topological_order, template, resolved_repo_root
+            subtasks,
+            dag.topological_order,
+            template,
+            resolved_repo_root,
+            metadata.parent_issue_number,
         )
 
     resolved_forge = forge or GitHubForge()
@@ -493,6 +576,7 @@ def provision_issues(
     dependencies_done: dict[str, bool] = {}
     created: dict[str, int] = {}
     reused: dict[str, int] = {}
+    degraded_subtask_ids: list[str] = []
 
     for subtask_id in dag.topological_order:
         subtask = dag.subtasks[subtask_id]
@@ -504,6 +588,7 @@ def provision_issues(
             plan_path,
             existing_by_subtask_id,
             dependencies_done,
+            parent_issue_number,
         )
         if is_reused:
             reused[subtask_id] = number
@@ -511,13 +596,15 @@ def provision_issues(
             created[subtask_id] = number
         dependencies_done[subtask_id] = is_done
 
-        _link_subtask_relationships(
+        link_result = _link_subtask_relationships(
             resolved_forge,
             parent_issue_number,
             number,
             subtask.depends_on,
             resolved_numbers,
         )
+        if link_result.degraded:
+            degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
 
@@ -526,6 +613,7 @@ def provision_issues(
         applied=True,
         created=created,
         reused=reused,
+        degraded_subtask_ids=tuple(degraded_subtask_ids),
     )
 
 
@@ -547,6 +635,21 @@ def _print_result(result: ProvisionResult) -> None:
     print(f"Reused: {len(result.reused)}")
     for subtask_id, number in result.reused.items():
         print(f"  = {subtask_id} -> #{number}")
+
+    if result.degraded_subtask_ids:
+        print(
+            f"\nOperating mode: degraded/parent-metadata for "
+            f"{len(result.degraded_subtask_ids)} subtask(s) "
+            "(native sub-issue/blocked_by relationship writes failed; "
+            "parent_issue_number/depends_on body metadata is authoritative "
+            "for these instead):"
+        )
+        for subtask_id in result.degraded_subtask_ids:
+            print(f"  ! {subtask_id}")
+    else:
+        print(
+            "\nOperating mode: full (native sub-issue/blocked_by relationships linked)"
+        )
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

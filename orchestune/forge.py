@@ -21,6 +21,19 @@ from orchestune.forge_prs import GitHubPullRequestMixin
 from orchestune.models import IssueRecord, PrRecord
 
 
+class RelationshipUnavailableError(ForgeError):
+    """#485: `add_sub_issue`/`set_blocked_by`のようなGitHub関係操作を、この
+    `Forge`実装が構造的にサポートしていないことを示す。
+
+    `gh` CLIやGitHub MCPの通常のAPI呼び出し失敗（ネットワーク瞬断、権限、
+    一時的なレート制限など）とは意味が異なる: そうした失敗は呼び出し元に
+    伝播させ、再試行できるようにすべきもの。これは「そもそもこの機能を
+    提供しない」実装（例: Sub-issue/Issue dependency書き込みを公開しない
+    GitHub MCP）が明示的に送出する専用の例外で、`provisioning.py`はこれ
+    だけを捕捉して本文metadataフォールバックへ縮退する。
+    """
+
+
 @runtime_checkable
 class IssueForge(Protocol):
     def list_issues_by_label(
@@ -64,6 +77,10 @@ class IssueForge(Protocol):
     def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]: ...
 
     def get_issue(self, issue_number: int | str) -> IssueRecord | None: ...
+
+    def find_issues_by_parent_metadata(
+        self, parent_issue_number: int | str
+    ) -> list[IssueRecord]: ...
 
 
 @runtime_checkable
@@ -135,5 +152,6 @@ __all__ = [
     "IssueForge",
     "LabelSpec",
     "PullRequestForge",
+    "RelationshipUnavailableError",
     "RepoAdminForge",
 ]

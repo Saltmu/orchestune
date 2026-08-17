@@ -543,6 +543,39 @@ class TestFindOpenIssuesByExactTitle:
         assert forge.find_open_issues_by_exact_title("[EPIC] Big rock") == []
 
 
+class TestFindIssuesByParentMetadata:
+    """#485: ネイティブSub-issue関係が使えない環境向けの本文metadata検索。"""
+
+    def test_calls_gh_search_with_parent_number_and_all_states(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(
+            '[{"number": 200, "title": "[FEAT] task-a: x", '
+            '"body": "```yaml\\nparent_issue_number: 100\\n```", '
+            '"labels": [], "createdAt": "2026-01-01T00:00:00Z", "state": "OPEN"}]'
+        )
+
+        results = forge.find_issues_by_parent_metadata(100)
+
+        called_args = gh_run.call_args.args[0]
+        assert called_args[:4] == ["gh", "issue", "list", "--search"]
+        assert "100" in called_args[called_args.index("--search") + 1]
+        assert called_args[called_args.index("--state") + 1] == "all"
+        assert [r.number for r in results] == [200]
+
+    def test_returns_empty_list_when_search_finds_nothing(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout("[]")
+
+        assert forge.find_issues_by_parent_metadata(100) == []
+
+    def test_rejects_invalid_parent_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.find_issues_by_parent_metadata("1; evil")
+        gh_run.assert_not_called()
+
+
 class TestGetIssue:
     """#323 review: verifies a persisted issue_number actually belongs to
     this subtask before reusing/mutating it, independent of whether it's

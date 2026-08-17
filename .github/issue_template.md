@@ -18,4 +18,5 @@ subtask_id: {{subtask_id_yaml}}
 footprint: {{footprint}}
 symbols: {{symbols}}
 depends_on: {{depends_on}}
+parent_issue_number: {{parent_issue_number}}
 ```
