@@ -121,7 +121,7 @@ def process_parent_completion(
     # unavailable when it was created) would otherwise be invisible here,
     # letting this treat the parent as already complete — creating the final
     # PR too early, or even closing the parent while that child is still open.
-    children = find_children_by_parent(forge, parent_issue_number)
+    children = find_children_by_parent(forge, parent_issue_number).issues
     open_children = [child.number for child in children if child.state != "CLOSED"]
     if open_children:
         return {"status": "waiting_on_children", "open_children": open_children}

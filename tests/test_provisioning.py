@@ -7,7 +7,10 @@ import pytest
 import yaml
 
 from orchestune.dag_models import SubTask
-from orchestune.forge import RelationshipUnavailableError
+from orchestune.forge import (
+    MetadataSearchUnavailableError,
+    RelationshipUnavailableError,
+)
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,
@@ -333,6 +336,31 @@ class TestRenderIssueBodySubtaskIdSafety:
 class TestProvisionIssuesDegradedMode:
     """#485: forgeがネイティブSub-issue/blocked_by関係を提供しない場合でも
     provisioningは中断せず、本文metadataフォールバックで完走する。"""
+
+    def test_raises_when_neither_relationships_nor_metadata_search_are_supported(
+        self, plan_path: Path, template_path: Path
+    ):
+        """#485 review round 7 (P1): a newly created subtask's body always
+        gets the correct parent_issue_number field, so `has_parent_metadata`
+        is trivially True for it. But that's worthless for discovery if
+        this forge can never *search* for it either — `find_children_by_parent`
+        degrades straight to native-only results, which will never include
+        this subtask. Provisioning must not report "degraded" (implying
+        the fallback works) in this case; it must fail loudly instead."""
+
+        class FullyUnsupportedForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("sub_issue_write not exposed")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("issue_dependency_write not exposed")
+
+            def find_issues_by_parent_metadata(self, parent_issue_number):
+                raise MetadataSearchUnavailableError("issue search not exposed")
+
+        forge = FullyUnsupportedForge()
+        with pytest.raises(RelationshipUnavailableError):
+            provision_issues(plan_path, forge=forge, template_path=template_path)
 
     def test_completes_and_reports_degraded_subtask_ids_when_relationships_unavailable(
         self, plan_path: Path, template_path: Path

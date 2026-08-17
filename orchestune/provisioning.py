@@ -309,17 +309,25 @@ def _validate_template_identity_marker(
 
 def _index_sub_issues_by_subtask_id(
     forge: IssueForge, parent_issue_number: int
-) -> dict[str, IssueRecord]:
-    """Returns the full `IssueRecord` (not just the number) so a reuse can
-    inspect/backfill its body without an extra `get_issue` round trip."""
+) -> tuple[dict[str, IssueRecord], bool]:
+    """Returns `(index, metadata_search_supported)`. `index` maps
+    `subtask_id` to the full `IssueRecord` (not just the number) so a
+    reuse can inspect/backfill its body without an extra `get_issue`
+    round trip. `metadata_search_supported` is threaded through to
+    `provision_issues` (#485 review round 7, P2): a newly created issue's
+    body always carries correct `parent_issue_number` metadata, but that's
+    worthless for discovery if this forge can never search for it — a
+    body-metadata "fallback" that nothing can find isn't actually one.
+    """
     index: dict[str, IssueRecord] = {}
     # #485: ネイティブSub-issue関係を作れなかった過去実行のIssueも本文
     # metadataのparent_issue_numberから見つけて再利用対象に含める。
-    for record in find_children_by_parent(forge, parent_issue_number):
+    result = find_children_by_parent(forge, parent_issue_number)
+    for record in result.issues:
         subtask_id = _subtask_id_from_body(record.body)
         if subtask_id:
             index.setdefault(subtask_id, record)
-    return index
+    return index, result.metadata_search_supported
 
 
 def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResult:
@@ -669,7 +677,7 @@ def provision_issues(
 
     resolved_forge = forge or GitHubForge()
     parent_issue_number = _resolve_parent_issue(resolved_forge, metadata, plan_path)
-    existing_by_subtask_id = _index_sub_issues_by_subtask_id(
+    existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
         resolved_forge, parent_issue_number
     )
 
@@ -704,14 +712,21 @@ def provision_issues(
             subtask.depends_on,
             resolved_numbers,
         )
-        if not has_parent_metadata and not link_result.parent_linked:
-            # #485 review round 4 (P2): a reused issue whose body metadata
-            # couldn't be backfilled AND whose native `add_sub_issue` also
-            # failed has no discovery mechanism left at all — reporting
-            # this as merely "degraded" would be misleading (that implies
-            # the fallback works). Fail loudly instead of letting
-            # `--parent-issue` Dispatcher and `process_parent_completion`
-            # silently never see this subtask.
+        metadata_actually_discoverable = (
+            has_parent_metadata and metadata_search_supported
+        )
+        if not metadata_actually_discoverable and not link_result.parent_linked:
+            # #485 review round 4 (P2) + round 7 (P2): a subtask with no
+            # native parent link has no discovery mechanism left at all
+            # unless the body-metadata fallback is BOTH correctly written
+            # (`has_parent_metadata`) AND actually searchable on this
+            # forge (`metadata_search_supported`) — a newly created
+            # issue's body always has the field, but that's worthless if
+            # nothing can ever search for it. Reporting this as merely
+            # "degraded" would be misleading (that implies the fallback
+            # works). Fail loudly instead of letting `--parent-issue`
+            # Dispatcher and `process_parent_completion` silently never
+            # see this subtask.
             raise RelationshipUnavailableError(
                 f"#{number} ({subtask_id}) has neither a native parent link "
                 f"nor discoverable parent_issue_number body metadata; "

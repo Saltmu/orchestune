@@ -109,7 +109,10 @@ class TestFindChildrenByParent:
         native = [_issue(1, 100)]
         forge = _NativeOnlyForge(native)
 
-        assert find_children_by_parent(forge, 100) == native
+        result = find_children_by_parent(forge, 100)
+
+        assert result.issues == native
+        assert result.metadata_search_supported is False
 
     def test_merges_metadata_fallback_candidates_not_in_native_list(self):
         native = [_issue(1, 100)]
@@ -120,7 +123,8 @@ class TestFindChildrenByParent:
 
         result = find_children_by_parent(forge, 100)
 
-        assert sorted(r.number for r in result) == [1, 2]
+        assert sorted(r.number for r in result.issues) == [1, 2]
+        assert result.metadata_search_supported is True
         assert forge.metadata_calls == 1
 
     def test_rejects_candidates_whose_body_metadata_does_not_match(self):
@@ -130,7 +134,7 @@ class TestFindChildrenByParent:
         candidates = [_issue(2, 1000, subtask_id="task-b")]
         forge = _MetadataAwareForge(native, candidates)
 
-        assert find_children_by_parent(forge, 100) == []
+        assert find_children_by_parent(forge, 100).issues == []
 
     def test_rejects_candidates_whose_native_parent_disagrees_with_stale_body(self):
         """#485 review (P2): an issue natively reparented elsewhere, whose
@@ -149,13 +153,15 @@ class TestFindChildrenByParent:
         )
         forge = _MetadataAwareForge(native, [reparented])
 
-        assert find_children_by_parent(forge, 100) == []
+        assert find_children_by_parent(forge, 100).issues == []
 
     def test_falls_back_to_native_only_when_metadata_search_is_unsupported(self):
         native = [_issue(1, 100)]
         forge = _UnsupportedMetadataForge(native)
 
-        assert find_children_by_parent(forge, 100) == native
+        result = find_children_by_parent(forge, 100)
+        assert result.issues == native
+        assert result.metadata_search_supported is False
 
     def test_propagates_operational_metadata_search_failures(self):
         """#485 review (P1): a transient/operational failure (auth expired,

@@ -97,9 +97,10 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
     `forge.list_sub_issues`による親Issue起点のfast pathを使う。
     """
     if config.parent_issue_number is not None:
-        return _group_by_status(
-            find_children_by_parent(config.resolved_forge, config.parent_issue_number)
+        result = find_children_by_parent(
+            config.resolved_forge, config.parent_issue_number
         )
+        return _group_by_status(result.issues)
 
     return IssuesByStatus(
         queued=config.resolved_forge.list_issues_by_label("status:queued"),

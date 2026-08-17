@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import yaml
@@ -104,9 +105,21 @@ def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | N
     return body[:start] + new_block + body[end:]
 
 
+@dataclass(frozen=True)
+class ChildDiscoveryResult:
+    issues: list[IssueRecord]
+    # #485 review round 7 (P2): whether `find_issues_by_parent_metadata`
+    # actually works on this `forge` (as opposed to raising a
+    # capability-absence signal). A body correctly carrying
+    # `parent_issue_number` is worthless for discovery if nothing can ever
+    # search for it — callers must not treat `has_parent_metadata` as
+    # sufficient proof of discoverability unless this is also `True`.
+    metadata_search_supported: bool
+
+
 def find_children_by_parent(
     forge: IssueForge, parent_issue_number: int | str
-) -> list[IssueRecord]:
+) -> ChildDiscoveryResult:
     """`parent_issue_number`配下の子Issueを、ネイティブSub-issue関係を起点に、
     本文metadataフォールバックで補完して返す（#485）。
 
@@ -130,7 +143,7 @@ def find_children_by_parent(
             f"#{parent_issue_number}: {e}",
             file=sys.stderr,
         )
-        return native
+        return ChildDiscoveryResult(issues=native, metadata_search_supported=False)
 
     # #485 review (P2): re-verify with `effective_parent_number`, not a raw
     # body-metadata read — a candidate returned by `gh search`'s substring
@@ -146,7 +159,7 @@ def find_children_by_parent(
         if candidate.number not in seen
         and effective_parent_number(candidate) == target_number
     ]
-    return native + extra
+    return ChildDiscoveryResult(issues=native + extra, metadata_search_supported=True)
 
 
 def is_epic_issue(issue: IssueRecord) -> bool:

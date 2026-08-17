@@ -334,6 +334,10 @@ class TestFetchIssues:
                 return_value=[_sub_issue(1, labels=("status:queued",))],
             ) as mock_sub_issues,
             patch(
+                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
+                return_value=[],
+            ),
+            patch(
                 "orchestune.forge.GitHubForge.list_issues_by_label",
                 side_effect=AssertionError("Should not scan the whole repository"),
             ),
