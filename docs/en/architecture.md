@@ -305,9 +305,11 @@ patching module attributes: `IntegratorConfig(forge=...)` and
 `DispatcherConfig(forge=...)` accept any object satisfying it, and the shared
 `fake_forge` fixture supplies one.
 
-That migration is partial. Roughly 500 call sites still reach for
+That migration is partial. Roughly 490 call sites still reach for
 `patch("orchestune.forge.GitHubForge.<method>")` — heaviest in
-`test_dispatch_cycle.py`, `test_dispatch_gc.py` and `test_parent_completion.py`
-— because those suites predate the protocol. Both styles stop `gh` from running,
-which is the invariant that matters; injection is the direction of travel for
-new tests, not a description of the whole suite today.
+`test_dispatch_cycle.py` and `test_dispatch_gc.py` — because those suites
+predate the protocol. `test_parent_completion.py` and
+`test_integration_coordinator.py` have already migrated to `fake_forge`
+injection. Both styles stop `gh` from running, which is the invariant that
+matters; injection is the direction of travel for new tests, not a
+description of the whole suite today.
