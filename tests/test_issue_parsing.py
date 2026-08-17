@@ -33,6 +33,28 @@ class TestParentIssueNumberFromBody:
         body = "```yaml\n: not valid: yaml: [\n```\n"
         assert parent_issue_number_from_body(body) is None
 
+    def test_parses_quoted_integer_string(self):
+        body = '```yaml\nsubtask_id: task-a\nparent_issue_number: "100"\n```\n'
+        assert parent_issue_number_from_body(body) == 100
+
+    def test_rejects_fractional_value_instead_of_truncating(self):
+        """#485 review round 8 (P2): `int(100.9)` truncates to 100 rather
+        than rejecting a malformed value — this must reject it instead,
+        or a metadata-search substring match on '100' could wrongly treat
+        the issue as a child of parent #100."""
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: 100.9\n```\n"
+        assert parent_issue_number_from_body(body) is None
+
+    def test_rejects_boolean_value(self):
+        """`bool` is a subclass of `int` in Python; `int(True) == 1` would
+        otherwise silently accept a YAML boolean as issue #1."""
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: true\n```\n"
+        assert parent_issue_number_from_body(body) is None
+
+    def test_rejects_non_numeric_string(self):
+        body = "```yaml\nsubtask_id: task-a\nparent_issue_number: abc\n```\n"
+        assert parent_issue_number_from_body(body) is None
+
 
 class TestBackfillParentIssueNumber:
     def test_adds_missing_field_preserving_rest_of_body(self):

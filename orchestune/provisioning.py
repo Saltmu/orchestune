@@ -249,6 +249,21 @@ def _subtask_id_from_body(body: str) -> str | None:
     return str(subtask_id) if subtask_id else None
 
 
+def _depends_on_from_body(body: str) -> tuple[str, ...]:
+    """Extract `depends_on` from a Footprint YAML fence, mirroring
+    `_subtask_id_from_body` (#485 review round 8, P1 template probe)."""
+    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
+    if not match:
+        return ()
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return ()
+    if not isinstance(data, dict):
+        return ()
+    return tuple(str(d) for d in (data.get("depends_on") or []))
+
+
 def _validate_template_identity_marker(
     template: str, template_path: str | Path
 ) -> None:
@@ -270,12 +285,13 @@ def _validate_template_identity_marker(
     needs quoting while this validation reports success.
     """
     probe_id = "orchestune-template-probe: needs-quoting #1"
+    probe_depends_on = ("orchestune-template-probe-dep",)
     probe = SubTask(
         id=probe_id,
         description="",
         footprint=(),
         symbols=(),
-        depends_on=(),
+        depends_on=probe_depends_on,
         risk=False,
         risk_reasons=(),
     )
@@ -285,6 +301,22 @@ def _validate_template_identity_marker(
             f"{template_path} から subtask_id を再照合できません"
             "（'{{subtask_id_yaml}}' がFootprint YAMLフェンス内の"
             "'subtask_id:' として描画されていません）。冪等性が壊れます"
+        )
+
+    # #485 review round 8 (P1): a custom `--template` missing
+    # `{{depends_on}}` would silently render bodies with no dependency
+    # list at all. Degraded `set_blocked_by` linking relies entirely on
+    # this body field (`_body_depends_on`/`_resolve_depends_on`): if it's
+    # never rendered, a blocked task looks permanently unblockable (no
+    # dependency ever "completes"), or — if only some native links
+    # succeeded — it can be promoted after only that partial subset
+    # finishes, since the body has nothing to fill the gap with.
+    if _depends_on_from_body(rendered) != probe_depends_on:
+        raise ValueError(
+            f"{template_path} から depends_on を再照合できません"
+            "（'{{depends_on}}' がFootprint YAMLフェンス内の"
+            "'depends_on:' として描画されていません）。ネイティブ"
+            "blocked_by関係が使えない環境で依存関係の解決が壊れます"
         )
 
     # #485 review (P1): a custom `--template` missing `{{parent_issue_number}}`

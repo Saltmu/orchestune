@@ -30,6 +30,7 @@ from orchestune.provisioning import (
     _render_issue_body,
     _resolve_parent_issue,
     _subtask_id_from_body,
+    _validate_template_identity_marker,
     main,
     provision_issues,
 )
@@ -331,6 +332,54 @@ class TestRenderIssueBodySubtaskIdSafety:
 
         assert "Preserve {{overview}} in the template" in body
         assert "Preserve THE REAL OVERVIEW in the template" not in body
+
+
+class TestValidateTemplateIdentityMarker:
+    """#485 review round 8 (P1): a custom `--template` missing metadata
+    fields silently degrades data the fallback discovery/dependency
+    resolution paths rely on, without any signal until it's too late."""
+
+    def test_accepts_the_real_template(self, template_path: Path):
+        # Must not raise: _TEMPLATE (used by the `template_path` fixture)
+        # already includes every required placeholder.
+        _validate_template_identity_marker(
+            template_path.read_text(encoding="utf-8"), template_path
+        )
+
+    def test_rejects_template_missing_depends_on_placeholder(self, tmp_path: Path):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="depends_on"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_missing_parent_issue_number_placeholder(
+        self, tmp_path: Path
+    ):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="parent_issue_number"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_missing_subtask_id_placeholder(self, tmp_path: Path):
+        template = (
+            "# [FEAT]\n\n"
+            "```yaml\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            "depends_on: {{depends_on}}\n"
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="subtask_id"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
 
 
 class TestProvisionIssuesDegradedMode:

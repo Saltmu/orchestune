@@ -41,6 +41,9 @@ def _parse_footprint_block(body: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+_INTEGER_STRING_PATTERN = re.compile(r"-?\d+")
+
+
 def parent_issue_number_from_body(body: str) -> int | None:
     """#485: ネイティブSub-issue関係が使えない環境向けに、Footprint YAML
     フェンスへ永続化された`parent_issue_number`を読み取るフォールバック。
@@ -54,10 +57,18 @@ def parent_issue_number_from_body(body: str) -> int | None:
     value = data.get("parent_issue_number")
     if value is None or value == "":
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    # #485 review round 8 (P2): `int(100.9)` truncates instead of rejecting
+    # a malformed non-integral value, and `int(True)` == 1 would silently
+    # accept a YAML boolean as a valid issue number. Only accept an actual
+    # `int` (excluding `bool`, a subclass of `int`) or a digit-only string
+    # (rejecting a numeric-looking-but-fractional string like `"100.9"`).
+    if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and _INTEGER_STRING_PATTERN.fullmatch(value.strip()):
+        return int(value)
+    return None
 
 
 def effective_parent_number(issue: IssueRecord) -> int | None:
