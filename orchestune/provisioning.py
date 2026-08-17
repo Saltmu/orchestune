@@ -426,6 +426,19 @@ def _ensure_reused_issue_is_discoverable(
     if effective_parent_number(candidate) == parent_issue_number:
         return True
 
+    if candidate.parent and candidate.parent.get("number") is not None:
+        # #485 review round 6 (P2): a *present* native parent always wins
+        # over body metadata in `effective_parent_number`/
+        # `find_children_by_parent` — that's the whole point of treating
+        # native as authoritative (review round 2). So if it disagrees
+        # with `parent_issue_number` here, backfilling the body would be
+        # pointless for discovery purposes: it can never override the
+        # native value. Only a successful native re-link (attempted next,
+        # in `_link_subtask_relationships`) can actually fix this, so
+        # report "not yet discoverable" rather than write a body field
+        # that would be silently ignored.
+        return False
+
     new_body = backfill_parent_issue_number(candidate.body, parent_issue_number)
     if new_body is None:
         # `effective_parent_number` above already ruled out "already

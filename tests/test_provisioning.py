@@ -486,6 +486,54 @@ class TestProvisionIssuesDegradedMode:
         # it discoverable, so there was nothing to backfill.
         assert "parent_issue_number" not in forge.issues[child_number]["body"]
 
+    def test_raises_when_reused_issue_natively_belongs_to_a_different_parent(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#485 review round 6 (P2): a *present* native parent always wins
+        over body metadata (that's the whole point of treating native as
+        authoritative). So an issue natively attached to a *different*
+        parent must not be reported "discoverable" just because a body
+        backfill write would succeed — that write would be silently
+        ignored by `effective_parent_number`. Only a successful native
+        re-link fixes this; if that also fails, provisioning must raise
+        rather than report misleading degraded success."""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'T'\nsubtasks:\n"
+            "  - id: task-a\n    description: 'd'\n    issue_number: 555\n---\n",
+            encoding="utf-8",
+        )
+
+        class NoRelinkForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise RelationshipUnavailableError("sub_issue_write not exposed")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise RelationshipUnavailableError("issue_dependency_write not exposed")
+
+            # `update_issue_body` is intentionally NOT overridden here: it
+            # would succeed if called, which is exactly what must not
+            # matter — this issue is natively attached elsewhere, so a
+            # body write can never make it discoverable under `100`.
+
+        forge = NoRelinkForge()
+        # `parent_issue_number` isn't persisted in the plan, so
+        # `_resolve_parent_issue` creates a fresh EPIC and gets whatever
+        # number is next — pin it to #1000 so it's unambiguously distinct
+        # from the stale native parent (#999) seeded below.
+        forge._next_number = 1000
+        forge.issues[555] = {
+            "title": "[FEAT] task-a: d",
+            "body": "```yaml\nsubtask_id: task-a\n```\n",
+            "labels": ["status:queued"],
+        }
+        # Natively attached to a *different* parent (#999), not the #1000
+        # this plan will resolve its own parent to.
+        forge.sub_issues[999] = [555]
+
+        with pytest.raises(RelationshipUnavailableError):
+            provision_issues(plan_path, forge=forge, template_path=template_path)
+
     def test_print_result_reports_degraded_operating_mode(self, capsys):
         result = ProvisionResult(
             parent_issue_number=100,
