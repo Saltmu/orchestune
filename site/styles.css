@@ -474,6 +474,21 @@ section .section-head p {
   font-size: 0.9rem;
 }
 
+.step p code.mono {
+  color: var(--amber-bright);
+  font-size: 0.85em;
+}
+
+.how-it-works-more {
+  text-align: center;
+  margin: 32px 0 0;
+}
+
+.how-it-works-more a {
+  font-size: 0.9rem;
+  color: var(--amber-bright);
+}
+
 /* Chat mockup */
 
 .chat-mockup {
