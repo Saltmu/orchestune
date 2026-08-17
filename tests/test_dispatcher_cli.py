@@ -403,7 +403,7 @@ class TestMainDispatchTargetAutoDetection:
                 ]
             )
 
-        assert mock_build.call_args.args[0] == "auto"
+        assert mock_build.call_args.args[0].dispatch_target_name == "auto"
 
     def test_defaults_to_cloud_routine_in_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -424,7 +424,7 @@ class TestMainDispatchTargetAutoDetection:
                 ]
             )
 
-        assert mock_build.call_args.args[0] == "cloud-routine"
+        assert mock_build.call_args.args[0].dispatch_target_name == "cloud-routine"
 
     def test_explicit_local_wins_even_inside_github_actions(
         self, tmp_path, monkeypatch
@@ -449,7 +449,7 @@ class TestMainDispatchTargetAutoDetection:
                 ]
             )
 
-        assert mock_build.call_args.args[0] == "local"
+        assert mock_build.call_args.args[0].dispatch_target_name == "local"
 
 
 class TestDispatcherConfigLoading:
@@ -484,7 +484,7 @@ class TestDispatcherConfigLoading:
             main(["--no-apply"], cwd=tmp_path)
 
         mock_build.assert_called_once()
-        assert mock_build.call_args.args[0] == "local"
+        assert mock_build.call_args.args[0].dispatch_target_name == "local"
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 5
@@ -649,7 +649,7 @@ class TestDispatcherConfigLoading:
             main(["--no-apply"], cwd=tmp_path)
 
         mock_build.assert_called_once()
-        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_build.call_args.args[0].dispatch_target_name == "claude-cli"
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 7
@@ -682,7 +682,7 @@ class TestDispatcherConfigLoading:
             )
 
         mock_build.assert_called_once()
-        assert mock_build.call_args.args[0] == "claude-cli"
+        assert mock_build.call_args.args[0].dispatch_target_name == "claude-cli"
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 3
@@ -827,7 +827,7 @@ class TestDispatcherConfigLoading:
         ):
             main(["--no-apply"], cwd=tmp_path)
 
-        assert mock_build.call_args.args[0] == dispatch_target
+        assert mock_build.call_args.args[0].dispatch_target_name == dispatch_target
 
     def test_post_cycle_failures_in_main(self, tmp_path, capsys):
         r1 = PhaseResult("poll_pending_not_needed_reviews", PhaseStatus.SUCCESS)

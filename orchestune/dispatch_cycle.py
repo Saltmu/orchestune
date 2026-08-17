@@ -25,6 +25,7 @@ from orchestune.dispatch_gc import (
     _rule_stale_entry,
 )
 from orchestune.dispatch_launch import (
+    LaunchContext,
     _apply_duplicate_skip,
     _decide_duplicate_candidates,
     _get_stack_eligible_tasks,
@@ -499,13 +500,15 @@ def _finalize_launch(
     if not config.apply:
         return selected
     selected = _launch_selected_tasks(
-        selected,
-        task_to_base_branch,
-        candidate_tasks,
-        ctx.run_state,
-        now,
-        config,
-        open_prs=ctx.prs,
+        LaunchContext(
+            selected,
+            task_to_base_branch,
+            candidate_tasks,
+            ctx.run_state,
+            now,
+            config,
+            open_prs=ctx.prs,
+        )
     )
     ctx.run_state.last_reconciled_at = now
     save_run_state(

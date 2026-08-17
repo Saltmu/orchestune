@@ -584,16 +584,20 @@ class CodexCloudDispatchTarget(DispatchTarget):
         return self.completion_status(handle, forge=forge) == "completed"
 
 
-def build_dispatch_target(
-    dispatch_target_name: str,
-    routine_id: str | None,
-    routine_token: str | None,
-    log_dir: str | Path,
-    local_cmd: str | None = None,
-    codex_cloud_env: str | None = None,
-    *,
-    allow_unsafe_agent_execution: bool = False,
-) -> DispatchTarget:
+@dataclass(frozen=True)
+class TargetBuildConfig:
+    """#476: `build_dispatch_target`の7引数を集約するDTO。"""
+
+    dispatch_target_name: str
+    routine_id: str | None
+    routine_token: str | None
+    log_dir: str | Path
+    local_cmd: str | None = None
+    codex_cloud_env: str | None = None
+    allow_unsafe_agent_execution: bool = False
+
+
+def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     """#215: CLI引数・環境変数からディスパッチターゲットを組み立てる。
 
     `cloud-routine`が指定されていても`routine_id`/`routine_token`が
@@ -603,6 +607,14 @@ def build_dispatch_target(
     `codex`）を検出し、見つかったCLIを指定した場合と同じ挙動にフォールスルーする。
     いずれも見つからない場合も同様に警告を出し、ダミー動作へフォールバックする。
     """
+    dispatch_target_name = config.dispatch_target_name
+    routine_id = config.routine_id
+    routine_token = config.routine_token
+    log_dir = config.log_dir
+    local_cmd = config.local_cmd
+    codex_cloud_env = config.codex_cloud_env
+    allow_unsafe_agent_execution = config.allow_unsafe_agent_execution
+
     is_unsafe_target = dispatch_target_name in {"claude-cli", "agy-cli", "codex-cli"}
     if dispatch_target_name == "auto":
         detected = detect_installed_local_cli()

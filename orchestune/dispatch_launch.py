@@ -373,18 +373,25 @@ def _apply_task_launches(
     return actually_selected
 
 
-def _launch_selected_tasks(
-    selected: list[Task],
-    task_to_base_branch: dict[int, str],
-    candidate_tasks: list[Task],
-    run_state: RunState,
-    now: float,
-    config: DispatcherConfig,
-    open_prs: Sequence[PrRecord] | None = None,
-) -> list[Task]:
-    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    yaml_error_tasks = _decide_yaml_error_tasks(candidate_tasks)
-    _apply_yaml_error_blocking(yaml_error_tasks, config)
+@dataclass
+class LaunchContext:
+    """#476: `_launch_selected_tasks`の7引数を集約するDTO。"""
 
-    plans = _decide_task_launch_plan(selected, task_to_base_branch, config)
-    return _apply_task_launches(plans, run_state, now, config, open_prs=open_prs)
+    selected: list[Task]
+    task_to_base_branch: dict[int, str]
+    candidate_tasks: list[Task]
+    run_state: RunState
+    now: float
+    config: DispatcherConfig
+    open_prs: Sequence[PrRecord] | None = None
+
+
+def _launch_selected_tasks(ctx: LaunchContext) -> list[Task]:
+    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
+    yaml_error_tasks = _decide_yaml_error_tasks(ctx.candidate_tasks)
+    _apply_yaml_error_blocking(yaml_error_tasks, ctx.config)
+
+    plans = _decide_task_launch_plan(ctx.selected, ctx.task_to_base_branch, ctx.config)
+    return _apply_task_launches(
+        plans, ctx.run_state, ctx.now, ctx.config, open_prs=ctx.open_prs
+    )

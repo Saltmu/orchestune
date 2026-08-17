@@ -413,7 +413,8 @@ class TestFinalizeLaunch:
         ) as mock_launch:
             _finalize_launch([], {}, [], ctx, 1000.0, config)
 
-        assert mock_launch.call_args.kwargs.get("open_prs") == [pr]
+        launch_ctx = mock_launch.call_args.args[0]
+        assert launch_ctx.open_prs == [pr]
 
 
 class TestRunDispatchCycle:
