@@ -14,8 +14,12 @@ chmod +x scripts/install-gitleaks.sh
 # fail on first use. Non-fatal: local-ci.sh retries this automatically.
 ./scripts/install-gitleaks.sh || echo "WARNING: gitleaks auto-install failed; local-ci.sh will retry on push."
 
+# Resolve Git hooks directory dynamically to support standard repos, worktrees, and submodules
+HOOKS_DIR="$(git rev-parse --git-path hooks 2>/dev/null || echo ".git/hooks")"
+mkdir -p "$HOOKS_DIR"
+
 # Create the pre-commit hook
-PRE_COMMIT_HOOK=".git/hooks/pre-commit"
+PRE_COMMIT_HOOK="${HOOKS_DIR}/pre-commit"
 
 cat << 'EOF' > "$PRE_COMMIT_HOOK"
 #!/usr/bin/env bash
@@ -45,11 +49,14 @@ EOF
 chmod +x "$PRE_COMMIT_HOOK"
 
 # Create the pre-push hook
-PRE_PUSH_HOOK=".git/hooks/pre-push"
+PRE_PUSH_HOOK="${HOOKS_DIR}/pre-push"
 
 cat << 'EOF' > "$PRE_PUSH_HOOK"
 #!/usr/bin/env bash
 # Git pre-push hook to enforce local CI run before pushing
+
+# Unset Git internal environment variables before invoking CI
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_GRAFT_FILE GIT_SUPER_PREFIX
 
 # Run local CI script
 ./scripts/local-ci.sh

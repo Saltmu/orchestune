@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -352,4 +353,37 @@ def _guard_dispatch_cycle_ensure_parent_branch(
     monkeypatch.setattr(
         "orchestune.dispatch_phase_rebase.ensure_parent_branch", guarded_ensure
     )
+    yield
+
+
+GIT_ENV_VARS_TO_CLEAR: tuple[str, ...] = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_GRAFT_FILE",
+    "GIT_SUPER_PREFIX",
+)
+
+# Strip dangerous Git environment variables immediately upon conftest load
+for _var in GIT_ENV_VARS_TO_CLEAR:
+    os.environ.pop(_var, None)
+
+
+def get_clean_git_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return a copy of os.environ with all dangerous GIT_* environment variables removed."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_VARS_TO_CLEAR}
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
+@pytest.fixture(autouse=True)
+def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
+    """Ensure tests run in an isolated Git environment where GIT_* variables are stripped."""
+    for var in GIT_ENV_VARS_TO_CLEAR:
+        monkeypatch.delenv(var, raising=False)
     yield

@@ -13,6 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # git CLIのadapter境界でrefを検証し、不正な値をsubprocessへ渡さない。
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
@@ -37,7 +38,11 @@ class GitResult:
 
 
 def run_git(
-    args: list[str], *, cwd: str | Path | None, check: bool = True
+    args: list[str],
+    *,
+    cwd: str | Path | None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> GitResult:
     """`git`を呼び出す単一の実行口。
 
@@ -45,13 +50,15 @@ def run_git(
     としてそのまま伝播する。実行自体ができなかった場合は`OSError`が伝播する。
     握り潰す/文字列化するかどうかの判断は呼び出し側の責務とする。
     """
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=check,
-    )
+    kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "capture_output": True,
+        "text": True,
+        "check": check,
+    }
+    if env is not None:
+        kwargs["env"] = env
+    result = subprocess.run(["git", *args], **kwargs)
     return GitResult(
         returncode=result.returncode, stdout=result.stdout, stderr=result.stderr
     )

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,7 @@ from orchestune.dispatch_targets import DispatchHandle, DispatchTarget
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord, Task
+from tests.conftest import get_clean_git_env
 
 pytestmark = pytest.mark.integration
 
@@ -23,40 +25,39 @@ class DummyGitRepo:
     def __init__(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.path = Path(self.temp_dir.name)
+        self.clean_env = get_clean_git_env()
         # Create bare origin repository
         self.origin_path = self.path / "origin.git"
         self.origin_path.mkdir()
-        subprocess.run(
-            ["git", "init", "--bare"],
-            cwd=str(self.origin_path),
+        self.run_git(
+            ["init", "--bare"],
+            cwd=self.origin_path,
             check=True,
-            capture_output=True,
         )
         # Create clone local repository
         self.local_path = self.path / "local"
-        subprocess.run(
-            ["git", "clone", str(self.origin_path), str(self.local_path)],
+        self.run_git(
+            ["clone", str(self.origin_path), str(self.local_path)],
+            cwd=self.path,
             check=True,
-            capture_output=True,
         )
 
         # Initial config for git user
-        subprocess.run(
-            ["git", "config", "user.name", "test-bot"],
-            cwd=str(self.local_path),
+        self.run_git(
+            ["config", "user.name", "test-bot"],
+            cwd=self.local_path,
             check=True,
         )
-        subprocess.run(
-            ["git", "config", "user.email", "test-bot@example.com"],
-            cwd=str(self.local_path),
+        self.run_git(
+            ["config", "user.email", "test-bot@example.com"],
+            cwd=self.local_path,
             check=True,
         )
 
         # Explicitly create and switch to 'main' branch
-        subprocess.run(
-            ["git", "checkout", "-b", "main"],
-            cwd=str(self.local_path),
-            capture_output=True,
+        self.run_git(
+            ["checkout", "-b", "main"],
+            cwd=self.local_path,
         )
 
         # Initial commit on main
@@ -82,6 +83,23 @@ class DummyGitRepo:
             ci_path, ci_content, f"Add {Path(ci_path).name}", executable=True
         )
 
+    def run_git(
+        self,
+        args: list[str],
+        cwd: str | Path | None = None,
+        check: bool = False,
+        capture_output: bool = True,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[Any]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(cwd) if cwd is not None else str(self.local_path),
+            check=check,
+            capture_output=capture_output,
+            text=text,
+            env=self.clean_env,
+        )
+
     def _commit_file(
         self,
         rel_path: str,
@@ -94,24 +112,21 @@ class DummyGitRepo:
         p.write_text(content, encoding="utf-8")
         if executable:
             p.chmod(0o755)
-        subprocess.run(
-            ["git", "add", rel_path],
-            cwd=str(self.local_path),
+        self.run_git(
+            ["add", rel_path],
+            cwd=self.local_path,
             check=True,
-            capture_output=True,
         )
-        subprocess.run(
-            ["git", "commit", "-m", msg],
-            cwd=str(self.local_path),
+        self.run_git(
+            ["commit", "-m", msg],
+            cwd=self.local_path,
             check=True,
-            capture_output=True,
         )
         # Push to origin
-        subprocess.run(
-            ["git", "push", "-u", "origin", "main"],
-            cwd=str(self.local_path),
+        self.run_git(
+            ["push", "-u", "origin", "main"],
+            cwd=self.local_path,
             check=True,
-            capture_output=True,
         )
 
     def cleanup(self):
