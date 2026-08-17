@@ -12,6 +12,11 @@ from orchestune.dispatch_targets import (
 )
 from orchestune.dispatch_worktree import (
     _branch_exists,
+    _cleanup_existing_worktree,
+    _cleanup_failed_worktree,
+    _create_worktree,
+    _provision_and_launch,
+    _resolve_worktree_path,
     create_worktree_and_launch,
     file_lock,
 )
@@ -657,3 +662,139 @@ class TestFileLock:
             with file_lock(lock_path):
                 pass
         mock_msvcrt.locking.assert_not_called()
+
+
+class TestResolveWorktreePath:
+    def test_valid_branch_name(self, tmp_path):
+        worktree_root = tmp_path / "worktrees"
+        path = _resolve_worktree_path(worktree_root, "feature/issue-42")
+        assert path == worktree_root / "feature-issue-42"
+
+    def test_invalid_branch_name_raises_value_error(self, tmp_path):
+        worktree_root = tmp_path / "worktrees"
+        with pytest.raises(ValueError, match="ブランチ名が不正です"):
+            _resolve_worktree_path(worktree_root, "--invalid-branch")
+
+
+class TestCleanupExistingWorktree:
+    def test_noop_when_path_does_not_exist(self, tmp_path):
+        worktree_path = tmp_path / "nonexistent"
+        err = _cleanup_existing_worktree(worktree_path, issue_number=1)
+        assert err is None
+
+    def test_successful_backup_and_removal(self, tmp_path):
+        worktree_path = tmp_path / "worktrees" / "feature-1"
+        worktree_path.mkdir(parents=True)
+        (worktree_path / "dummy.txt").write_text("hello")
+
+        with (
+            patch(
+                "orchestune.dispatch_worktree.dispatch_gc.backup_wip_commit",
+                return_value=None,
+            ) as mock_backup,
+            patch("orchestune.dispatch_worktree.run_git") as mock_run_git,
+        ):
+            err = _cleanup_existing_worktree(worktree_path, issue_number=1)
+            assert err is None
+            mock_backup.assert_called_once_with(
+                worktree_path, "WIP: backup by Orchestune before worktree recreation"
+            )
+            mock_run_git.assert_called_once_with(
+                ["worktree", "remove", "--force", str(worktree_path)],
+                cwd=None,
+                check=False,
+            )
+
+    def test_backup_failure_returns_error_string(self, tmp_path):
+        worktree_path = tmp_path / "worktrees" / "feature-1"
+        worktree_path.mkdir(parents=True)
+
+        with patch(
+            "orchestune.dispatch_worktree.dispatch_gc.backup_wip_commit",
+            return_value="backup error",
+        ):
+            err = _cleanup_existing_worktree(worktree_path, issue_number=1)
+            assert err == "backup error"
+
+
+class TestCreateWorktree:
+    def test_create_worktree_existing_branch(self, tmp_path):
+        worktree_root = tmp_path / "worktrees"
+        worktree_path = worktree_root / "feature-1"
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=True),
+            patch("orchestune.dispatch_worktree.run_git") as mock_run_git,
+        ):
+            _create_worktree(worktree_path, worktree_root, "feature-1")
+            assert mock_run_git.call_count == 2
+            assert mock_run_git.call_args_list[0].args[0] == ["worktree", "prune"]
+            assert mock_run_git.call_args_list[1].args[0] == [
+                "worktree",
+                "add",
+                str(worktree_path),
+                "feature-1",
+            ]
+
+    def test_create_worktree_new_branch_with_base(self, tmp_path):
+        worktree_root = tmp_path / "worktrees"
+        worktree_path = worktree_root / "feature-1"
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch_worktree.resolve_local_or_remote_branch",
+                return_value="origin/parent/issue-10",
+            ),
+            patch("orchestune.dispatch_worktree.run_git") as mock_run_git,
+        ):
+            _create_worktree(
+                worktree_path,
+                worktree_root,
+                "feature-1",
+                base_branch="parent/issue-10",
+            )
+            assert mock_run_git.call_count == 2
+            assert mock_run_git.call_args_list[1].args[0] == [
+                "worktree",
+                "add",
+                "-b",
+                "feature-1",
+                str(worktree_path),
+                "origin/parent/issue-10",
+            ]
+
+
+class TestProvisionAndLaunch:
+    def test_launches_dispatch_target_and_records_start_time(self, tmp_path):
+        task = _task(1)
+        worktree_path = tmp_path / "worktrees" / "feature-1"
+        fake_target = MagicMock()
+        fake_handle = DispatchHandle(
+            pid=999, external_id="ext-1", branch_name="feature/1"
+        )
+        fake_target.launch.return_value = fake_handle
+
+        with patch("orchestune.dispatch_worktree.time.time", return_value=12345.67):
+            handle, started_at = _provision_and_launch(
+                fake_target, task, "feature/1", worktree_path
+            )
+            assert handle == fake_handle
+            assert started_at == 12345.67
+            fake_target.launch.assert_called_once_with(task, "feature/1", worktree_path)
+
+
+class TestCleanupFailedWorktree:
+    def test_removes_worktree_and_prunes(self, tmp_path):
+        worktree_path = tmp_path / "worktrees" / "feature-1"
+        worktree_path.mkdir(parents=True)
+
+        with patch("orchestune.dispatch_worktree.run_git") as mock_run_git:
+            _cleanup_failed_worktree(worktree_path)
+            assert mock_run_git.call_count == 2
+            assert mock_run_git.call_args_list[0].args[0] == [
+                "worktree",
+                "remove",
+                "--force",
+                str(worktree_path),
+            ]
+            assert mock_run_git.call_args_list[1].args[0] == ["worktree", "prune"]
+            assert not worktree_path.exists()
