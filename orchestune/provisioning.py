@@ -748,12 +748,19 @@ def provision_issues(
     _validate_template_identity_marker(template, template_path)
 
     if not apply:
+        # codex review (PR #506): an explicit `--parent-issue` must be
+        # reflected in the preview too, or a `--no-apply --parent-issue N`
+        # run shows child bodies with the old/absent parent number even
+        # though the subsequent `--apply` run would use N.
+        preview_parent_issue_number = (
+            parent_issue if parent_issue is not None else metadata.parent_issue_number
+        )
         return _preview_only(
             subtasks,
             dag.topological_order,
             template,
             resolved_repo_root,
-            metadata.parent_issue_number,
+            preview_parent_issue_number,
         )
 
     resolved_forge = forge or GitHubForge()

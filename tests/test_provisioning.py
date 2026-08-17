@@ -1148,6 +1148,29 @@ class TestProvisionIssuesNoApply:
         assert "status:queued" in result.previews[0].labels
         assert "status:blocked" in result.previews[1].labels
 
+    def test_no_apply_honors_explicit_parent_issue_in_preview_bodies(
+        self, plan_path: Path, template_path: Path
+    ):
+        """codex review (PR #506): `--no-apply --parent-issue N` must preview
+        the bodies that the subsequent `--apply` run would actually file,
+        not the plan's stale/absent persisted `parent_issue_number`."""
+
+        class ExplodingForge:
+            def __getattr__(self, name):
+                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+
+        result = provision_issues(
+            plan_path,
+            forge=ExplodingForge(),
+            apply=False,
+            template_path=template_path,
+            parent_issue=999,
+        )
+
+        assert result.applied is False
+        for preview in result.previews:
+            assert "parent_issue_number: 999" in preview.body
+
 
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
