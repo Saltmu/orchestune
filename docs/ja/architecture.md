@@ -46,10 +46,10 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 
 そして、**ループには上限があり、終端があります**——ただし現状では全経路ではありません。DAG再計算の回数とウィンドウあたりの起動数は既定で有界ですが、タスクのタイムアウトとトークン消費の上限は**既定では無効**で、無人で長時間走らせる場合は明示的な設定が要ります（[使い方とコマンドリファレンス](usage.md)参照）。自動的に収束できない場合、対象Issueは`status:blocked-human-review`へ遷移して停止します。
 
-> **既知の欠落**: 現時点で、終端へ到達しない経路が3つあります。
+> **既知の欠落**: 現時点で、終端へ到達しない経路が2つあります。
 > - Cloud Routineターゲットでの`status:not-needed`検証レビュー。レビューセッションが結果ラベルを付けないまま消失した場合、保留エントリは毎サイクル保持され続けます（`dispatched_at`は記録されていますがタイムアウト判定に使われていません）。[#511](https://github.com/Saltmu/orchestune/issues/511)
 > - タイムアウト回収されたタスクの再投入。`--task-timeout-seconds`に正の値を設定していても、`_apply_zombie_or_timeout_reclaim`はタスクごとの回収回数を保持しないため、繰り返しタイムアウトするタスクは`status:queued`へ無限に戻され続けます。[#512](https://github.com/Saltmu/orchestune/issues/512)
-> - **上限カウンタの永続化境界**。`recompute_count`・`forced_serial`・`launch_history`・トークン消費はいずれも`run_state.json`にのみ存在し、GitHub側には持たれていません。自己修復はこれらを初期値で復元するため、第0章が主要な運用形態として挙げる**ステートレスなCIランナー**のように毎回`run_state.json`が失われる構成では、上記の上限が実質的に機能しません。[#513](https://github.com/Saltmu/orchestune/issues/513)
+> - **上限カウンタの永続化境界（一部）**。`launch_history`とトークン消費はいずれも`run_state.json`にのみ存在し、GitHub側には持たれていません。自己修復はこれらを初期値で復元するため、第0章が主要な運用形態として挙げる**ステートレスなCIランナー**のように毎回`run_state.json`が失われる構成では、`max_launches_per_window`/トークン上限が実質的に機能しません。（`recompute_count`/`forced_serial`はIssue本文へ永続化され、この欠落の対象外です。）[#514](https://github.com/Saltmu/orchestune/issues/514)
 
 Orchestuneが**目指す**のは「常に自動で解決すること」ではなく、**収束するか、人間が対処可能な状態で停止するかのいずれかであること**です。上記の通りこれは設計目標であって、現時点で全経路が満たしているわけではありません。
 

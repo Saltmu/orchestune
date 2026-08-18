@@ -46,10 +46,10 @@ The detailed behaviour of each mechanism — its exclusion rules, its skip condi
 
 And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries and launches per window are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
-> **Known gaps**: three paths currently never reach a terminal state.
+> **Known gaps**: two paths currently never reach a terminal state.
 > - The `status:not-needed` re-verification on the Cloud Routine target. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle (`dispatched_at` is recorded but never used for a timeout). [#511](https://github.com/Saltmu/orchestune/issues/511)
 > - Requeueing of a reclaimed timed-out task. Even with a positive `--task-timeout-seconds`, `_apply_zombie_or_timeout_reclaim` keeps no per-task reclaim counter, so a task that keeps timing out is returned to `status:queued` forever. [#512](https://github.com/Saltmu/orchestune/issues/512)
-> - **Where the bounding counters live.** `recompute_count`, `forced_serial`, `launch_history`, and token usage exist only in `run_state.json`, never on the GitHub side. Self-healing restores them at their initial values, so on the **stateless CI runner** that Section 0 names as a primary deployment model the bounds above are effectively inert. [#513](https://github.com/Saltmu/orchestune/issues/513)
+> - **Where the bounding counters live (partial).** `launch_history` and token usage exist only in `run_state.json`, never on the GitHub side. Self-healing restores them at their initial values, so on the **stateless CI runner** that Section 0 names as a primary deployment model, `max_launches_per_window` and the token caps are effectively inert. (`recompute_count`/`forced_serial` are now persisted to the Issue body and are outside this gap.) [#514](https://github.com/Saltmu/orchestune/issues/514)
 
 What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.
 
