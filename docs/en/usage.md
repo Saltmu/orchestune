@@ -109,6 +109,19 @@ orchestune provision --plan decomposition_plan.md
 | `--plan <path>` | `decomposition_plan.md` | Path to the decomposition plan to provision from. |
 | `--template <path>` | `.github/issue_template.md` | Path to the issue body template. |
 | `--apply` / `--no-apply` | `--apply` | Choose whether to actually create issues on GitHub and write back numbers, or just preview them (dry-run). |
+| `--parent-issue <number>` | none | Attach subtasks to this existing issue as their EPIC parent, instead of creating/reusing one derived from `title`. See "Attaching to a pre-existing EPIC issue" below. |
+
+### Attaching to a pre-existing EPIC issue (`--parent-issue`)
+
+If the EPIC issue was already filed ahead of time (by hand, or via plain GitHub — not by Orchestune), pass `--parent-issue <number>` instead of relying on `title` to create/reuse one.
+
+```bash
+orchestune provision --plan decomposition_plan.md --parent-issue 123
+```
+
+If the target issue doesn't already look like an Orchestune EPIC (title starting with `[EPIC] ` and the parent marker embedded in the body), it is normalized in place — its existing content is preserved, and the `[EPIC] ` prefix / parent marker are added as needed. No title match against the `title` frontmatter field is required.
+
+**Note**: `--parent-issue` must be passed on every `orchestune provision` / `orchestune dispatch` run for this plan. A hand-filed EPIC's title generally won't match the plan-derived title (`"[EPIC] " + title`), so the persisted `parent_issue_number` frontmatter value alone can't be auto-recognized on a later run without the flag.
 
 ### Provisioning Rules
 

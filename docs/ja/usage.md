@@ -109,6 +109,19 @@ orchestune provision --plan decomposition_plan.md
 | `--plan <path>` | `decomposition_plan.md` | 起票元の分解計画ファイルのパス。 |
 | `--template <path>` | `.github/issue_template.md` | Issue本文のテンプレートファイルのパス。 |
 | `--apply` / `--no-apply` | `--apply` | 実際にGitHubへIssueを作成・書き戻しを行うか、プレビュー（ドライラン）のみにするかを選択。 |
+| `--parent-issue <番号>` | なし | `title`から親Issueを新規作成/再利用する代わりに、既存の指定Issue番号をサブタスクの親EPICとして使う。詳細は下記「既存EPIC Issueへの紐付け」を参照。 |
+
+### 既存EPIC Issueへの紐付け（`--parent-issue`）
+
+EPIC Issueを先に（手動、またはOrchestuneを使わず普通に）起票しておき、サブタスクの分解・起票だけにOrchestuneを使いたい場合は `--parent-issue <番号>` を指定します。
+
+```bash
+orchestune provision --plan decomposition_plan.md --parent-issue 123
+```
+
+指定したIssueがまだOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっていなければ、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
+
+**注意**: `--parent-issue` は、対象のplanに対する `orchestune provision` / `orchestune dispatch` の実行のたびに毎回指定する必要があります。人間が起票したEPICのタイトルはplan由来のタイトル（`"[EPIC] " + title`）と一致しないため、`parent_issue_number` フロントマターへ永続化された値だけでは自動認識できません（`orchestune dispatch` の `--parent-issue` フラグも同様に毎回必須です）。
 
 ### 起票ルール
 

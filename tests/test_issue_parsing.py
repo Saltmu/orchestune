@@ -6,7 +6,9 @@ import pytest
 
 from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.issue_parsing import (
+    PARENT_MARKER,
     backfill_parent_issue_number,
+    ensure_parent_marker,
     find_children_by_parent,
     parent_issue_number_from_body,
 )
@@ -216,3 +218,20 @@ class TestFindChildrenByParent:
 
         with pytest.raises(RuntimeError):
             find_children_by_parent(forge, 100)
+
+
+class TestEnsureParentMarker:
+    def test_appends_marker_when_absent(self):
+        body = "A human-written EPIC description."
+        result = ensure_parent_marker(body)
+        assert result.startswith(body)
+        assert PARENT_MARKER in result
+
+    def test_is_a_noop_when_marker_already_present(self):
+        body = f"Some description.\n\n{PARENT_MARKER}\n"
+        assert ensure_parent_marker(body) == body
+
+    def test_preserves_existing_body_content_exactly(self):
+        body = "Line one.\nLine two with *markdown*.\n"
+        result = ensure_parent_marker(body)
+        assert result.startswith("Line one.\nLine two with *markdown*.")
