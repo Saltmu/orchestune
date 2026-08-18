@@ -14,13 +14,15 @@ Three consequences run through the rest of this document:
 * **Parallelism is the mechanism, not the goal.** Independent subtasks let several agents burn quota at once instead of one agent burning it in sequence, so DAG construction (Section 1) exists to find as much *safe* parallelism as the task allows.
 * **Unattended operation is what converts parallelism into quota efficiency.** The gains only materialize if runs can proceed while the human is away — overnight, or in a stateless CI runner. That is why state is self-healing from GitHub (Section 2), why child-level integration merges without a human (Section 3), and why human judgment is confined to two gates (Section 4). A design that required a click per subtask would stall the pipeline on human availability.
 
-### 0.1 Determinism: the LLM only judges, Python owns every state transition
+### 0.1 Determinism: the LLM judges, Python owns the automated shared-state transitions
 
 An LLM call is a scarce operation that consumes quota. Orchestune therefore **spends LLM calls only where judgment cannot be replaced — decomposition, implementation, semantic review of an integration diff, and the `status:not-needed` assessment — and handles everything else in deterministic Python**. Polling labels, recomputing the DAG, rebuilding local state, garbage collection, and escalation could all be delegated to an agent, but each delegation is paid for in quota.
 
 This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces — the main waste named above.
 
-**Almost every state transition belongs to Python.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue. Python polls the labels and performs the next transition deterministically.
+**The automated shared-state transitions belong to Python.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue.
+
+That review is **fire-and-forget, though: Python does not track its result either**. A bug it reports stays a comment on the integration PR; it does not stop or alter the automatic merge — the human doing the acceptance merge is who picks it up. The only review whose result flows back into the state machine is the `status:not-needed` re-verification below, and it does so through a label.
 
 The one exception is `status:not-needed`. An implementation agent that finds the requirement already satisfied is instructed by the skills (`skills/local-ci-developer`, `skills/workflow-template`) to remove `status:in-progress` and apply `status:not-needed` — it writes no commit and opens no PR, so the usual completion signal (the existence of a PR) would never fire, and the label itself has to serve as that signal. The re-verification session on the Cloud Routine target is the same: when the check does not pass, its prompt tells it to move the label from `status:not-needed` to `status:queued` and add `not-needed-review:failed` (`build_not_needed_review_prompt`).
 
@@ -167,7 +169,7 @@ The second is the candidate set used to loosely match module-qualified notation 
 
 Only definitions (`class` / `def`) and assignments (`x = ...`, `x: T = ...`) are collected — **bindings introduced by `import` are not**. A name that exists only via an import, as in `try: import fast as impl except ImportError: import slow as impl`, will be reported as missing if a plan declares it in `symbols`. The note is neutral and non-blocking so the practical cost is small, but it is a known limit of this check.
 
-**This check does not block.** A symbol that isn't found may mean "the plan went stale in a refactor" or "this subtask is about to create it", so Orchestune does not decide: it leaves a neutral note in the Issue body and lets the implementing agent and the human judge — one application of [0.1](#01-determinism-the-llm-only-judges-python-owns-every-state-transition)'s "the LLM only judges, Python owns every state transition".
+**This check does not block.** A symbol that isn't found may mean "the plan went stale in a refactor" or "this subtask is about to create it", so Orchestune does not decide: it leaves a neutral note in the Issue body and lets the implementing agent and the human judge — one application of [0.1](#01-determinism-the-llm-judges-python-owns-the-automated-shared-state-transitions)'s "the LLM judges, Python owns the automated shared-state transitions".
 
 ---
 
