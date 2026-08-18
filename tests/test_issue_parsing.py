@@ -8,9 +8,11 @@ from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.issue_parsing import (
     PARENT_MARKER,
     backfill_parent_issue_number,
+    backfill_recovery_counters,
     ensure_parent_marker,
     find_children_by_parent,
     parent_issue_number_from_body,
+    recovery_counters_from_body,
 )
 from orchestune.models import IssueRecord
 
@@ -235,3 +237,78 @@ class TestEnsureParentMarker:
         body = "Line one.\nLine two with *markdown*.\n"
         result = ensure_parent_marker(body)
         assert result.startswith("Line one.\nLine two with *markdown*.")
+
+
+class TestRecoveryCountersFromBody:
+    """#513: recompute_count/forced_serialのFootprint YAMLフェンス往復。"""
+
+    def test_parses_values_from_footprint_block(self):
+        body = (
+            "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n"
+            "forced_serial: true\n```\n"
+        )
+        assert recovery_counters_from_body(body) == (2, True)
+
+    def test_defaults_to_zero_and_false_when_fields_absent(self):
+        """#513: 導入前に作られたIssue（フィールド欠落）への後方互換。"""
+        body = "```yaml\nsubtask_id: task-a\n```\n"
+        assert recovery_counters_from_body(body) == (0, False)
+
+    def test_defaults_to_zero_and_false_when_no_yaml_block(self):
+        assert recovery_counters_from_body("no yaml here") == (0, False)
+
+    def test_defaults_to_zero_and_false_on_malformed_yaml(self):
+        body = "```yaml\n: not valid: yaml: [\n```\n"
+        assert recovery_counters_from_body(body) == (0, False)
+
+    def test_forced_serial_defaults_to_false_when_only_recompute_count_present(self):
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 1\n```\n"
+        assert recovery_counters_from_body(body) == (1, False)
+
+    def test_rejects_non_integer_recompute_count(self):
+        """#485レビューの`_validated_parent_issue_number`と同様、壊れた
+        値を機械的にintへ丸めるのではなく0へフォールバックする。"""
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: not-a-number\n```\n"
+        assert recovery_counters_from_body(body) == (0, False)
+
+
+class TestBackfillRecoveryCounters:
+    def test_adds_missing_fields_preserving_rest_of_body(self):
+        body = (
+            "# [FEAT] task-a: d\n\nSome human-written notes.\n\n"
+            "```yaml\nsubtask_id: task-a\nfootprint: [src/foo.py]\n```\n"
+        )
+        result = backfill_recovery_counters(body, 2, True)
+        assert result is not None
+        assert "Some human-written notes." in result
+        assert recovery_counters_from_body(result) == (2, True)
+        assert "subtask_id: task-a" in result
+
+    def test_updates_an_existing_value(self):
+        body = (
+            "```yaml\nsubtask_id: task-a\nrecompute_count: 1\n"
+            "forced_serial: false\n```\n"
+        )
+        result = backfill_recovery_counters(body, 2, False)
+        assert result is not None
+        assert recovery_counters_from_body(result) == (2, False)
+
+    def test_returns_none_when_already_correct(self):
+        body = (
+            "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n"
+            "forced_serial: true\n```\n"
+        )
+        assert backfill_recovery_counters(body, 2, True) is None
+
+    def test_returns_none_when_no_footprint_block(self):
+        assert backfill_recovery_counters("no yaml here", 1, False) is None
+
+    def test_preserves_other_footprint_fields(self):
+        body = (
+            "```yaml\nsubtask_id: task-a\nparent_issue_number: 100\n"
+            "footprint: [src/foo.py]\n```\n"
+        )
+        result = backfill_recovery_counters(body, 1, False)
+        assert result is not None
+        assert "parent_issue_number: 100" in result
+        assert "subtask_id: task-a" in result

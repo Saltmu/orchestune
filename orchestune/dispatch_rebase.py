@@ -21,6 +21,7 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 from orchestune.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.process_utils import default_ci_command, is_process_alive
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,28 @@ class FootprintDeviationDecision:
     conflicts: list[FootprintConflict] = field(default_factory=list)
 
 
+def _persist_recovery_counters(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> None:
+    """#513: recompute_count/forced_serialをIssue本文のFootprintフェンスへ
+    書き戻す。`run_state.json`消失時、自己修復（`dispatch_recovery.py`の
+    `recovery_counters_from_body`）がここから復元する。
+
+    逸脱イベント発生時（DAG再計算・forced_serial遷移）にのみ呼ばれるため、
+    毎ディスパッチサイクルではなく、頻度としては`notify_recompute`/
+    `notify_force_serial`のコメント投稿と同程度——追加のAPI呼び出しは
+    このイベントに比例する。
+    """
+    issue = config.resolved_forge.get_issue(active.issue_number)
+    if issue is None:
+        return
+    patched_body = backfill_recovery_counters(
+        issue.body, active.recompute_count, active.forced_serial
+    )
+    if patched_body is not None:
+        config.resolved_forge.update_issue_body(active.issue_number, patched_body)
+
+
 def _decide_footprint_deviation_outcome(
     active: ActiveWorktree,
     deviated: list[str],
@@ -205,6 +228,13 @@ def _apply_footprint_deviation_outcome(
         event["recompute_count"] = decision.recompute_count
         if config.apply:
             active.forced_serial = True
+            # #516レビュー指摘: ラベル（表示専用）より先に本文（自己修復が
+            # 読む唯一のソース）へ永続化する。逆順だと、add_label成功後に
+            # ここで失敗した場合、GitHub上に永続的なstatus:force-serial
+            # ラベルは付くのに本文のforced_serialはfalseのままという
+            # 不整合が残り、次の自己修復サイクルで既に強制直列化済みの
+            # タスクを「直列化されていない」と誤って復元してしまう。
+            _persist_recovery_counters(active, config)
             config.resolved_forge.add_label(active.issue_number, "status:force-serial")
         return event
 
@@ -222,6 +252,7 @@ def _apply_footprint_deviation_outcome(
     event["conflicts"] = [dataclasses.asdict(c) for c in decision.conflicts]
     if config.apply:
         active.recompute_count += 1
+        _persist_recovery_counters(active, config)
     return event
 
 

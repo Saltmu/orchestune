@@ -4,8 +4,10 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_recovery import (
     _apply_restore_missing_active_worktrees,
     _decide_missing_active_worktrees,
+    _decide_stale_recovery_counters,
     _extract_raw_subtask_id,
     _parse_subtask_info_from_issue,
+    recover_run_state,
 )
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
@@ -19,6 +21,8 @@ def _issue_with_footprint(
     blocked_by=(),
     parent=None,
     created_at="2026-01-01T00:00:00+00:00",
+    recompute_count=None,
+    forced_serial=None,
 ):
     if subtask_id is None:
         body = "本文のみでFootprintブロックなし"
@@ -27,12 +31,18 @@ def _issue_with_footprint(
             "\n".join(f"  - {f}" for f in footprint) if footprint else "  []"
         )
         depends_on_values = ", ".join(depends_on or ())
+        extra_fields = ""
+        if recompute_count is not None:
+            extra_fields += f"recompute_count: {recompute_count}\n"
+        if forced_serial is not None:
+            extra_fields += f"forced_serial: {str(forced_serial).lower()}\n"
         body = (
             "## Footprint\n```yaml\n"
             f"subtask_id: {subtask_id}\n"
             "footprint:\n"
             f"{footprint_lines}\n"
             f"depends_on: [{depends_on_values}]\n"
+            f"{extra_fields}"
             "```\n"
         )
     return IssueRecord(
@@ -123,6 +133,80 @@ class TestDecideMissingActiveWorktrees:
         assert active.declared_footprint == ("src/foo.py",)
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
+
+    def test_restores_recompute_count_and_forced_serial_from_issue_body(self, tmp_path):
+        """#513再現テスト: run_state.json消失時、Issue本文に永続化された
+        recompute_count/forced_serialから復元されるべきだが、現状は常に
+        (0, False)へ初期化される（DAG再計算のリトライ上限とforced_serial
+        フォールバックが、ステートレスCIランナーでは機能しない）。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            footprint=["src/foo.py"],
+            recompute_count=2,
+            forced_serial=True,
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        active = result[0][2]
+        assert active.recompute_count == 2
+        assert active.forced_serial is True
+
+    def test_restores_zero_and_false_when_issue_predates_the_fields(self, tmp_path):
+        """#513: 本フィールド導入前に作られたIssue（フェンスにフィールドが
+        無い）は、後方互換として(0, False)にフォールバックする。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101, subtask_id="task-a", footprint=["src/foo.py"]
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        active = result[0][2]
+        assert active.recompute_count == 0
+        assert active.forced_serial is False
+
+    def test_treats_legacy_force_serial_label_as_authoritative(self, tmp_path):
+        """#516再2巡目レビュー指摘: 本フィールド導入前からforced_serialだった
+        Issue（本文にフィールドは無いがstatus:force-serialラベルは付いている）
+        を、run_state.json消失後に「直列化されていない」と誤って復元しては
+        ならない。ラベルは表示専用だが、本文が沈黙している場合の権威として
+        扱う。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101, subtask_id="task-a", footprint=["src/foo.py"]
+        )
+        issue = IssueRecord(
+            number=issue.number,
+            title=issue.title,
+            body=issue.body,
+            labels=issue.labels + ("status:force-serial",),
+            created_at=issue.created_at,
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        assert result[0][2].forced_serial is True
 
     def test_restored_old_issue_has_unknown_start_time(self, tmp_path):
         """#198: Issue作成日時はdispatch開始日時ではないため、復元Taskの
@@ -326,3 +410,140 @@ class TestApplyRestoreMissingActiveWorktrees:
         )
         assert modified is True
         assert run_state.active_worktrees["101"] is active
+
+
+class TestDecideStaleRecoveryCounters:
+    """#516再2巡目レビュー指摘: `_persist_recovery_counters`がIssue本文への
+    書き込みに成功した直後、サイクル終端の`save_run_state`前にプロセスが
+    停止すると、run_state.json上のActiveWorktreeは古い値のまま残る。この
+    エントリは`active_worktrees`に既に存在するため`_decide_missing_active_worktrees`
+    の対象外——recover_run_stateは既存エントリも本文/ラベルと突き合わせて
+    再照合しなければならない。
+    """
+
+    def test_reconciles_forced_serial_from_body_into_stale_existing_entry(
+        self, tmp_path
+    ):
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            recompute_count=2,
+            forced_serial=False,  # run_state側は古いまま
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            footprint=["src/foo.py"],
+            recompute_count=2,
+            forced_serial=True,  # 本文側は既に更新済み
+        )
+
+        reconciliations = _decide_stale_recovery_counters(run_state, [issue])
+
+        assert reconciliations == [("101", 2, True)]
+
+    def test_never_rolls_back_recompute_count_when_body_lags_behind(self, tmp_path):
+        """本文の書き込みがまだ追いついていないだけの一時的なラグで、
+        run_state側の進捗（より大きいrecompute_count）を巻き戻してはならない。"""
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            recompute_count=2,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            footprint=["src/foo.py"],
+            recompute_count=1,  # 本文はまだ1（rebase処理途中）
+            forced_serial=False,
+        )
+
+        reconciliations = _decide_stale_recovery_counters(run_state, [issue])
+
+        assert reconciliations == []
+
+    def test_no_reconciliation_when_values_already_match(self, tmp_path):
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            recompute_count=1,
+            forced_serial=True,
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            footprint=["src/foo.py"],
+            recompute_count=1,
+            forced_serial=True,
+        )
+
+        assert _decide_stale_recovery_counters(run_state, [issue]) == []
+
+    def test_skips_entries_with_no_corresponding_in_progress_issue(self, tmp_path):
+        """対応するIssueがin_progress_issuesに無い（クローズ済み等）場合は
+        スキップする（推測で書き換えない）。"""
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            recompute_count=0,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"101": active})
+
+        assert _decide_stale_recovery_counters(run_state, []) == []
+
+
+class TestRecoverRunStateReconcilesStaleEntries:
+    """decide+applyの統合入口（recover_run_state）が既存エントリも
+    実際に更新することを確認する。"""
+
+    def test_updates_existing_active_worktree_in_place(self, tmp_path):
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            recompute_count=2,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            footprint=["src/foo.py"],
+            recompute_count=2,
+            forced_serial=True,
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            modified = recover_run_state(run_state, [issue], config)
+
+        assert modified is True
+        assert run_state.active_worktrees["101"].forced_serial is True

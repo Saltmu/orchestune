@@ -175,6 +175,21 @@ class DummyGitHub:
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
         return self.issues.get(int(issue_number))
 
+    def update_issue_body(self, issue_number: int | str, body: str) -> None:
+        """#513: recompute_count/forced_serial永続化の統合テスト対象。"""
+        num = int(issue_number)
+        if num in self.issues:
+            issue = self.issues[num]
+            self.issues[num] = IssueRecord(
+                number=issue.number,
+                title=issue.title,
+                body=body,
+                labels=issue.labels,
+                created_at=issue.created_at,
+                parent=issue.parent,
+                blocked_by=issue.blocked_by,
+            )
+
     def add_label(self, issue_number: int | str, label: str) -> None:
         num = int(issue_number)
         if num in self.issues:
@@ -684,6 +699,10 @@ def test_closed_loop_dag_recomputation_serialization():
             dummy_github.find_issues_by_parent_metadata,
         ),
         patch("orchestune.forge.GitHubForge.get_issue", dummy_github.get_issue),
+        patch(
+            "orchestune.forge.GitHubForge.update_issue_body",
+            dummy_github.update_issue_body,
+        ),
         patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),

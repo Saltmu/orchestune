@@ -243,6 +243,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.dispatch_targets.subprocess.Popen"),
@@ -320,6 +321,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=True),
@@ -404,6 +406,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
@@ -499,6 +502,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
@@ -560,6 +564,7 @@ class TestRunDispatchCycleFootprintRecompute:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=True),

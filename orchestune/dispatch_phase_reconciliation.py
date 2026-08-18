@@ -25,6 +25,7 @@ from orchestune.dispatch_reconciliation import (
     _handle_blocked_recompute_recovery,
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
+    _reconcile_recovery_counters,
     _self_heal_run_state,
 )
 from orchestune.dispatch_rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
@@ -119,8 +120,17 @@ def run_self_heal_phase(run_state: Any, config: DispatcherConfig) -> None:
     Issue取得直後・`_build_cycle_context`より前に呼び出す必要があるため、
     Reconciliation Phase本体（`run_post_gc_reconciliation`）とは別の
     エントリポイントとして公開する。
+
+    #516再3巡目レビュー指摘: `_self_heal_run_state`は`run_state.json`欠落時
+    にしか動作しないため、`_reconcile_recovery_counters`（ファイル有無を
+    問わず毎サイクル、既存active_worktreesエントリのstaleなrecompute_count/
+    forced_serialを本文と再照合する）を別途呼び出す。再4巡目レビュー指摘
+    により、`_reconcile_recovery_counters`は`_self_heal_run_state`と同じく
+    リポジトリ全体のIssue一覧を独自に読み直すため、ここでは呼び出し元から
+    スコープ済みIssue一覧を受け取らない。
     """
     _self_heal_run_state(run_state, config)
+    _reconcile_recovery_counters(run_state, config)
 
 
 def run_blocked_promotion_phase(
