@@ -22,9 +22,85 @@ DOC_LANGUAGES = ("en", "ja")
 # ship in the distributed package either.
 PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
 PACKAGE_NAME = "orchestune"
-L4_MODULES = frozenset(
-    {"cli", "dispatcher", "dag_cli", "monitor", "bootstrap", "provisioning"}
-)
+# The layer assignment is a design decision, so it lives here rather than being
+# parsed back out of the architecture documents. `_module_layer()` reads this,
+# which keeps `test_no_module_imports_a_strictly_higher_layer` independent of
+# prose: moving a module to a lower layer in a document used to silence real
+# violations instead of failing (#515). The documents are checked against this
+# mapping by `test_documented_layers_match_the_expected_layers`.
+EXPECTED_LAYERS: dict[int, frozenset[str]] = {
+    4: frozenset(
+        {"bootstrap", "cli", "dag_cli", "dispatcher", "monitor", "provisioning"}
+    ),
+    3: frozenset(
+        {
+            "dispatch_cycle",
+            "dispatch_cycle_context",
+            "dispatch_cycle_report",
+            "dispatch_phase_gc",
+            "dispatch_phase_reconciliation",
+            "dispatch_phase_rebase",
+            "dispatch_phase_scheduling",
+            "dispatch_postcycle",
+            "dispatch_report",
+            "integration_coordinator",
+            "integrator",
+            "integrator_steps",
+            "integrator_types",
+            "parent_completion",
+        }
+    ),
+    2: frozenset(
+        {
+            "dag_contracts",
+            "dag_graph",
+            "dag_parsing",
+            "dag_similarity",
+            "dispatch_actor_verification",
+            "dispatch_config",
+            "dispatch_escalation",
+            "dispatch_filters",
+            "dispatch_gc",
+            "dispatch_gc_completion",
+            "dispatch_gc_git",
+            "dispatch_gc_zombies",
+            "dispatch_labels",
+            "dispatch_launch",
+            "dispatch_locks",
+            "dispatch_rebase",
+            "dispatch_reconciliation",
+            "dispatch_recovery",
+            "dispatch_rules",
+            "dispatch_scoring",
+            "dispatch_state",
+            "dispatch_targets",
+            "dispatch_worktree",
+            "integrator_git_ops",
+            "integrator_pr",
+            "integrator_tasks",
+            "integrator_worktree",
+            "issue_parsing",
+            "not_needed_review_state",
+            "status_snapshot",
+            "symbol_verification",
+        }
+    ),
+    1: frozenset({"forge", "forge_admin", "forge_issues", "forge_prs", "git_cli"}),
+    0: frozenset(
+        {
+            "dag_models",
+            "dispatch_result",
+            "json_state",
+            "models",
+            "plan_writer",
+            "process_utils",
+            "setup_skills",
+            "validation",
+            "version",
+        }
+    ),
+}
+L4_MODULES = EXPECTED_LAYERS[4]
 ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
     "dag_cli": frozenset({"cli"}),
@@ -478,6 +554,13 @@ def _row_cells(line: str) -> list[str]:
 def _documented_layers(lang: str) -> dict[int, list[str]]:
     """The `**L<n>**` rows of the module-layer table, as {layer: modules}.
 
+    Modules are read from the row's *last* cell, so the table may carry any
+    number of leading descriptive columns (layer, role, ...) without this
+    breaking. Should a table ever end with something other than the module
+    list, the extraction goes wrong loudly: the result no longer matches
+    `EXPECTED_LAYERS` and the sync test fails naming the mismatch, rather than
+    silently weakening an architectural check (#515).
+
     Each row stays a list rather than a set so that a module repeated inside one
     row survives to be caught by the exact-once assertion.
     """
@@ -487,23 +570,24 @@ def _documented_layers(lang: str) -> dict[int, list[str]]:
         if match is None:
             continue
         assert int(match.group(1)) not in layers, f"duplicate layer row in {lang}"
-        layers[int(match.group(1))] = _BACKTICKED.findall(_row_cells(line)[1])
+        layers[int(match.group(1))] = _BACKTICKED.findall(_row_cells(line)[-1])
     return layers
 
 
 def _documented_subprocess_partition(lang: str) -> dict[str, set[str]]:
     """The command/module rows of the '`git`/`gh` stay in L1' table."""
     return {
-        _row_cells(line)[0].strip("`"): set(_BACKTICKED.findall(_row_cells(line)[1]))
+        _row_cells(line)[0].strip("`"): set(_BACKTICKED.findall(_row_cells(line)[-1]))
         for line in _architecture_doc(lang)
         if _COMMAND_ROW.match(line)
     }
 
 
-def _module_layer(lang: str = "en") -> dict[str, int]:
+def _module_layer() -> dict[str, int]:
+    """Every layered module's layer, from `EXPECTED_LAYERS` — never from a doc."""
     return {
         module: layer
-        for layer, modules in _documented_layers(lang).items()
+        for layer, modules in EXPECTED_LAYERS.items()
         for module in modules
     }
 
@@ -520,29 +604,40 @@ def test_tests_do_not_patch_removed_github_module() -> None:
     assert _stale_github_patch_targets() == []
 
 
-def test_documented_layers_cover_every_module_exactly_once() -> None:
-    # `orchestune/__init__.py` is the one file with no layer: it declares the
-    # boundary rather than living inside it. The exemption is stated in both
-    # architecture documents, and what the package root may import is asserted
-    # by `test_package_root_declares_a_public_api_without_entrypoints`.
+def test_expected_layers_cover_every_module_exactly_once() -> None:
+    """`EXPECTED_LAYERS` is the layer map, so it is what must stay exhaustive.
+
+    `orchestune/__init__.py` is the one file with no layer: it declares the
+    boundary rather than living inside it. The exemption is stated in both
+    architecture documents, and what the package root may import is asserted
+    by `test_package_root_declares_a_public_api_without_entrypoints`.
+    """
     package_modules = {
         module.removeprefix(f"{PACKAGE_NAME}.")
         for module in _package_modules()
         if module != PACKAGE_NAME
     }
+    listed = [module for modules in EXPECTED_LAYERS.values() for module in modules]
+    assert sorted(listed) == sorted(set(listed)), "module assigned to two layers"
+    assert set(listed) == package_modules, "EXPECTED_LAYERS is out of date"
+
+
+def test_documented_layers_match_the_expected_layers() -> None:
+    """Both documents must reproduce `EXPECTED_LAYERS` — the one doc-sync check.
+
+    This is the only place the layer tables are read. A document that drifts
+    fails here by name; it can no longer change what the layering test enforces.
+    """
+    expected = {layer: set(modules) for layer, modules in EXPECTED_LAYERS.items()}
     for lang in DOC_LANGUAGES:
-        layers = _documented_layers(lang)
-        listed = [module for modules in layers.values() for module in modules]
-        assert sorted(listed) == sorted(set(listed)), f"{lang}: module listed twice"
-        assert set(listed) == package_modules, f"{lang}: layer table is out of date"
-
-
-def test_layer_tables_agree_across_languages() -> None:
-    assert _documented_layers("en") == _documented_layers("ja")
-
-
-def test_documented_layers_are_consistent_with_the_l4_constant() -> None:
-    assert set(_documented_layers("en")[4]) == set(L4_MODULES)
+        documented = _documented_layers(lang)
+        for layer, modules in documented.items():
+            assert sorted(modules) == sorted(
+                set(modules)
+            ), f"{lang}: module listed twice in the L{layer} row"
+        assert {
+            layer: set(modules) for layer, modules in documented.items()
+        } == expected, f"{lang}: layer table does not match EXPECTED_LAYERS"
 
 
 def test_no_module_imports_a_strictly_higher_layer() -> None:
