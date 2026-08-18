@@ -1007,6 +1007,34 @@ class TestRestoreLaunchHistory:
 
         assert sorted(run_state.launch_history) == [now - 60, now - 30]
 
+    def test_preserves_duplicate_timestamps_as_a_multiset(self, tmp_path):
+        """#519レビュー指摘(P1): 同一サイクルで複数タスクが起動すると、
+        いずれもサイクル共通の`now`をappendするため、重複タイムスタンプは
+        「別々の起動」を表す正当なデータ。集合和で畳むと起動数を過少に
+        数え、上限に余剰スロットが生まれてしまう。多重集合として
+        （各値の出現回数の最大を採って）マージすること。"""
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now - 60, now - 60])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        assert run_state.launch_history == [now - 60, now - 60]
+
+    def test_takes_the_larger_occurrence_count_from_either_side(self, tmp_path):
+        """ローカルに2件・本文に1件なら2件（巻き戻さない）。逆なら本文の2件。"""
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[now - 60, now - 60])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now - 60])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        assert run_state.launch_history == [now - 60, now - 60]
+
     def test_is_a_noop_in_flat_mode(self, tmp_path):
         """#514スコープ決定: --parent-issue未指定では永続化・復元とも行わない。"""
         run_state = RunState(active_worktrees={}, launch_history=[])

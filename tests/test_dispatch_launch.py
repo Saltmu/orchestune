@@ -731,6 +731,137 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
         assert launch_history_from_body(written_body) == [now]
 
 
+class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
+    """#519レビュー指摘(P1/P2): 親Issueへのリモート書き込みが、既存の
+    クラッシュ安全順序（ローカル確定 → GitHub反映）を迂回してはならない。
+    また親ごとのストアへ、他の親の起動履歴を混ぜてはならない。
+    """
+
+    def _launch_plan(self, tmp_path):
+        from orchestune.dispatch_launch import TaskLaunchPlan
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = _task(1, subtask_id="task-1")
+        plans = [TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        return plans, dispatch_target
+
+    def _run(self, tmp_path, run_state, now, forge, *, run_state_path=None):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=run_state_path or (tmp_path / "run_state.json"),
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=100,
+            forge=forge,
+        )
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, now, config)
+
+    def test_local_run_state_is_persisted_even_if_the_remote_write_fails(
+        self, tmp_path
+    ):
+        """再現テスト: `update_issue_body`が一時障害で失敗しても、起動済み
+        タスクのActiveWorktreeはrun_state.jsonへ確定していなければならない。
+        さもないと次サイクルが重複起動する。"""
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch_state import load_run_state
+
+        run_state_path = tmp_path / "run_state.json"
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        forge.update_issue_body.side_effect = RuntimeError("transient GitHub error")
+
+        self._run(
+            tmp_path,
+            RunState(active_worktrees={}),
+            5_000_000.0,
+            forge,
+            run_state_path=run_state_path,
+        )
+
+        persisted = load_run_state(run_state_path)
+        assert "1" in persisted.active_worktrees
+        assert persisted.launch_history == [5_000_000.0]
+
+    def test_label_transition_still_happens_if_the_remote_write_fails(self, tmp_path):
+        """永続化はあくまで耐久性の強化であり、失敗しても起動フロー
+        （status:in-progressへの遷移）を止めてはならない。"""
+        from unittest.mock import MagicMock
+
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        forge.update_issue_body.side_effect = RuntimeError("transient GitHub error")
+
+        self._run(tmp_path, RunState(active_worktrees={}), 5_000_000.0, forge)
+
+        assert any(
+            call.args[1] == "status:in-progress"
+            for call in forge.add_label.call_args_list
+        )
+
+    def test_does_not_copy_other_parents_launches_into_this_parent(self, tmp_path):
+        """#519レビュー指摘(P2): run_state.launch_historyは複数の親をまたいで
+        共有される。親Bのサイクルで、親Aの起動タイムスタンプを親Bの本文へ
+        書き込んではならない（永続化される上限は親ごとと文書化しているため）。"""
+        from unittest.mock import MagicMock
+
+        from orchestune.issue_parsing import launch_history_from_body
+
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        now = 5_000_000.0
+        other_parents_launch = now - 60.0
+
+        self._run(
+            tmp_path,
+            RunState(active_worktrees={}, launch_history=[other_parents_launch]),
+            now,
+            forge,
+        )
+
+        _, written_body = forge.update_issue_body.call_args.args
+        assert launch_history_from_body(written_body) == [now]
+
+    def test_appends_to_the_parents_own_persisted_history(self, tmp_path):
+        """親自身の既存履歴には追記する（多重集合として重複も保つ）。"""
+        from unittest.mock import MagicMock
+
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        prior = now - 30.0
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(
+            body=(
+                "EPIC\n\n<!-- orchestune:launch-history -->\n"
+                f"```yaml\nlaunch_history:\n- {prior}\n```\n"
+            )
+        )
+
+        self._run(tmp_path, RunState(active_worktrees={}), now, forge)
+
+        _, written_body = forge.update_issue_body.call_args.args
+        assert launch_history_from_body(written_body) == [prior, now]
+
+
 class TestLaunchSelectedTasks:
     """#476: build_dispatch_target/_launch_selected_tasksの多引数をDTOへ集約した
     リファクタリング後も、decide+applyの薄いラッパーとしての挙動が維持されることを

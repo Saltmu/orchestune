@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -186,7 +187,19 @@ def _restore_launch_history(
         return False
     min_time = now - config.window_seconds
     in_window = [t for t in persisted if t >= min_time]
-    merged = sorted(set(run_state.launch_history) | set(in_window))
+    # #519レビュー指摘(P1): 集合和ではなく**多重集合**として、各値の出現回数の
+    # 大きい方を採る。同一サイクルで複数タスクが起動するといずれもサイクル共通の
+    # `now`をappendするため、重複タイムスタンプは「別々の起動」を表す正当な
+    # データであり、畳むと起動数を過少に数えて上限に余剰スロットが生まれる。
+    local_counts = Counter(run_state.launch_history)
+    persisted_counts = Counter(in_window)
+    merged_counts = Counter(
+        {
+            timestamp: max(local_counts[timestamp], persisted_counts[timestamp])
+            for timestamp in set(local_counts) | set(persisted_counts)
+        }
+    )
+    merged = sorted(merged_counts.elements())
     if merged == sorted(run_state.launch_history):
         return False
     run_state.launch_history = merged

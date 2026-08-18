@@ -13,7 +13,10 @@ from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
 from orchestune.git_cli import run_git
-from orchestune.issue_parsing import backfill_launch_history
+from orchestune.issue_parsing import (
+    backfill_launch_history,
+    launch_history_from_body,
+)
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
@@ -258,10 +261,8 @@ def _decide_task_launch_plan(
     return plans
 
 
-def _persist_launch_history(
-    run_state: RunState, now: float, config: DispatcherConfig
-) -> None:
-    """#514: 起動タイムスタンプを親Issue本文へ永続化する。
+def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
+    """#514: 今回の起動タイムスタンプを親Issue本文へ追記する。
 
     `run_state.json`が消えるステートレスCIランナーでは`launch_history`が
     毎回空になり、`max_launches_per_window`が実質無効になる。復元側は
@@ -270,9 +271,19 @@ def _persist_launch_history(
     スコープ（Issue #514の決定）: `--parent-issue`未指定（フラットモード）は
     永続化先の親Issueが無いため対象外。意味論は「親Issueごとのウィンドウ」。
 
-    書き込むのはウィンドウ内のタイムスタンプのみ（本文の単調肥大化を防ぐ）。
-    値が既に一致していれば`backfill_launch_history`が`None`を返すため、
-    無駄な`update_issue_body`呼び出しは発生しない。
+    #519レビュー指摘(P2): 基準にするのは`run_state.launch_history`ではなく
+    **その親Issue自身の既存履歴**。`run_state.json`は複数の親（big rock）を
+    またいで共有されるため、グローバル履歴をそのまま書くと親Aの起動が親Bの
+    永続履歴へ混入し、Bのランナーがステートレスになった後もBを絞り続ける。
+    ここで確実に「この親のもの」と分かるのは、今まさに起動した`now`だけ。
+
+    重複タイムスタンプは畳まない: 同一サイクルで複数タスクが起動すると
+    いずれも同じ`now`を持つが、それらは別々の起動を表す正当なデータのため
+    （#519レビュー指摘(P1)）。
+
+    ウィンドウ外は書かない（本文の単調肥大化を防ぐ）。値が既に一致していれば
+    `backfill_launch_history`が`None`を返すため、無駄な`update_issue_body`
+    呼び出しは発生しない。
     """
     if config.parent_issue_number is None:
         return
@@ -280,8 +291,9 @@ def _persist_launch_history(
     if issue is None:
         return
     min_time = now - config.window_seconds
-    in_window = sorted(t for t in run_state.launch_history if t >= min_time)
-    patched_body = backfill_launch_history(issue.body, in_window)
+    merged = [t for t in launch_history_from_body(issue.body) if t >= min_time]
+    merged.append(now)
+    patched_body = backfill_launch_history(issue.body, sorted(merged))
     if patched_body is not None:
         config.resolved_forge.update_issue_body(
             config.parent_issue_number, patched_body
@@ -371,7 +383,6 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_state,
         )
         run_state.launch_history.append(now)
-        _persist_launch_history(run_state, now, config)
         save_run_state(
             run_state,
             config.run_state_path,
@@ -393,6 +404,24 @@ def _apply_task_launches(
                 if label in task.status_labels
             ),
         )
+
+        # #514/#519レビュー指摘(P1): 親Issueへの永続化は、ローカルの
+        # `save_run_state`とラベル遷移が完了した**後**に、非致命的に行う。
+        # 直前のコメントが述べるクラッシュ安全順序（ローカル確定 → GitHub反映）
+        # をこのリモート書き込みが迂回すると、一時的なGitHub障害・レート制限で
+        # 例外が上がったときに「エージェントは起動済みだがrun_stateにも
+        # ラベルにも記録が無い」状態が残り、次サイクルが重複起動しうる。
+        # これはステートレスランナー向けの耐久性強化であって、失敗しても
+        # 起動フロー自体を止めるべきものではない。
+        try:
+            _persist_launch_history(now, config)
+        except Exception as e:
+            print(
+                f"Warning: failed to persist launch history to parent issue "
+                f"#{config.parent_issue_number}: {e}",
+                file=sys.stderr,
+            )
+
         actually_selected.append(task)
 
     save_run_state(
