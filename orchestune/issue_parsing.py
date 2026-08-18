@@ -201,6 +201,18 @@ def is_epic_issue(issue: IssueRecord) -> bool:
     return issue.title.startswith("[EPIC] ") and PARENT_MARKER in issue.body
 
 
+def ensure_parent_marker(body: str) -> str:
+    """`body`に`PARENT_MARKER`が無ければ追記して返す（既にあれば無変更）。
+
+    `provision --parent-issue`が人間の手で起票済みのEPIC Issueを正規化する
+    際に使う。既存の本文（人間が書いた説明文）はそのまま保持し、マーカーの
+    追記のみ行う。
+    """
+    if PARENT_MARKER in body:
+        return body
+    return f"{body.rstrip()}\n\n{PARENT_MARKER}\n"
+
+
 def _native_depends_on(
     issue: IssueRecord, issue_to_subtask_id: dict[int, str] | None
 ) -> tuple[str, ...]:

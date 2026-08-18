@@ -97,6 +97,9 @@ class FakeForge:
     def update_issue_body(self, issue_number: int | str, body: str) -> None:
         self.issues[int(issue_number)]["body"] = body
 
+    def update_issue_title(self, issue_number: int | str, title: str) -> None:
+        self.issues[int(issue_number)]["title"] = title
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
@@ -1145,6 +1148,50 @@ class TestProvisionIssuesNoApply:
         assert "status:queued" in result.previews[0].labels
         assert "status:blocked" in result.previews[1].labels
 
+    def test_no_apply_honors_explicit_parent_issue_in_preview_bodies(
+        self, plan_path: Path, template_path: Path
+    ):
+        """codex review (PR #506): `--no-apply --parent-issue N` must preview
+        the bodies that the subsequent `--apply` run would actually file,
+        not the plan's stale/absent persisted `parent_issue_number`."""
+
+        class ExplodingForge:
+            def __getattr__(self, name):
+                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+
+        result = provision_issues(
+            plan_path,
+            forge=ExplodingForge(),
+            apply=False,
+            template_path=template_path,
+            parent_issue=999,
+        )
+
+        assert result.applied is False
+        for preview in result.previews:
+            assert "parent_issue_number: 999" in preview.body
+
+    def test_no_apply_rejects_invalid_parent_issue_before_previewing(
+        self, plan_path: Path, template_path: Path
+    ):
+        """codex review (PR #506): a `--no-apply --parent-issue 0` dry run
+        must fail the same way the corresponding `--apply` run would,
+        instead of successfully previewing an invocation that can never
+        actually be applied."""
+
+        class ExplodingForge:
+            def __getattr__(self, name):
+                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+
+        with pytest.raises(ValueError):
+            provision_issues(
+                plan_path,
+                forge=ExplodingForge(),
+                apply=False,
+                template_path=template_path,
+                parent_issue=0,
+            )
+
 
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
@@ -1463,6 +1510,94 @@ class TestResolveParentIssue:
         number = _resolve_parent_issue(forge, metadata, plan_path)
         assert number == orphan_number
         assert f"parent_issue_number: {orphan_number}" in plan_path.read_text(
+            encoding="utf-8"
+        )
+
+    def test_explicit_parent_issue_normalizes_plain_title_and_missing_marker(
+        self, tmp_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        existing_number = forge.create_issue(
+            "Human-filed epic", "Some pre-existing description written by a human."
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock", parent_issue_number=None, description=""
+        )
+        number = _resolve_parent_issue(
+            forge, metadata, plan_path, explicit_parent_issue=existing_number
+        )
+        assert number == existing_number
+        assert forge.issues[existing_number]["title"] == "[EPIC] Human-filed epic"
+        body = forge.issues[existing_number]["body"]
+        assert body.startswith("Some pre-existing description written by a human.")
+        assert PARENT_MARKER in body
+        assert f"parent_issue_number: {existing_number}" in plan_path.read_text(
+            encoding="utf-8"
+        )
+
+    def test_explicit_parent_issue_already_conformant_is_left_untouched(
+        self, tmp_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        existing_number = forge.create_issue(
+            "[EPIC] Already Proper", _parent_body("Already Proper")
+        )
+        original_body = forge.issues[existing_number]["body"]
+        metadata = PlanMetadata(
+            title="My Big Rock", parent_issue_number=None, description=""
+        )
+        number = _resolve_parent_issue(
+            forge, metadata, plan_path, explicit_parent_issue=existing_number
+        )
+        assert number == existing_number
+        assert forge.issues[existing_number]["title"] == "[EPIC] Already Proper"
+        assert forge.issues[existing_number]["body"] == original_body
+
+    def test_explicit_parent_issue_missing_number_raises(self, tmp_path: Path):
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        metadata = PlanMetadata(
+            title="My Big Rock", parent_issue_number=None, description=""
+        )
+        with pytest.raises(RuntimeError, match="--parent-issue 999"):
+            _resolve_parent_issue(forge, metadata, plan_path, explicit_parent_issue=999)
+
+    def test_explicit_parent_issue_overrides_stale_persisted_value(
+        self, tmp_path: Path
+    ):
+        plan_path = tmp_path / "plan.md"
+        forge = FakeForge()
+        stale_number = forge.create_issue(
+            "[EPIC] My Big Rock", _parent_body("My Big Rock")
+        )
+        new_number = forge.create_issue("Human-filed epic", "Description.")
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\n"
+            f"parent_issue_number: {stale_number}\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock", parent_issue_number=stale_number, description=""
+        )
+        number = _resolve_parent_issue(
+            forge, metadata, plan_path, explicit_parent_issue=new_number
+        )
+        assert number == new_number
+        assert f"parent_issue_number: {new_number}" in plan_path.read_text(
             encoding="utf-8"
         )
 

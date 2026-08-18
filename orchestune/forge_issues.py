@@ -253,6 +253,10 @@ class GitHubIssueMixin:
             input_text=body,
         )
 
+    def update_issue_title(self, issue_number: int | str, title: str) -> None:
+        number = validate_issue_number(issue_number)
+        self._run(["gh", "issue", "edit", str(number), "--title", title])
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:

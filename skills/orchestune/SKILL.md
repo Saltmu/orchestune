@@ -71,7 +71,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    (The section below the frontmatter is free text to explain the design approach or background)
    ```
 
-   The top-level `title` is required — `orchestune-provision` uses it to create the parent tracking issue for the whole "big rock". `parent_issue_number` and each subtask's `issue_number` start as `null`; do not set them yourself — `orchestune-provision` writes the created (or reused) issue numbers back into this file so that re-running the workflow after a partial failure reuses the same issues instead of creating duplicates.
+   The top-level `title` is required — `orchestune-provision` uses it to create the parent tracking issue for the whole "big rock". `parent_issue_number` and each subtask's `issue_number` start as `null`; do not set them yourself — `orchestune-provision` writes the created (or reused) issue numbers back into this file so that re-running the workflow after a partial failure reuses the same issues instead of creating duplicates. If an EPIC issue for this "big rock" already exists (filed by hand ahead of time), don't set `parent_issue_number` either — pass `--parent-issue <number>` to `orchestune provision` instead (see [orchestune-provision SKILL.md](../orchestune-provision/SKILL.md)), which normalizes and attaches to that existing issue rather than creating a new one.
 
 ### Stage 2: Validate DAG
 
