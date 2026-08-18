@@ -44,6 +44,27 @@ def test_local_ci_scripts_unset_git_env():
     assert "GIT_DIR" in sh_content
 
 
+def test_scripts_contain_all_dangerous_git_env_vars():
+    """Verify all 4 shell/powershell scripts contain every variable from DANGEROUS_GIT_ENV_VARS (SSOT)."""
+    from orchestune.git_cli import DANGEROUS_GIT_ENV_VARS
+
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    target_scripts = [
+        "local-ci.ps1",
+        "local-ci.sh",
+        "setup-git-hooks.ps1",
+        "setup-git-hooks.sh",
+    ]
+
+    for script_name in target_scripts:
+        script_file = scripts_dir / script_name
+        content = script_file.read_text(encoding="utf-8")
+        for var in DANGEROUS_GIT_ENV_VARS:
+            assert (
+                var in content
+            ), f"Variable {var!r} from DANGEROUS_GIT_ENV_VARS is missing in scripts/{script_name}"
+
+
 def test_git_rev_parse_hooks_in_worktree(tmp_path: Path):
     """Verify git rev-parse --git-path hooks resolves to the common repository hooks directory inside a worktree."""
     from tests.conftest import get_clean_git_env
@@ -138,3 +159,195 @@ def test_git_rev_parse_hooks_in_worktree(tmp_path: Path):
     assert (
         p_main.resolve() == p_wt.resolve()
     ), f"Worktree hooks path ({p_wt}) must resolve to common hooks path ({p_main})"
+
+
+def test_setup_git_hooks_ps1_execution_in_worktree(tmp_path: Path):
+    """Verify setup-git-hooks.ps1 executes successfully inside a worktree and creates hooks in the common hooks dir."""
+    import shutil
+    import sys
+
+    from tests.conftest import get_clean_git_env
+
+    clean_env = get_clean_git_env()
+    main_repo = tmp_path / "repo_ps1"
+    main_repo.mkdir()
+
+    # Initialize main repo
+    subprocess.run(
+        ["git", "init"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=str(main_repo),
+        check=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=str(main_repo),
+        check=True,
+        env=clean_env,
+    )
+
+    # Initial commit
+    readme = main_repo / "README.md"
+    readme.write_text("Hello", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+
+    # Create worktree
+    worktree_path = tmp_path / "wt_ps1"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree_path), "-b", "feature-ps1"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+
+    # Copy real scripts directory to the worktree
+    real_scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    target_scripts_dir = worktree_path / "scripts"
+    shutil.copytree(real_scripts_dir, target_scripts_dir)
+
+    # Determine powershell executable
+    ps_exe = "powershell.exe" if sys.platform == "win32" else "pwsh"
+    # Execute setup-git-hooks.ps1 from inside the worktree
+    res = subprocess.run(
+        [
+            ps_exe,
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(target_scripts_dir / "setup-git-hooks.ps1"),
+        ],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    )
+    assert (
+        res.returncode == 0
+    ), f"setup-git-hooks.ps1 failed: {res.stderr}\n{res.stdout}"
+
+    # Verify hooks exist in the common .git/hooks directory
+    common_hooks_dir = main_repo / ".git" / "hooks"
+    assert (
+        common_hooks_dir / "pre-commit"
+    ).exists(), "pre-commit hook was not created in common hooks dir"
+    assert (
+        common_hooks_dir / "pre-push"
+    ).exists(), "pre-push hook was not created in common hooks dir"
+
+    # Verify pre-push content in common hooks contains GIT_* unset
+    pre_push_content = (common_hooks_dir / "pre-push").read_text(encoding="utf-8")
+    assert "unset GIT_DIR" in pre_push_content
+
+
+def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
+    """Verify setup-git-hooks.sh executes successfully inside a worktree and creates hooks in the common hooks dir."""
+    import shutil
+
+    from tests.conftest import get_clean_git_env
+
+    # Check if bash is available
+    bash_path = shutil.which("bash")
+    if not bash_path:
+        return
+
+    clean_env = get_clean_git_env()
+    main_repo = tmp_path / "repo_sh"
+    main_repo.mkdir()
+
+    # Initialize main repo
+    subprocess.run(
+        ["git", "init"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=str(main_repo),
+        check=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=str(main_repo),
+        check=True,
+        env=clean_env,
+    )
+
+    # Initial commit
+    readme = main_repo / "README.md"
+    readme.write_text("Hello", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+
+    # Create worktree
+    worktree_path = tmp_path / "wt_sh"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree_path), "-b", "feature-sh"],
+        cwd=str(main_repo),
+        check=True,
+        capture_output=True,
+        env=clean_env,
+    )
+
+    # Copy real scripts directory to the worktree
+    real_scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    target_scripts_dir = worktree_path / "scripts"
+    shutil.copytree(real_scripts_dir, target_scripts_dir)
+
+    # Execute setup-git-hooks.sh from inside the worktree
+    res = subprocess.run(
+        ["bash", str(target_scripts_dir / "setup-git-hooks.sh")],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    )
+    assert res.returncode == 0, f"setup-git-hooks.sh failed: {res.stderr}\n{res.stdout}"
+
+    # Verify hooks exist in the common .git/hooks directory
+    common_hooks_dir = main_repo / ".git" / "hooks"
+    assert (
+        common_hooks_dir / "pre-commit"
+    ).exists(), "pre-commit hook was not created in common hooks dir"
+    assert (
+        common_hooks_dir / "pre-push"
+    ).exists(), "pre-push hook was not created in common hooks dir"
+
+    # Verify pre-push content in common hooks contains GIT_* unset
+    pre_push_content = (common_hooks_dir / "pre-push").read_text(encoding="utf-8")
+    assert "unset GIT_DIR" in pre_push_content

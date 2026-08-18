@@ -16,7 +16,19 @@ import pytest
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
 from orchestune.forge import BootstrapResult, Forge, GitHubForge
+from orchestune.git_cli import (
+    DANGEROUS_GIT_ENV_VARS,
+)
+from orchestune.git_cli import (
+    get_clean_git_env as get_clean_git_env,
+)
 from orchestune.models import IssueRecord, PrRecord
+
+GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
+
+# Strip dangerous Git environment variables immediately upon conftest load
+for _var in DANGEROUS_GIT_ENV_VARS:
+    os.environ.pop(_var, None)
 
 
 def make_task(issue_number: int = 1, **overrides: Any) -> Task:
@@ -356,34 +368,9 @@ def _guard_dispatch_cycle_ensure_parent_branch(
     yield
 
 
-GIT_ENV_VARS_TO_CLEAR: tuple[str, ...] = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_PREFIX",
-    "GIT_GRAFT_FILE",
-    "GIT_SUPER_PREFIX",
-)
-
-# Strip dangerous Git environment variables immediately upon conftest load
-for _var in GIT_ENV_VARS_TO_CLEAR:
-    os.environ.pop(_var, None)
-
-
-def get_clean_git_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return a copy of os.environ with all dangerous GIT_* environment variables removed."""
-    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_VARS_TO_CLEAR}
-    if extra_env:
-        env.update(extra_env)
-    return env
-
-
 @pytest.fixture(autouse=True)
 def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
     """Ensure tests run in an isolated Git environment where GIT_* variables are stripped."""
-    for var in GIT_ENV_VARS_TO_CLEAR:
+    for var in DANGEROUS_GIT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     yield

@@ -25,7 +25,6 @@ class DummyGitRepo:
     def __init__(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.path = Path(self.temp_dir.name)
-        self.clean_env = get_clean_git_env()
         # Create bare origin repository
         self.origin_path = self.path / "origin.git"
         self.origin_path.mkdir()
@@ -90,6 +89,7 @@ class DummyGitRepo:
         check: bool = False,
         capture_output: bool = True,
         text: bool = False,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[Any]:
         return subprocess.run(
             ["git", *args],
@@ -97,7 +97,7 @@ class DummyGitRepo:
             check=check,
             capture_output=capture_output,
             text=text,
-            env=self.clean_env,
+            env=get_clean_git_env(env),
         )
 
     def _commit_file(

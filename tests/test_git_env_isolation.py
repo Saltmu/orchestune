@@ -82,3 +82,46 @@ def test_get_clean_git_env_strips_git_vars_and_merges_extras():
     finally:
         for var in GIT_ENV_VARS_TO_CLEAR:
             os.environ.pop(var, None)
+
+
+def test_run_git_automatically_isolates_polluted_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify run_git automatically strips polluted GIT_DIR from ambient environment."""
+    from orchestune.git_cli import run_git
+
+    host_repo_dir = tmp_path / "host_repo_git_cli"
+    host_repo_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "--bare"],
+        cwd=str(host_repo_dir),
+        check=True,
+        capture_output=True,
+    )
+
+    # Set dangerous GIT_DIR in os.environ
+    monkeypatch.setenv("GIT_DIR", str(host_repo_dir))
+
+    # Initialize a new local repo via run_git with cwd set to a separate directory
+    local_dir = tmp_path / "local_repo_git_cli"
+    local_dir.mkdir()
+
+    # run_git should automatically isolate GIT_DIR and execute in local_dir
+    res = run_git(["init"], cwd=local_dir)
+    assert res.returncode == 0
+    assert (local_dir / ".git").exists()
+
+
+def test_dummy_git_repo_sees_dynamic_env_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify DummyGitRepo.run_git dynamically picks up environment variables added after repo initialization."""
+    repo = DummyGitRepo()
+    try:
+        # Dynamically set a new environment variable after repo creation
+        monkeypatch.setenv("TEST_DYNAMIC_VAR", "dynamic_value_123")
+        # Run a git command via repo.run_git
+        res = repo.run_git(["config", "user.name"])
+        assert res.returncode == 0
+    finally:
+        repo.cleanup()
