@@ -14,6 +14,45 @@ Three consequences run through the rest of this document:
 * **Parallelism is the mechanism, not the goal.** Independent subtasks let several agents burn quota at once instead of one agent burning it in sequence, so DAG construction (Section 1) exists to find as much *safe* parallelism as the task allows.
 * **Unattended operation is what converts parallelism into quota efficiency.** The gains only materialize if runs can proceed while the human is away — overnight, or in a stateless CI runner. That is why state is self-healing from GitHub (Section 2), why child-level integration merges without a human (Section 3), and why human judgment is confined to two gates (Section 4). A design that required a click per subtask would stall the pipeline on human availability.
 
+### 0.1 Determinism: the LLM judges, Python owns the automated shared-state transitions
+
+An LLM call is a scarce operation that consumes quota. Orchestune therefore **spends LLM calls only where judgment cannot be replaced — decomposition, implementation, semantic review of an integration diff, and the `status:not-needed` assessment — and handles everything else in deterministic Python**. Polling labels, recomputing the DAG, rebuilding local state, garbage collection, and escalation could all be delegated to an agent, but each delegation is paid for in quota.
+
+This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces — the main waste named above.
+
+The dividing line is not "what the LLM does not do" but **scope**: whose territory is being written to.
+
+| | Writes to |
+|---|---|
+| **LLM** | The isolation it was given (its worktree and its own branch), plus the statement of its judgement (labels, comments, a PR) |
+| **Python** | **The shared state that advances automatically** — integration merges from a child PR into the parent branch, whether an Issue lives or dies, dependency resolution, the quota ledger |
+| **Human** | **The acceptance merge** — the final PR from the parent branch into `main`; the "one human click" of Section 4 |
+
+Some label transitions do belong to the LLM. An implementation agent applies `status:not-needed` itself when it finds the requirement already satisfied (it writes no commit and opens no PR, so the label is the only completion signal available), and it commits, pushes, and opens PRs. All of that stays inside its own branch, though. **What the agent never decides is whether that work enters shared state.**
+
+#### Premise: both the LLM and the infrastructure will be wrong
+
+Determinism alone is not enough. Because both LLM output and infrastructure can fail, Orchestune **enumerates the deviation points individually and gives each one a deterministic detection and recovery path**.
+
+| Deviation | Detection | Deterministic handling |
+|---|---|---|
+| Bad decomposition (an unestablished shared extension point) | Shared-contract gate (Section 1) | Warning |
+| Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
+| Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch_locks.check_footprint_deviation`) | DAG recomputation (with exclusion rules and a retry cap) |
+| Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
+| The agent's own report (`status:not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by a label |
+
+The detailed behaviour of each mechanism — its exclusion rules, its skip conditions, how it differs per dispatch target — belongs to that mechanism's own section and to the docstring of its implementation. All that matters here is that each one follows from the same principle.
+
+And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries and launches per window are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+
+> **Known gaps**: three paths currently never reach a terminal state.
+> - The `status:not-needed` re-verification on the Cloud Routine target. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle (`dispatched_at` is recorded but never used for a timeout). [#511](https://github.com/Saltmu/orchestune/issues/511)
+> - Requeueing of a reclaimed timed-out task. Even with a positive `--task-timeout-seconds`, `_apply_zombie_or_timeout_reclaim` keeps no per-task reclaim counter, so a task that keeps timing out is returned to `status:queued` forever. [#512](https://github.com/Saltmu/orchestune/issues/512)
+> - **Where the bounding counters live.** `recompute_count`, `forced_serial`, `launch_history`, and token usage exist only in `run_state.json`, never on the GitHub side. Self-healing restores them at their initial values, so on the **stateless CI runner** that Section 0 names as a primary deployment model the bounds above are effectively inert. [#513](https://github.com/Saltmu/orchestune/issues/513)
+
+What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.
+
 ---
 
 ## 1. DAG Construction & Conflict Prevention
@@ -106,6 +145,24 @@ matching one of the shared-extension-point categories, or they explicitly set
 consumer/consumer pairing, are never flagged, since there's no write race to
 warn about.
 
+### Reconciling the decomposition plan against the codebase (staleness detection)
+
+Where the two subsections above both deal with conflicts **between subtasks**, this one reconciles the **decomposition plan against the current repository**. It is a different axis.
+
+A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `symbols` can be found in the Python files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`). Whether the footprint paths themselves exist is checked separately by `find_missing_footprint_paths` against the filesystem — not the AST, and not at Issue-creation time — when `orchestune-dag` runs with a repository root.
+
+Symbol collection combines **two walks with different purposes**.
+
+The first is the full set of defined names, gathered by walking the entire tree with `ast.walk` (`_collect_all_names`). That deliberately includes class names, `Class.method` qualified names, and nested functions (closure helpers and the like), so a plan may name a bare method and still match.
+
+The second is the candidate set used to loosely match module-qualified notation (`db.get_connection`) on its final segment (`_collect_top_level_names`). This one is **restricted to module scope**, because `ast.walk` loses scope information: used here it would mistake a function-local variable, or a bare method name, for a module-level definition. Within that restricted walk, `if` / `try` / `with` / loops / `match` bind what they contain into the *enclosing* scope, so their bodies are flattened into it (a conditionally defined top-level function, or a conditional assignment, are the typical cases), while function and class definitions open a new scope of their own and are not recursed into. A conditionally defined *method* is not picked up here but by the first, whole-tree walk, which flattens each class body separately.
+
+**Two conditions skip the check entirely**: a footprint containing no existing `.py` file at all, and a footprint in which any `.py` file cannot be parsed (a syntax error, say). Both return an empty result and leave no note — declaring a symbol "missing" without the material to judge would be a false positive. But note that **right after a refactor splits or renames files, the footprint paths may be exactly the ones that no longer exist**: the check tends to go quiet in precisely the situation it is meant for.
+
+Only definitions (`class` / `def`) and assignments (`x = ...`, `x: T = ...`) are collected — **bindings introduced by `import` are not**. A name that exists only via an import, as in `try: import fast as impl except ImportError: import slow as impl`, will be reported as missing if a plan declares it in `symbols`. The note is neutral and non-blocking so the practical cost is small, but it is a known limit of this check.
+
+**This check does not block.** A symbol that isn't found may mean "the plan went stale in a refactor" or "this subtask is about to create it", so Orchestune does not decide: it leaves a neutral note in the Issue body and lets the implementing agent and the human judge — one application of [0.1](#01-determinism-the-llm-judges-python-owns-the-automated-shared-state-transitions)'s "the LLM judges, Python owns the automated shared-state transitions".
+
 ---
 
 ## 2. Self-healing State Recovery
@@ -163,7 +220,8 @@ sequenceDiagram
 3. **Automatic child merge & close**: once CI passes, the integrator merges that temporary branch's PR into `parent/issue-{N}` **without waiting for a human** and closes the child Issue (`reason: completed`). No per-child review gate exists at this tier — CI is the quality gate (see Section 4).
 4. **Final PR, once every child is done**: when all child Issues under a parent are closed, the integrator opens a PR from `parent/issue-{N}` to `main`. This PR is never auto-merged.
 5. **Acceptance merge & parent close**: a human reviews and merges that final PR. Once merged, the integrator detects it and closes the parent Issue automatically.
-6. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR for the human who will later review the final PR — it never blocks or reverses the automatic child merge.
+6. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR — it never blocks or reverses the automatic child merge, and Python does not track its result either.
+   **Whether the acceptance reviewer sees those findings depends on the mode**: in flat mode the integration PR *is* the acceptance PR a human merges, so they sit on the same PR; under this two-tier model they land on the *child* integration PR and are neither copied nor linked onto the acceptance PR (parent branch → `main`). An asynchronous finding can even land after the child PR is closed, so reading them means going to each child PR by hand.
 
 If the dispatcher is run without `--parent-issue`, Orchestune falls back to the flat, single-tier mode: child branches merge directly toward `main` and, matching the "final merge" semantics above, that merge is always left for a human (the integrator only opens the PR).
 
