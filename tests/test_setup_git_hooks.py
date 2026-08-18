@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def test_setup_git_hooks_ps1_content_contains_git_env_unset():
     """Verify setup-git-hooks.ps1 configures pre-push hook with GIT_* unset and uses rev-parse for hooks dir."""
@@ -229,7 +231,7 @@ def test_setup_git_hooks_ps1_execution_in_worktree(tmp_path: Path):
     # Determine powershell executable
     ps_exe = "powershell.exe" if sys.platform == "win32" else "pwsh"
     if not shutil.which(ps_exe):
-        return
+        pytest.skip(f"PowerShell ({ps_exe}) not found on PATH")
     # Execute setup-git-hooks.ps1 from inside the worktree
     res = subprocess.run(
         [
@@ -271,7 +273,7 @@ def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
     # Check if bash is available
     bash_path = shutil.which("bash")
     if not bash_path:
-        return
+        pytest.skip("bash not found on PATH")
 
     clean_env = get_clean_git_env()
     main_repo = tmp_path / "repo_sh"

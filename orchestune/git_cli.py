@@ -80,7 +80,12 @@ def run_git(
         "check": check,
     }
     if env is not None:
-        kwargs["env"] = env
+        if isolate_git_env and any(var in env for var in DANGEROUS_GIT_ENV_VARS):
+            kwargs["env"] = {
+                k: v for k, v in env.items() if k not in DANGEROUS_GIT_ENV_VARS
+            }
+        else:
+            kwargs["env"] = env
     elif isolate_git_env and any(var in os.environ for var in DANGEROUS_GIT_ENV_VARS):
         kwargs["env"] = get_clean_git_env()
 

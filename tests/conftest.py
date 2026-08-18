@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import subprocess
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -25,10 +24,6 @@ from orchestune.git_cli import (
 from orchestune.models import IssueRecord, PrRecord
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
-
-# Strip dangerous Git environment variables immediately upon conftest load
-for _var in DANGEROUS_GIT_ENV_VARS:
-    os.environ.pop(_var, None)
 
 
 def make_task(issue_number: int = 1, **overrides: Any) -> Task:

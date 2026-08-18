@@ -125,3 +125,54 @@ def test_dummy_git_repo_sees_dynamic_env_changes(
         assert res.returncode == 0
     finally:
         repo.cleanup()
+
+
+def test_run_git_strips_dangerous_vars_from_explicit_env(tmp_path: Path):
+    """Verify run_git strips dangerous variables even when passed via explicit env dict."""
+    from orchestune.git_cli import run_git
+
+    host_repo_dir = tmp_path / "host_repo_explicit_env"
+    host_repo_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "--bare"],
+        cwd=str(host_repo_dir),
+        check=True,
+        capture_output=True,
+    )
+
+    local_dir = tmp_path / "local_repo_explicit_env"
+    local_dir.mkdir()
+
+    # Pass an explicit env dict that contains polluted GIT_DIR
+    polluted_env = os.environ.copy()
+    polluted_env["GIT_DIR"] = str(host_repo_dir)
+
+    # run_git with default isolate_git_env=True should strip GIT_DIR and init local_dir
+    res = run_git(["init"], cwd=local_dir, env=polluted_env)
+    assert res.returncode == 0
+    assert (local_dir / ".git").exists()
+
+
+def test_run_git_honors_isolate_git_env_false(tmp_path: Path):
+    """Verify run_git does not strip variables when isolate_git_env=False is explicitly requested."""
+    from orchestune.git_cli import run_git
+
+    host_repo_dir = tmp_path / "host_repo_no_isolate"
+    host_repo_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "--bare"],
+        cwd=str(host_repo_dir),
+        check=True,
+        capture_output=True,
+    )
+
+    local_dir = tmp_path / "local_repo_no_isolate"
+    local_dir.mkdir()
+
+    polluted_env = os.environ.copy()
+    polluted_env["GIT_DIR"] = str(host_repo_dir)
+
+    # With isolate_git_env=False, GIT_DIR is passed to git, which initializes in host_repo_dir instead of local_dir
+    run_git(["init"], cwd=local_dir, env=polluted_env, isolate_git_env=False)
+    # local_dir should NOT have .git directory because git operated on GIT_DIR
+    assert not (local_dir / ".git").exists()
