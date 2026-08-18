@@ -1103,13 +1103,10 @@ class TestRestoreLaunchHistory:
         assert changed is True
         assert run_state.launch_history == [now - 60]
 
-    def test_clamps_a_slightly_future_timestamp_to_now(self, tmp_path):
+    def test_keeps_a_slightly_future_timestamp_unchanged(self, tmp_path):
         """#519レビュー7巡目(P2): ランナー間の軽微なクロックずれで数秒未来に
-        書かれた正当な記録は、捨てずに`now`へクランプする。
-
-        捨てると起動数の過少カウント＝上限を緩める危険側へ倒れるため
-        （本ファイル群の非対称: 過少は危険、過大は安全）。
-        """
+        書かれた正当な記録は捨てない（捨てると起動数の過少カウント＝上限を
+        緩める危険側へ倒れる）。"""
         now = 10_000.0
         run_state = RunState(active_worktrees={}, launch_history=[])
         config = self._config(tmp_path)
@@ -1118,7 +1115,28 @@ class TestRestoreLaunchHistory:
         with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
-        assert run_state.launch_history == [now - 60, now]
+        assert run_state.launch_history == [now - 60, now + 5]
+
+    def test_repeated_restoration_does_not_manufacture_entries(self, tmp_path):
+        """#519レビュー8巡目(P2)の再現テスト: 未来のタイムスタンプを`now`へ
+        クランプして正規化すると、クランプ先が毎サイクル動くため、同じ1回の
+        起動が別々のエントリとして増え続ける。
+
+        このマージはタイムスタンプ値を同一性のキーにした多重集合なので、
+        本文の`1005`が`now=1000`→`[1000]`、`now=1001`→`[1000, 1001]`、
+        `now=1002`→`[1000, 1001, 1002]`と増殖し、1回の起動が複数スロットを
+        消費してしまう（`max_launches_per_window > 1`のとき顕在化）。
+        正規化で値を動かさないこと。
+        """
+        launched_at = 10_005.0
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([launched_at])
+
+        for now in (10_000.0, 10_001.0, 10_002.0, 10_010.0):
+            with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+                _restore_launch_history(run_state, config, now=now)
+            assert run_state.launch_history == [launched_at]
 
     def test_discards_an_implausibly_future_timestamp(self, tmp_path):
         """#519レビュー7巡目(P2): 本文は人間が編集できるため、有限だが遥か

@@ -190,8 +190,10 @@ def _restore_launch_history(
 
     復元は**片方向**（和集合）で行う: 本文側が古い場合にローカルの進捗
     （より多くの起動）を巻き戻すと、上限が緩む方向へ壊れるため。
-    ウィンドウ外のタイムスタンプは`prune_run_state`と同じ意味論で除外し、
-    未来のタイムスタンプは`now`へクランプする（`launch_history_in_window`）。
+    ウィンドウの帯（`now`の前後1ウィンドウ）の外は除外する
+    （`launch_history_in_window`）。帯の内側の値は変更しない: このマージは
+    タイムスタンプ値を同一性のキーにした多重集合なので、正規化で値が動くと
+    同じ1回の起動が毎サイクル別エントリとして増え続ける（#519レビュー8巡目 P2）。
     """
     if config.parent_issue_number is None:
         return False

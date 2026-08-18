@@ -244,32 +244,38 @@ def launch_history_from_body(body: str) -> list[float]:
 def launch_history_in_window(
     timestamps: list[float], now: float, window_seconds: float
 ) -> list[float]:
-    """#514: 起動タイムスタンプ列をウィンドウ内へ正規化する（永続化側・復元側
-    の両方が同じ意味論を使うための共通関数）。
+    """#514: 起動タイムスタンプ列をウィンドウ内へ絞る（永続化側・復元側の
+    両方が同じ意味論を使うための共通関数）。
 
-    #519レビュー7巡目(P2): 下限（`now - window_seconds`）だけを見る素朴な
-    フィルタでは、親Issue本文が手で編集されて`999999999999`のような有限だが
-    遥か未来のタイムスタンプが入った場合、`quota_available`の
-    `now - t < window_seconds`が何年も真であり続け、その親配下の
-    ディスパッチが止まる。`math.isfinite`は`.inf`しか弾けない。
+    `now`を中心に前後1ウィンドウの帯だけを残し、値そのものは**変更しない**。
 
-    未来側は2段階で扱う。境界は「1ウィンドウ先」:
+    - 下限（`now - window_seconds`）より古い: ウィンドウを抜けた記録
+      （`prune_run_state`と同じ意味論）。
+    - 上限（`now + window_seconds`）より先: 過去の起動の記録としてあり得ない
+      値。`#519`レビュー7巡目(P2)の指摘どおり、下限だけを見ていると本文が
+      手で編集されて`999999999999`のような有限の未来値が入った場合に
+      `quota_available`の`now - t < window_seconds`が何年も真であり続け、
+      その親配下のディスパッチが止まる（`math.isfinite`は`.inf`しか弾けない）。
+      壊れた値は捨てるという既存方針（`.inf`/`.nan`/数値化できない要素）と
+      同じ扱いにする。
 
-    - `now`〜`now + window_seconds`: `now`へ**クランプ**する。ランナー間の
-      軽微なクロックずれで数秒未来に書かれた正当な記録を捨てると、起動数の
-      過少カウント＝上限を緩める危険側へ倒れるため（本ファイル群の非対称:
-      過少は危険、過大は安全）。クランプならスロットは消費したまま
-      `now + window_seconds`で正常に期限切れになる。
-    - `now + window_seconds`より先: **破棄**する。過去の起動の記録として
-      あり得ない値であり、壊れた値は捨てるという既存方針（`.inf`/`.nan`/
-      数値化できない要素）と同じ。ここを破棄せずクランプで済ませると、
-      毎サイクル新しい`now`へクランプし直されて**永久に**1スロットを
-      食い潰し続ける（`.inf`と同じ症状が有限値で再現してしまう）。
+    帯の内側にある「わずかに未来」の値は、ランナー間のクロックずれで書かれた
+    正当な記録なので**そのまま残す**。捨てると起動数の過少カウント＝上限を
+    緩める危険側へ倒れる（本ファイル群の非対称: 過少は危険、過大は安全）。
+    期限切れも`now + window_seconds`までずれるだけで正常に訪れる。
+
+    #519レビュー8巡目(P2): ここで`now`へクランプして正規化してはならない。
+    復元側のマージはタイムスタンプ値を同一性のキーにした多重集合なので、
+    クランプ先が毎サイクル動くと同じ1回の起動が別々のエントリとして増え続け、
+    1回の起動が複数スロットを消費してしまう（`1005`が`[1000]`→
+    `[1000, 1001]`→`[1000, 1001, 1002]`と増える）。値を変えないことが
+    そのまま同一性の保存になる。
     """
-    min_time = now - window_seconds
-    plausible = (t for t in timestamps if t <= now + window_seconds)
-    clamped = (min(timestamp, now) for timestamp in plausible)
-    return sorted(timestamp for timestamp in clamped if timestamp >= min_time)
+    return sorted(
+        timestamp
+        for timestamp in timestamps
+        if now - window_seconds <= timestamp <= now + window_seconds
+    )
 
 
 def backfill_launch_history(body: str, launch_history: list[float]) -> str | None:

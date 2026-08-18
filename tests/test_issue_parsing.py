@@ -380,15 +380,32 @@ class TestLaunchHistoryInWindow:
             [900.0, 800.0], now=1000.0, window_seconds=100
         ) == [900.0]
 
-    def test_clamps_a_slightly_future_timestamp_to_now(self):
-        """クロックずれ由来の数秒未来は捨てない（捨てると上限が緩む危険側）。"""
+    def test_keeps_a_slightly_future_timestamp_unchanged(self):
+        """クロックずれ由来の数秒未来は正当な記録なので捨てない（捨てると
+        起動数の過少カウント＝上限が緩む危険側）。
+
+        #519レビュー8巡目(P2): かつ`now`へクランプもしない。復元側のマージは
+        タイムスタンプ値を同一性のキーにしているため、正規化で値が動くと
+        同じ1回の起動が毎サイクル別エントリとして増えてしまう。
+        """
         assert launch_history_in_window([1002.0], now=1000.0, window_seconds=100) == [
-            1000.0
+            1002.0
         ]
 
+    def test_is_stable_across_repeated_normalization(self):
+        """#519レビュー8巡目(P2)の核心: 同じ入力を異なる`now`で正規化しても、
+        出力の値が変わらないこと（値が動くとマージがエントリを増殖させる）。"""
+        persisted = [1005.0]
+        assert (
+            launch_history_in_window(persisted, now=1000.0, window_seconds=3600)
+            == launch_history_in_window(persisted, now=1001.0, window_seconds=3600)
+            == launch_history_in_window(persisted, now=1002.0, window_seconds=3600)
+            == [1005.0]
+        )
+
     def test_discards_beyond_one_window_into_the_future(self):
-        """過去の起動の記録としてあり得ない値は捨てる。クランプで済ませると
-        毎サイクル新しい`now`へクランプし直され、永久に1スロットを食い潰す。"""
+        """過去の起動の記録としてあり得ない値は捨てる（`math.isfinite`は
+        `.inf`しか弾けず、有限の遥か未来値は永久にスロットを食い潰す）。"""
         assert (
             launch_history_in_window(
                 [999_999_999_999.0, 1101.0], now=1000.0, window_seconds=100
@@ -396,10 +413,10 @@ class TestLaunchHistoryInWindow:
             == []
         )
 
-    def test_keeps_the_boundary_value_inclusive(self):
-        assert launch_history_in_window([1100.0], now=1000.0, window_seconds=100) == [
-            1000.0
-        ]
+    def test_keeps_both_boundary_values_inclusive(self):
+        assert launch_history_in_window(
+            [900.0, 1100.0], now=1000.0, window_seconds=100
+        ) == [900.0, 1100.0]
 
     def test_preserves_duplicates_as_a_multiset(self):
         """同一サイクルの複数起動は同じ`now`を持つ正当なデータ（畳まない）。"""
