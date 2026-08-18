@@ -308,6 +308,45 @@ def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
         )
 
 
+def _release_launch_reservation(now: float, config: DispatcherConfig) -> None:
+    """#519レビュー4巡目(P2): `_persist_launch_history`で確保した予約を1件分
+    取り消す。
+
+    予約が守っているのは**エージェントのクオータ**なので、エージェントが
+    1つも起動しなかった決定論的な失敗（不正なブランチ名・worktree作成失敗等）
+    では解放しなければならない。既定(`max_launches_per_window=1`)では、
+    こうした失敗1件が同じ親配下の全タスクを1ウィンドウぶんブロックしてしまう。
+
+    多重集合の意味論を保つため、取り消すのは`now`の出現1回分のみ（同一サイクルで
+    複数タスクが起動すると同じ`now`が複数入るため、全部消してはいけない）。
+
+    解放自体の失敗は非致命的に握る: 残るのは過大計上＝上限が厳しくなる方向で、
+    窓から抜ければ自然回復するため（予約の失敗とは非対称で、あちらは
+    過少計上＝危険側なのでfail-closedにしている）。
+    """
+    if config.parent_issue_number is None:
+        return
+    try:
+        issue = config.resolved_forge.get_issue(config.parent_issue_number)
+        if issue is None:
+            return
+        remaining = launch_history_from_body(issue.body)
+        if now not in remaining:
+            return
+        remaining.remove(now)
+        patched_body = backfill_launch_history(issue.body, sorted(remaining))
+        if patched_body is not None:
+            config.resolved_forge.update_issue_body(
+                config.parent_issue_number, patched_body
+            )
+    except Exception as e:
+        print(
+            f"Warning: failed to release the launch reservation in parent issue "
+            f"#{config.parent_issue_number}: {e}",
+            file=sys.stderr,
+        )
+
+
 def _apply_task_launches(
     plans: list[TaskLaunchPlan],
     run_state: RunState,
@@ -392,6 +431,10 @@ def _apply_task_launches(
                     f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
                     f"エラー内容:\n```\n{launch.error_message}\n```",
                 )
+            # エージェントは1つも起動していないためクオータを消費していない。
+            # 予約を解放しないと、この失敗1件が同じ親配下の全タスクを
+            # 1ウィンドウぶんブロックしてしまう（#519レビュー4巡目 P2）。
+            _release_launch_reservation(now, config)
             continue
 
         # run_stateへの登録・永続化を先に行い、GitHubラベルの更新は後で行う。

@@ -869,6 +869,75 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             for call in forge.add_label.call_args_list
         )
 
+    def test_releases_the_reservation_when_launch_fails_preflight(self, tmp_path):
+        """#519レビュー4巡目(P2): 予約が守っているのは**エージェントのクオータ**。
+        起動前の決定論的な失敗（不正なブランチ名・worktree作成失敗など）は
+        クオータを消費していないので、予約を解放しなければならない。
+        さもないと既定(max_launches_per_window=1)では、1件の失敗が同じ親配下の
+        全タスクを1時間ブロックしてしまう。
+        """
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch_worktree import LaunchResult
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+
+        def _capture(_n, body):
+            bodies["current"] = body
+
+        forge.update_issue_body.side_effect = _capture
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with patch(
+            "orchestune.dispatch_launch.create_worktree_and_launch",
+            return_value=LaunchResult(
+                issue_number=1,
+                branch="claude/issue-1-task-1",
+                worktree_path=str(tmp_path / "worktrees" / "w1"),
+                pid=None,
+                launched=False,
+                error_message="worktree creation failed",
+            ),
+        ):
+            selected = _apply_task_launches(
+                plans, RunState(active_worktrees={}), now, config
+            )
+
+        assert selected == []
+        assert launch_history_from_body(bodies["current"]) == []
+
+    def test_keeps_the_reservation_when_launch_succeeds(self, tmp_path):
+        """成功時は当然、予約を残す（解放処理が誤って消さないこと）。"""
+        from unittest.mock import MagicMock
+
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
+            current=body
+        )
+
+        self._run(tmp_path, RunState(active_worktrees={}), now, forge)
+
+        assert launch_history_from_body(bodies["current"]) == [now]
+
     def test_does_not_copy_other_parents_launches_into_this_parent(self, tmp_path):
         """#519レビュー指摘(P2): run_state.launch_historyは複数の親をまたいで
         共有される。親Bのサイクルで、親Aの起動タイムスタンプを親Bの本文へ
