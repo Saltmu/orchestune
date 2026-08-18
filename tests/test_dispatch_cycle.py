@@ -622,6 +622,10 @@ class TestRunDispatchCycle:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.get_issue",
+                return_value=_full_issue(100, labels=(), subtask_id=None),
+            ),
         ):
             mock_list.return_value = [sub_issue_1]
             report = run_dispatch_cycle(config)
@@ -785,8 +789,9 @@ class TestRunDispatchCycleParentIssueValidation:
 
     def test_does_not_check_when_apply_is_false(self, tmp_path):
         config = self._config(tmp_path, apply=False)
+        parent = _full_issue(181, labels=(), subtask_id=None)
         with (
-            patch("orchestune.forge.GitHubForge.get_issue") as mock_get_issue,
+            patch("orchestune.forge.GitHubForge.get_issue", return_value=parent),
             patch(
                 "orchestune.dispatch_phase_rebase.ensure_parent_branch"
             ) as mock_ensure,
@@ -802,7 +807,10 @@ class TestRunDispatchCycleParentIssueValidation:
         ):
             run_dispatch_cycle(config)
 
-        mock_get_issue.assert_not_called()
+        # #519レビュー7巡目(P2)以降、dry-runでも親Issue本文の`launch_history`は
+        # 読み取る（previewの正確さのため）ので`get_issue`自体は呼ばれうる。
+        # このテストの対象は親ブランチの検証・作成が走らないことなので、
+        # `ensure_parent_branch`が呼ばれないことで判定する。
         mock_ensure.assert_not_called()
 
 

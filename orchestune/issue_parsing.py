@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -27,6 +28,17 @@ FOOTPRINT_BLOCK_PATTERN = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 # that `dispatch_cycle.py` (L3) can validate a `--parent-issue` number against
 # it without depending on the entrypoint-layer `provisioning` module.
 PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
+
+# #514: 親(EPIC) Issue本文へ`launch_history`を永続化するブロックの目印。
+# 子Issueと違い親Issueは`provisioning._parent_body`が示す通りFootprint YAML
+# フェンスを持たないため、専用マーカーで自分のフェンスを識別する。マーカーを
+# 必須にすることで、無関係な```yamlフェンス（人間が本文へ書いたもの等）を
+# 誤って読み書きすることも防ぐ。
+LAUNCH_HISTORY_MARKER = "<!-- orchestune:launch-history -->"
+LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
+    re.escape(LAUNCH_HISTORY_MARKER) + r"\n```yaml\s*\n(.*?)```\n?",
+    re.DOTALL,
+)
 
 
 def _parse_footprint_block(body: str) -> dict | None:
@@ -189,6 +201,105 @@ def backfill_recovery_counters(
     new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
     start, end = match.span(1)
     return body[:start] + new_block + body[end:]
+
+
+def launch_history_from_body(body: str) -> list[float]:
+    """#514: 親Issue本文へ永続化された`launch_history`（起動タイムスタンプ列）を
+    読み取る。自己修復（`dispatch_reconciliation.py`）が`run_state.json`消失時に
+    `max_launches_per_window`を復元するために使う。
+
+    マーカー欠落（本フィールド導入前に作られた親Issue）・壊れたYAML・
+    数値化できない要素は、いずれも「起動履歴なし」＝空リストへ倒す:
+    壊れた値で上限判定を誤らせるより、復元できなかった分だけ緩くなる方が
+    安全側（既定の`max_concurrent`は別途効く）。
+    """
+    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
+    if not match:
+        return []
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("launch_history")
+    if not isinstance(raw, list):
+        return []
+    timestamps: list[float] = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        # #519レビュー6巡目(P2): 本文が手で編集・破損して`.inf`/`.nan`が
+        # 入ると`yaml.safe_load`はPythonのfloatを返すため型チェックを通過する。
+        # `.inf`は`quota_available`の`now - inf < window_seconds`が毎サイクル
+        # 真になり、そのエントリが永久に1スロットを食い潰して親配下の
+        # ディスパッチを止める。`.nan`は逆にあらゆる比較が偽になり、
+        # ウィンドウ判定をすり抜けて記録が静かに失われる。
+        if not math.isfinite(item):
+            continue
+        timestamps.append(float(item))
+    return timestamps
+
+
+def launch_history_in_window(
+    timestamps: list[float], now: float, window_seconds: float
+) -> list[float]:
+    """#514: 起動タイムスタンプ列をウィンドウ内へ絞る（永続化側・復元側の
+    両方が同じ意味論を使うための共通関数）。
+
+    `now`を中心に前後1ウィンドウの帯だけを残し、値そのものは**変更しない**。
+
+    - 下限（`now - window_seconds`）より古い: ウィンドウを抜けた記録
+      （`prune_run_state`と同じ意味論）。
+    - 上限（`now + window_seconds`）より先: 過去の起動の記録としてあり得ない
+      値。`#519`レビュー7巡目(P2)の指摘どおり、下限だけを見ていると本文が
+      手で編集されて`999999999999`のような有限の未来値が入った場合に
+      `quota_available`の`now - t < window_seconds`が何年も真であり続け、
+      その親配下のディスパッチが止まる（`math.isfinite`は`.inf`しか弾けない）。
+      壊れた値は捨てるという既存方針（`.inf`/`.nan`/数値化できない要素）と
+      同じ扱いにする。
+
+    帯の内側にある「わずかに未来」の値は、ランナー間のクロックずれで書かれた
+    正当な記録なので**そのまま残す**。捨てると起動数の過少カウント＝上限を
+    緩める危険側へ倒れる（本ファイル群の非対称: 過少は危険、過大は安全）。
+    期限切れも`now + window_seconds`までずれるだけで正常に訪れる。
+
+    #519レビュー8巡目(P2): ここで`now`へクランプして正規化してはならない。
+    復元側のマージはタイムスタンプ値を同一性のキーにした多重集合なので、
+    クランプ先が毎サイクル動くと同じ1回の起動が別々のエントリとして増え続け、
+    1回の起動が複数スロットを消費してしまう（`1005`が`[1000]`→
+    `[1000, 1001]`→`[1000, 1001, 1002]`と増える）。値を変えないことが
+    そのまま同一性の保存になる。
+    """
+    return sorted(
+        timestamp
+        for timestamp in timestamps
+        if now - window_seconds <= timestamp <= now + window_seconds
+    )
+
+
+def backfill_launch_history(body: str, launch_history: list[float]) -> str | None:
+    """#514: 親Issue本文の`launch_history`ブロックを書き換えて返す。
+    ブロックが無ければ本文末尾へ追記する（親Issueは既存フェンスを持たないため、
+    `backfill_recovery_counters`と違い新規作成もこの関数の責務）。
+
+    既に同じ値であれば`None`（無駄な`update_issue_body`呼び出しを避ける）。
+    ブロック以外の本文はバイト単位で不変に保つ。
+    """
+    if launch_history_from_body(body) == launch_history:
+        return None
+    block_body = yaml.dump(
+        {"launch_history": list(launch_history)},
+        allow_unicode=True,
+        default_flow_style=False,
+    )
+    new_block = f"{LAUNCH_HISTORY_MARKER}\n```yaml\n{block_body}```\n"
+    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
+    if match:
+        start, end = match.span()
+        return body[:start] + new_block + body[end:]
+    separator = "" if body.endswith("\n") else "\n"
+    return f"{body}{separator}\n{new_block}"
 
 
 @dataclass(frozen=True)

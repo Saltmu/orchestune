@@ -13,6 +13,11 @@ from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
 from orchestune.git_cli import run_git
+from orchestune.issue_parsing import (
+    backfill_launch_history,
+    launch_history_from_body,
+    launch_history_in_window,
+)
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
@@ -257,6 +262,110 @@ def _decide_task_launch_plan(
     return plans
 
 
+def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
+    """#514: 今回の起動タイムスタンプを親Issue本文へ**起動前に**追記する
+    （スロットの予約）。呼び出し元は例外を捕捉して起動を見送る（fail-closed）。
+
+    `run_state.json`が消えるステートレスCIランナーでは`launch_history`が
+    毎回空になり、`max_launches_per_window`が実質無効になる。復元側は
+    `dispatch_reconciliation._restore_launch_history`。
+
+    スコープ（Issue #514の決定）: `--parent-issue`未指定（フラットモード）は
+    永続化先の親Issueが無いため対象外。
+
+    #519レビュー指摘(P2)の明確化: **永続化ストアだけが親ごと**（親Issue本文が
+    唯一の置き場所のため）であって、実行時のクオータ判定（`quota_available`）は
+    `run_state.launch_history`をグローバルに数える既存挙動のまま——本PRはそこを
+    変更しない。真の意味での「親ごとのクオータ」にするには`quota_available`側の
+    変更が要り、それは複数親を永続ディスクで運用している既存利用者の束縛を
+    緩める挙動変更になるため、#514のスコープ外とする。
+
+    #519レビュー指摘(P2): 基準にするのは`run_state.launch_history`ではなく
+    **その親Issue自身の既存履歴**。`run_state.json`は複数の親（big rock）を
+    またいで共有されるため、グローバル履歴をそのまま書くと親Aの起動が親Bの
+    永続履歴へ混入し、Bのランナーがステートレスになった後もBを絞り続ける。
+    ここで確実に「この親のもの」と分かるのは、今まさに起動した`now`だけ。
+
+    重複タイムスタンプは畳まない: 同一サイクルで複数タスクが起動すると
+    いずれも同じ`now`を持つが、それらは別々の起動を表す正当なデータのため
+    （#519レビュー指摘(P1)）。
+
+    ウィンドウ外は書かない（本文の単調肥大化を防ぐ）。`launch_history_in_window`
+    は`now`の前後1ウィンドウの帯だけを残すため、本文が手で編集されて遥か未来の
+    値が入っても書き戻しの時点で落ちる（#519レビュー7巡目 P2）。帯の内側の値は
+    変更しない——復元側のマージはタイムスタンプ値を同一性のキーにしているため
+    （#519レビュー8巡目 P2）。値が既に一致していれば
+    `backfill_launch_history`が`None`を返すため、無駄な`update_issue_body`
+    呼び出しは発生しない。
+
+    **単一ランナー前提（#377と同じ制約）**: この読み取り→更新は`gh issue edit`
+    による本文全体の上書きで、条件付き更新（CAS）の手段が無い。同一の親Issueへ
+    複数のランナーが同時にディスパッチすると、後勝ちで先のランナーの予約が
+    消え、双方が起動しうる。`run_dispatch_cycle`の`file_lock`は同一ファイル
+    システム内のプロセス間ロックであり、CIランナーをまたいだ直列化には効かない。
+
+    これは本機能が持ち込んだ制約ではなく、`architecture.md`の設計前提（#377）
+    が既に述べている通り、ディスパッチャ全体が単一ランナー上でのシリアル実行を
+    前提としていることによる（そもそも本機能以前は`launch_history`が
+    `run_state.json`にしか無く、クロスランナーでは上限が全く効かなかった）。
+    複数ランナー構成では、同前提が推奨する`concurrency`グループの設定で
+    直列化すること——コード変更を伴わずに根本解決できる唯一の手段である。
+    """
+    if config.parent_issue_number is None:
+        return
+    issue = config.resolved_forge.get_issue(config.parent_issue_number)
+    if issue is None:
+        return
+    merged = launch_history_in_window(
+        launch_history_from_body(issue.body), now, config.window_seconds
+    )
+    merged.append(now)
+    patched_body = backfill_launch_history(issue.body, sorted(merged))
+    if patched_body is not None:
+        config.resolved_forge.update_issue_body(
+            config.parent_issue_number, patched_body
+        )
+
+
+def _release_launch_reservation(now: float, config: DispatcherConfig) -> None:
+    """#519レビュー4巡目(P2): `_persist_launch_history`で確保した予約を1件分
+    取り消す。
+
+    予約が守っているのは**エージェントのクオータ**なので、エージェントが
+    1つも起動しなかった決定論的な失敗（不正なブランチ名・worktree作成失敗等）
+    では解放しなければならない。既定(`max_launches_per_window=1`)では、
+    こうした失敗1件が同じ親配下の全タスクを1ウィンドウぶんブロックしてしまう。
+
+    多重集合の意味論を保つため、取り消すのは`now`の出現1回分のみ（同一サイクルで
+    複数タスクが起動すると同じ`now`が複数入るため、全部消してはいけない）。
+
+    解放自体の失敗は非致命的に握る: 残るのは過大計上＝上限が厳しくなる方向で、
+    窓から抜ければ自然回復するため（予約の失敗とは非対称で、あちらは
+    過少計上＝危険側なのでfail-closedにしている）。
+    """
+    if config.parent_issue_number is None:
+        return
+    try:
+        issue = config.resolved_forge.get_issue(config.parent_issue_number)
+        if issue is None:
+            return
+        remaining = launch_history_from_body(issue.body)
+        if now not in remaining:
+            return
+        remaining.remove(now)
+        patched_body = backfill_launch_history(issue.body, sorted(remaining))
+        if patched_body is not None:
+            config.resolved_forge.update_issue_body(
+                config.parent_issue_number, patched_body
+            )
+    except Exception as e:
+        print(
+            f"Warning: failed to release the launch reservation in parent issue "
+            f"#{config.parent_issue_number}: {e}",
+            file=sys.stderr,
+        )
+
+
 def _apply_task_launches(
     plans: list[TaskLaunchPlan],
     run_state: RunState,
@@ -277,6 +386,32 @@ def _apply_task_launches(
     for plan in plans:
         task = plan.task
         assert config.dispatch_target is not None
+
+        # #514/#519レビュー2巡目(P1): レート制限の永続化は「使う前に予約する」
+        # 順序で行う。起動後に書いて失敗を握り潰すと、ステートレスランナーでは
+        # 「エージェントは起動済みだが、親Issueにも（消えた）run_stateにも記録が
+        # 無い」状態が残り、次サイクルが同じ窓の中でもう1件起動できてしまう——
+        # この永続化がdurableにしようとしている当の上限が破れる。
+        #
+        # 予約後・起動前にクラッシュした場合は「記録はあるが起動していない」に
+        # なるが、これは上限が厳しくなる方向であり、窓から抜ければ自然に回復する
+        # （安全側の非対称）。予約に失敗したタスクは起動せずqueuedのまま残し、
+        # 次サイクルで再試行する（fail-closed）。
+        #
+        # なお`active_worktrees`側のローカル先行順序（後段のsave_run_state →
+        # ラベル遷移）とは別の関心事: あちらは「GitHub側が確定してローカルが空」
+        # という検出不能な非対称を避けるためのもの。
+        try:
+            _persist_launch_history(now, config)
+        except Exception as e:
+            print(
+                f"Warning: skipping launch of issue #{task.issue_number}: failed to "
+                f"reserve a launch slot in parent issue "
+                f"#{config.parent_issue_number}: {e}",
+                file=sys.stderr,
+            )
+            continue
+
         launch = create_worktree_and_launch(
             task,
             plan.branch_name,
@@ -286,6 +421,18 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_launch,
         )
         if not launch.launched:
+            # エージェントは1つも起動していないためクオータを消費していない。
+            # 予約を解放しないと、この失敗1件が同じ親配下の全タスクを
+            # 1ウィンドウぶんブロックしてしまう（#519レビュー4巡目 P2）。
+            #
+            # 解放はGitHubへの報告（transition_status_label / add_comment）
+            # より**先**に行う。報告は一時的なforgeエラーで送出しうるため、
+            # 後ろに置くと解放へ到達せず予約が漏れる（#519レビュー7巡目 P2）。
+            # 逆順にしても危険は無い: 解放自体は失敗を握りつぶすため報告へ
+            # 必ず到達し、また解放とラベル/コメントの間にクラッシュしても
+            # 残るのは「起動していないのにstatus:queuedのまま」という、
+            # 次サイクルが通常のキュー投入として再評価できる状態である。
+            _release_launch_reservation(now, config)
             old_labels = tuple(
                 label
                 for label in ("status:queued", "status:blocked")
@@ -361,6 +508,7 @@ def _apply_task_launches(
                 if label in task.status_labels
             ),
         )
+
         actually_selected.append(task)
 
     save_run_state(

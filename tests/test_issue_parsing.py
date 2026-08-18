@@ -7,10 +7,13 @@ import pytest
 from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.issue_parsing import (
     PARENT_MARKER,
+    backfill_launch_history,
     backfill_parent_issue_number,
     backfill_recovery_counters,
     ensure_parent_marker,
     find_children_by_parent,
+    launch_history_from_body,
+    launch_history_in_window,
     parent_issue_number_from_body,
     recovery_counters_from_body,
 )
@@ -312,3 +315,154 @@ class TestBackfillRecoveryCounters:
         assert result is not None
         assert "parent_issue_number: 100" in result
         assert "subtask_id: task-a" in result
+
+
+class TestLaunchHistoryFromBody:
+    """#514: 親Issue本文へ永続化したlaunch_historyの読み取り。
+
+    子Issue（`recovery_counters_from_body`）と違い、親Issue（EPIC）は
+    `_parent_body`が示す通りFootprint YAMLフェンスを持たないため、
+    専用マーカー付きのフェンスを使う。
+    """
+
+    def test_parses_timestamps(self):
+        body = (
+            "EPIC description\n\n"
+            "<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- 1000.5\n- 2000.25\n```\n"
+        )
+        assert launch_history_from_body(body) == [1000.5, 2000.25]
+
+    def test_returns_empty_when_marker_absent(self):
+        """本フィールド導入前に作られた親Issueへの後方互換。"""
+        body = "EPIC description\n\n<!-- orchestune:decomposition-plan-parent -->"
+        assert launch_history_from_body(body) == []
+
+    def test_returns_empty_on_malformed_yaml(self):
+        body = "<!-- orchestune:launch-history -->\n```yaml\n: not: valid: [\n```\n"
+        assert launch_history_from_body(body) == []
+
+    def test_ignores_non_numeric_entries(self):
+        """壊れた値で上限判定を誤らせないよう、数値化できない項目は捨てる。"""
+        body = (
+            "<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- 1000.0\n- not-a-number\n- 2000.0\n```\n"
+        )
+        assert launch_history_from_body(body) == [1000.0, 2000.0]
+
+    def test_rejects_non_finite_timestamps(self):
+        """#519レビュー6巡目(P2): 本文が手で編集・破損して`.inf`/`.nan`が
+        入ると、`yaml.safe_load`はPythonのfloatを返すため型チェックを通過する。
+
+        `.inf`は`quota_available`の`now - inf < window_seconds`が毎サイクル
+        真になり、そのエントリが永久に1スロットを食い潰して親配下の
+        ディスパッチを止めてしまう。`.nan`は逆にあらゆる比較が偽になり、
+        ウィンドウ判定をすり抜けて記録が静かに失われる。どちらも捨てる。
+        """
+        body = (
+            "<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- .inf\n- .nan\n- -.inf\n- 1000.0\n```\n"
+        )
+        assert launch_history_from_body(body) == [1000.0]
+
+    def test_does_not_confuse_a_child_footprint_fence(self):
+        """子IssueのFootprintフェンスを誤って読まないこと（マーカー必須）。"""
+        body = "```yaml\nsubtask_id: task-a\nlaunch_history:\n- 1000.0\n```\n"
+        assert launch_history_from_body(body) == []
+
+
+class TestLaunchHistoryInWindow:
+    """#519レビュー7巡目(P2): ウィンドウ正規化の共通意味論（永続化側の
+    `_persist_launch_history`と復元側の`_restore_launch_history`が共有する）。"""
+
+    def test_drops_timestamps_older_than_the_window(self):
+        assert launch_history_in_window(
+            [900.0, 800.0], now=1000.0, window_seconds=100
+        ) == [900.0]
+
+    def test_keeps_a_slightly_future_timestamp_unchanged(self):
+        """クロックずれ由来の数秒未来は正当な記録なので捨てない（捨てると
+        起動数の過少カウント＝上限が緩む危険側）。
+
+        #519レビュー8巡目(P2): かつ`now`へクランプもしない。復元側のマージは
+        タイムスタンプ値を同一性のキーにしているため、正規化で値が動くと
+        同じ1回の起動が毎サイクル別エントリとして増えてしまう。
+        """
+        assert launch_history_in_window([1002.0], now=1000.0, window_seconds=100) == [
+            1002.0
+        ]
+
+    def test_is_stable_across_repeated_normalization(self):
+        """#519レビュー8巡目(P2)の核心: 同じ入力を異なる`now`で正規化しても、
+        出力の値が変わらないこと（値が動くとマージがエントリを増殖させる）。"""
+        persisted = [1005.0]
+        assert (
+            launch_history_in_window(persisted, now=1000.0, window_seconds=3600)
+            == launch_history_in_window(persisted, now=1001.0, window_seconds=3600)
+            == launch_history_in_window(persisted, now=1002.0, window_seconds=3600)
+            == [1005.0]
+        )
+
+    def test_discards_beyond_one_window_into_the_future(self):
+        """過去の起動の記録としてあり得ない値は捨てる（`math.isfinite`は
+        `.inf`しか弾けず、有限の遥か未来値は永久にスロットを食い潰す）。"""
+        assert (
+            launch_history_in_window(
+                [999_999_999_999.0, 1101.0], now=1000.0, window_seconds=100
+            )
+            == []
+        )
+
+    def test_keeps_both_boundary_values_inclusive(self):
+        assert launch_history_in_window(
+            [900.0, 1100.0], now=1000.0, window_seconds=100
+        ) == [900.0, 1100.0]
+
+    def test_preserves_duplicates_as_a_multiset(self):
+        """同一サイクルの複数起動は同じ`now`を持つ正当なデータ（畳まない）。"""
+        assert launch_history_in_window(
+            [950.0, 950.0], now=1000.0, window_seconds=100
+        ) == [950.0, 950.0]
+
+
+class TestBackfillLaunchHistory:
+    def test_creates_the_block_when_absent_preserving_body(self):
+        body = "EPIC description\n\n<!-- orchestune:decomposition-plan-parent -->"
+        result = backfill_launch_history(body, [1000.0, 2000.0])
+        assert result is not None
+        assert result.startswith("EPIC description")
+        assert PARENT_MARKER in result
+        assert launch_history_from_body(result) == [1000.0, 2000.0]
+
+    def test_replaces_an_existing_block(self):
+        body = (
+            "EPIC\n\n<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- 1000.0\n```\n"
+        )
+        result = backfill_launch_history(body, [3000.0])
+        assert result is not None
+        assert launch_history_from_body(result) == [3000.0]
+        assert "1000.0" not in result
+
+    def test_returns_none_when_already_equal(self):
+        body = (
+            "<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- 1000.0\n```\n"
+        )
+        assert backfill_launch_history(body, [1000.0]) is None
+
+    def test_writes_an_empty_list(self):
+        """ウィンドウ外へ全て抜けた場合、空リストとして書ける。"""
+        body = (
+            "<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- 1000.0\n```\n"
+        )
+        result = backfill_launch_history(body, [])
+        assert result is not None
+        assert launch_history_from_body(result) == []
+
+    def test_round_trips_through_the_parser(self):
+        body = "EPIC"
+        result = backfill_launch_history(body, [1.5, 2.5, 3.5])
+        assert result is not None
+        assert launch_history_from_body(result) == [1.5, 2.5, 3.5]

@@ -102,7 +102,7 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 > **既知の欠落**: 現時点で、終端へ到達しない経路が3つあります。
 > - Cloud Routineターゲットでの`status:not-needed`検証レビュー。レビューセッションが結果ラベルを付けないまま消失した場合、保留エントリは毎サイクル保持され続けます（`dispatched_at`は記録されていますがタイムアウト判定に使われていません）。[#511](https://github.com/Saltmu/orchestune/issues/511)
 > - タイムアウト回収されたタスクの再投入。`--task-timeout-seconds`に正の値を設定していても、`_apply_zombie_or_timeout_reclaim`はタスクごとの回収回数を保持しないため、繰り返しタイムアウトするタスクは`status:queued`へ無限に戻され続けます。[#512](https://github.com/Saltmu/orchestune/issues/512)
-> - **上限カウンタの永続化境界（一部）**。`launch_history`とトークン消費はいずれも`run_state.json`にのみ存在し、GitHub側には持たれていません。自己修復はこれらを初期値で復元するため、第0章が主要な運用形態として挙げる**ステートレスなCIランナー**のように毎回`run_state.json`が失われる構成では、`max_launches_per_window`/トークン上限が実質的に機能しません。（`recompute_count`/`forced_serial`はIssue本文へ永続化され、この欠落の対象外です。）[#514](https://github.com/Saltmu/orchestune/issues/514)
+> - **トークン消費の観測不可**。`max_tokens_per_window`は、クラウドのディスパッチターゲット（`ClaudeCodeCloudRoutineDispatchTarget`・`CodexCloudDispatchTarget`）では発火しません。`collect_usage`の既定実装が`None`を返し、両ターゲットとも上書きしていないためです——クラウドセッションの消費量を問い合わせるポーリングAPIが公開されておらず、`is_complete`すらPR作成をプロキシシグナルにしています。したがって**無人運転の主経路ではトークン上限が効きません**。これは永続化以前の問題（そもそも記録すべきデータが生成されない）で、APIが公開され次第の再検討となります。なお`recompute_count`/`forced_serial`（子Issue本文）と`launch_history`（親Issue本文）は永続化済みで、この欠落の対象外です。
 
 Orchestuneが**目指す**のは「常に自動で解決すること」ではなく、**収束するか、人間が対処可能な状態で停止するかのいずれかであること**です。上記の通りこれは設計目標であって、現時点で全経路が満たしているわけではありません。
 
