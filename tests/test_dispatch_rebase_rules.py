@@ -10,7 +10,9 @@ from unittest.mock import MagicMock, patch
 from orchestune.dag_models import compile_extra_ignore_patterns
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_rebase import (
+    FootprintDeviationDecision,
     RebaseContext,
+    _apply_footprint_deviation_outcome,
     _decide_footprint_deviation_outcome,
     _decide_rebase_needed,
     _decide_rebase_target,
@@ -381,3 +383,128 @@ class TestTryAutoRebase:
 
         assert result is True
         mock_apply.assert_called_once_with(context, "parent-branch")
+
+
+class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
+    """#513: recompute_count/forced_serialをIssue本文へ永続化する（書き込み側）。
+    読み出し側（自己修復）のテストはtest_dispatch_recovery.pyを参照。
+    """
+
+    def _forge_with_body(self, body: str):
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body=body)
+        return forge
+
+    def test_recomputed_action_writes_incremented_recompute_count(self, tmp_path):
+        active = _active(recompute_count=1)
+        decision = FootprintDeviationDecision(
+            action="recomputed", subtask_id="task-a", conflicts=[]
+        )
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 1\n```\n"
+        forge = self._forge_with_body(body)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        assert active.recompute_count == 2
+        forge.get_issue.assert_called_once_with(1)
+        written_body = forge.update_issue_body.call_args.args[1]
+        assert "recompute_count: 2" in written_body
+
+    def test_forced_serial_action_writes_forced_serial_true(self, tmp_path):
+        active = _active(recompute_count=2)
+        decision = FootprintDeviationDecision(
+            action="forced_serial", subtask_id="task-a", recompute_count=2
+        )
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n```\n"
+        forge = self._forge_with_body(body)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        assert active.forced_serial is True
+        written_body = forge.update_issue_body.call_args.args[1]
+        assert "forced_serial: true" in written_body
+
+    def test_does_not_write_when_apply_is_false(self, tmp_path):
+        """dry-run（--no-apply）では他の副作用と同様、書き込みを行わない。"""
+        active = _active(recompute_count=1)
+        decision = FootprintDeviationDecision(
+            action="recomputed", subtask_id="task-a", conflicts=[]
+        )
+        forge = MagicMock()
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=False,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        forge.get_issue.assert_not_called()
+        forge.update_issue_body.assert_not_called()
+
+    def test_does_not_write_when_value_already_matches(self, tmp_path):
+        """既に本文の値が一致していれば無駄なupdate_issue_body呼び出しをしない。"""
+        active = _active(recompute_count=1)
+        decision = FootprintDeviationDecision(
+            action="recomputed", subtask_id="task-a", conflicts=[]
+        )
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n```\n"
+        forge = self._forge_with_body(body)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        forge.update_issue_body.assert_not_called()
+
+    def test_does_not_write_when_get_issue_returns_none(self, tmp_path):
+        """#513: Issue取得時点で既に見つからない（削除・番号相違等の異常系）
+        場合はスキップする。次回の逸脱イベントで再試行される。"""
+        active = _active(recompute_count=1)
+        decision = FootprintDeviationDecision(
+            action="recomputed", subtask_id="task-a", conflicts=[]
+        )
+        forge = MagicMock()
+        forge.get_issue.return_value = None
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        forge.update_issue_body.assert_not_called()

@@ -133,6 +133,64 @@ def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | N
     return body[:start] + new_block + body[end:]
 
 
+def _validated_recompute_count(value: object) -> int:
+    """#513: `_validated_parent_issue_number`と同様、`int()`による機械的な
+    丸め（`int(2.9) == 2`）や`bool`の暗黙変換（`int(True) == 1`）を避け、
+    実際に整数として書かれた値のみを受理する。壊れた値は「まだ0回」と
+    同じ意味に倒す——過大なrecompute_countを誤って引き継ぐと、本来まだ
+    再計算できるはずのタスクが即座にforced_serialへ落ちてしまうため。
+    """
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value >= 0 else 0
+    return 0
+
+
+def recovery_counters_from_body(body: str) -> tuple[int, bool]:
+    """#513: Footprint YAMLフェンスへ永続化された`recompute_count`/
+    `forced_serial`を読み取る。自己修復（`dispatch_recovery.py`）が
+    `run_state.json`消失時にDAG再計算のリトライ上限とforced_serial
+    フォールバックを復元するために使う。
+
+    フェンス欠落・壊れたYAML・フィールド欠落（本フィールド導入前に
+    作られたIssue）は、いずれも`(0, False)`——「まだ一度も再計算して
+    いない」と同じ意味——にフォールバックする。
+    """
+    data = _parse_footprint_block(body)
+    if not data:
+        return (0, False)
+    recompute_count = _validated_recompute_count(data.get("recompute_count"))
+    forced_serial = data.get("forced_serial") is True
+    return (recompute_count, forced_serial)
+
+
+def backfill_recovery_counters(
+    body: str, recompute_count: int, forced_serial: bool
+) -> str | None:
+    """#513: Footprint YAMLフェンスの`recompute_count`/`forced_serial`を
+    書き換えて返す。`backfill_parent_issue_number`と同じくフェンス以外の
+    本文はバイト単位で不変に保つ。値が既に一致していれば`None`（無駄な
+    `update_issue_body`呼び出しを避ける）。
+    """
+    match = FOOTPRINT_BLOCK_PATTERN.search(body)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if recovery_counters_from_body(body) == (recompute_count, forced_serial):
+        return None
+    data["recompute_count"] = recompute_count
+    data["forced_serial"] = forced_serial
+    new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    start, end = match.span(1)
+    return body[:start] + new_block + body[end:]
+
+
 @dataclass(frozen=True)
 class ChildDiscoveryResult:
     issues: list[IssueRecord]

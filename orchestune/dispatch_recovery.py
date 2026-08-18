@@ -10,7 +10,11 @@ import yaml
 
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.git_cli import run_git
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    parse_task_from_issue,
+    recovery_counters_from_body,
+)
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
@@ -147,6 +151,7 @@ def _decide_missing_active_worktrees(
 
     restorations: list[tuple[str, str, ActiveWorktree]] = []
     for issue, subtask_id, declared_footprint in missing_issues:
+        recompute_count, forced_serial = recovery_counters_from_body(issue.body)
         associated_pr = None
         for pr in open_prs:
             if issue.number in pr.closes_issue_numbers:
@@ -181,8 +186,13 @@ def _decide_missing_active_worktrees(
             # できる開始時刻を復元できないTaskはtimeout判定を保留する。
             started_at=None,
             declared_footprint=declared_footprint,
-            recompute_count=0,
-            forced_serial=False,
+            # #513: run_state.json消失時もDAG再計算のリトライ上限と
+            # forced_serialフォールバックを維持するため、Issue本文の
+            # Footprintフェンスへ永続化された値から復元する（`dispatch_rebase.py`
+            # が書き込み側）。フィールド欠落（本フィールド導入前のIssue）は
+            # (0, False)にフォールバックする。
+            recompute_count=recompute_count,
+            forced_serial=forced_serial,
             external_id=external_id,
             external_url=external_url,
             base_branch=restored_base_branch,

@@ -19,6 +19,8 @@ def _issue_with_footprint(
     blocked_by=(),
     parent=None,
     created_at="2026-01-01T00:00:00+00:00",
+    recompute_count=None,
+    forced_serial=None,
 ):
     if subtask_id is None:
         body = "本文のみでFootprintブロックなし"
@@ -27,12 +29,18 @@ def _issue_with_footprint(
             "\n".join(f"  - {f}" for f in footprint) if footprint else "  []"
         )
         depends_on_values = ", ".join(depends_on or ())
+        extra_fields = ""
+        if recompute_count is not None:
+            extra_fields += f"recompute_count: {recompute_count}\n"
+        if forced_serial is not None:
+            extra_fields += f"forced_serial: {str(forced_serial).lower()}\n"
         body = (
             "## Footprint\n```yaml\n"
             f"subtask_id: {subtask_id}\n"
             "footprint:\n"
             f"{footprint_lines}\n"
             f"depends_on: [{depends_on_values}]\n"
+            f"{extra_fields}"
             "```\n"
         )
     return IssueRecord(
@@ -123,6 +131,52 @@ class TestDecideMissingActiveWorktrees:
         assert active.declared_footprint == ("src/foo.py",)
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
+
+    def test_restores_recompute_count_and_forced_serial_from_issue_body(self, tmp_path):
+        """#513再現テスト: run_state.json消失時、Issue本文に永続化された
+        recompute_count/forced_serialから復元されるべきだが、現状は常に
+        (0, False)へ初期化される（DAG再計算のリトライ上限とforced_serial
+        フォールバックが、ステートレスCIランナーでは機能しない）。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101,
+            subtask_id="task-a",
+            footprint=["src/foo.py"],
+            recompute_count=2,
+            forced_serial=True,
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        active = result[0][2]
+        assert active.recompute_count == 2
+        assert active.forced_serial is True
+
+    def test_restores_zero_and_false_when_issue_predates_the_fields(self, tmp_path):
+        """#513: 本フィールド導入前に作られたIssue（フェンスにフィールドが
+        無い）は、後方互換として(0, False)にフォールバックする。"""
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101, subtask_id="task-a", footprint=["src/foo.py"]
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        active = result[0][2]
+        assert active.recompute_count == 0
+        assert active.forced_serial is False
 
     def test_restored_old_issue_has_unknown_start_time(self, tmp_path):
         """#198: Issue作成日時はdispatch開始日時ではないため、復元Taskの
