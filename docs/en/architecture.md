@@ -24,7 +24,16 @@ This pays twice: every deterministic step is quota not spent directly, and it al
 
 The one exception is `status:not-needed`. An implementation agent that finds the requirement already satisfied is instructed by the skills (`skills/local-ci-developer`, `skills/workflow-template`) to remove `status:in-progress` and apply `status:not-needed` — it writes no commit and opens no PR, so the usual completion signal (the existence of a PR) would never fire, and the label itself has to serve as that signal. The re-verification session on the Cloud Routine target is the same: when the check does not pass, its prompt tells it to move the label from `status:not-needed` to `status:queued` and add `not-needed-review:failed` (`build_not_needed_review_prompt`).
 
-So **label transitions themselves are partly LLM-owned**. The dividing line is not the label but reversibility: the LLM judges, and states its judgement as a label — nothing further. **Every irreversible operation (closing an Issue, merging, pushing, resolving dependencies, releasing quota) belongs to Python**, which performs it deterministically upon detecting the label the LLM applied. The verifier's own prompt spells this constraint out: it may only apply labels, comment, and (when the judgement was wrong) move a label; the actual close is done by another system that detects that label.
+So **label transitions themselves are partly LLM-owned**. Nor is the dividing line irreversibility — an implementation agent commits to its own branch, pushes it, and opens a PR (the `skills/local-ci-developer` workflow), all of which are irreversible.
+
+The real line is **scope**: whose territory is being written to.
+
+| | Writes to |
+|---|---|
+| **LLM** | The isolation it was given (its worktree and its own branch), plus the statement of its judgement (labels, comments, a PR) |
+| **Python** | **Shared state** — merges into the parent branch or `main`, whether an Issue lives or dies, dependency resolution, the quota ledger |
+
+An agent is a writer inside its own isolated workspace; whether that work is taken into shared state is always Python's call. The verifier's own prompt spells the constraint out: it may only apply labels, comment, and (when the judgement was wrong) move a label; the actual close is done by another system that detects that label.
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
