@@ -31,9 +31,10 @@ The real line is **scope**: whose territory is being written to.
 | | Writes to |
 |---|---|
 | **LLM** | The isolation it was given (its worktree and its own branch), plus the statement of its judgement (labels, comments, a PR) |
-| **Python** | **Shared state** — merges into the parent branch or `main`, whether an Issue lives or dies, dependency resolution, the quota ledger |
+| **Python** | **The shared state that advances automatically** — integration merges from a child PR into the parent branch, whether an Issue lives or dies, dependency resolution, the quota ledger |
+| **Human** | **The acceptance merge** — the final PR from the parent branch into `main`; the "one human click" of Section 4 |
 
-An agent is a writer inside its own isolated workspace; whether that work is taken into shared state is always Python's call. The verifier's own prompt spells the constraint out: it may only apply labels, comment, and (when the judgement was wrong) move a label; the actual close is done by another system that detects that label.
+An agent is a writer inside its own isolated workspace, and it is not the agent that decides whether that work enters shared state. Child-level integration is advanced automatically by Python on nothing but a CI pass; only the final call to take it into `main` stays with a human. The verifier's own prompt spells the constraint out: it may only apply labels, comment, and (when the judgement was wrong) move a label; the actual close is done by another system that detects that label.
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
@@ -43,11 +44,13 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 |---|---|---|
 | Bad decomposition (an unestablished shared extension point) | Shared-contract gate (Section 1) | Warning |
 | Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
-| Bad declaration (a change outside the footprint) | Deviation detection (Section 3) | DAG recomputation (with a dead band and a retry cap) |
+| Bad declaration (a change outside the footprint) | Deviation detection (Section 3) | DAG recomputation (with exclusion rules and a retry cap) |
 | Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
 | The agent's own report (`status:not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by a label |
 
 That re-verification only runs when `ClaudeCodeCloudRoutineDispatchTarget` is in use. Under the default `LocalProcessDispatchTarget`, a `status:not-needed` Issue is closed directly, with no re-verification in between (`_finalize_not_needed_worktree`).
+
+Deviation detection has two exclusions. One is a dead band on changed lines (5 or fewer by default), which stops churn from causing a livelock. The other is a **hotspot-file exclusion**: files nearly every task may touch — `package.json`, the various lockfiles, `src/routes.py` — are never treated as a deviation **regardless of how large the change is** (`_is_hotspot`). An undeclared lockfile update therefore does not trigger DAG recomputation.
 
 And **loops are bounded, with a terminal state**. DAG recomputation retries (2 by default) and launches per window (1 by default) are bounded out of the box, and a dead band ignores tiny deviations so the loop cannot livelock. Task timeouts (`--task-timeout-seconds`) and token caps (`--max-tokens-per-window` / `--max-tokens-per-task`), by contrast, are **off by default** — set them explicitly before leaving a long run unattended. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
