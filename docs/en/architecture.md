@@ -20,7 +20,9 @@ An LLM call is a scarce operation that consumes quota. Orchestune therefore **sp
 
 This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces — the main waste named above.
 
-**The LLM has no authority to change state.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue. Python polls the labels and performs the next transition deterministically.
+**Almost every state transition belongs to Python.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue. Python polls the labels and performs the next transition deterministically.
+
+The one exception is `status:not-needed`. An implementation agent that finds the requirement already satisfied is instructed by the skills (`skills/local-ci-developer`, `skills/workflow-template`) to remove `status:in-progress` and apply `status:not-needed` — it writes no commit and opens no PR, so the usual completion signal (the existence of a PR) would never fire, and the label itself has to serve as that signal. **Only the judgement and the raising of that signal sit with the LLM**; everything downstream (the re-verification described below, closing the Issue, resolving dependencies, releasing quota) is done deterministically by Python.
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
@@ -32,9 +34,11 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 | Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
 | Bad declaration (a change outside the footprint) | Deviation detection (Section 3) | DAG recomputation (with a dead band and a retry cap) |
 | Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
-| The agent's own report | Re-verification by an independent session that carries no memory of it | Deterministic close from Python, driven by a label |
+| The agent's own report (`status:not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by a label |
 
-And **every loop is bounded, with a terminal state**. Recomputation retries, launches and token spend per window, and task timeouts are all capped, and a dead band ignores tiny deviations so the loop cannot livelock. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+That re-verification only runs when `ClaudeCodeCloudRoutineDispatchTarget` is in use. Under the default `LocalProcessDispatchTarget`, a `status:not-needed` Issue is closed directly, with no re-verification in between (`_finalize_not_needed_worktree`).
+
+And **loops are bounded, with a terminal state**. DAG recomputation retries (2 by default) and launches per window (1 by default) are bounded out of the box, and a dead band ignores tiny deviations so the loop cannot livelock. Task timeouts (`--task-timeout-seconds`) and token caps (`--max-tokens-per-window` / `--max-tokens-per-task`), by contrast, are **off by default** — set them explicitly before leaving a long run unattended. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
 What Orchestune guarantees is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**.
 
@@ -134,7 +138,7 @@ warn about.
 
 Where the two subsections above both deal with conflicts **between subtasks**, this one reconciles the **decomposition plan against the current repository**. It is a different axis.
 
-A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `footprint` paths and `symbols` can actually be found in the codebase.
+A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `symbols` can be found in the Python files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`). Whether the footprint paths themselves exist is checked separately by `find_missing_footprint_paths` against the filesystem — not the AST, and not at Issue-creation time — when `orchestune-dag` runs with a repository root.
 
 Symbol collection is scope-aware. `ast.walk` flattens the whole tree and loses scope, so it mistakes a bare method name or a function-local variable for a module-level definition. Conversely `if` / `try` / `with` / loops / `match` bind whatever they contain into the *enclosing* scope, so their bodies must be flattened into it (conditional imports and conditionally defined methods are the typical cases). Function and class definitions open a new scope of their own, so the walk does not recurse into them.
 
