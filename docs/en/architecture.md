@@ -53,7 +53,7 @@ And **loops are bounded, with a terminal state**. DAG recomputation retries (2 b
 
 > **Known gap**: the `status:not-needed` re-verification on the Cloud Routine target is not covered by that termination guarantee. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle and neither converges nor reaches `status:blocked-human-review` (`dispatched_at` is recorded but never used for a timeout). Tracked in [#511](https://github.com/Saltmu/orchestune/issues/511).
 
-What Orchestune guarantees is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**.
+What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. That is a design goal rather than a property every path already satisfies: an ordinary task left hung with `--task-timeout-seconds` at its default of zero, and the Cloud Routine pending review noted above ([#511](https://github.com/Saltmu/orchestune/issues/511)), are both still outside it.
 
 ---
 
@@ -153,7 +153,11 @@ Where the two subsections above both deal with conflicts **between subtasks**, t
 
 A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `symbols` can be found in the Python files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`). Whether the footprint paths themselves exist is checked separately by `find_missing_footprint_paths` against the filesystem — not the AST, and not at Issue-creation time — when `orchestune-dag` runs with a repository root.
 
-Symbol collection is scope-aware. `ast.walk` flattens the whole tree and loses scope, so it mistakes a bare method name or a function-local variable for a module-level definition. Conversely `if` / `try` / `with` / loops / `match` bind whatever they contain into the *enclosing* scope, so their bodies must be flattened into it (conditional imports and conditionally defined methods are the typical cases). Function and class definitions open a new scope of their own, so the walk does not recurse into them.
+Symbol collection combines **two walks with different purposes**.
+
+The first is the full set of defined names, gathered by walking the entire tree with `ast.walk` (`_collect_all_names`). That deliberately includes class names, `Class.method` qualified names, and nested functions (closure helpers and the like), so a plan may name a bare method and still match.
+
+The second is the candidate set used to loosely match module-qualified notation (`db.get_connection`) on its final segment (`_collect_top_level_names`). This one is **restricted to module scope**, because `ast.walk` loses scope information: used here it would mistake a function-local variable, or a bare method name, for a module-level definition. Within that restricted walk, `if` / `try` / `with` / loops / `match` bind what they contain into the *enclosing* scope, so their bodies are flattened into it (conditional imports and conditionally defined methods are the typical cases), while function and class definitions open a new scope of their own and are not recursed into.
 
 **This check does not block.** A symbol that isn't found may mean "the plan went stale in a refactor" or "this subtask is about to create it", so Orchestune does not decide: it leaves a neutral note in the Issue body and lets the implementing agent and the human judge — one application of [0.1](#01-determinism-the-llm-only-judges-python-owns-every-state-transition)'s "the LLM only judges, Python owns every state transition".
 
