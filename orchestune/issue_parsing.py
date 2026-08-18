@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -227,6 +228,14 @@ def launch_history_from_body(body: str) -> list[float]:
     timestamps: list[float] = []
     for item in raw:
         if isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        # #519レビュー6巡目(P2): 本文が手で編集・破損して`.inf`/`.nan`が
+        # 入ると`yaml.safe_load`はPythonのfloatを返すため型チェックを通過する。
+        # `.inf`は`quota_available`の`now - inf < window_seconds`が毎サイクル
+        # 真になり、そのエントリが永久に1スロットを食い潰して親配下の
+        # ディスパッチを止める。`.nan`は逆にあらゆる比較が偽になり、
+        # ウィンドウ判定をすり抜けて記録が静かに失われる。
+        if not math.isfinite(item):
             continue
         timestamps.append(float(item))
     return timestamps

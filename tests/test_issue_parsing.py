@@ -349,6 +349,21 @@ class TestLaunchHistoryFromBody:
         )
         assert launch_history_from_body(body) == [1000.0, 2000.0]
 
+    def test_rejects_non_finite_timestamps(self):
+        """#519レビュー6巡目(P2): 本文が手で編集・破損して`.inf`/`.nan`が
+        入ると、`yaml.safe_load`はPythonのfloatを返すため型チェックを通過する。
+
+        `.inf`は`quota_available`の`now - inf < window_seconds`が毎サイクル
+        真になり、そのエントリが永久に1スロットを食い潰して親配下の
+        ディスパッチを止めてしまう。`.nan`は逆にあらゆる比較が偽になり、
+        ウィンドウ判定をすり抜けて記録が静かに失われる。どちらも捨てる。
+        """
+        body = (
+            "<!-- orchestune:launch-history -->\n"
+            "```yaml\nlaunch_history:\n- .inf\n- .nan\n- -.inf\n- 1000.0\n```\n"
+        )
+        assert launch_history_from_body(body) == [1000.0]
+
     def test_does_not_confuse_a_child_footprint_fence(self):
         """子IssueのFootprintフェンスを誤って読まないこと（マーカー必須）。"""
         body = "```yaml\nsubtask_id: task-a\nlaunch_history:\n- 1000.0\n```\n"
