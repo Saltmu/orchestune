@@ -25,6 +25,7 @@ from orchestune.dispatch_reconciliation import (
     _handle_blocked_recompute_recovery,
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
+    _reconcile_recovery_counters,
     _self_heal_run_state,
 )
 from orchestune.dispatch_rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
@@ -33,6 +34,7 @@ from orchestune.integration_coordinator import (
     IntegrationCoordinator,
     record_pending_not_needed_review,
 )
+from orchestune.models import IssueRecord
 
 
 def _dispatch_not_needed_review(
@@ -113,14 +115,26 @@ def _process_active_worktrees(
     )
 
 
-def run_self_heal_phase(run_state: Any, config: DispatcherConfig) -> None:
+def run_self_heal_phase(
+    run_state: Any,
+    in_progress_issues: list[IssueRecord],
+    config: DispatcherConfig,
+) -> None:
     """run_state自己修復（薄いラッパー、呼び出し互換のため維持）。
 
     Issue取得直後・`_build_cycle_context`より前に呼び出す必要があるため、
     Reconciliation Phase本体（`run_post_gc_reconciliation`）とは別の
     エントリポイントとして公開する。
+
+    #516再3巡目レビュー指摘: `_self_heal_run_state`は`run_state.json`欠落時
+    にしか動作しないため、`_reconcile_recovery_counters`（ファイル有無を
+    問わず毎サイクル、既存active_worktreesエントリのstaleなrecompute_count/
+    forced_serialを本文と再照合する）を別途呼び出す。`in_progress_issues`は
+    呼び出し元が`_fetch_issues`で既に取得済みのものを再利用し、追加の
+    GitHub API呼び出しは発生しない。
     """
     _self_heal_run_state(run_state, config)
+    _reconcile_recovery_counters(run_state, in_progress_issues, config)
 
 
 def run_blocked_promotion_phase(

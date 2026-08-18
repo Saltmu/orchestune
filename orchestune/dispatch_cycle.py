@@ -46,7 +46,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         ensure_parent_branch_ready(config)
 
         issues = _fetch_issues(config)
-        run_self_heal_phase(run_state, config)
+        run_self_heal_phase(run_state, issues.in_progress, config)
         issues = issues.filtered_by_parent(config.parent_issue_number)
 
         ctx = _build_cycle_context(issues, run_state, config)

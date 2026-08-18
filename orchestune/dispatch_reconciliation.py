@@ -8,7 +8,10 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_locks import check_footprint_deviation
 from orchestune.dispatch_rebase import SubTask, _build_subtasks_for_recompute
-from orchestune.dispatch_recovery import recover_run_state
+from orchestune.dispatch_recovery import (
+    _reconcile_stale_recovery_counters,
+    recover_run_state,
+)
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import RunState, save_run_state
@@ -142,6 +145,34 @@ def _self_heal_run_state(
         "status:in-progress"
     )
     if recover_run_state(run_state, in_progress_issues, config):
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+        )
+
+
+def _reconcile_recovery_counters(
+    run_state: RunState,
+    in_progress_issues: list[IssueRecord],
+    config: DispatcherConfig,
+) -> None:
+    """#516再3巡目レビュー指摘: `_reconcile_stale_recovery_counters`
+    （`dispatch_recovery.py`）は`recover_run_state`経由でのみ呼ばれていたが、
+    `recover_run_state`は`_self_heal_run_state`が`run_state.json`欠落時にしか
+    呼ばない。そのときの`run_state.active_worktrees`は常に空（新規ロード）
+    のため、「既存だがstaleなエントリ」の再照合は生産コードから一度も
+    到達し得なかった——`_persist_recovery_counters`が本文への書き込みに
+    成功した直後、サイクル終端の`save_run_state`前にプロセスが停止すると、
+    既存の（ファイルが存在する）`run_state.json`が古い値のまま残り続ける。
+
+    ファイル有無に関わらず毎サイクル呼び出す。`in_progress_issues`は
+    呼び出し元（`run_self_heal_phase`）が既に取得済みのものを再利用し、
+    追加のGitHub API呼び出しは発生しない。
+    """
+    if not config.apply:
+        return
+    if _reconcile_stale_recovery_counters(run_state, in_progress_issues):
         save_run_state(
             run_state,
             config.run_state_path,

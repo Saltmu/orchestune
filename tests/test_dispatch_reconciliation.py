@@ -22,6 +22,7 @@ from orchestune.dispatch_reconciliation import (
     _handle_blocked_recompute_recovery,
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
+    _reconcile_recovery_counters,
     _self_heal_run_state,
 )
 from orchestune.dispatch_rules import CycleContext
@@ -511,6 +512,122 @@ class TestSelfHealRunState:
             _self_heal_run_state(run_state, config)
 
         mock_save.assert_not_called()
+
+
+class TestReconcileRecoveryCounters:
+    """#516再3巡目レビュー指摘: `_reconcile_stale_recovery_counters`は
+    `recover_run_state`経由でのみ呼ばれていたが、それは`_self_heal_run_state`
+    が`run_state.json`欠落時にしか実行しないため、既存run_stateに残る
+    staleなrecompute_count/forced_serialは、ファイルが存在する通常サイクル
+    では一度も再照合されず、この再照合コード自体が生産コードから到達
+    不能だった。ファイル有無に関わらず毎サイクル呼び出されるべき。
+    """
+
+    def test_persists_when_reconciliation_reports_a_change(self, tmp_path):
+        run_state_path = tmp_path / "run_state.json"
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch(
+                "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+        ):
+            _reconcile_recovery_counters(run_state, [], config)
+
+        mock_save.assert_called_once_with(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+        )
+
+    def test_does_not_persist_when_no_change(self, tmp_path):
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch(
+                "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+        ):
+            _reconcile_recovery_counters(run_state, [], config)
+
+        mock_save.assert_not_called()
+
+    def test_is_a_noop_when_apply_is_false(self, tmp_path):
+        """dry-run（--no-apply）では、DAG再計算等の他の副作用と同様に
+        再照合そのものを行わない（他のconfig.apply分岐と同じ流儀）。"""
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=False,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch(
+                "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters"
+            ) as mock_reconcile,
+            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+        ):
+            _reconcile_recovery_counters(run_state, [], config)
+
+        mock_reconcile.assert_not_called()
+        mock_save.assert_not_called()
+
+    def test_reconciles_a_stale_entry_even_though_run_state_file_exists(self, tmp_path):
+        """再現テスト（#516再3巡目）: run_state.jsonが存在する（＝
+        `_self_heal_run_state`は何もしない）通常サイクルでも、staleな
+        forced_serialが本文の値へ再照合されなければならない。"""
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}", encoding="utf-8")  # ファイルは存在する
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            recompute_count=2,
+            forced_serial=False,  # run_state側は古いまま
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        issue = IssueRecord(
+            number=101,
+            title="t",
+            body=(
+                "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n"
+                "forced_serial: true\n```\n"
+            ),
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+
+        with patch("orchestune.dispatch_reconciliation.save_run_state"):
+            _reconcile_recovery_counters(run_state, [issue], config)
+
+        assert run_state.active_worktrees["101"].forced_serial is True
 
 
 class TestDualStatusReconciliationMultipleTasks:
