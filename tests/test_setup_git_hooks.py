@@ -228,6 +228,8 @@ def test_setup_git_hooks_ps1_execution_in_worktree(tmp_path: Path):
 
     # Determine powershell executable
     ps_exe = "powershell.exe" if sys.platform == "win32" else "pwsh"
+    if not shutil.which(ps_exe):
+        return
     # Execute setup-git-hooks.ps1 from inside the worktree
     res = subprocess.run(
         [
