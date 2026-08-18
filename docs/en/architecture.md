@@ -4,6 +4,59 @@ This document explains how Orchestune builds conflict-free parallel tasks, drive
 
 ---
 
+## System Overview
+
+Orchestune treats GitHub as the single source of truth and puts a deterministic Python control engine in charge of orchestrating LLM implementation agents. A human is involved at exactly two points — the decomposition gate up front and the acceptance gate at the end — and everything in between runs autonomously.
+
+```mermaid
+graph TD
+    HU1["Human: decomposition gate<br/>approve decomposition_plan.md"]
+    HU2["Human: acceptance gate<br/>the only human click"]
+
+    subgraph GH ["GitHub (Source of Truth)"]
+        GI["Issues<br/>status:* / shared_contract:*"]
+        GP["Child branches / child PRs"]
+        PB["parent/issue-N"]
+        MB["main"]
+    end
+
+    subgraph ENG ["Orchestune Engine (deterministic Python)"]
+        L1["Forge / git_cli (L1)<br/>the only boundary running gh and git"]
+        REC["State Recovery (L2)<br/>rebuild state from GitHub"]
+        DAG["DAG Engine (L2)<br/>similarity analysis, conflict detection, topological sort"]
+        DP["Dispatcher (L4/L3)<br/>scheduling, worktree creation, rebase"]
+        IG["Integrator (L3)<br/>pre-merge CI, auto-integration, final PR"]
+    end
+
+    subgraph EX ["Agent Execution"]
+        WT["Isolated git worktree (per child task)"]
+        AG["AI coding agents<br/>Claude Code, etc."]
+    end
+
+    HU1 -->|approve| DAG
+    GI -->|read labels and PR state| L1
+    L1 -->|restore| REC
+    REC -->|reconstruct run state| DP
+    DAG -->|execution order| DP
+    DP -->|footprint / symbols| DAG
+    DP -->|create worktree, launch task| AG
+    AG -->|work in isolation| WT
+    WT -->|commit / push / PR| GP
+    GI -->|detect status:done label| IG
+    IG -->|pre-merge CI in its own temp worktree| PB
+    IG -->|auto-merge once CI passes| PB
+    IG -->|auto-close child Issue| GI
+    PB -->|detect upstream merge, rebase downstream| DP
+    IG -->|all children done, open final PR| MB
+    HU2 -->|review and merge| MB
+```
+
+Every read and write between the engine and GitHub goes through the L1 adapters (`forge` / `git_cli`); that containment is enforced mechanically by CI, as described in [§5.2](#52-invariants-enforced-by-ci). Note also that the Integrator is triggered by a child Issue's `status:done` label rather than by a child PR, and that its pre-merge CI runs in a temporary worktree of its own, separate from the agents' isolated worktrees — the engine never writes into an agent's workspace.
+
+The sections that follow drill into each element of this picture in turn: Section 0 covers the design goal that runs through everything, Section 1 the DAG Engine, Section 2 State Recovery, Section 3 the Integrator and Dispatcher, Section 4 the two human gates, and Section 5 the engine's internal layering.
+
+---
+
 ## 0. Design Goal: Quota Efficiency
 
 Orchestune is an orchestrator for individual developers and small teams. The AI usage quota (a subscription's session/weekly allowance) is fixed, and so are the hours a human can be at the desk. Every design decision below follows from a single optimization target — **maximize the finished, mergeable work produced per unit of quota consumed** — and not from minimizing wall-clock time on any individual task. For a small task, prompting one agent directly is both faster and cheaper than decomposition, provisioning, and dispatch.
@@ -68,20 +121,14 @@ graph TD
     E --> F[Cycle & Risk Check]
 ```
 
-> The similarity-based task partitioning in this section derives from the
-> Co-Coder paper (Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin,
-> Fangru Lin, Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware
-> Task Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026). That
-> paper builds a symbol-sharing graph from a repository's static interface
-> and runs Infomap community detection to assign files to agents, optimizing
-> for critical-path length plus communication cost. Orchestune adapts this
-> for an operational tool: the objective changes from cohesion/cost
-> optimization to conflict avoidance, the graph's source changes from
-> existing repository files to a decomposition plan's declared
-> footprint/symbols, and it uses IDF-weighted Otsuka-Ochiai similarity. See
-> the docstring in `orchestune/dag_similarity.py` for details.
+> **Reference**: the similarity-based task partitioning in this section derives from the Co-Coder paper (Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin, Fangru Lin, Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware Task Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026).
+>
+> That paper builds a symbol-sharing graph from a repository's static interface and runs Infomap community detection to assign files to agents, optimizing for critical-path length plus communication cost.
+>
+> Orchestune adapts this for an operational tool: the objective changes from cohesion/cost optimization to conflict avoidance, the graph's source changes from existing repository files to a decomposition plan's declared `footprint`/`symbols`, and it uses IDF-weighted Otsuka-Ochiai similarity. See the docstring in `orchestune/dag_similarity.py` for details.
 
 ### Conflict Prevention Mechanism
+
 * **Overlap Analysis**:
   When multiple tasks attempt to edit the same files or symbols, merge conflicts are inevitable. Orchestune computes similarity metrics across footprints and automatically inserts "implicit dependencies" to sequence conflicting tasks safely.
 * **Safe Parallelization**:
@@ -89,75 +136,54 @@ graph TD
 
 ### Ordinary Footprint Overlap vs. the Shared-Contract Gate
 
-The overlap analysis above (`dag_similarity.py`) only inserts an implicit
-dependency edge when subtasks' **declared** footprint/symbol strings actually
-match (or score above the weighted cosine-similarity threshold). That works
-well for the common case of multiple tasks editing an already-existing file,
-but greenfield decomposition plans have a different failure mode: several
-subtasks may implicitly need to establish or edit a shared extension point
-that doesn't exist yet — e.g. a format registry or a CLI wiring module — each
-assuming a different plausible path for it. Since none of their declared
-footprints share a literal string, the existing overlap detection has nothing
-to match on and cannot catch this case.
+The overlap analysis above (`dag_similarity.py`) only inserts an implicit dependency edge when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.
 
-To address this, Stage 1 of the `orchestune` skill asks the planner to
-explicitly identify such shared extension points (registries, CLI wiring,
-dependency manifests, public API index files) up front, create a dedicated
-`shared-contract` / `integration-scaffold` subtask that owns them, and tag
-every subtask involved (owner and dependents alike) with a matching
-`shared_contract: <id>` value — the most reliable signal, since it doesn't
-rely on literal string matching at all.
+Consider several subtasks that each need to establish or edit a **shared extension point that does not exist yet** — a format registry, a CLI wiring module — with each assuming a different plausible path for it. Since none of their declared footprints share a literal string, the existing overlap detection has nothing to match on and cannot catch the case.
 
-`orchestune/dag_contracts.py`'s `find_unowned_shared_contract_hotspots`
-backs this up in two tiers, flagging results as a non-blocking `Warnings:`
-entry in `orchestune-dag`'s output: (1) subtasks sharing the same
-`shared_contract` tag, and (2) *every* subtask regardless of tagging, whose
-footprint falls into the same category *and* the same directory (scoping by
-directory keeps unrelated sibling packages — e.g. `packages/auth/__init__.py`
-vs. `packages/payments/__init__.py` — from being flagged as the same
-hotspot). Tier 2 deliberately doesn't skip tagged subtasks: if only one of
-two subtasks writing to the same file remembered to set `shared_contract`
-(a plausible authoring mistake), tier 1 alone would never compare them —
-each would sit alone in its own group — and the exact race this gate exists
-to catch would slip through. Pairs already flagged by tier 1 are tracked and
-not re-flagged by tier 2. In both tiers, the check is **reachability**, not
-connectivity: a warning fires when some pair in the group is not reachable
-from the other via `depends_on`/inferred edges in either direction. This
-matters because two subtasks that merely share a common ancestor (e.g. both
-`depends_on` the same `shared-contract` task, as in `shared -> csv` and
-`shared -> yaml`) are not ordered relative to *each other* and can still run
-in parallel — the gate keeps warning about such pairs even though both
-declare a dependency on the owner.
+To address this, Stage 1 of the `orchestune` skill asks the planner to explicitly identify such shared extension points (registries, CLI wiring, dependency manifests, public API index files) up front, create a dedicated `shared-contract` / `integration-scaffold` subtask that owns them, and tag every subtask involved — owner and dependents alike — with a matching `shared_contract: <id>` value. This is the most reliable signal, since it does not rely on literal string matching at all.
 
-The directory-scoped heuristic (tier 2) still can't catch cases where the
-shared file is guessed at entirely different paths in different directories
-(the original registry-naming scenario) — that's what the explicit
-`shared_contract` tag (tier 1) is for.
+`orchestune/dag_contracts.py`'s `find_unowned_shared_contract_hotspots` backs this up in two tiers:
 
-**Writers vs. consumers**: the `shared_contract` tag only means "participates
-in this contract," not "writes to the shared file." A dependent subtask that
-merely `depends_on` the owner and never touches the shared file in its own
-`footprint` (a pure consumer, reading/importing it) can carry the same tag.
-`find_unowned_shared_contract_hotspots` only compares subtasks that are
-actually judged to be *writers* — either their `footprint` contains a path
-matching one of the shared-extension-point categories, or they explicitly set
-`writes_shared_contract: true`. Pure consumers, and any writer/consumer or
-consumer/consumer pairing, are never flagged, since there's no write race to
-warn about.
+1. **Subtasks sharing the same `shared_contract` tag.**
+2. ***Every* subtask regardless of tagging**, grouped where the `footprint` falls into the same category *and* the same directory (scoping by directory keeps unrelated sibling packages — `packages/auth/__init__.py` vs. `packages/payments/__init__.py` — from being flagged as the same hotspot).
+
+In either tier, a non-blocking `Warnings:` entry appears in `orchestune-dag`'s output when the group contains a pair that is not reachable from the other.
+
+What matters here is that the check is **reachability**, not connectivity: a warning fires when some pair in the group cannot reach the other via `depends_on`/inferred edges in either direction. Two subtasks that merely share a common ancestor — both `depends_on` the same `shared-contract` task, as in `shared -> csv` and `shared -> yaml` — are not ordered relative to *each other* and can still run in parallel. The gate therefore keeps warning about such pairs even though both declare a dependency on the owner.
+
+Tier 2 deliberately does not skip tagged subtasks. If only one of two subtasks writing to the same file remembered to set `shared_contract` (a plausible authoring mistake), tier 1 alone would never compare them — each would sit alone in its own group — and the exact race this gate exists to catch would slip through. Pairs already flagged by tier 1 are tracked and not re-flagged by tier 2.
+
+The directory scoping does mean the tier-2 heuristic cannot catch cases where the shared file is guessed at entirely different paths in different directories (the original registry-naming scenario). That is what the explicit tier-1 `shared_contract` tag is for.
+
+**Writers vs. consumers**:
+The `shared_contract` tag only means "participates in this contract," not "writes to the shared file." A dependent subtask that merely `depends_on` the owner and never touches the shared file in its own `footprint` — a pure consumer, reading or importing it — can carry the same tag.
+
+`find_unowned_shared_contract_hotspots` therefore only compares subtasks judged to be actual *writers*: either their `footprint` contains a path matching one of the shared-extension-point categories, or they explicitly set `writes_shared_contract: true`. Pure consumers, and any writer/consumer or consumer/consumer pairing, are never flagged, since there is no write race to warn about.
 
 ### Reconciling the decomposition plan against the codebase (staleness detection)
 
 Where the two subsections above both deal with conflicts **between subtasks**, this one reconciles the **decomposition plan against the current repository**. It is a different axis.
 
-A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `symbols` can be found in the Python files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`). Whether the footprint paths themselves exist is checked separately by `find_missing_footprint_paths` against the filesystem — not the AST, and not at Issue-creation time — when `orchestune-dag` runs with a repository root.
+A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `symbols` can be found in the Python files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`).
 
-Symbol collection combines **two walks with different purposes**.
+Whether the `footprint` paths themselves exist is checked separately, by `find_missing_footprint_paths` against the filesystem, when `orchestune-dag` runs with a repository root — not through the AST, and not at Issue-creation time.
 
-The first is the full set of defined names, gathered by walking the entire tree with `ast.walk` (`_collect_all_names`). That deliberately includes class names, `Class.method` qualified names, and nested functions (closure helpers and the like), so a plan may name a bare method and still match.
+Symbol collection combines **two walks with different purposes**:
 
-The second is the candidate set used to loosely match module-qualified notation (`db.get_connection`) on its final segment (`_collect_top_level_names`). This one is **restricted to module scope**, because `ast.walk` loses scope information: used here it would mistake a function-local variable, or a bare method name, for a module-level definition. Within that restricted walk, `if` / `try` / `with` / loops / `match` bind what they contain into the *enclosing* scope, so their bodies are flattened into it (a conditionally defined top-level function, or a conditional assignment, are the typical cases), while function and class definitions open a new scope of their own and are not recursed into. A conditionally defined *method* is not picked up here but by the first, whole-tree walk, which flattens each class body separately.
+1. **The full set of defined names (`_collect_all_names`)**:
+   Walks the entire tree with `ast.walk`. It deliberately includes class names, `Class.method` qualified names, and nested functions (closure helpers and the like), so a plan may name a bare method and still match.
+2. **The module-scope-only candidate set (`_collect_top_level_names`)**:
+   Used to loosely match module-qualified notation (`db.get_connection`) on its final segment. This one is **restricted to module scope**, because `ast.walk` loses scope information: used here it would mistake a function-local variable, or a bare method name, for a module-level definition.
 
-**Two conditions skip the check entirely**: a footprint containing no existing `.py` file at all, and a footprint in which any `.py` file cannot be parsed (a syntax error, say). Both return an empty result and leave no note — declaring a symbol "missing" without the material to judge would be a false positive. But note that **right after a refactor splits or renames files, the footprint paths may be exactly the ones that no longer exist**: the check tends to go quiet in precisely the situation it is meant for.
+The restricted walk follows Python's scoping rules. `if` / `try` / `with` / loops / `match` bind what they contain into the *enclosing* scope, so their bodies are flattened into it (a conditionally defined top-level function, or a conditional assignment, are the typical cases). Function and class definitions open a new scope of their own and are not recursed into. A conditionally defined *method* is therefore not picked up here, but by the first, whole-tree walk, which flattens each class body separately.
+
+**When the check is skipped**:
+Two conditions skip verification entirely. Both return an empty result and leave no note, because declaring a symbol "missing" without the material to judge would be a false positive.
+
+* The `footprint` contains no existing `.py` file at all.
+* Any `.py` file in the `footprint` cannot be parsed (a syntax error, say).
+
+Note, though, that **right after a refactor splits or renames files, the `footprint` paths may be exactly the ones that no longer exist**. The check tends to go quiet in precisely the situation it is meant for.
 
 Only definitions (`class` / `def`) and assignments (`x = ...`, `x: T = ...`) are collected — **bindings introduced by `import` are not**. A name that exists only via an import, as in `try: import fast as impl except ImportError: import slow as impl`, will be reported as missing if a plan declares it in `symbols`. The note is neutral and non-blocking so the practical cost is small, but it is a known limit of this check.
 
@@ -244,7 +270,12 @@ Between these two gates, child-level integration PRs, CI verification, and the r
 
 **CI as the de facto quality gate**: the pre-merge CI verification described in Section 3 substitutes for per-task human review — every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
 
-**Traceability backstop: dispatch cycle reports on the parent Issue**: `orchestune-dispatch`'s per-run event log (`events.jsonl`) is `.gitignore`d and does not survive between CI runs, so it cannot serve as durable history on its own. To keep dispatch-cycle decisions traceable without depending on that ephemeral log, each *applied* dispatch cycle (`--no-apply` skips this along with the rest of the post-cycle block) posts a `## 🤖 Orchestune Dispatch Cycle Report` comment to the configured parent Issue (`--parent-issue`, #396) summarizing that cycle's selected tasks, noteworthy footprint-deviation events, completions, and promotions. Deviation events that merely re-report an unchanged steady state (e.g. a worktree that is already force-serialized) are excluded from both the skip check and the comment body, so the parent Issue isn't flooded with an identical comment every cycle; a cycle with nothing to report, or with no parent Issue configured, posts nothing. Like the other post-cycle phases, posting doesn't raise on failure — the cycle itself always runs to completion — but a failure still surfaces as a nonzero `orchestune-dispatch` exit status (failing a typical CI step): an ordinary posting exception (e.g. a transient network error) is logged as a warning and maps to exit code 2, while a GitHub authentication failure is logged as an error and maps to exit code 1.
+**Traceability backstop: dispatch cycle reports on the parent Issue**:
+`orchestune-dispatch`'s per-run event log (`events.jsonl`) is `.gitignore`d and does not survive between CI runs, so it cannot serve as durable history on its own. To keep dispatch-cycle decisions traceable without depending on that ephemeral log, each *applied* dispatch cycle posts a `## 🤖 Orchestune Dispatch Cycle Report` comment to the configured parent Issue (`--parent-issue`, #396). `--no-apply` skips this along with the rest of the post-cycle block.
+
+The comment summarizes that cycle's selected tasks, noteworthy `footprint`-deviation events, completions, and promotions. Deviation events that merely re-report an unchanged steady state (a worktree that is already force-serialized, say) are excluded from both the skip check and the comment body, so the parent Issue is not flooded with an identical comment every cycle. A cycle with nothing to report, or with no parent Issue configured, posts nothing.
+
+Failure handling matches the other post-cycle phases: posting does not raise, and the cycle itself always runs to completion. A failure does still surface as a nonzero `orchestune-dispatch` exit status, failing a typical CI step — an ordinary posting exception (a transient network error, say) is logged as a warning and maps to exit code 2, while a GitHub authentication failure is logged as an error and maps to exit code 1.
 
 This keeps human review effort concentrated where judgment matters most (scoping and the final acceptance merge), while everything mechanical in between — including Issue closing at both tiers — is fully automated.
 
@@ -276,21 +307,15 @@ that dependency point upward.
 
 L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
 "contains only argparse wiring". `cli` is the exception because it dispatches to
-the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`. All code
-that predated this boundary has since been resolved. Three modules — `dag`,
-`dispatcher`, and `monitor` — used to carry such code. `dag` was a
-compatibility facade re-exporting the whole `dag_*` package; callers now
-import the concrete `dag_*` module directly, and `dag_cli` (the module that
-actually owns `main()`) is the real L4 entrypoint. `dispatcher` held the
-dispatch cycle's best-effort post-cycle orchestration directly; that has
-moved to `dispatch_postcycle` (L3), leaving `dispatcher` with only argument
-parsing, config loading, and `main()`. `monitor` built its own status
-snapshots (`MonitorState`/`build_status_snapshot`/`format_status_report` and
-friends) directly; that has moved to `status_snapshot` (L2), leaving
-`monitor` with only argument parsing, the `--watch` loop, and `main()`. This
-is not a licence to skip the layering going forward — new code still belongs
-in the layer that owns the behaviour, and this section and
-`tests/test_architecture.py` keep enforcing it mechanically.
+the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
+
+All code that predated this boundary has since been resolved. Three modules used to carry such code:
+
+* `dag`: a compatibility facade re-exporting the whole `dag_*` package. Callers now import the concrete `dag_*` module directly, and `dag_cli` — the module that actually owns `main()` — is the real L4 entrypoint.
+* `dispatcher`: held the dispatch cycle's best-effort post-cycle orchestration directly. That has moved to `dispatch_postcycle` (L3), leaving only argument parsing, config loading, and `main()`.
+* `monitor`: built its own status snapshots (`MonitorState`/`build_status_snapshot`/`format_status_report` and friends) directly. That has moved to `status_snapshot` (L2), leaving only argument parsing, the `--watch` loop, and `main()`.
+
+This is not a licence to skip the layering going forward. New code still belongs in the layer that owns the behaviour, and this section and `tests/test_architecture.py` keep enforcing it mechanically.
 
 ### 5.2 Invariants enforced by CI
 
@@ -315,22 +340,12 @@ table above cannot silently drift from the code:
    the CI script and to `poetry`. Those are one-off process launches rather
    than a client that callers need to fake, so they stay where they are used.
 
-   **Scope of the check.** The guard reads the command out of the source, so it
-   sees a literal list — passed inline, or through a variable that some
-   assignment in scope binds to one. It models Python's scoping rules well
-   enough to be trusted on ordinary code: it follows branches and loops, keeps
-   class bodies out of their methods, honours `global`/`nonlocal`, and reads the
-   `args=` keyword as well as the first positional argument. It does not
-   evaluate anything. A command assembled at runtime, read from configuration,
-   or handed in by another module escapes it entirely.
+   **Scope of the check**:
+   The guard reads the command out of the source, so it sees a literal list — passed inline, or through a variable that some assignment in scope binds to one. It models Python's scoping rules well enough to be trusted on ordinary code: it follows branches and loops, keeps class bodies out of their methods, honours `global`/`nonlocal`, and reads the `args=` keyword as well as the first positional argument.
 
-   That boundary is deliberate. This invariant exists to catch the accident —
-   someone reaching for `subprocess` in an L2 module instead of `run_git` — not
-   to prevent a determined bypass. Anyone who wants to run `git` outside
-   `git_cli` can do so, and no static check in a test file will stop them; the
-   thing standing in their way is code review. So write `git`/`gh` argv as a
-   literal, and treat a failure here as "this belongs in L1", not as a puzzle
-   to route around.
+   It does not evaluate anything, however. A command assembled at runtime, read from configuration, or handed in by another module escapes it entirely.
+
+   That boundary is deliberate. This invariant exists to catch the accident — someone reaching for `subprocess` in an L2 module instead of `run_git` — not to prevent a determined bypass. Anyone who wants to run `git` outside `git_cli` can do so, and no static check in a test file will stop them; the thing standing in their way is code review. So write `git`/`gh` argv as a literal, and treat a failure here as "this belongs in L1", not as a puzzle to route around.
 
 3. **No import cycles**, and no internal import hidden inside a function body
    (which would evade the cycle check). `cli` is exempt from the second rule
@@ -342,6 +357,12 @@ table above cannot silently drift from the code:
    is not subject to rule 1. What it may import is checked separately: a
    dedicated test asserts it pulls in no L4 entrypoint, which is the property
    that would otherwise be lost.
+
+> **Note**: splitting the 5.1 layer table into three columns (layer / role /
+> modules) would read better, but `_documented_layers()` extracts module names
+> from the second cell, so the two-column layout stays for now. Widening it
+> requires the parser change to land alongside it
+> ([#515](https://github.com/Saltmu/orchestune/issues/515)).
 
 ### 5.3 Why `Forge` is a protocol, not a class
 
