@@ -515,15 +515,21 @@ class TestSelfHealRunState:
 
 
 class TestReconcileRecoveryCounters:
-    """#516再3巡目レビュー指摘: `_reconcile_stale_recovery_counters`は
-    `recover_run_state`経由でのみ呼ばれていたが、それは`_self_heal_run_state`
-    が`run_state.json`欠落時にしか実行しないため、既存run_stateに残る
-    staleなrecompute_count/forced_serialは、ファイルが存在する通常サイクル
-    では一度も再照合されず、この再照合コード自体が生産コードから到達
-    不能だった。ファイル有無に関わらず毎サイクル呼び出されるべき。
+    """#516: `_reconcile_stale_recovery_counters`をrun_state.json有無に
+    関わらず毎サイクル呼び出す（再3巡目レビュー指摘）。再4巡目レビュー指摘
+    により以下2点を追加で担保する:
+    (1) --parent-issue指定時のスコープ済みIssue一覧に依存せず、常に
+        リポジトリ全体のstatus:in-progress Issueを独自に読み直す（#156と
+        同じ理由: run_stateは複数親Issueにまたがって共有されうる）。
+    (2) 早期保存がopen_prsを渡さずにsave_run_stateを呼ぶと、30日超の
+        completed_worktrees保護（open PRのlast_completed）が通常の
+        サイクル終端保存より先に無条件で刈り込まれてしまうため、
+        変更があった場合のみopen_prsを取得して渡す。
     """
 
-    def test_persists_when_reconciliation_reports_a_change(self, tmp_path):
+    def test_persists_with_open_prs_when_reconciliation_reports_a_change(
+        self, tmp_path
+    ):
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -532,23 +538,27 @@ class TestReconcileRecoveryCounters:
             apply=True,
         )
         run_state = RunState(active_worktrees={})
+        open_prs = [MagicMock()]
 
         with (
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=open_prs),
             patch(
                 "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
                 return_value=True,
             ),
             patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
         ):
-            _reconcile_recovery_counters(run_state, [], config)
+            _reconcile_recovery_counters(run_state, config)
 
         mock_save.assert_called_once_with(
             run_state,
             config.run_state_path,
             launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
         )
 
-    def test_does_not_persist_when_no_change(self, tmp_path):
+    def test_does_not_fetch_open_prs_or_save_when_no_change(self, tmp_path):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -558,14 +568,17 @@ class TestReconcileRecoveryCounters:
         run_state = RunState(active_worktrees={})
 
         with (
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_open_prs") as mock_list_prs,
             patch(
                 "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
                 return_value=False,
             ),
             patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
         ):
-            _reconcile_recovery_counters(run_state, [], config)
+            _reconcile_recovery_counters(run_state, config)
 
+        mock_list_prs.assert_not_called()
         mock_save.assert_not_called()
 
     def test_is_a_noop_when_apply_is_false(self, tmp_path):
@@ -581,21 +594,28 @@ class TestReconcileRecoveryCounters:
 
         with (
             patch(
+                "orchestune.forge.GitHubForge.list_issues_by_label"
+            ) as mock_list_issues,
+            patch(
                 "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters"
             ) as mock_reconcile,
             patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
         ):
-            _reconcile_recovery_counters(run_state, [], config)
+            _reconcile_recovery_counters(run_state, config)
 
+        mock_list_issues.assert_not_called()
         mock_reconcile.assert_not_called()
         mock_save.assert_not_called()
 
-    def test_reconciles_a_stale_entry_even_though_run_state_file_exists(self, tmp_path):
-        """再現テスト（#516再3巡目）: run_state.jsonが存在する（＝
-        `_self_heal_run_state`は何もしない）通常サイクルでも、staleな
-        forced_serialが本文の値へ再照合されなければならない。"""
+    def test_reconciles_repository_wide_regardless_of_parent_scope(self, tmp_path):
+        """再現テスト（#516再4巡目）: --parent-issue指定時、`_fetch_issues`は
+        parent-scopedなfast pathを使うため、その結果をそのまま渡すと他の親
+        Issue配下のactive worktreeが再照合対象から漏れる。`config.parent_issue_number`
+        にこのactive worktreeとは無関係な親（999）を設定していても、
+        リポジトリ全体を独自に読み直すことで正しく再照合されなければ
+        ならない。"""
         run_state_path = tmp_path / "run_state.json"
-        run_state_path.write_text("{}", encoding="utf-8")  # ファイルは存在する
+        run_state_path.write_text("{}", encoding="utf-8")
         active = ActiveWorktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
@@ -604,7 +624,7 @@ class TestReconcileRecoveryCounters:
             started_at=1_699_999_000.0,
             declared_footprint=("src/foo.py",),
             recompute_count=2,
-            forced_serial=False,  # run_state側は古いまま
+            forced_serial=False,
         )
         run_state = RunState(active_worktrees={"101": active})
         issue = IssueRecord(
@@ -622,10 +642,17 @@ class TestReconcileRecoveryCounters:
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
+            parent_issue_number=999,  # 別の親（B）を対象にディスパッチ中
         )
 
-        with patch("orchestune.dispatch_reconciliation.save_run_state"):
-            _reconcile_recovery_counters(run_state, [issue], config)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_issues_by_label",
+                return_value=[issue],
+            ),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+        ):
+            _reconcile_recovery_counters(run_state, config)
 
         assert run_state.active_worktrees["101"].forced_serial is True
 

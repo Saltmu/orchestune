@@ -337,6 +337,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             ),
             patch("orchestune.dispatch_cycle._sync_external_locks"),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
                 "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
@@ -414,6 +415,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
                 "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
@@ -518,6 +520,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
                 "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
@@ -657,6 +660,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.forge.GitHubForge.add_label"),
             patch("orchestune.forge.GitHubForge.add_comment"),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
                 "orchestune.forge.GitHubForge.get_label_actor",
                 return_value="some-user",
