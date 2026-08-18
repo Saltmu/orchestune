@@ -16,7 +16,10 @@ from orchestune.dispatch_recovery import (
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import RunState, save_run_state
-from orchestune.issue_parsing import launch_history_from_body
+from orchestune.issue_parsing import (
+    launch_history_from_body,
+    launch_history_in_window,
+)
 from orchestune.models import IssueRecord
 
 
@@ -170,6 +173,12 @@ def _restore_launch_history(
     スコープ（Issue #514の決定）:
     - `--parent-issue`未指定（フラットモード）では永続化先の親Issueが無いため
       何もしない
+    - `--no-apply`（dry-run）でも**メモリ上の復元は行う**。dry-runは
+      「適用したら何が起きるか」のpreviewであり、永続履歴を無視すると
+      「起動する」と表示した直後の実適用では復元が効いて1件も起動しない、
+      という食い違いが起きる（#519レビュー7巡目 P2）。本文の読み取りは
+      副作用が無く、run_stateへの書き戻しは呼び出し元（
+      `_self_heal_launch_history`）がapply時のみに限定する
     - **永続化ストアだけが親ごと**（親Issue本文が唯一の置き場所のため）。
       実行時のクオータ判定（`quota_available`）は`run_state.launch_history`を
       グローバルに数える既存挙動のままで、本PRはそこを変更しない
@@ -181,9 +190,10 @@ def _restore_launch_history(
 
     復元は**片方向**（和集合）で行う: 本文側が古い場合にローカルの進捗
     （より多くの起動）を巻き戻すと、上限が緩む方向へ壊れるため。
-    ウィンドウ外のタイムスタンプは`prune_run_state`と同じ意味論で除外する。
+    ウィンドウ外のタイムスタンプは`prune_run_state`と同じ意味論で除外し、
+    未来のタイムスタンプは`now`へクランプする（`launch_history_in_window`）。
     """
-    if not config.apply or config.parent_issue_number is None:
+    if config.parent_issue_number is None:
         return False
     issue = config.resolved_forge.get_issue(config.parent_issue_number)
     if issue is None:
@@ -191,8 +201,7 @@ def _restore_launch_history(
     persisted = launch_history_from_body(issue.body)
     if not persisted:
         return False
-    min_time = now - config.window_seconds
-    in_window = [t for t in persisted if t >= min_time]
+    in_window = launch_history_in_window(persisted, now, config.window_seconds)
     # #519レビュー指摘(P1): 集合和ではなく**多重集合**として、各値の出現回数の
     # 大きい方を採る。同一サイクルで複数タスクが起動するといずれもサイクル共通の
     # `now`をappendするため、重複タイムスタンプは「別々の起動」を表す正当な
@@ -229,6 +238,11 @@ def _self_heal_launch_history(
     30日超の`last_completed`を無条件に刈り込んでしまう）。
     """
     if not _restore_launch_history(run_state, config, now):
+        return
+    # #519レビュー7巡目(P2): 復元はメモリ上で`--no-apply`でも行うが（dry-runは
+    # 「適用したら何が起きるか」のpreviewなので、永続履歴を無視して
+    # 「起動する」と表示してはならない）、run_stateへの書き戻しはapply時のみ。
+    if not config.apply:
         return
     open_prs = config.resolved_forge.list_open_prs()
     save_run_state(

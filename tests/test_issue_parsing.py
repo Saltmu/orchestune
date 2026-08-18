@@ -13,6 +13,7 @@ from orchestune.issue_parsing import (
     ensure_parent_marker,
     find_children_by_parent,
     launch_history_from_body,
+    launch_history_in_window,
     parent_issue_number_from_body,
     recovery_counters_from_body,
 )
@@ -368,6 +369,43 @@ class TestLaunchHistoryFromBody:
         """子IssueのFootprintフェンスを誤って読まないこと（マーカー必須）。"""
         body = "```yaml\nsubtask_id: task-a\nlaunch_history:\n- 1000.0\n```\n"
         assert launch_history_from_body(body) == []
+
+
+class TestLaunchHistoryInWindow:
+    """#519レビュー7巡目(P2): ウィンドウ正規化の共通意味論（永続化側の
+    `_persist_launch_history`と復元側の`_restore_launch_history`が共有する）。"""
+
+    def test_drops_timestamps_older_than_the_window(self):
+        assert launch_history_in_window(
+            [900.0, 800.0], now=1000.0, window_seconds=100
+        ) == [900.0]
+
+    def test_clamps_a_slightly_future_timestamp_to_now(self):
+        """クロックずれ由来の数秒未来は捨てない（捨てると上限が緩む危険側）。"""
+        assert launch_history_in_window([1002.0], now=1000.0, window_seconds=100) == [
+            1000.0
+        ]
+
+    def test_discards_beyond_one_window_into_the_future(self):
+        """過去の起動の記録としてあり得ない値は捨てる。クランプで済ませると
+        毎サイクル新しい`now`へクランプし直され、永久に1スロットを食い潰す。"""
+        assert (
+            launch_history_in_window(
+                [999_999_999_999.0, 1101.0], now=1000.0, window_seconds=100
+            )
+            == []
+        )
+
+    def test_keeps_the_boundary_value_inclusive(self):
+        assert launch_history_in_window([1100.0], now=1000.0, window_seconds=100) == [
+            1000.0
+        ]
+
+    def test_preserves_duplicates_as_a_multiset(self):
+        """同一サイクルの複数起動は同じ`now`を持つ正当なデータ（畳まない）。"""
+        assert launch_history_in_window(
+            [950.0, 950.0], now=1000.0, window_seconds=100
+        ) == [950.0, 950.0]
 
 
 class TestBackfillLaunchHistory:

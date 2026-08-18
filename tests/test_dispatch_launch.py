@@ -1,6 +1,8 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_launch import (
     _decide_duplicate_candidates,
@@ -918,6 +920,56 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             )
 
         assert selected == []
+        assert launch_history_from_body(bodies["current"]) == []
+
+    def test_releases_the_reservation_before_reporting_to_the_forge(self, tmp_path):
+        """#519レビュー7巡目(P2): 解放をGitHubへの報告より**後**に置くと、
+        `transition_status_label`/`add_comment`が一時的なforgeエラーで送出した
+        場合に解放へ到達せず、起動していないエージェントの予約が漏れる。
+        既定(max_launches_per_window=1)では、その1件が同じ親配下の全タスクを
+        1ウィンドウぶんブロックしてしまう。
+        """
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch_worktree import LaunchResult
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
+            current=body
+        )
+        # 起動失敗の報告そのものが失敗する（forge側の一時障害）
+        forge.add_label.side_effect = RuntimeError("forge is unavailable")
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with patch(
+            "orchestune.dispatch_launch.create_worktree_and_launch",
+            return_value=LaunchResult(
+                issue_number=1,
+                branch="claude/issue-1-task-1",
+                worktree_path=str(tmp_path / "worktrees" / "w1"),
+                pid=None,
+                launched=False,
+                error_message="worktree creation failed",
+            ),
+        ):
+            with pytest.raises(RuntimeError):
+                _apply_task_launches(plans, RunState(active_worktrees={}), now, config)
+
+        # 報告が失敗してもクオータは解放済み（次サイクルで再試行できる）
         assert launch_history_from_body(bodies["current"]) == []
 
     def test_keeps_the_reservation_when_launch_succeeds(self, tmp_path):

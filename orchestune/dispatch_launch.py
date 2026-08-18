@@ -16,6 +16,7 @@ from orchestune.git_cli import run_git
 from orchestune.issue_parsing import (
     backfill_launch_history,
     launch_history_from_body,
+    launch_history_in_window,
 )
 from orchestune.models import IssueRecord, PrRecord
 
@@ -289,7 +290,10 @@ def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
     いずれも同じ`now`を持つが、それらは別々の起動を表す正当なデータのため
     （#519レビュー指摘(P1)）。
 
-    ウィンドウ外は書かない（本文の単調肥大化を防ぐ）。値が既に一致していれば
+    ウィンドウ外は書かない（本文の単調肥大化を防ぐ）。未来のタイムスタンプは
+    `launch_history_in_window`が`now`へクランプするため、本文が手で編集されて
+    遥か未来の値が入っても書き戻しの時点で正規化される（#519レビュー7巡目 P2）。
+    値が既に一致していれば
     `backfill_launch_history`が`None`を返すため、無駄な`update_issue_body`
     呼び出しは発生しない。
 
@@ -311,8 +315,9 @@ def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
     issue = config.resolved_forge.get_issue(config.parent_issue_number)
     if issue is None:
         return
-    min_time = now - config.window_seconds
-    merged = [t for t in launch_history_from_body(issue.body) if t >= min_time]
+    merged = launch_history_in_window(
+        launch_history_from_body(issue.body), now, config.window_seconds
+    )
     merged.append(now)
     patched_body = backfill_launch_history(issue.body, sorted(merged))
     if patched_body is not None:
@@ -415,6 +420,18 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_launch,
         )
         if not launch.launched:
+            # エージェントは1つも起動していないためクオータを消費していない。
+            # 予約を解放しないと、この失敗1件が同じ親配下の全タスクを
+            # 1ウィンドウぶんブロックしてしまう（#519レビュー4巡目 P2）。
+            #
+            # 解放はGitHubへの報告（transition_status_label / add_comment）
+            # より**先**に行う。報告は一時的なforgeエラーで送出しうるため、
+            # 後ろに置くと解放へ到達せず予約が漏れる（#519レビュー7巡目 P2）。
+            # 逆順にしても危険は無い: 解放自体は失敗を握りつぶすため報告へ
+            # 必ず到達し、また解放とラベル/コメントの間にクラッシュしても
+            # 残るのは「起動していないのにstatus:queuedのまま」という、
+            # 次サイクルが通常のキュー投入として再評価できる状態である。
+            _release_launch_reservation(now, config)
             old_labels = tuple(
                 label
                 for label in ("status:queued", "status:blocked")
@@ -444,10 +461,6 @@ def _apply_task_launches(
                     f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
                     f"エラー内容:\n```\n{launch.error_message}\n```",
                 )
-            # エージェントは1つも起動していないためクオータを消費していない。
-            # 予約を解放しないと、この失敗1件が同じ親配下の全タスクを
-            # 1ウィンドウぶんブロックしてしまう（#519レビュー4巡目 P2）。
-            _release_launch_reservation(now, config)
             continue
 
         # run_stateへの登録・永続化を先に行い、GitHubラベルの更新は後で行う。

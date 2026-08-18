@@ -1081,15 +1081,89 @@ class TestRestoreLaunchHistory:
         mock_get.assert_not_called()
         assert changed is False
 
-    def test_is_a_noop_when_apply_is_false(self, tmp_path):
+    def test_restores_in_memory_even_when_apply_is_false(self, tmp_path):
+        """#519レビュー7巡目(P2): dry-runは「適用したら何が起きるか」の
+        previewなので、永続履歴を無視してはならない。
+
+        ステートレスなランナーで`--no-apply`を実行すると、以前は本文の
+        読み取りごとスキップされ、ローカル履歴が空のまま
+        `quota_available`が「起動する」と表示していた。直後に実適用すると
+        復元が効いて1件も起動しない、という食い違いになる。本文の読み取り
+        自体に副作用は無いため、復元はメモリ上で両モードとも行う
+        （run_stateへの書き戻しだけがapply限定——`TestSelfHealLaunchHistory`）。
+        """
+        now = 10_000.0
         run_state = RunState(active_worktrees={}, launch_history=[])
         config = self._config(tmp_path, apply=False)
+        issue = self._parent_issue([now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue") as mock_get:
-            changed = _restore_launch_history(run_state, config, now=10_000.0)
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            changed = _restore_launch_history(run_state, config, now=now)
 
-        mock_get.assert_not_called()
-        assert changed is False
+        assert changed is True
+        assert run_state.launch_history == [now - 60]
+
+    def test_clamps_a_slightly_future_timestamp_to_now(self, tmp_path):
+        """#519レビュー7巡目(P2): ランナー間の軽微なクロックずれで数秒未来に
+        書かれた正当な記録は、捨てずに`now`へクランプする。
+
+        捨てると起動数の過少カウント＝上限を緩める危険側へ倒れるため
+        （本ファイル群の非対称: 過少は危険、過大は安全）。
+        """
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now + 5, now - 60])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        assert run_state.launch_history == [now - 60, now]
+
+    def test_discards_an_implausibly_future_timestamp(self, tmp_path):
+        """#519レビュー7巡目(P2): 本文は人間が編集できるため、有限だが遥か
+        未来のタイムスタンプが入りうる。`math.isfinite`は`.inf`しか弾けず、
+        `999999999999`はそのまま復元されて`quota_available`の
+        `now - t < window_seconds`が何年も真であり続ける。
+
+        1ウィンドウより先は過去の起動の記録としてあり得ないため破棄する。
+        クランプで済ませると毎サイクル新しい`now`へクランプし直され、
+        `.inf`と同じ「永久に1スロットを食い潰す」症状が有限値で再現する。
+        """
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([999_999_999_999.0, now - 60])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        assert run_state.launch_history == [now - 60]
+
+    def test_an_implausible_timestamp_does_not_block_dispatch_forever(self, tmp_path):
+        """破棄の要点: 本文を修正しなくても、次サイクル以降ディスパッチが
+        止まらないこと（クランプのみだと毎サイクル復活してしまう）。"""
+        from orchestune.dispatch_scoring import quota_available
+
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([999_999_999_999.0])
+
+        for now in (10_000.0, 20_000.0):
+            run_state.launch_history = []
+            with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+                _restore_launch_history(run_state, config, now=now)
+            assert run_state.launch_history == []
+            assert (
+                quota_available(
+                    run_state,
+                    now,
+                    max_concurrent=5,
+                    max_launches_per_window=1,
+                    window_seconds=3600,
+                )
+                == 1
+            )
 
     def test_returns_false_when_parent_issue_has_no_block(self, tmp_path):
         """本フィールド導入前の親Issue（ブロック欠落）への後方互換。"""

@@ -241,6 +241,37 @@ def launch_history_from_body(body: str) -> list[float]:
     return timestamps
 
 
+def launch_history_in_window(
+    timestamps: list[float], now: float, window_seconds: float
+) -> list[float]:
+    """#514: 起動タイムスタンプ列をウィンドウ内へ正規化する（永続化側・復元側
+    の両方が同じ意味論を使うための共通関数）。
+
+    #519レビュー7巡目(P2): 下限（`now - window_seconds`）だけを見る素朴な
+    フィルタでは、親Issue本文が手で編集されて`999999999999`のような有限だが
+    遥か未来のタイムスタンプが入った場合、`quota_available`の
+    `now - t < window_seconds`が何年も真であり続け、その親配下の
+    ディスパッチが止まる。`math.isfinite`は`.inf`しか弾けない。
+
+    未来側は2段階で扱う。境界は「1ウィンドウ先」:
+
+    - `now`〜`now + window_seconds`: `now`へ**クランプ**する。ランナー間の
+      軽微なクロックずれで数秒未来に書かれた正当な記録を捨てると、起動数の
+      過少カウント＝上限を緩める危険側へ倒れるため（本ファイル群の非対称:
+      過少は危険、過大は安全）。クランプならスロットは消費したまま
+      `now + window_seconds`で正常に期限切れになる。
+    - `now + window_seconds`より先: **破棄**する。過去の起動の記録として
+      あり得ない値であり、壊れた値は捨てるという既存方針（`.inf`/`.nan`/
+      数値化できない要素）と同じ。ここを破棄せずクランプで済ませると、
+      毎サイクル新しい`now`へクランプし直されて**永久に**1スロットを
+      食い潰し続ける（`.inf`と同じ症状が有限値で再現してしまう）。
+    """
+    min_time = now - window_seconds
+    plausible = (t for t in timestamps if t <= now + window_seconds)
+    clamped = (min(timestamp, now) for timestamp in plausible)
+    return sorted(timestamp for timestamp in clamped if timestamp >= min_time)
+
+
 def backfill_launch_history(body: str, launch_history: list[float]) -> str | None:
     """#514: 親Issue本文の`launch_history`ブロックを書き換えて返す。
     ブロックが無ければ本文末尾へ追記する（親Issueは既存フェンスを持たないため、
