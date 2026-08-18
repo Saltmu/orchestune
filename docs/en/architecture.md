@@ -20,19 +20,7 @@ An LLM call is a scarce operation that consumes quota. Orchestune therefore **sp
 
 This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces — the main waste named above.
 
-**The automated shared-state transitions belong to Python.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue.
-
-That review is **fire-and-forget, though: Python does not track its result either**. Its findings stay as comments on the integration PR; they do not stop or alter a merge.
-
-Whether the acceptance reviewer sees them depends on the integration mode. In **flat mode** (no `--parent-issue`), that integration PR *is* the acceptance PR the human merges, so the findings sit on the same PR (`AutoMergeChildIntegrationStep` returns immediately when `parent_issue_number` is `None`, and nothing is auto-merged). Under the **two-tier parent-branch model** (`--parent-issue`), the findings land on the *child* integration PR and the automatic merge runs right after. The acceptance PR (parent branch → `main`) is a different PR, and they are **neither copied nor linked onto it** — an asynchronous finding can even land after the child PR is closed, so reading them means going to each child PR by hand.
-
-The only **LLM review** whose result flows back into the state machine is the `status:not-needed` re-verification below, and it does so through a label. Human review is a separate input: a `CHANGES_REQUESTED` decision on a child PR is picked up by `_rule_changes_requested`, which stops dependent in-flight work and moves the Issue to `status:blocked-human-review`.
-
-The one exception is `status:not-needed`. An implementation agent that finds the requirement already satisfied is instructed by the skills (`skills/local-ci-developer`, `skills/workflow-template`) to remove `status:in-progress` and apply `status:not-needed` — it writes no commit and opens no PR, so the usual completion signal (the existence of a PR) would never fire, and the label itself has to serve as that signal. The re-verification session on the Cloud Routine target is the same: when the check does not pass, its prompt tells it to move the label from `status:not-needed` to `status:queued` and add `not-needed-review:failed` (`build_not_needed_review_prompt`).
-
-So **label transitions themselves are partly LLM-owned**. Nor is the dividing line irreversibility — an implementation agent commits to its own branch, pushes it, and opens a PR (the `skills/local-ci-developer` workflow), all of which are irreversible.
-
-The real line is **scope**: whose territory is being written to.
+The dividing line is not "what the LLM does not do" but **scope**: whose territory is being written to.
 
 | | Writes to |
 |---|---|
@@ -40,7 +28,7 @@ The real line is **scope**: whose territory is being written to.
 | **Python** | **The shared state that advances automatically** — integration merges from a child PR into the parent branch, whether an Issue lives or dies, dependency resolution, the quota ledger |
 | **Human** | **The acceptance merge** — the final PR from the parent branch into `main`; the "one human click" of Section 4 |
 
-An agent is a writer inside its own isolated workspace, and it is not the agent that decides whether that work enters shared state. Child-level integration is advanced automatically by Python on nothing but a CI pass; only the final call to take it into `main` stays with a human. The verifier's own prompt spells the constraint out: it may only apply labels, comment, and (when the judgement was wrong) move a label; the actual close is done by another system that detects that label.
+Some label transitions do belong to the LLM. An implementation agent applies `status:not-needed` itself when it finds the requirement already satisfied (it writes no commit and opens no PR, so the label is the only completion signal available), and it commits, pushes, and opens PRs. All of that stays inside its own branch, though. **What the agent never decides is whether that work enters shared state.**
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
@@ -50,22 +38,20 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 |---|---|---|
 | Bad decomposition (an unestablished shared extension point) | Shared-contract gate (Section 1) | Warning |
 | Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
-| Bad declaration (a change outside the footprint) | Deviation detection (Section 3) | DAG recomputation (with exclusion rules and a retry cap) |
+| Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch_locks.check_footprint_deviation`) | DAG recomputation (with exclusion rules and a retry cap) |
 | Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
 | The agent's own report (`status:not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by a label |
 
-That re-verification only runs when `ClaudeCodeCloudRoutineDispatchTarget` is in use. Under the default `LocalProcessDispatchTarget`, a `status:not-needed` Issue is closed directly, with no re-verification in between (`_finalize_not_needed_worktree`).
+The detailed behaviour of each mechanism — its exclusion rules, its skip conditions, how it differs per dispatch target — belongs to that mechanism's own section and to the docstring of its implementation. All that matters here is that each one follows from the same principle.
 
-Deviation detection has two exclusions. One is a dead band on changed lines (5 or fewer by default), which stops churn from causing a livelock. The other is a **hotspot-file exclusion**: files nearly every task may touch — `package.json`, the various lockfiles, `src/routes.py` — are never treated as a deviation **regardless of how large the change is** (`_is_hotspot`). An undeclared lockfile update therefore does not trigger DAG recomputation.
-
-And **loops are bounded, with a terminal state** — subject to the caveats below. DAG recomputation retries (2 by default) and launches per window (1 by default) are bounded out of the box, and a dead band ignores tiny deviations so the loop cannot livelock. Task timeouts (`--task-timeout-seconds`) and token caps (`--max-tokens-per-window` / `--max-tokens-per-task`), by contrast, are **off by default** — set them explicitly before leaving a long run unattended. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries and launches per window are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
 > **Known gaps**: three paths currently never reach a terminal state.
 > - The `status:not-needed` re-verification on the Cloud Routine target. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle (`dispatched_at` is recorded but never used for a timeout). [#511](https://github.com/Saltmu/orchestune/issues/511)
-> - **Where the bounding counters live.** `recompute_count`, `forced_serial`, `launch_history`, and token usage exist only in `run_state.json`, never on the GitHub side. Self-healing restores them at their initial values (`dispatch_recovery.py`), so on the **stateless CI runner** that Section 0 names as a primary deployment model — where `run_state.json` is lost on every run — the bounds above are effectively inert. [#513](https://github.com/Saltmu/orchestune/issues/513)
-> - Requeueing of a reclaimed timed-out task. Even with a positive `--task-timeout-seconds`, `_apply_zombie_or_timeout_reclaim` keeps no per-task reclaim counter, so a task that keeps timing out is returned to `status:queued` forever (`max_launches_per_window` only delays the next launch; it does not bound the total number of attempts). [#512](https://github.com/Saltmu/orchestune/issues/512)
+> - Requeueing of a reclaimed timed-out task. Even with a positive `--task-timeout-seconds`, `_apply_zombie_or_timeout_reclaim` keeps no per-task reclaim counter, so a task that keeps timing out is returned to `status:queued` forever. [#512](https://github.com/Saltmu/orchestune/issues/512)
+> - **Where the bounding counters live.** `recompute_count`, `forced_serial`, `launch_history`, and token usage exist only in `run_state.json`, never on the GitHub side. Self-healing restores them at their initial values, so on the **stateless CI runner** that Section 0 names as a primary deployment model the bounds above are effectively inert. [#513](https://github.com/Saltmu/orchestune/issues/513)
 
-What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. That is a design goal rather than a property every path already satisfies: besides the three known gaps above, an ordinary task left hung with `--task-timeout-seconds` at its default of zero is also still outside it.
+What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.
 
 ---
 
@@ -234,7 +220,8 @@ sequenceDiagram
 3. **Automatic child merge & close**: once CI passes, the integrator merges that temporary branch's PR into `parent/issue-{N}` **without waiting for a human** and closes the child Issue (`reason: completed`). No per-child review gate exists at this tier — CI is the quality gate (see Section 4).
 4. **Final PR, once every child is done**: when all child Issues under a parent are closed, the integrator opens a PR from `parent/issue-{N}` to `main`. This PR is never auto-merged.
 5. **Acceptance merge & parent close**: a human reviews and merges that final PR. Once merged, the integrator detects it and closes the parent Issue automatically.
-6. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR for the human who will later review the final PR — it never blocks or reverses the automatic child merge.
+6. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR — it never blocks or reverses the automatic child merge, and Python does not track its result either.
+   **Whether the acceptance reviewer sees those findings depends on the mode**: in flat mode the integration PR *is* the acceptance PR a human merges, so they sit on the same PR; under this two-tier model they land on the *child* integration PR and are neither copied nor linked onto the acceptance PR (parent branch → `main`). An asynchronous finding can even land after the child PR is closed, so reading them means going to each child PR by hand.
 
 If the dispatcher is run without `--parent-issue`, Orchestune falls back to the flat, single-tier mode: child branches merge directly toward `main` and, matching the "final merge" semantics above, that merge is always left for a human (the integrator only opens the PR).
 
