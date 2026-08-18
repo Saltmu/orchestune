@@ -486,6 +486,45 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
 
         forge.update_issue_body.assert_not_called()
 
+    def test_persists_body_before_publishing_the_durable_label(self, tmp_path):
+        """#516レビュー指摘: `add_label`成功後、`_persist_recovery_counters`が
+        落ちる（プロセス停止・API失敗）と、GitHub上には永続的な
+        `status:force-serial`ラベルが付いているのにIssue本文の
+        `forced_serial`はfalseのまま、という不整合が残る。自己修復
+        （`_decide_missing_active_worktrees`）は本文のみを信頼しラベルを
+        見ないため、既に強制直列化済みのタスクが「直列化されていない」と
+        誤って復元され、衝突するタスクが再び並列ディスパッチされ得る。
+
+        本文の永続化がラベル付与より先に行われることを検証する:
+        `add_label`が例外を送出しても、その時点で本文は既に書き込み
+        済みでなければならない。
+        """
+        active = _active(recompute_count=2)
+        decision = FootprintDeviationDecision(
+            action="forced_serial", subtask_id="task-a", recompute_count=2
+        )
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n```\n"
+        forge = self._forge_with_body(body)
+        forge.add_label.side_effect = RuntimeError("simulated crash after persist")
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        try:
+            _apply_footprint_deviation_outcome(
+                active, ["src/bar.py"], decision, {"task-a": 1}, config
+            )
+        except RuntimeError:
+            pass
+
+        forge.update_issue_body.assert_called_once()
+        written_body = forge.update_issue_body.call_args.args[1]
+        assert "forced_serial: true" in written_body
+
     def test_does_not_write_when_get_issue_returns_none(self, tmp_path):
         """#513: Issue取得時点で既に見つからない（削除・番号相違等の異常系）
         場合はスキップする。次回の逸脱イベントで再試行される。"""

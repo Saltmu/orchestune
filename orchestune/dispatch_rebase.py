@@ -228,8 +228,14 @@ def _apply_footprint_deviation_outcome(
         event["recompute_count"] = decision.recompute_count
         if config.apply:
             active.forced_serial = True
-            config.resolved_forge.add_label(active.issue_number, "status:force-serial")
+            # #516レビュー指摘: ラベル（表示専用）より先に本文（自己修復が
+            # 読む唯一のソース）へ永続化する。逆順だと、add_label成功後に
+            # ここで失敗した場合、GitHub上に永続的なstatus:force-serial
+            # ラベルは付くのに本文のforced_serialはfalseのままという
+            # 不整合が残り、次の自己修復サイクルで既に強制直列化済みの
+            # タスクを「直列化されていない」と誤って復元してしまう。
             _persist_recovery_counters(active, config)
+            config.resolved_forge.add_label(active.issue_number, "status:force-serial")
         return event
 
     # decision.action == "recomputed"
