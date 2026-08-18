@@ -54,12 +54,12 @@ Deviation detection has two exclusions. One is a dead band on changed lines (5 o
 
 And **loops are bounded, with a terminal state** — subject to the caveats below. DAG recomputation retries (2 by default) and launches per window (1 by default) are bounded out of the box, and a dead band ignores tiny deviations so the loop cannot livelock. Task timeouts (`--task-timeout-seconds`) and token caps (`--max-tokens-per-window` / `--max-tokens-per-task`), by contrast, are **off by default** — set them explicitly before leaving a long run unattended. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
-> **Known gaps**: two paths currently never reach a terminal state.
+> **Known gaps**: three paths currently never reach a terminal state.
 > - The `status:not-needed` re-verification on the Cloud Routine target. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle (`dispatched_at` is recorded but never used for a timeout). [#511](https://github.com/Saltmu/orchestune/issues/511)
 > - **Where the bounding counters live.** `recompute_count`, `forced_serial`, `launch_history`, and token usage exist only in `run_state.json`, never on the GitHub side. Self-healing restores them at their initial values (`dispatch_recovery.py`), so on the **stateless CI runner** that Section 0 names as a primary deployment model — where `run_state.json` is lost on every run — the bounds above are effectively inert. [#513](https://github.com/Saltmu/orchestune/issues/513)
 > - Requeueing of a reclaimed timed-out task. Even with a positive `--task-timeout-seconds`, `_apply_zombie_or_timeout_reclaim` keeps no per-task reclaim counter, so a task that keeps timing out is returned to `status:queued` forever (`max_launches_per_window` only delays the next launch; it does not bound the total number of attempts). [#512](https://github.com/Saltmu/orchestune/issues/512)
 
-What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. That is a design goal rather than a property every path already satisfies: besides the two known gaps above, an ordinary task left hung with `--task-timeout-seconds` at its default of zero is also still outside it.
+What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. That is a design goal rather than a property every path already satisfies: besides the three known gaps above, an ordinary task left hung with `--task-timeout-seconds` at its default of zero is also still outside it.
 
 ---
 
