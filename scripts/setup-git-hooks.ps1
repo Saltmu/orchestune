@@ -14,7 +14,25 @@ try {
     Write-Warning "gitleaks auto-install failed; local-ci.ps1 will retry on push. ($_)"
 }
 
-$HooksDir = Join-Path $ProjectRoot ".git\hooks"
+# Resolve Git hooks directory dynamically to support standard repos, worktrees, and submodules
+$HooksDir = $null
+try {
+    $GitHooksPath = (git rev-parse --git-path hooks 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $GitHooksPath) {
+        $HooksDir = if ([System.IO.Path]::IsPathRooted($GitHooksPath)) {
+            $GitHooksPath
+        } else {
+            Join-Path $ProjectRoot $GitHooksPath
+        }
+    }
+} catch {
+    $HooksDir = $null
+}
+
+if (-not $HooksDir) {
+    $HooksDir = Join-Path $ProjectRoot ".git\hooks"
+}
+
 if (-not (Test-Path $HooksDir)) {
     New-Item -ItemType Directory -Path $HooksDir -Force | Out-Null
 }
@@ -55,6 +73,9 @@ $PrePushHook = Join-Path $HooksDir "pre-push"
 $PrePushContent = @'
 #!/usr/bin/env bash
 # Git pre-push hook to enforce local CI run before pushing
+
+# Unset Git internal environment variables before invoking CI
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_GRAFT_FILE GIT_SUPER_PREFIX
 
 if command -v powershell.exe >/dev/null 2>&1; then
   powershell.exe -ExecutionPolicy Bypass -File ./scripts/local-ci.ps1

@@ -4,6 +4,24 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
+# Unset Git internal environment variables that may leak from git hooks
+$GitEnvVars = @(
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_GRAFT_FILE",
+    "GIT_SUPER_PREFIX"
+)
+foreach ($var in $GitEnvVars) {
+    if (Test-Path "Env:$var") {
+        Remove-Item "Env:$var"
+    }
+}
+
 Write-Host "========================================="
 Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="

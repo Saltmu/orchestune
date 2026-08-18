@@ -8,14 +8,37 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # git CLIのadapter境界でrefを検証し、不正な値をsubprocessへ渡さない。
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
+
+# Git hooksや外部環境からリークして意図しないリポジトリを操作する危険な環境変数一覧 (Issue #507)
+DANGEROUS_GIT_ENV_VARS: tuple[str, ...] = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_GRAFT_FILE",
+    "GIT_SUPER_PREFIX",
+)
+
+
+def get_clean_git_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return a copy of os.environ with all dangerous GIT_* environment variables removed."""
+    env = {k: v for k, v in os.environ.items() if k not in DANGEROUS_GIT_ENV_VARS}
+    if extra_env:
+        env.update(extra_env)
+    return env
 
 
 def _validate_ref_name(ref: str) -> str:
@@ -37,7 +60,12 @@ class GitResult:
 
 
 def run_git(
-    args: list[str], *, cwd: str | Path | None, check: bool = True
+    args: list[str],
+    *,
+    cwd: str | Path | None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+    isolate_git_env: bool = True,
 ) -> GitResult:
     """`git`を呼び出す単一の実行口。
 
@@ -45,13 +73,23 @@ def run_git(
     としてそのまま伝播する。実行自体ができなかった場合は`OSError`が伝播する。
     握り潰す/文字列化するかどうかの判断は呼び出し側の責務とする。
     """
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=check,
-    )
+    kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "capture_output": True,
+        "text": True,
+        "check": check,
+    }
+    if env is not None:
+        if isolate_git_env and any(var in env for var in DANGEROUS_GIT_ENV_VARS):
+            kwargs["env"] = {
+                k: v for k, v in env.items() if k not in DANGEROUS_GIT_ENV_VARS
+            }
+        else:
+            kwargs["env"] = env
+    elif isolate_git_env and any(var in os.environ for var in DANGEROUS_GIT_ENV_VARS):
+        kwargs["env"] = get_clean_git_env()
+
+    result = subprocess.run(["git", *args], **kwargs)
     return GitResult(
         returncode=result.returncode, stdout=result.stdout, stderr=result.stderr
     )

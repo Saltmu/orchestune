@@ -4,6 +4,9 @@ set -euo pipefail
 # Move to the project root
 cd "$(dirname "$0")/.."
 
+# Unset Git internal environment variables that may leak from git hooks
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_GRAFT_FILE GIT_SUPER_PREFIX
+
 echo "========================================="
 echo "Running Orchestune Local CI Check..."
 echo "========================================="

@@ -15,7 +15,15 @@ import pytest
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
 from orchestune.forge import BootstrapResult, Forge, GitHubForge
+from orchestune.git_cli import (
+    DANGEROUS_GIT_ENV_VARS,
+)
+from orchestune.git_cli import (
+    get_clean_git_env as get_clean_git_env,
+)
 from orchestune.models import IssueRecord, PrRecord
+
+GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
 
 
 def make_task(issue_number: int = 1, **overrides: Any) -> Task:
@@ -352,4 +360,12 @@ def _guard_dispatch_cycle_ensure_parent_branch(
     monkeypatch.setattr(
         "orchestune.dispatch_phase_rebase.ensure_parent_branch", guarded_ensure
     )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
+    """Ensure tests run in an isolated Git environment where GIT_* variables are stripped."""
+    for var in DANGEROUS_GIT_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
     yield
