@@ -23,6 +23,8 @@ from orchestune.dispatch_reconciliation import (
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
     _reconcile_recovery_counters,
+    _restore_launch_history,
+    _self_heal_launch_history,
     _self_heal_run_state,
 )
 from orchestune.dispatch_rules import CycleContext
@@ -933,3 +935,209 @@ class TestHandleBlockedRecomputeRecovery:
         ]
         mock_add.assert_called_once_with(1, "status:queued")
         assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+
+
+class TestRestoreLaunchHistory:
+    """#514: run_state.json消失時、親Issue本文からlaunch_historyを復元する。
+
+    `--parent-issue` 未指定（フラットモード）は対象外（永続化先の親Issueが
+    存在しないため、Issue #514 のスコープ決定に従う）。
+    """
+
+    def _config(self, tmp_path, **overrides):
+        defaults = dict(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            parent_issue_number=100,
+            window_seconds=3600,
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def _parent_issue(self, timestamps):
+        entries = "\n".join(f"- {t}" for t in timestamps)
+        return IssueRecord(
+            number=100,
+            title="[EPIC] t",
+            body=(
+                "EPIC\n\n<!-- orchestune:launch-history -->\n"
+                f"```yaml\nlaunch_history:\n{entries}\n```\n"
+            ),
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+    def test_restores_in_window_timestamps_when_run_state_is_empty(self, tmp_path):
+        """再現テスト: run_state.jsonが消えてlaunch_historyが空でも、
+        親Issue本文のウィンドウ内タイムスタンプが復元されること。"""
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now - 60, now - 120])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            changed = _restore_launch_history(run_state, config, now=now)
+
+        assert changed is True
+        assert sorted(run_state.launch_history) == [now - 120, now - 60]
+
+    def test_drops_timestamps_outside_the_window(self, tmp_path):
+        """`prune_run_state`と同じ意味論で、ウィンドウ外は復元しない。"""
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now - 60, now - 7200])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        assert run_state.launch_history == [now - 60]
+
+    def test_does_not_shrink_an_existing_local_history(self, tmp_path):
+        """本文側が古い場合に、ローカルの進捗（より多くの起動）を巻き戻さない。"""
+        now = 10_000.0
+        run_state = RunState(active_worktrees={}, launch_history=[now - 30, now - 60])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now - 60])
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        assert sorted(run_state.launch_history) == [now - 60, now - 30]
+
+    def test_is_a_noop_in_flat_mode(self, tmp_path):
+        """#514スコープ決定: --parent-issue未指定では永続化・復元とも行わない。"""
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path, parent_issue_number=None)
+
+        with patch("orchestune.forge.GitHubForge.get_issue") as mock_get:
+            changed = _restore_launch_history(run_state, config, now=10_000.0)
+
+        mock_get.assert_not_called()
+        assert changed is False
+
+    def test_is_a_noop_when_apply_is_false(self, tmp_path):
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path, apply=False)
+
+        with patch("orchestune.forge.GitHubForge.get_issue") as mock_get:
+            changed = _restore_launch_history(run_state, config, now=10_000.0)
+
+        mock_get.assert_not_called()
+        assert changed is False
+
+    def test_returns_false_when_parent_issue_has_no_block(self, tmp_path):
+        """本フィールド導入前の親Issue（ブロック欠落）への後方互換。"""
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        config = self._config(tmp_path)
+        issue = IssueRecord(
+            number=100,
+            title="[EPIC] t",
+            body="EPIC only",
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            changed = _restore_launch_history(run_state, config, now=10_000.0)
+
+        assert changed is False
+        assert run_state.launch_history == []
+
+
+class TestSelfHealLaunchHistory:
+    """#514: 復元を生産コードの配線から呼び出す層。
+
+    PR #516 の3巡目レビューで学んだ通り、`_self_heal_run_state`は
+    `run_state.json`欠落時にしか動作しないため、そこに相乗りさせると
+    「ファイルは存在するがlaunch_historyだけ古い」ケースへ到達できない。
+    ファイル有無を問わず毎サイクル呼び出す。
+    """
+
+    def test_persists_when_restoration_reports_a_change(self, tmp_path):
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            parent_issue_number=100,
+        )
+        run_state = RunState(active_worktrees={})
+        open_prs = [MagicMock()]
+
+        with (
+            patch(
+                "orchestune.dispatch_reconciliation._restore_launch_history",
+                return_value=True,
+            ),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=open_prs),
+            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+        ):
+            _self_heal_launch_history(run_state, config, now=1000.0)
+
+        mock_save.assert_called_once_with(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
+
+    def test_does_not_save_when_nothing_restored(self, tmp_path):
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            parent_issue_number=100,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch(
+                "orchestune.dispatch_reconciliation._restore_launch_history",
+                return_value=False,
+            ),
+            patch("orchestune.forge.GitHubForge.list_open_prs") as mock_list_prs,
+            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+        ):
+            _self_heal_launch_history(run_state, config, now=1000.0)
+
+        mock_list_prs.assert_not_called()
+        mock_save.assert_not_called()
+
+    def test_restores_even_though_run_state_file_exists(self, tmp_path):
+        """再現テスト: run_state.jsonが存在する通常サイクルでも復元されること
+        （`_self_heal_run_state`のファイル有無ゲートに影響されない）。"""
+        run_state_path = tmp_path / "run_state.json"
+        run_state_path.write_text("{}", encoding="utf-8")
+        now = 10_000.0
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            parent_issue_number=100,
+            window_seconds=3600,
+        )
+        run_state = RunState(active_worktrees={}, launch_history=[])
+        issue = IssueRecord(
+            number=100,
+            title="[EPIC] t",
+            body=(
+                "EPIC\n\n<!-- orchestune:launch-history -->\n"
+                f"```yaml\nlaunch_history:\n- {now - 60}\n```\n"
+            ),
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+
+        with (
+            patch("orchestune.forge.GitHubForge.get_issue", return_value=issue),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_reconciliation.save_run_state"),
+        ):
+            _self_heal_launch_history(run_state, config, now=now)
+
+        assert run_state.launch_history == [now - 60]

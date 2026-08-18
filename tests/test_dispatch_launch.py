@@ -625,6 +625,112 @@ class TestApplyTaskLaunchesRunStatePersistence:
         assert any(cw.issue_number == 99 for cw in persisted.completed_worktrees)
 
 
+class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
+    """#514: run_state.json消失時に`max_launches_per_window`を復元できるよう、
+    起動タイムスタンプを親Issue本文へも永続化する。
+
+    `--parent-issue`未指定（フラットモード）は対象外（Issue #514のスコープ決定）。
+    """
+
+    def _launch_plan(self, tmp_path):
+        from orchestune.dispatch_launch import TaskLaunchPlan
+        from orchestune.dispatch_targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = _task(1, subtask_id="task-1")
+        plans = [TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        return plans, dispatch_target
+
+    def _run(self, tmp_path, run_state, now, *, parent_issue_number, forge):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=parent_issue_number,
+            forge=forge,
+        )
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, now, config)
+
+    def test_writes_the_launch_timestamp_into_the_parent_issue_body(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from orchestune.issue_parsing import launch_history_from_body
+
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        now = 5_000_000.0
+
+        self._run(
+            tmp_path,
+            RunState(active_worktrees={}),
+            now,
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        forge.update_issue_body.assert_called_once()
+        issue_number, written_body = forge.update_issue_body.call_args.args
+        assert issue_number == 100
+        assert launch_history_from_body(written_body) == [now]
+        assert "EPIC body" in written_body
+
+    def test_does_not_touch_the_parent_issue_in_flat_mode(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        forge = MagicMock()
+
+        self._run(
+            tmp_path,
+            RunState(active_worktrees={}),
+            5_000_000.0,
+            parent_issue_number=None,
+            forge=forge,
+        )
+
+        forge.get_issue.assert_not_called()
+        forge.update_issue_body.assert_not_called()
+
+    def test_persists_only_in_window_timestamps(self, tmp_path):
+        """ウィンドウ外の古い起動は書き込まない（本文の単調肥大化を防ぐ）。"""
+        from unittest.mock import MagicMock
+
+        from orchestune.issue_parsing import launch_history_from_body
+
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        now = 5_000_000.0
+        stale = now - 90_000.0  # 既定24時間ウィンドウの外
+
+        self._run(
+            tmp_path,
+            RunState(active_worktrees={}, launch_history=[stale]),
+            now,
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        _, written_body = forge.update_issue_body.call_args.args
+        assert launch_history_from_body(written_body) == [now]
+
+
 class TestLaunchSelectedTasks:
     """#476: build_dispatch_target/_launch_selected_tasksの多引数をDTOへ集約した
     リファクタリング後も、decide+applyの薄いラッパーとしての挙動が維持されることを

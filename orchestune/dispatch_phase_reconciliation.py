@@ -8,6 +8,7 @@ Issueの自己修復までの、1サイクル中の「整合性回復」に関�
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -26,6 +27,7 @@ from orchestune.dispatch_reconciliation import (
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
     _reconcile_recovery_counters,
+    _self_heal_launch_history,
     _self_heal_run_state,
 )
 from orchestune.dispatch_rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
@@ -114,7 +116,9 @@ def _process_active_worktrees(
     )
 
 
-def run_self_heal_phase(run_state: Any, config: DispatcherConfig) -> None:
+def run_self_heal_phase(
+    run_state: Any, config: DispatcherConfig, now: float | None = None
+) -> None:
     """run_state自己修復（薄いラッパー、呼び出し互換のため維持）。
 
     Issue取得直後・`_build_cycle_context`より前に呼び出す必要があるため、
@@ -131,6 +135,7 @@ def run_self_heal_phase(run_state: Any, config: DispatcherConfig) -> None:
     """
     _self_heal_run_state(run_state, config)
     _reconcile_recovery_counters(run_state, config)
+    _self_heal_launch_history(run_state, config, time.time() if now is None else now)
 
 
 def run_blocked_promotion_phase(

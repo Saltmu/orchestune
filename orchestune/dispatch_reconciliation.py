@@ -15,6 +15,7 @@ from orchestune.dispatch_recovery import (
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import RunState, save_run_state
+from orchestune.issue_parsing import launch_history_from_body
 from orchestune.models import IssueRecord
 
 
@@ -150,6 +151,73 @@ def _self_heal_run_state(
             config.run_state_path,
             launch_window_seconds=config.window_seconds,
         )
+
+
+def _restore_launch_history(
+    run_state: RunState,
+    config: DispatcherConfig,
+    now: float,
+) -> bool:
+    """#514: 親Issue本文へ永続化された`launch_history`を復元する。
+    変更した場合`True`を返す（呼び出し元が保存要否を判断する）。
+
+    `run_state.json`が消えるステートレスCIランナーでは`launch_history`が
+    毎回空になり、`max_launches_per_window`（既定1回/3600秒）が実質無効に
+    なる。`orchestune dispatch`に常駐モードは無く毎回が別プロセスのため、
+    この上限は元々「実行をまたぐ」束縛として設計されており、永続状態を要する。
+
+    スコープ（Issue #514の決定）:
+    - `--parent-issue`未指定（フラットモード）では永続化先の親Issueが無いため
+      何もしない
+    - 意味論は「親Issueごとのウィンドウ」。`run_state.json`は複数の親を
+      またぐが、本文ストアは親ごとになるため
+
+    復元は**片方向**（和集合）で行う: 本文側が古い場合にローカルの進捗
+    （より多くの起動）を巻き戻すと、上限が緩む方向へ壊れるため。
+    ウィンドウ外のタイムスタンプは`prune_run_state`と同じ意味論で除外する。
+    """
+    if not config.apply or config.parent_issue_number is None:
+        return False
+    issue = config.resolved_forge.get_issue(config.parent_issue_number)
+    if issue is None:
+        return False
+    persisted = launch_history_from_body(issue.body)
+    if not persisted:
+        return False
+    min_time = now - config.window_seconds
+    in_window = [t for t in persisted if t >= min_time]
+    merged = sorted(set(run_state.launch_history) | set(in_window))
+    if merged == sorted(run_state.launch_history):
+        return False
+    run_state.launch_history = merged
+    return True
+
+
+def _self_heal_launch_history(
+    run_state: RunState,
+    config: DispatcherConfig,
+    now: float,
+) -> None:
+    """#514: 親Issue本文から`launch_history`を復元し、変更があれば永続化する。
+
+    PR #516の3巡目レビューで学んだ通り、`_self_heal_run_state`は
+    `run_state.json`欠落時にしか動作しないため、そこへ相乗りさせると
+    「ファイルは存在するが`launch_history`だけ古い」ケースへ到達できない。
+    ファイル有無を問わず毎サイクル呼び出す。
+
+    保存時に`open_prs`を渡す理由は`_reconcile_recovery_counters`と同じ
+    （渡さないと`prune_run_state`がopen PR紐付きの完了履歴保護を適用せず、
+    30日超の`last_completed`を無条件に刈り込んでしまう）。
+    """
+    if not _restore_launch_history(run_state, config, now):
+        return
+    open_prs = config.resolved_forge.list_open_prs()
+    save_run_state(
+        run_state,
+        config.run_state_path,
+        launch_window_seconds=config.window_seconds,
+        open_prs=open_prs,
+    )
 
 
 def _reconcile_recovery_counters(

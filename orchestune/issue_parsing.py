@@ -28,6 +28,17 @@ FOOTPRINT_BLOCK_PATTERN = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 # it without depending on the entrypoint-layer `provisioning` module.
 PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
 
+# #514: 親(EPIC) Issue本文へ`launch_history`を永続化するブロックの目印。
+# 子Issueと違い親Issueは`provisioning._parent_body`が示す通りFootprint YAML
+# フェンスを持たないため、専用マーカーで自分のフェンスを識別する。マーカーを
+# 必須にすることで、無関係な```yamlフェンス（人間が本文へ書いたもの等）を
+# 誤って読み書きすることも防ぐ。
+LAUNCH_HISTORY_MARKER = "<!-- orchestune:launch-history -->"
+LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
+    re.escape(LAUNCH_HISTORY_MARKER) + r"\n```yaml\s*\n(.*?)```\n?",
+    re.DOTALL,
+)
+
 
 def _parse_footprint_block(body: str) -> dict | None:
     """Footprint YAMLフェンスをdictとして返す（存在しない/壊れている場合はNone）。"""
@@ -189,6 +200,60 @@ def backfill_recovery_counters(
     new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
     start, end = match.span(1)
     return body[:start] + new_block + body[end:]
+
+
+def launch_history_from_body(body: str) -> list[float]:
+    """#514: 親Issue本文へ永続化された`launch_history`（起動タイムスタンプ列）を
+    読み取る。自己修復（`dispatch_reconciliation.py`）が`run_state.json`消失時に
+    `max_launches_per_window`を復元するために使う。
+
+    マーカー欠落（本フィールド導入前に作られた親Issue）・壊れたYAML・
+    数値化できない要素は、いずれも「起動履歴なし」＝空リストへ倒す:
+    壊れた値で上限判定を誤らせるより、復元できなかった分だけ緩くなる方が
+    安全側（既定の`max_concurrent`は別途効く）。
+    """
+    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
+    if not match:
+        return []
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("launch_history")
+    if not isinstance(raw, list):
+        return []
+    timestamps: list[float] = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        timestamps.append(float(item))
+    return timestamps
+
+
+def backfill_launch_history(body: str, launch_history: list[float]) -> str | None:
+    """#514: 親Issue本文の`launch_history`ブロックを書き換えて返す。
+    ブロックが無ければ本文末尾へ追記する（親Issueは既存フェンスを持たないため、
+    `backfill_recovery_counters`と違い新規作成もこの関数の責務）。
+
+    既に同じ値であれば`None`（無駄な`update_issue_body`呼び出しを避ける）。
+    ブロック以外の本文はバイト単位で不変に保つ。
+    """
+    if launch_history_from_body(body) == launch_history:
+        return None
+    block_body = yaml.dump(
+        {"launch_history": list(launch_history)},
+        allow_unicode=True,
+        default_flow_style=False,
+    )
+    new_block = f"{LAUNCH_HISTORY_MARKER}\n```yaml\n{block_body}```\n"
+    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
+    if match:
+        start, end = match.span()
+        return body[:start] + new_block + body[end:]
+    separator = "" if body.endswith("\n") else "\n"
+    return f"{body}{separator}\n{new_block}"
 
 
 @dataclass(frozen=True)

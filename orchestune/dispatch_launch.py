@@ -13,6 +13,7 @@ from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
 from orchestune.git_cli import run_git
+from orchestune.issue_parsing import backfill_launch_history
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
@@ -257,6 +258,36 @@ def _decide_task_launch_plan(
     return plans
 
 
+def _persist_launch_history(
+    run_state: RunState, now: float, config: DispatcherConfig
+) -> None:
+    """#514: 起動タイムスタンプを親Issue本文へ永続化する。
+
+    `run_state.json`が消えるステートレスCIランナーでは`launch_history`が
+    毎回空になり、`max_launches_per_window`が実質無効になる。復元側は
+    `dispatch_reconciliation._restore_launch_history`。
+
+    スコープ（Issue #514の決定）: `--parent-issue`未指定（フラットモード）は
+    永続化先の親Issueが無いため対象外。意味論は「親Issueごとのウィンドウ」。
+
+    書き込むのはウィンドウ内のタイムスタンプのみ（本文の単調肥大化を防ぐ）。
+    値が既に一致していれば`backfill_launch_history`が`None`を返すため、
+    無駄な`update_issue_body`呼び出しは発生しない。
+    """
+    if config.parent_issue_number is None:
+        return
+    issue = config.resolved_forge.get_issue(config.parent_issue_number)
+    if issue is None:
+        return
+    min_time = now - config.window_seconds
+    in_window = sorted(t for t in run_state.launch_history if t >= min_time)
+    patched_body = backfill_launch_history(issue.body, in_window)
+    if patched_body is not None:
+        config.resolved_forge.update_issue_body(
+            config.parent_issue_number, patched_body
+        )
+
+
 def _apply_task_launches(
     plans: list[TaskLaunchPlan],
     run_state: RunState,
@@ -340,6 +371,7 @@ def _apply_task_launches(
             base_branch=plan.base_branch_for_state,
         )
         run_state.launch_history.append(now)
+        _persist_launch_history(run_state, now, config)
         save_run_state(
             run_state,
             config.run_state_path,
