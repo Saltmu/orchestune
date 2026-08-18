@@ -451,6 +451,26 @@ def _architecture_doc(lang: str) -> list[str]:
     )
 
 
+def _determinism_section(lang: str) -> list[str]:
+    """`### 0.1`見出しから、次の同位以上の見出しまたは水平線の直前までの行を返す。
+
+    見出し番号だけで探すのは、節タイトルが言語ごとに異なるため。`####`以下の
+    小見出しは節の内容として取り込む（打ち切るのはL1-L3の見出しのみ）。
+    """
+    collected: list[str] = []
+    in_section = False
+    for line in _architecture_doc(lang):
+        if line.startswith("### 0.1"):
+            in_section = True
+            collected.append(line)
+            continue
+        if in_section:
+            if re.match(r"#{1,3} ", line) or line.startswith("---"):
+                break
+            collected.append(line)
+    return collected
+
+
 def _row_cells(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
@@ -613,3 +633,32 @@ def test_architecture_docs_mention_dispatch_cycle_report() -> None:
     for lang in DOC_LANGUAGES:
         doc_text = "\n".join(_architecture_doc(lang))
         assert header in doc_text, f"{lang}のarchitecture.mdに'{header}'がありません"
+
+
+def test_architecture_docs_document_the_determinism_principle() -> None:
+    """#509: クオーター効率（第0章）を達成する手段としての決定論——LLMは判断のみを
+    担い、状態遷移は決定論的なPython側が行う——が、ja/en両方のarchitecture.mdに
+    設計原則として記載されていること。
+
+    節の存在だけでなく、自動化が収束できなかった場合の終端状態（人間への
+    エスカレーション）に言及していることも確認する。ラベル名は`_LABEL_PRIORITY`
+    から抽出し、ハードコード複製によるドリフトを防ぐ。
+    """
+    from orchestune.status_snapshot import _LABEL_PRIORITY, MonitorState
+
+    escalation_label = next(
+        label
+        for label, state in _LABEL_PRIORITY
+        if state is MonitorState.BLOCKED_HUMAN_REVIEW
+    )
+
+    for lang in DOC_LANGUAGES:
+        section = _determinism_section(lang)
+        assert (
+            section
+        ), f"{lang}のarchitecture.mdに'### 0.1'で始まる決定論の節がありません"
+        body = "\n".join(section)
+        assert escalation_label in body, (
+            f"{lang}のarchitecture.mdの0.1節に、終端状態'{escalation_label}'への"
+            "言及がありません"
+        )

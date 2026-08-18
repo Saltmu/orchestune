@@ -14,6 +14,30 @@ Three consequences run through the rest of this document:
 * **Parallelism is the mechanism, not the goal.** Independent subtasks let several agents burn quota at once instead of one agent burning it in sequence, so DAG construction (Section 1) exists to find as much *safe* parallelism as the task allows.
 * **Unattended operation is what converts parallelism into quota efficiency.** The gains only materialize if runs can proceed while the human is away — overnight, or in a stateless CI runner. That is why state is self-healing from GitHub (Section 2), why child-level integration merges without a human (Section 3), and why human judgment is confined to two gates (Section 4). A design that required a click per subtask would stall the pipeline on human availability.
 
+### 0.1 Determinism: the LLM only judges, Python owns every state transition
+
+An LLM call is a scarce operation that consumes quota. Orchestune therefore **spends LLM calls only where judgment cannot be replaced — decomposition, implementation, semantic review of an integration diff, and the `status:not-needed` assessment — and handles everything else in deterministic Python**. Polling labels, recomputing the DAG, rebuilding local state, garbage collection, and escalation could all be delegated to an agent, but each delegation is paid for in quota.
+
+This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces — the main waste named above.
+
+**The LLM has no authority to change state.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue. Python polls the labels and performs the next transition deterministically.
+
+#### Premise: both the LLM and the infrastructure will be wrong
+
+Determinism alone is not enough. Because both LLM output and infrastructure can fail, Orchestune **enumerates the deviation points individually and gives each one a deterministic detection and recovery path**.
+
+| Deviation | Detection | Deterministic handling |
+|---|---|---|
+| Bad decomposition (an unestablished shared extension point) | Shared-contract gate (Section 1) | Warning |
+| Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
+| Bad declaration (a change outside the footprint) | Deviation detection (Section 3) | DAG recomputation (with a dead band and a retry cap) |
+| Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
+| The agent's own report | Re-verification by an independent session that carries no memory of it | Deterministic close from Python, driven by a label |
+
+And **every loop is bounded, with a terminal state**. Recomputation retries, launches and token spend per window, and task timeouts are all capped, and a dead band ignores tiny deviations so the loop cannot livelock. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+
+What Orchestune guarantees is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**.
+
 ---
 
 ## 1. DAG Construction & Conflict Prevention
@@ -105,6 +129,16 @@ matching one of the shared-extension-point categories, or they explicitly set
 `writes_shared_contract: true`. Pure consumers, and any writer/consumer or
 consumer/consumer pairing, are never flagged, since there's no write race to
 warn about.
+
+### Reconciling the decomposition plan against the codebase (staleness detection)
+
+Where the two subsections above both deal with conflicts **between subtasks**, this one reconciles the **decomposition plan against the current repository**. It is a different axis.
+
+A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/symbol_verification.py` uses the AST to check whether the declared `footprint` paths and `symbols` can actually be found in the codebase.
+
+Symbol collection is scope-aware. `ast.walk` flattens the whole tree and loses scope, so it mistakes a bare method name or a function-local variable for a module-level definition. Conversely `if` / `try` / `with` / loops / `match` bind whatever they contain into the *enclosing* scope, so their bodies must be flattened into it (conditional imports and conditionally defined methods are the typical cases). Function and class definitions open a new scope of their own, so the walk does not recurse into them.
+
+**This check does not block.** A symbol that isn't found may mean "the plan went stale in a refactor" or "this subtask is about to create it", so Orchestune does not decide: it leaves a neutral note in the Issue body and lets the implementing agent and the human judge — one application of [0.1](#01-determinism-the-llm-only-judges-python-owns-every-state-transition)'s "the LLM only judges, Python owns every state transition".
 
 ---
 

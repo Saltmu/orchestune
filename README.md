@@ -32,6 +32,8 @@ For a small task, asking an agent directly is faster and cheaper than going thro
 
 DAG validation, self-healing state recovery from GitHub, and the two-gate human approval model (see [Architecture & Design](docs/en/architecture.md)) all exist for one reason: so the pipeline holds together when nobody is watching.
 
+The pipeline itself is advanced by deterministic Python. An LLM call is a scarce operation that consumes quota, so it is spent only where judgment cannot be replaced — and it never owns a state transition (see [0.1 Determinism](docs/en/architecture.md#01-determinism-the-llm-only-judges-python-owns-every-state-transition)).
+
 ---
 
 ## Installation
