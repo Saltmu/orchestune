@@ -267,8 +267,14 @@ def test_setup_git_hooks_ps1_execution_in_worktree(tmp_path: Path):
 def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
     """Verify setup-git-hooks.sh executes successfully inside a worktree and creates hooks in the common hooks dir."""
     import shutil
+    import sys
 
     from tests.conftest import get_clean_git_env
+
+    if sys.platform == "win32":
+        pytest.skip(
+            "setup-git-hooks.sh execution test is only applicable on non-Windows platforms"
+        )
 
     # Check if bash is available
     bash_path = shutil.which("bash")
