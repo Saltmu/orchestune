@@ -20,6 +20,8 @@ from orchestune.models import IssueRecord, PrRecord
 if TYPE_CHECKING:
     from orchestune.dispatch_config import DispatcherConfig
 
+_FORCE_SERIAL_LABEL = "status:force-serial"
+
 
 def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:
     """Issue本文のFootprint YAMLブロックから、素のsubtask_id（未検出ならNone）を取り出す。
@@ -106,6 +108,23 @@ def _restored_base_branch(
     return base_branch
 
 
+def _recovery_counters_for_issue(issue: IssueRecord) -> tuple[int, bool]:
+    """#516レビュー指摘: Issue本文（Footprintフェンス）を第一のソースとしつつ、
+    `status:force-serial`ラベルが付いているのに本文フィールドが無い/false
+    のケースをラベル側の権威で補う。想定されるケースは2つ:
+    (1) 本フィールド導入前からforced_serialだった移行時のIssue（本文に
+        フィールドが無い）、(2) `_persist_recovery_counters`の本文書き込みは
+        成功したがその後の`add_label`が失敗し、次のイベントまで本文が
+        更新されないまま残ったケースの逆——ここでは扱わない（本文が
+        `true`で確定していればそちらが優先される）。ラベルは`recompute_count`
+        を持たないためforced_serial側のみのフォールバックとする。
+    """
+    recompute_count, forced_serial = recovery_counters_from_body(issue.body)
+    if _FORCE_SERIAL_LABEL in issue.labels:
+        forced_serial = True
+    return (recompute_count, forced_serial)
+
+
 def _decide_missing_active_worktrees(
     run_state: RunState,
     in_progress_issues: list[IssueRecord],
@@ -151,7 +170,7 @@ def _decide_missing_active_worktrees(
 
     restorations: list[tuple[str, str, ActiveWorktree]] = []
     for issue, subtask_id, declared_footprint in missing_issues:
-        recompute_count, forced_serial = recovery_counters_from_body(issue.body)
+        recompute_count, forced_serial = _recovery_counters_for_issue(issue)
         associated_pr = None
         for pr in open_prs:
             if issue.number in pr.closes_issue_numbers:
@@ -233,6 +252,72 @@ def _restore_missing_active_worktrees(
     return _apply_restore_missing_active_worktrees(run_state, restorations)
 
 
+def _decide_stale_recovery_counters(
+    run_state: RunState,
+    in_progress_issues: list[IssueRecord],
+) -> list[tuple[str, int, bool]]:
+    """#516再2巡目レビュー指摘: `_persist_recovery_counters`がIssue本文への
+    書き込みに成功した直後、サイクル終端の`save_run_state`前にプロセスが
+    停止すると、run_state.json上のActiveWorktreeは古い値のまま残る。この
+    エントリは`active_worktrees`に既に存在する（`_decide_missing_active_worktrees`
+    の対象外）ため、次回起動時も永久にstaleなまま——本文の方が進んでいる
+    のに古い値で強制直列化が解除されたままになりうる。
+
+    本文/ラベル側の値が現在のrun_state側の値より「安全な方向」へ進んでいる
+    場合のみ反映する（recompute_countは大きい方、forced_serialはtrueが勝つ）。
+    逆方向（本文側の書き込みがまだ追いついていないだけの一時的なラグ）で
+    run_state側の進捗を巻き戻すことは絶対にしない——それ自体がforced_serial
+    フォールバックを不安定にしうるため。
+    """
+    issues_by_number = {issue.number: issue for issue in in_progress_issues}
+    reconciliations: list[tuple[str, int, bool]] = []
+    for key, active in run_state.active_worktrees.items():
+        issue = issues_by_number.get(active.issue_number)
+        if issue is None:
+            continue
+        recompute_count, forced_serial = _recovery_counters_for_issue(issue)
+        new_recompute_count = max(active.recompute_count, recompute_count)
+        new_forced_serial = active.forced_serial or forced_serial
+        if (
+            new_recompute_count != active.recompute_count
+            or new_forced_serial != active.forced_serial
+        ):
+            reconciliations.append((key, new_recompute_count, new_forced_serial))
+    return reconciliations
+
+
+def _apply_stale_recovery_counters(
+    run_state: RunState,
+    reconciliations: list[tuple[str, int, bool]],
+) -> bool:
+    """decide層が算出した反映内容のみをrun_state.active_worktreesへ書き込む。"""
+    if not reconciliations:
+        return False
+
+    for key, recompute_count, forced_serial in reconciliations:
+        active = run_state.active_worktrees[key]
+        active.recompute_count = recompute_count
+        active.forced_serial = forced_serial
+        print(
+            f"Self-healing: Reconciled stale recovery counters for Issue "
+            f"#{active.issue_number} (recompute_count={recompute_count}, "
+            f"forced_serial={forced_serial})",
+            file=sys.stderr,
+        )
+
+    return True
+
+
+def _reconcile_stale_recovery_counters(
+    run_state: RunState,
+    in_progress_issues: list[IssueRecord],
+) -> bool:
+    """既存active_worktreesエントリの復旧カウンタをIssue本文/ラベルと
+    突き合わせて更新する（decide+applyの薄いラッパー）。"""
+    reconciliations = _decide_stale_recovery_counters(run_state, in_progress_issues)
+    return _apply_stale_recovery_counters(run_state, reconciliations)
+
+
 def _warn_missing_physical_worktrees(run_state: RunState) -> None:
     """物理的な git worktree が存在しない場合に警告ログを出す（読み取り専用）。"""
     try:
@@ -267,5 +352,8 @@ def recover_run_state(
     およびローカルの物理的な git worktree から RunState を自動復元する。
     """
     modified = _restore_missing_active_worktrees(run_state, in_progress_issues, config)
+    modified = (
+        _reconcile_stale_recovery_counters(run_state, in_progress_issues) or modified
+    )
     _warn_missing_physical_worktrees(run_state)
     return modified
