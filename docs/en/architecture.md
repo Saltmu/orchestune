@@ -22,7 +22,9 @@ This pays twice: every deterministic step is quota not spent directly, and it al
 
 **The automated shared-state transitions belong to Python.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue.
 
-That review is **fire-and-forget, though: Python does not track its result either**. Its findings stay as comments on the *child* integration PR; they do not stop or alter the automatic merge (`AutoMergeChildIntegrationStep` runs right after `SemanticReviewStep`), and they are **neither copied nor linked onto the acceptance PR** (parent branch → `main`). An asynchronous finding can even land after the child PR is closed, so reading them means going to each child PR by hand — **nothing puts them in front of the human doing the acceptance merge**.
+That review is **fire-and-forget, though: Python does not track its result either**. Its findings stay as comments on the integration PR; they do not stop or alter a merge.
+
+Whether the acceptance reviewer sees them depends on the integration mode. In **flat mode** (no `--parent-issue`), that integration PR *is* the acceptance PR the human merges, so the findings sit on the same PR (`AutoMergeChildIntegrationStep` returns immediately when `parent_issue_number` is `None`, and nothing is auto-merged). Under the **two-tier parent-branch model** (`--parent-issue`), the findings land on the *child* integration PR and the automatic merge runs right after. The acceptance PR (parent branch → `main`) is a different PR, and they are **neither copied nor linked onto it** — an asynchronous finding can even land after the child PR is closed, so reading them means going to each child PR by hand.
 
 The only **LLM review** whose result flows back into the state machine is the `status:not-needed` re-verification below, and it does so through a label. Human review is a separate input: a `CHANGES_REQUESTED` decision on a child PR is picked up by `_rule_changes_requested`, which stops dependent in-flight work and moves the Issue to `status:blocked-human-review`.
 
