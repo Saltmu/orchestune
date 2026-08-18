@@ -262,7 +262,8 @@ def _decide_task_launch_plan(
 
 
 def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
-    """#514: 今回の起動タイムスタンプを親Issue本文へ追記する。
+    """#514: 今回の起動タイムスタンプを親Issue本文へ**起動前に**追記する
+    （スロットの予約）。呼び出し元は例外を捕捉して起動を見送る（fail-closed）。
 
     `run_state.json`が消えるステートレスCIランナーでは`launch_history`が
     毎回空になり、`max_launches_per_window`が実質無効になる。復元側は
@@ -327,6 +328,32 @@ def _apply_task_launches(
     for plan in plans:
         task = plan.task
         assert config.dispatch_target is not None
+
+        # #514/#519レビュー2巡目(P1): レート制限の永続化は「使う前に予約する」
+        # 順序で行う。起動後に書いて失敗を握り潰すと、ステートレスランナーでは
+        # 「エージェントは起動済みだが、親Issueにも（消えた）run_stateにも記録が
+        # 無い」状態が残り、次サイクルが同じ窓の中でもう1件起動できてしまう——
+        # この永続化がdurableにしようとしている当の上限が破れる。
+        #
+        # 予約後・起動前にクラッシュした場合は「記録はあるが起動していない」に
+        # なるが、これは上限が厳しくなる方向であり、窓から抜ければ自然に回復する
+        # （安全側の非対称）。予約に失敗したタスクは起動せずqueuedのまま残し、
+        # 次サイクルで再試行する（fail-closed）。
+        #
+        # なお`active_worktrees`側のローカル先行順序（後段のsave_run_state →
+        # ラベル遷移）とは別の関心事: あちらは「GitHub側が確定してローカルが空」
+        # という検出不能な非対称を避けるためのもの。
+        try:
+            _persist_launch_history(now, config)
+        except Exception as e:
+            print(
+                f"Warning: skipping launch of issue #{task.issue_number}: failed to "
+                f"reserve a launch slot in parent issue "
+                f"#{config.parent_issue_number}: {e}",
+                file=sys.stderr,
+            )
+            continue
+
         launch = create_worktree_and_launch(
             task,
             plan.branch_name,
@@ -411,23 +438,6 @@ def _apply_task_launches(
                 if label in task.status_labels
             ),
         )
-
-        # #514/#519レビュー指摘(P1): 親Issueへの永続化は、ローカルの
-        # `save_run_state`とラベル遷移が完了した**後**に、非致命的に行う。
-        # 直前のコメントが述べるクラッシュ安全順序（ローカル確定 → GitHub反映）
-        # をこのリモート書き込みが迂回すると、一時的なGitHub障害・レート制限で
-        # 例外が上がったときに「エージェントは起動済みだがrun_stateにも
-        # ラベルにも記録が無い」状態が残り、次サイクルが重複起動しうる。
-        # これはステートレスランナー向けの耐久性強化であって、失敗しても
-        # 起動フロー自体を止めるべきものではない。
-        try:
-            _persist_launch_history(now, config)
-        except Exception as e:
-            print(
-                f"Warning: failed to persist launch history to parent issue "
-                f"#{config.parent_issue_number}: {e}",
-                file=sys.stderr,
-            )
 
         actually_selected.append(task)
 

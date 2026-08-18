@@ -774,45 +774,97 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             mock_popen.return_value.pid = 1234
             _apply_task_launches(plans, run_state, now, config)
 
-    def test_local_run_state_is_persisted_even_if_the_remote_write_fails(
+    def test_reserves_the_slot_before_launching(self, tmp_path):
+        """#519レビュー2巡目(P1): レート制限の永続化は「使う前に予約する」
+        順序でなければならない。起動後に書いて失敗を握り潰すと、ステートレス
+        ランナーでは「エージェントは起動済みだが親Issueにも消えたrun_stateにも
+        記録が無い」状態になり、次サイクルが同じ窓の中でもう1件起動できる——
+        この永続化がdurableにしようとしている当の上限が破れる。
+        """
+        from unittest.mock import MagicMock, patch
+
+        import orchestune.dispatch_worktree as dw
+        from orchestune.dispatch_launch import _apply_task_launches
+
+        calls: list[str] = []
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        forge.update_issue_body.side_effect = lambda *a, **k: calls.append("persist")
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=100,
+            forge=forge,
+        )
+        real_launch = dw.create_worktree_and_launch
+
+        def _record_launch(*args, **kwargs):
+            calls.append("launch")
+            return real_launch(*args, **kwargs)
+
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch(
+                "orchestune.dispatch_launch.create_worktree_and_launch",
+                side_effect=_record_launch,
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(
+                plans, RunState(active_worktrees={}), 5_000_000.0, config
+            )
+
+        assert calls[:2] == ["persist", "launch"]
+
+    def test_fails_closed_and_does_not_launch_when_the_reservation_fails(
         self, tmp_path
     ):
-        """再現テスト: `update_issue_body`が一時障害で失敗しても、起動済み
-        タスクのActiveWorktreeはrun_state.jsonへ確定していなければならない。
-        さもないと次サイクルが重複起動する。"""
-        from unittest.mock import MagicMock
+        """予約に失敗したら起動しない（fail-closed）。記録できない起動を
+        作らないので、上限が緩む方向へは壊れない。タスクはqueuedのまま
+        次サイクルで再試行される。"""
+        from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_state import load_run_state
+        from orchestune.dispatch_launch import _apply_task_launches
 
-        run_state_path = tmp_path / "run_state.json"
         forge = MagicMock()
         forge.get_issue.return_value = MagicMock(body="EPIC body")
         forge.update_issue_body.side_effect = RuntimeError("transient GitHub error")
 
-        self._run(
-            tmp_path,
-            RunState(active_worktrees={}),
-            5_000_000.0,
-            forge,
-            run_state_path=run_state_path,
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=100,
+            forge=forge,
         )
+        run_state = RunState(active_worktrees={})
 
-        persisted = load_run_state(run_state_path)
-        assert "1" in persisted.active_worktrees
-        assert persisted.launch_history == [5_000_000.0]
+        with (
+            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch(
+                "orchestune.dispatch_launch.create_worktree_and_launch"
+            ) as mock_launch,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            selected = _apply_task_launches(plans, run_state, 5_000_000.0, config)
 
-    def test_label_transition_still_happens_if_the_remote_write_fails(self, tmp_path):
-        """永続化はあくまで耐久性の強化であり、失敗しても起動フロー
-        （status:in-progressへの遷移）を止めてはならない。"""
-        from unittest.mock import MagicMock
-
-        forge = MagicMock()
-        forge.get_issue.return_value = MagicMock(body="EPIC body")
-        forge.update_issue_body.side_effect = RuntimeError("transient GitHub error")
-
-        self._run(tmp_path, RunState(active_worktrees={}), 5_000_000.0, forge)
-
-        assert any(
+        mock_launch.assert_not_called()
+        assert selected == []
+        assert run_state.active_worktrees == {}
+        assert run_state.launch_history == []
+        assert not any(
             call.args[1] == "status:in-progress"
             for call in forge.add_label.call_args_list
         )
