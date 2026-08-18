@@ -22,7 +22,9 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 
 **状態遷移のほぼすべてはPython側が行います。** 例えば統合コーディネーター（セクション3）が起動する意味的レビューのセッションは、統合PRへ所見をコメントするだけで完結し、ラベル付与・マージ・Issueのクローズは一切行いません。Python側がラベルをポーリングし、決定論的に次の状態へ遷移させます。
 
-唯一の例外が`status:not-needed`です。要件が既に満たされていると判断した実装エージェントは、`status:in-progress`を外して`status:not-needed`を付与するよう各スキル（`skills/local-ci-developer`・`skills/workflow-template`）で指示されています——コミットもPRも作らないため、通常の完了検知（PRの存在をシグナルとする仕組み）では永遠に完了と判定されず、ラベル付与自体が完了シグナルになるためです。**判断の内容と、その完了シグナルの発火だけがLLM側にあり**、その後の処理（後述の再検証の起動、Issueのクローズ、依存関係の解決、クオーターの解放）はすべてPythonが決定論的に行います。
+唯一の例外が`status:not-needed`です。要件が既に満たされていると判断した実装エージェントは、`status:in-progress`を外して`status:not-needed`を付与するよう各スキル（`skills/local-ci-developer`・`skills/workflow-template`）で指示されています——コミットもPRも作らないため、通常の完了検知（PRの存在をシグナルとする仕組み）では永遠に完了と判定されず、ラベル付与自体が完了シグナルになるためです。Cloud Routineターゲットでの再検証セッションも同様で、検証に通らなかった場合はラベルを`status:not-needed`から`status:queued`へ付け替え、`not-needed-review:failed`を付与するようプロンプトで指示されています（`build_not_needed_review_prompt`）。
+
+つまり**ラベル遷移そのものは、一部がLLM側にあります**。分割線はラベルではなく可逆性です——LLMが行うのは判断と、その結果をラベルとして表明することまで。**不可逆な操作（Issueのクローズ、マージ、push、依存関係の解決、クオーターの解放）はいずれもPython側にあり**、LLMが付けたラベルを検知して決定論的に実行されます。検証セッションのプロンプトがこの制約を明示しています——「あなたはラベル付与・コメント・（不当時の）ラベル付け替えのみを行い、実際のクローズは、あなたが付与したラベルを検知した別のシステムが行う」。
 
 #### 前提: LLMもインフラも間違える
 
@@ -39,6 +41,8 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 この再検証は、`ClaudeCodeCloudRoutineDispatchTarget`を使う場合にのみ起動されます。既定の`LocalProcessDispatchTarget`では、`status:not-needed`のIssueは再検証を挟まずそのままクローズされます（`_finalize_not_needed_worktree`）。
 
 そして、**ループには上限があり、終端があります**。DAG再計算の回数（既定2回）とウィンドウあたりの起動数（既定1回）は既定で有界であり、微小な逸脱はデッドバンドで無視することでライブロックを防ぎます。一方、タスクのタイムアウト（`--task-timeout-seconds`）とトークン消費の上限（`--max-tokens-per-window` / `--max-tokens-per-task`）は**既定では無効**です。無人で長時間走らせる場合は明示的に設定してください。自動的に収束できない場合、対象Issueは`status:blocked-human-review`へ遷移して停止します。
+
+> **既知の欠落**: Cloud Routineターゲットでの`status:not-needed`検証レビューは、この終端保証の対象外です。レビューセッションが結果ラベルを付けないまま消失した場合、保留エントリは毎サイクル保持され続け、収束も`status:blocked-human-review`への遷移もしません（`dispatched_at`は記録されていますがタイムアウト判定に使われていません）。[#511](https://github.com/Saltmu/orchestune/issues/511)で対応予定です。
 
 Orchestuneが保証するのは「常に自動で解決すること」ではなく、**収束するか、人間が対処可能な状態で停止するかのいずれかであること**です。
 

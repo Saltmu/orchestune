@@ -22,7 +22,9 @@ This pays twice: every deterministic step is quota not spent directly, and it al
 
 **Almost every state transition belongs to Python.** The semantic-review session started by the integration coordinator (Section 3), for example, only comments its findings on the integration PR; it never applies a label, merges, or closes an Issue. Python polls the labels and performs the next transition deterministically.
 
-The one exception is `status:not-needed`. An implementation agent that finds the requirement already satisfied is instructed by the skills (`skills/local-ci-developer`, `skills/workflow-template`) to remove `status:in-progress` and apply `status:not-needed` — it writes no commit and opens no PR, so the usual completion signal (the existence of a PR) would never fire, and the label itself has to serve as that signal. **Only the judgement and the raising of that signal sit with the LLM**; everything downstream (the re-verification described below, closing the Issue, resolving dependencies, releasing quota) is done deterministically by Python.
+The one exception is `status:not-needed`. An implementation agent that finds the requirement already satisfied is instructed by the skills (`skills/local-ci-developer`, `skills/workflow-template`) to remove `status:in-progress` and apply `status:not-needed` — it writes no commit and opens no PR, so the usual completion signal (the existence of a PR) would never fire, and the label itself has to serve as that signal. The re-verification session on the Cloud Routine target is the same: when the check does not pass, its prompt tells it to move the label from `status:not-needed` to `status:queued` and add `not-needed-review:failed` (`build_not_needed_review_prompt`).
+
+So **label transitions themselves are partly LLM-owned**. The dividing line is not the label but reversibility: the LLM judges, and states its judgement as a label — nothing further. **Every irreversible operation (closing an Issue, merging, pushing, resolving dependencies, releasing quota) belongs to Python**, which performs it deterministically upon detecting the label the LLM applied. The verifier's own prompt spells this constraint out: it may only apply labels, comment, and (when the judgement was wrong) move a label; the actual close is done by another system that detects that label.
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
@@ -39,6 +41,8 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 That re-verification only runs when `ClaudeCodeCloudRoutineDispatchTarget` is in use. Under the default `LocalProcessDispatchTarget`, a `status:not-needed` Issue is closed directly, with no re-verification in between (`_finalize_not_needed_worktree`).
 
 And **loops are bounded, with a terminal state**. DAG recomputation retries (2 by default) and launches per window (1 by default) are bounded out of the box, and a dead band ignores tiny deviations so the loop cannot livelock. Task timeouts (`--task-timeout-seconds`) and token caps (`--max-tokens-per-window` / `--max-tokens-per-task`), by contrast, are **off by default** — set them explicitly before leaving a long run unattended. When automation still cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+
+> **Known gap**: the `status:not-needed` re-verification on the Cloud Routine target is not covered by that termination guarantee. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle and neither converges nor reaches `status:blocked-human-review` (`dispatched_at` is recorded but never used for a timeout). Tracked in [#511](https://github.com/Saltmu/orchestune/issues/511).
 
 What Orchestune guarantees is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**.
 
