@@ -292,6 +292,19 @@ def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
     ウィンドウ外は書かない（本文の単調肥大化を防ぐ）。値が既に一致していれば
     `backfill_launch_history`が`None`を返すため、無駄な`update_issue_body`
     呼び出しは発生しない。
+
+    **単一ランナー前提（#377と同じ制約）**: この読み取り→更新は`gh issue edit`
+    による本文全体の上書きで、条件付き更新（CAS）の手段が無い。同一の親Issueへ
+    複数のランナーが同時にディスパッチすると、後勝ちで先のランナーの予約が
+    消え、双方が起動しうる。`run_dispatch_cycle`の`file_lock`は同一ファイル
+    システム内のプロセス間ロックであり、CIランナーをまたいだ直列化には効かない。
+
+    これは本機能が持ち込んだ制約ではなく、`architecture.md`の設計前提（#377）
+    が既に述べている通り、ディスパッチャ全体が単一ランナー上でのシリアル実行を
+    前提としていることによる（そもそも本機能以前は`launch_history`が
+    `run_state.json`にしか無く、クロスランナーでは上限が全く効かなかった）。
+    複数ランナー構成では、同前提が推奨する`concurrency`グループの設定で
+    直列化すること——コード変更を伴わずに根本解決できる唯一の手段である。
     """
     if config.parent_issue_number is None:
         return
