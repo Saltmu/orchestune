@@ -269,7 +269,14 @@ def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
     `dispatch_reconciliation._restore_launch_history`。
 
     スコープ（Issue #514の決定）: `--parent-issue`未指定（フラットモード）は
-    永続化先の親Issueが無いため対象外。意味論は「親Issueごとのウィンドウ」。
+    永続化先の親Issueが無いため対象外。
+
+    #519レビュー指摘(P2)の明確化: **永続化ストアだけが親ごと**（親Issue本文が
+    唯一の置き場所のため）であって、実行時のクオータ判定（`quota_available`）は
+    `run_state.launch_history`をグローバルに数える既存挙動のまま——本PRはそこを
+    変更しない。真の意味での「親ごとのクオータ」にするには`quota_available`側の
+    変更が要り、それは複数親を永続ディスクで運用している既存利用者の束縛を
+    緩める挙動変更になるため、#514のスコープ外とする。
 
     #519レビュー指摘(P2): 基準にするのは`run_state.launch_history`ではなく
     **その親Issue自身の既存履歴**。`run_state.json`は複数の親（big rock）を

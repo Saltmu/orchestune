@@ -1035,6 +1035,41 @@ class TestRestoreLaunchHistory:
 
         assert run_state.launch_history == [now - 60, now - 60]
 
+    def test_restoration_feeds_the_global_quota_counter(self, tmp_path):
+        """#519レビュー指摘(P2)の明文化: 実行時のクオータ判定
+        （`quota_available`）は`run_state.launch_history`を**グローバルに**
+        数える既存挙動のままで、本PRはそれを変更しない。永続化ストアだけが
+        親ごと（親Issue本文が唯一の置き場所のため）。
+
+        したがって永続ディスクで複数の親を運用する場合、親Bの復元分は親Aの
+        ローカル履歴と合算されて数えられる。マージは和集合の最大回数を採る
+        片方向なので、上限は緩む方向へは壊れない（安全側）。
+        """
+        from orchestune.dispatch_scoring import quota_available
+
+        now = 10_000.0
+        parent_a_launch = now - 30.0
+        run_state = RunState(active_worktrees={}, launch_history=[parent_a_launch])
+        config = self._config(tmp_path)
+        issue = self._parent_issue([now - 60])  # 親Bの永続履歴
+
+        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            _restore_launch_history(run_state, config, now=now)
+
+        # 親Aのローカル分と親Bの復元分が両方残る（片方向マージ）
+        assert run_state.launch_history == [now - 60, parent_a_launch]
+        # そしてクオータ判定はその全体を数える（＝グローバル意味論）
+        assert (
+            quota_available(
+                run_state,
+                now,
+                max_concurrent=5,
+                max_launches_per_window=2,
+                window_seconds=3600,
+            )
+            == 0
+        )
+
     def test_is_a_noop_in_flat_mode(self, tmp_path):
         """#514スコープ決定: --parent-issue未指定では永続化・復元とも行わない。"""
         run_state = RunState(active_worktrees={}, launch_history=[])
