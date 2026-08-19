@@ -95,6 +95,9 @@ def _rule_not_needed(
         if active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
+            _discard_reclaim_count(
+                ctx.run_state, active.issue_number, completion_event["action"]
+            )
             del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
@@ -103,17 +106,28 @@ def _rule_not_needed(
     )
 
 
+# #512/PR#520レビュー対応(Codex P2): 回収回数の台帳から記録を破棄してよい
+# 「タスクが自力で走り切った」完了アクション。`not_needed_review_dispatched`も
+# 含めるのは、エージェントが対応不要と自己申告して走り切った時点で、その実行は
+# GCによる回収なしに終端しているため（独立検証レビューはpost-cycleの別フェーズが
+# 別の台帳で追跡しており、run_stateへは触れられない）。レビューが不合格で
+# `status:queued`へ差し戻された場合は、新しい実行として回数0から数え直す。
+_RECLAIM_COUNT_CLEARING_ACTIONS = frozenset(
+    {"completed", "not_needed", "not_needed_review_dispatched"}
+)
+
+
 def _discard_reclaim_count(run_state: RunState, issue_number: int, action: str) -> None:
-    """#512: 正常完了したタスクのゾンビ／タイムアウト回収回数を台帳から破棄する。
+    """#512: 完了したタスクのゾンビ／タイムアウト回収回数を台帳から破棄する。
 
     残したままだと、同じIssueが（人間による再オープン等で）再度ディスパッチ
     された際に前回の回収回数が引き継がれ、実際には初回の回収なのに早期に
     `status:blocked-human-review`へ落ちてしまう。
 
-    トークン上限超過（`escalated_token_limit_exceeded`）は完了ではなく人間の
-    確認待ちへの遷移のため、破棄せず回数を保持する。
+    トークン上限超過（`escalated_token_limit_exceeded`）や空コミット完了は
+    完了ではなく人間の確認待ちへの遷移のため、破棄せず回数を保持する。
     """
-    if action == "completed":
+    if action in _RECLAIM_COUNT_CLEARING_ACTIONS:
         run_state.task_reclaim_counts.pop(issue_number, None)
 
 

@@ -8,8 +8,10 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc import _rule_completed
+from orchestune.dispatch_gc import _rule_completed, _rule_not_needed
 from orchestune.dispatch_gc_zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -303,4 +305,49 @@ class TestReclaimCounterLifecycle:
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
+        assert ctx.run_state.task_reclaim_counts == {280: record}
+
+    @pytest.mark.parametrize("action", ["not_needed", "not_needed_review_dispatched"])
+    def test_not_needed_completion_discards_its_reclaim_count(self, action):
+        """PR#520レビュー対応(Codex P2): `status:not-needed`で走り切ったタスクの
+        カウンタも残さない（独立検証レビューへ回した場合を含む）。"""
+        ctx = _ctx()
+        ctx.config.apply = True
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
+            count=2, last_reclaimed_at=_NOW
+        )
+        task = _task(status_labels=("status:not-needed",))
+
+        with patch(
+            "orchestune.dispatch_gc._finalize_not_needed_worktree",
+            return_value={"action": action, "issue_number": 280},
+        ):
+            outcome = _rule_not_needed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert ctx.run_state.task_reclaim_counts == {}
+
+    def test_dirty_worktree_not_needed_keeps_the_reclaim_count(self):
+        """完了が保留された（dirty worktree）場合はカウンタを保持する。"""
+        ctx = _ctx()
+        ctx.config.apply = True
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        record = TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
+        ctx.run_state.task_reclaim_counts[280] = record
+        task = _task(status_labels=("status:not-needed",))
+
+        with patch(
+            "orchestune.dispatch_gc._finalize_not_needed_worktree",
+            return_value={
+                "action": "completion_skipped_dirty_worktree",
+                "issue_number": 280,
+            },
+        ):
+            _rule_not_needed(ctx, "1", active, task)
+
         assert ctx.run_state.task_reclaim_counts == {280: record}

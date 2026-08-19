@@ -198,6 +198,17 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--max-task-reclaims", "5"])
         assert args.max_task_reclaims == 5
 
+    def test_max_task_reclaims_rejects_negative_values(self):
+        """PR#520レビュー対応(Codex P2): 負値は設定ファイル同様CLIでも拒否する
+        （素通りすると「1回目の回収で必ず上限超過」と解釈され、タスクが黙って
+        status:blocked-human-reviewへ落ちてしまう）。"""
+        import pytest
+
+        from orchestune.dispatcher import _build_arg_parser
+
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(["--max-task-reclaims", "-1"])
+
     def test_zombie_gc_defaults_to_true(self):
         from orchestune.dispatcher import _build_arg_parser
 

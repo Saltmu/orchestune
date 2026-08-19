@@ -37,6 +37,22 @@ from orchestune.dispatch_targets import (
 from orchestune.forge import ForgeAuthError, GitHubForge
 
 
+def _non_negative_int(value: str) -> int:
+    """#512/PR#520レビュー対応(Codex P2): 0以上の整数のみを受理するargparse型。
+
+    `type=int`のままだと`--max-task-reclaims -1`のような負値がそのまま通り、
+    「1回目の回収で必ず上限超過」と解釈されてタスクが黙って
+    `status:blocked-human-review`へ落ちてしまう（設定ファイル側は
+    `_config_defaults`が同じ制約を検証しており、CLIだけが素通りしていた）。
+    """
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(
+            f"must be greater than or equal to 0 (got {parsed})"
+        )
+    return parsed
+
+
 def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--apply",
@@ -69,7 +85,7 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--max-task-reclaims",
-        type=int,
+        type=_non_negative_int,
         default=3,
         help="ゾンビ・タイムアウトGCが同一タスクをstatus:queuedへ差し戻せる回数の上限"
         "（#512）。超過したタスクはstatus:blocked-human-reviewへ遷移し再投入されなくなる。"
