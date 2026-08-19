@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,11 +47,99 @@ class CompletedWorktree:
 
 
 @dataclass
+class TaskReclaimRecord:
+    """#512: タスク（Issue）ごとのゾンビ／タイムアウト回収回数の台帳エントリ。
+
+    `ActiveWorktree`ではなくRunState側の台帳に置く理由: 回収時に対象の
+    `ActiveWorktree`は`run_state`から削除されるため、エントリと寿命を共有すると
+    「回収 → 再投入 → 再起動」を跨いで回数を保持できず、上限判定が常に0から
+    やり直しになってしまう。
+
+    `last_reclaimed_at`は診断用（`run_state.json`を人が読むとき、そのタスクが
+    最後にいつ回収されたかを示す）。上限判定には使わず、刈り込みにも使わない
+    （PR#520レビュー5巡目対応: 経過時間による刈り込みは未完了タスクの回数を
+    落とし得るため廃止した。`_retained_task_reclaim_counts`参照）。
+    """
+
+    count: int = 0
+    last_reclaimed_at: float = 0.0
+    # #512/PR#520レビュー9巡目対応(Codex P2): この回数が「まだGitHubへ反映できて
+    # いない回収」の予約分であることを示す。反映（ラベル遷移・コメント）に失敗した
+    # 回収を次サイクルで再試行する際、同じ回数を再利用して枠を二重に消費しない
+    # ようにするために使う。反映が確定した時点で`False`へ戻す。
+    pending: bool = False
+
+
+@dataclass
 class RunState:
     active_worktrees: dict[str, ActiveWorktree] = field(default_factory=dict)
     launch_history: list[float] = field(default_factory=list)
     completed_worktrees: list[CompletedWorktree] = field(default_factory=list)
     last_reconciled_at: float | None = None
+    # #512: Issue番号 -> 回収回数。`max_task_reclaims`超過の判定に使う。
+    task_reclaim_counts: dict[int, TaskReclaimRecord] = field(default_factory=dict)
+    # #512/PR#520レビュー16巡目対応(Codex P2): 台帳のクローズ確認を1サイクルあたり
+    # 一定件数に絞る際の走査位置。サイクルをまたいで進めることで、どの記録も
+    # いずれ確認される（壁時計に基づくローテーションでは、一定周期で起動される
+    # ディスパッチャーが同じ位置ばかり見てしまう組み合わせがあるため）。
+    task_reclaim_lookup_cursor: int = 0
+
+
+def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
+    """#512: `run_state.json`の`task_reclaim_counts`を検証しつつ復元する。
+
+    後方互換: キー自体が無い（本フィールド導入前に書かれた`run_state.json`）
+    場合は空の台帳＝「まだ一度も回収していない」として扱う。
+
+    壊れた値の扱いも同じ考え方で倒す——壊れた値で上限判定を誤らせ、まだ再投入
+    できるはずのタスクを即座に人間確認待ちへ落とす方が害が大きいため:
+
+    - Issue番号として読めないキー・`count`が整数でない/負数/boolのエントリは、
+      エントリごと捨てる（＝回数0）。
+    - `last_reclaimed_at`だけが壊れている（欠落・非数値・非有限）場合は回数を
+      活かし、時刻のみ`0.0`へ倒す（診断用の値であり、上限判定には影響しない）。
+    - `pending`は`true`のときのみ真として扱う（欠落＝本フィールド導入前の
+      `run_state.json`は「予約中ではない」＝次の回収で回数を1つ進める）。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    records: dict[int, TaskReclaimRecord] = {}
+    for key, value in raw.items():
+        try:
+            issue_number = int(key)
+        except (TypeError, ValueError):
+            # JSONのオブジェクトキーは文字列なので、Issue番号として読めない
+            # キー（手で編集された等）はエントリごと捨てる。
+            continue
+        if not isinstance(value, dict):
+            continue
+        count = value.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            continue
+        last_reclaimed_at = value.get("last_reclaimed_at")
+        if (
+            isinstance(last_reclaimed_at, bool)
+            or not isinstance(last_reclaimed_at, int | float)
+            or not math.isfinite(last_reclaimed_at)
+        ):
+            last_reclaimed_at = 0.0
+        records[issue_number] = TaskReclaimRecord(
+            count=count,
+            last_reclaimed_at=float(last_reclaimed_at),
+            pending=value.get("pending") is True,
+        )
+    return records
+
+
+def _parse_lookup_cursor(value: object) -> int:
+    """#512: `task_reclaim_lookup_cursor`を検証しつつ復元する。
+
+    欠落（本フィールド導入前の`run_state.json`）や壊れた値は`0`へ倒す。
+    走査位置は毎サイクル記録数で丸められるため、0から始めても取りこぼしはない。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 def load_run_state(path: str | Path) -> RunState:
@@ -93,7 +182,38 @@ def load_run_state(path: str | Path) -> RunState:
         launch_history=list(data.get("launch_history", [])),
         completed_worktrees=completed_worktrees,
         last_reconciled_at=data.get("last_reconciled_at"),
+        task_reclaim_counts=_parse_task_reclaim_counts(data.get("task_reclaim_counts")),
+        task_reclaim_lookup_cursor=_parse_lookup_cursor(
+            data.get("task_reclaim_lookup_cursor")
+        ),
     )
+
+
+def _retained_task_reclaim_counts(state: RunState) -> dict[int, TaskReclaimRecord]:
+    """#512: 回収回数の台帳は`prune_run_state`では一切刈り込まない。
+
+    PR#520レビュー4〜5巡目対応(Codex P2): 件数上限でも経過時間でも、
+    「まだ終わっていないタスクのカウンタ」を消し得る刈り込みは、本Issueが
+    塞ごうとしている終端の無い経路を作り直してしまう。
+
+    - 件数上限で古い順に追い出すと、失敗を繰り返す未完了タスクが上限を超えて
+      存在する場合に、次の試行の前にそのタスクのカウンタが追い出される。
+    - 経過時間で落とすと、既定の起動レート（`--max-launches-per-window`）に対して
+      バックログが大きい場合など、回収から次の起動までが保持期間を超えるタスクの
+      カウンタが落ちる。
+
+    いずれも次の回収が1回目からやり直しになり、`max_task_reclaims`を素通り
+    できてしまう。したがって記録の削除は「タスクが終わったことが分かる経路」——
+    完了・`status:not-needed`によるクローズ（`dispatch_gc`）、独立検証レビュー
+    合格によるクローズ（`dispatch_postcycle`）——にのみ委ねる。
+
+    台帳の規模: エントリはGC回収が起きたIssueにしか作られず、完了時に削除される。
+    残り得るのは「GC回収されたのち、上記以外の経路で終わったIssue」（人手での
+    クローズ等）だけで、1件あたり数十バイトの `{"count": int,
+    "last_reclaimed_at": float}` にすぎない。将来これを刈り込む必要が出た場合も、
+    経過時間や件数ではなく「GitHub上でIssueが閉じているか」を根拠にすること。
+    """
+    return dict(state.task_reclaim_counts)
 
 
 def prune_run_state(
@@ -112,6 +232,10 @@ def prune_run_state(
       ただし、現在 open 状態にある PR (`open_prs`) の重複判定に必要な `last_completed` (commit_sha) を保護するため、
       open PR に紐づく Issue / ブランチの最新 1 件の `CompletedWorktree` は経過時間に関わらず保護する。
       さらに、全完了履歴の件数は `max_completed_worktrees` 件を超えないよう有界に保持する。
+    - `task_reclaim_counts` (#512): ここでは刈り込まない。未完了タスクのカウンタを失うと
+      `max_task_reclaims` による上限判定が0からやり直しになり、終端の無い経路が復活するため、
+      削除はタスクの完了・クローズ経路にのみ委ねる。詳細は
+      `_retained_task_reclaim_counts` のdocstringを参照。
     """
     import time
 
@@ -169,11 +293,16 @@ def prune_run_state(
         protected_selected + unprotected_selected, key=lambda x: x.completed_at
     )
 
+    # #512: 台帳は刈り込まない（理由は`_retained_task_reclaim_counts`のdocstring）。
+    retained_task_reclaim_counts = _retained_task_reclaim_counts(state)
+
     return RunState(
         active_worktrees=state.active_worktrees,
         launch_history=pruned_launch_history,
         completed_worktrees=pruned_completed,
         last_reconciled_at=state.last_reconciled_at,
+        task_reclaim_counts=retained_task_reclaim_counts,
+        task_reclaim_lookup_cursor=state.task_reclaim_lookup_cursor,
     )
 
 
@@ -204,5 +333,12 @@ def save_run_state(
             dataclasses.asdict(value) for value in state.completed_worktrees
         ],
         "last_reconciled_at": state.last_reconciled_at,
+        # JSONのオブジェクトキーは文字列のみのため、Issue番号は明示的に
+        # str()で書き出す（読み戻し時に_parse_task_reclaim_countsがintへ戻す）。
+        "task_reclaim_counts": {
+            str(issue_number): dataclasses.asdict(record)
+            for issue_number, record in state.task_reclaim_counts.items()
+        },
+        "task_reclaim_lookup_cursor": state.task_reclaim_lookup_cursor,
     }
     write_json_atomic(path, data)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from orchestune.forge import Forge
 
@@ -25,6 +25,7 @@ def transition_status_label(
     issue_number: int | str,
     new_label: str,
     old_labels: Iterable[str],
+    on_label_added: Callable[[], None] | None = None,
 ) -> None:
     """新しい`status:*`ラベルを先に付与してから、指定した旧ラベルを除去する。
 
@@ -35,8 +36,17 @@ def transition_status_label(
     先に確定させることで、途中で例外が起きてもIssueは必ず新旧いずれかの
     ラベルを持ち続ける。`new_label`と同名の`old_label`は、付与直後に
     自分自身を消してしまわないよう除去対象から除く。
+
+    #512/PR#520レビュー16巡目対応(Codex P1): `on_label_added`が渡された場合、
+    新ラベルの付与直後——旧ラベルの除去より**前**——に呼び出す。呼び出し元は
+    ここでローカルの帳簿を確定させる。旧ラベルの除去だけが失敗したときに
+    ローカルを未確定のまま残すと、Issueは新旧両方のラベルを持つため
+    `status:in-progress`として発見され続け、次サイクル以降も同じ遷移を
+    再試行しながらクオータを占有してしまう。
     """
     forge.add_label(issue_number, new_label)
+    if on_label_added is not None:
+        on_label_added()
     for old_label in old_labels:
         if old_label != new_label:
             forge.remove_label(issue_number, old_label)

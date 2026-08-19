@@ -94,6 +94,11 @@ def _poll_pending_not_needed_reviews(
     """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
 
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
+
+    #512: レビュー合格でクローズされたIssueの回収回数（`task_reclaim_counts`）の
+    破棄は、ここではなく次のディスパッチサイクルが行う——GitHub上でクローズ済みと
+    確認できたIssueをまとめて落とす単一の規則（`dispatch_cycle_context`の
+    `discard_reclaim_counts_for_closed_issues`）に集約している。
     """
 
     def work() -> dict:

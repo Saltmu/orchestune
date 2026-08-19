@@ -44,6 +44,7 @@ stateDiagram-v2
     in_progress --> blocked_human_review: Upstream PR got CHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: Automatic rebase failed\n(_apply_auto_rebase)
     in_progress --> queued: Zombie/timeout reclaimed by GC\n(_collect_zombies_and_timeouts)
+    in_progress --> blocked_human_review: GC reclaim limit exceeded\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: status:not-needed label detected\n(closed, or pending review)
     in_progress --> blocked: Stale bookkeeping entry discarded\n(_apply_stale_active_entry_discard;\nthe label itself was already changed externally)
 
@@ -121,6 +122,37 @@ independently of the lifecycle above (see "External lock" below).
 - Condition: the process disappeared while uncommitted changes remain
   (zombie), or the task timed out. Uncommitted work is stashed as a WIP
   commit before requeuing.
+- Retry bound ([#512](https://github.com/Saltmu/orchestune/issues/512)): the same
+  task may be requeued at most `max_task_reclaims` times (`--max-task-reclaims`,
+  3 by default); beyond that it takes transition 9-b below. The count lives in
+  the `task_reclaim_counts` ledger in `run_state.json` and is persisted *before*
+  the label transition (exposing `status:queued` first and stopping before the
+  save would let a relaunch happen without counting the reclaim). The record is
+  discarded when a dispatch cycle observes on GitHub that the Issue is **closed**
+  (`discard_reclaim_counts_for_closed_issues` in `dispatch_cycle_context`).
+  Neither `status:done` (the worker finished) nor dispatching the independent
+  `status:not-needed` review clears it: the former can still be returned to
+  `status:queued` by an Integrator provisional-merge CI failure, the latter by a
+  rejected review. A closed Issue is never relaunched automatically, and because
+  the rule is re-derived from GitHub every cycle, the discard does not need to be
+  persisted immediately. Note that if an Issue is closed and reopened before any
+  cycle observes the closure, the previous count is inherited — the reopened task
+  can therefore reach human-review escalation sooner than a fresh one (the error
+  is on the safe side: it stops earlier rather than looping).
+
+### 9-b. `status:in-progress` → `status:blocked-human-review` (GC reclaim limit exceeded)
+- Source: `_apply_zombie_or_timeout_reclaim` in `orchestune/dispatch_gc_zombies.py`
+- Condition: the cumulative number of zombie/timeout reclaims for a task exceeds
+  `max_task_reclaims`. Instead of returning it to `status:queued`, the task stops
+  for human review with the reclaim count and the last reason posted as a
+  comment — so a task that structurally always times out cannot be relaunched
+  forever. Like transitions 5-7, it goes through `apply_human_review_escalation`.
+- The same limit also applies to the two paths where the GC repeatedly fails to
+  finish a task on its own: when the WIP backup commit cannot be created
+  (`_apply_backup_failure`), and when completion is held back because the worktree
+  still has uncommitted changes (`_apply_dirty_worktree_hold`, the hold introduced
+  by #212). In both cases the worktree is deliberately left in place to preserve
+  the uncommitted work, and its path is named in the comment.
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
 - Source: `_finalize_not_needed_worktree` in `orchestune/dispatch_gc.py`

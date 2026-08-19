@@ -43,6 +43,7 @@ stateDiagram-v2
     in_progress --> blocked_human_review: 依存元PRがCHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: 自動リベース失敗\n(_apply_auto_rebase)
     in_progress --> queued: ゾンビ/タイムアウト検知によるGC\n(_collect_zombies_and_timeouts)
+    in_progress --> blocked_human_review: GC回収回数が上限超過\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: status:not-neededラベル検知\n(クローズ or 検証レビュー)
     in_progress --> blocked: staleな帳簿エントリの破棄\n(_apply_stale_active_entry_discard、\nラベル自体は外部で既に変更済み)
 
@@ -121,6 +122,36 @@ stateDiagram-v2
 - 発生元: `orchestune/dispatch_gc.py`の`_collect_zombies_and_timeouts`
 - 条件: プロセス消失かつ未コミット変更あり（ゾンビ）、またはタイムアウト
   超過の場合。未コミット変更はWIPコミットとして退避した上で再キューイングする。
+- 回数上限（[#512](https://github.com/Saltmu/orchestune/issues/512)）: 同一タスクを
+  差し戻せるのは`max_task_reclaims`回（`--max-task-reclaims`、既定3回）まで。
+  超過した場合は下記9-bへ遷移する。回数は`run_state.json`の`task_reclaim_counts`
+  台帳へ、ラベル遷移より先に永続化される（ラベルだけ先に`status:queued`へ戻して
+  保存前に停止すると、回数が数えられないまま再起動できてしまうため）。
+  台帳の記録は、ディスパッチサイクルがGitHub上で**Issueのクローズを確認した
+  時点**で破棄する（`dispatch_cycle_context.discard_reclaim_counts_for_closed_issues`）。
+  `status:done`（ワーカーの完了）や`status:not-needed`の独立検証レビューへの
+  送り出しでは破棄しない——前者はIntegratorの仮マージCI失敗で、後者はレビュー
+  不合格で、それぞれ`status:queued`へ差し戻され得るため。クローズ済みのIssueが
+  自動で再起動されることはなく、この判定は毎サイクルGitHubから導出し直すため、
+  破棄の即時永続化は不要。なお、クローズ後にディスパッチサイクルが一度もその状態を
+  観測しないまま再オープンされた場合は、直前の回数がそのまま引き継がれる
+  （再オープンしたタスクは新規のタスクより早く人間の確認へ回り得る。回数が多い側＝
+  ループせずに早く停止する方向の誤差）。
+
+### 9-b. `status:in-progress` → `status:blocked-human-review`（GC回収の上限超過）
+- 発生元: `orchestune/dispatch_gc_zombies.py`の`_apply_zombie_or_timeout_reclaim`
+- 条件: ゾンビ／タイムアウト回収による再投入の累計回数が`max_task_reclaims`を
+  超えた場合。`status:queued`への差し戻しを打ち切り、回収回数と最終理由を
+  コメントした上で人間の確認待ちで停止する（構造的に必ずタイムアウトする
+  タスクが無限に再起動され続けるのを防ぐため）。
+  遷移自体は5〜7と同じ`apply_human_review_escalation`へ集約している。
+- GCがタスクを自力で片付けられないまま繰り返す次の2経路も、同じ上限で本遷移を行う。
+  いずれも未コミットの作業データを保全するためworktreeは削除せずに残し、そのパスを
+  コメントで示す。
+  - WIPバックアップコミットの作成に失敗して回収自体をスキップし続けている場合
+    （`_apply_backup_failure`）
+  - 未コミット変更が残るため完了処理を保留し続けている場合
+    （`_apply_dirty_worktree_hold`。#212で導入された保留）
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree`

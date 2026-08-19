@@ -4,7 +4,9 @@ from orchestune.dispatch_state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,
+    TaskReclaimRecord,
     load_run_state,
+    prune_run_state,
     save_run_state,
 )
 
@@ -386,3 +388,191 @@ class TestRunState:
         loaded = load_run_state(path)
         assert loaded.active_worktrees["10"].base_branch == "origin/main"
         assert loaded.completed_worktrees[0].base_branch == "origin/main"
+
+
+class TestTaskReclaimCounts:
+    """#512: ゾンビ/タイムアウト回収回数の台帳の永続化と有界化。"""
+
+    def test_save_and_load_roundtrip(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        now = 1700000000.0
+        state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=now),
+            },
+        )
+        save_run_state(state, path, now=now)
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts == {
+            280: TaskReclaimRecord(count=2, last_reclaimed_at=now)
+        }
+
+    def test_missing_key_defaults_to_empty_ledger(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts == {}
+
+    def test_pending_flag_round_trips(self, tmp_path):
+        """#512: 予約中フラグ（pending）も永続化・復元される。"""
+        path = tmp_path / "run_state.json"
+        now = 1700000000.0
+        state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=now, pending=True)
+            }
+        )
+        save_run_state(state, path, now=now)
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts[280].pending is True
+
+    def test_missing_pending_flag_defaults_to_false(self, tmp_path):
+        """本フィールド導入前のrun_state.jsonは「予約中ではない」として扱う。"""
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "launch_history": [],
+                    "task_reclaim_counts": {
+                        "280": {"count": 1, "last_reclaimed_at": 1700000000.0}
+                    },
+                }
+            )
+        )
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts[280].pending is False
+
+    def test_lookup_cursor_round_trips_and_defaults_to_zero(self, tmp_path):
+        """#512: 走査カーソルの永続化と、欠落・壊れた値のフォールバック。"""
+        path = tmp_path / "run_state.json"
+        save_run_state(RunState(task_reclaim_lookup_cursor=120), path)
+        assert load_run_state(path).task_reclaim_lookup_cursor == 120
+
+        path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))
+        assert load_run_state(path).task_reclaim_lookup_cursor == 0
+
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "launch_history": [],
+                    "task_reclaim_lookup_cursor": -3,
+                }
+            )
+        )
+        assert load_run_state(path).task_reclaim_lookup_cursor == 0
+
+    def test_broken_entries_are_ignored(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "launch_history": [],
+                    "task_reclaim_counts": {
+                        "not-an-issue-number": {"count": 5},
+                        "281": {"count": -1},
+                        "282": {"count": True},
+                        "283": "not-a-record",
+                        "284": {"count": 1, "last_reclaimed_at": "nan"},
+                        "285": {"count": 1},
+                        "286": {"count": 2, "last_reclaimed_at": 1700000000.0},
+                    },
+                }
+            )
+        )
+
+        loaded = load_run_state(path)
+
+        # 壊れた値は「まだ回収していない」（＝台帳に載せない）へ倒す。
+        # 時刻だけが壊れている場合は回数を活かし、時刻を0.0へ倒す。
+        assert loaded.task_reclaim_counts == {
+            284: TaskReclaimRecord(count=1, last_reclaimed_at=0.0),
+            285: TaskReclaimRecord(count=1, last_reclaimed_at=0.0),
+            286: TaskReclaimRecord(count=2, last_reclaimed_at=1700000000.0),
+        }
+
+    def test_non_finite_timestamp_is_normalized(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            '{"active_worktrees": {}, "launch_history": [], '
+            '"task_reclaim_counts": {"280": {"count": 1, "last_reclaimed_at": Infinity}}}'
+        )
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts == {
+            280: TaskReclaimRecord(count=1, last_reclaimed_at=0.0)
+        }
+
+    def test_prune_keeps_records_regardless_of_age(self):
+        """PR#520レビュー5巡目対応(Codex P2): 経過時間でも刈り込まない。
+
+        起動レートに対してバックログが大きい場合、回収から次の起動までが
+        保持期間を超え得る。そこでカウンタが落ちると次の回収が1回目から
+        やり直しになり、`max_task_reclaims`を素通りできてしまう。
+        """
+        now = 1700000000.0
+        state = RunState(
+            active_worktrees={
+                "10": ActiveWorktree(
+                    issue_number=10,
+                    branch="claude/issue-10-x",
+                    worktree_path="worktrees/claude-issue-10-x",
+                    pid=1,
+                    started_at=now,
+                    declared_footprint=(),
+                )
+            },
+            task_reclaim_counts={
+                10: TaskReclaimRecord(count=1, last_reclaimed_at=now - 100 * 86400.0),
+                # activeでなく、保持期間（既定30日）よりはるかに古くても残す
+                11: TaskReclaimRecord(count=1, last_reclaimed_at=now - 100 * 86400.0),
+                12: TaskReclaimRecord(count=1, last_reclaimed_at=now - 86400.0),
+            },
+        )
+
+        pruned = prune_run_state(state, now=now)
+
+        assert set(pruned.task_reclaim_counts) == {10, 11, 12}
+
+    def test_prune_does_not_alias_the_original_ledger(self):
+        """刈り込み結果は元のdictと別インスタンス（意図しない共有変更を避ける）。"""
+        state = RunState(
+            task_reclaim_counts={10: TaskReclaimRecord(count=1, last_reclaimed_at=1.0)}
+        )
+
+        pruned = prune_run_state(state, now=1700000000.0)
+        pruned.task_reclaim_counts.pop(10)
+
+        assert set(state.task_reclaim_counts) == {10}
+
+    def test_prune_keeps_every_record_regardless_of_count(self):
+        """PR#520レビュー4巡目対応(Codex P2): 件数上限で古い順に追い出さない。
+
+        追い出すと、未完了のまま繰り返し失敗しているタスクのカウンタが次の試行の
+        前に消え、毎回1回目からやり直しになって`max_task_reclaims`を素通り
+        できてしまう（本Issueが塞ごうとしている終端の無い経路そのもの）。
+        """
+        now = 1700000000.0
+        state = RunState(
+            task_reclaim_counts={
+                issue_number: TaskReclaimRecord(
+                    count=1, last_reclaimed_at=now - issue_number
+                )
+                for issue_number in range(1_000)
+            },
+        )
+
+        pruned = prune_run_state(state, now=now)
+
+        assert len(pruned.task_reclaim_counts) == 1_000
