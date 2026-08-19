@@ -314,16 +314,27 @@ def _mark_reclaim_for_retry(
     """#512/PR#520レビュー7巡目対応(Codex P1): GitHubへの反映に失敗した回収を、
     次サイクルで必ず拾い直せる状態にして残す。
 
-    ここへ来た時点でworktreeは削除済み・プロセスは停止済みだが、GitHub側の
-    ラベルは`status:in-progress`のまま、`active_worktrees`のエントリも残る。
-    タイムアウト判定が無効（`--task-timeout-seconds 0`、既定）な構成では、
-    `_check_zombie_and_timeout`は「worktree不在 + started_at既知」を回収対象と
-    判定しないため、この帳簿エントリが同時実行スロットを永久に占有しかねない。
+    ここへ来た時点でworktreeは削除済みだが、GitHub側のラベルは
+    `status:in-progress`のまま、`active_worktrees`のエントリも残る。この状態を
+    そのまま次サイクルへ渡すと、対象プロセスが停止していることもあって
+    次の2つの困った挙動になる:
 
-    そこで、タイムアウト判定が無効な場合に限り`started_at`を未知（None）へ落とし、
-    #383のゾンビ復旧経路（プロセス不在 + worktree不在 + 開始時刻不明）に載せる。
-    タイムアウトが有効な構成では`started_at`を保ったままでも次サイクルの
-    タイムアウト判定が再び拾うため、KPI集計に使う開始時刻を壊さない。
+    - タイムアウト判定が無効（`--task-timeout-seconds 0`、既定）なら、
+      `_check_zombie_and_timeout`は「worktree不在 + started_at既知」を回収対象と
+      判定せず、この帳簿エントリが同時実行スロットを永久に占有する。
+    - タイムアウト判定が有効でも、GCフェーズより先に走る`_rule_completed`が
+      「プロセス停止 + worktree不在」を完了とみなし、新規コミット無しの完了
+      （`completed_no_commits`）として即座にエスカレーションしてしまう
+      （PR#520レビュー8巡目対応(Codex P2)）——記録済みの回収の再試行にならない。
+
+    そこで`started_at`を未知（None）へ落とし、#383のゾンビ復旧経路
+    （プロセス不在 + worktree不在 + 開始時刻不明）へ載せる。`started_at`が未知の
+    エントリは`_is_worktree_complete`が完了と判定しないため、完了処理にも
+    さらわれない。
+
+    ただし対象プロセスがまだ生きている場合（killに失敗した場合）は`started_at`を
+    保つ: ゾンビ判定はプロセス停止が前提で拾えず、`started_at`を消すと
+    タイムアウト判定まで無効化してしまうため、タイムアウト判定に委ねる方が安全。
 
     回収回数は既に永続化済みのため、次サイクルの再回収でも二重には数えない
     （増えるのは上限に対して厳しくなる方向のみ）。
@@ -333,10 +344,10 @@ def _mark_reclaim_for_retry(
         f"#{reclaim.active.issue_number} on GitHub: {error}",
         file=sys.stderr,
     )
-    if config.task_timeout_seconds > 0:
-        return
     active = run_state.active_worktrees.get(reclaim.key)
     if active is None or active.started_at is None:
+        return
+    if is_process_alive(active.pid):
         return
     active.started_at = None
     try:

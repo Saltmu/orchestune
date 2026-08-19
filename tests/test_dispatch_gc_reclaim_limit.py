@@ -446,9 +446,13 @@ class TestReclaimRetryBound:
         assert persisted.task_reclaim_counts[280].count == 1
         assert persisted.active_worktrees["280"].started_at is None
 
-    def test_github_failure_keeps_started_at_when_timeout_is_enabled(self, tmp_path):
-        """タイムアウトが有効なら、次サイクルのタイムアウト判定が拾うため
-        開始時刻（KPI集計に使う）を壊さない。"""
+    def test_github_failure_marks_for_retry_even_with_timeouts_enabled(self, tmp_path):
+        """PR#520レビュー8巡目対応(Codex P2): タイムアウトが有効な構成でも印を付ける。
+
+        started_atを残すと、GCフェーズより先に走る`_rule_completed`が
+        「プロセス停止 + worktree不在」を完了とみなし、記録済みの回収を再試行せず
+        `completed_no_commits`として即エスカレーションしてしまう。
+        """
         worktree = tmp_path / "wt-280"
         worktree.mkdir()
         active = _active(worktree_path=str(worktree))
@@ -457,6 +461,38 @@ class TestReclaimRetryBound:
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=RuntimeError("gh: API is unavailable"),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert events == []
+        assert run_state.active_worktrees["280"].started_at is None
+
+    def test_github_failure_keeps_started_at_while_the_process_is_alive(self, tmp_path):
+        """killに失敗してプロセスが生き残っている場合は開始時刻を壊さない。
+
+        ゾンビ判定はプロセス停止が前提で拾えないため、started_atを消すと
+        タイムアウト判定まで無効化してしまう。
+        """
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        active = _active(worktree_path=str(worktree), pid=4242)
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path, task_timeout_seconds=60, max_task_reclaims=0)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
+            patch("orchestune.dispatch_gc_zombies.os.kill"),
             patch(
                 "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
             ),
@@ -565,18 +601,18 @@ class TestReclaimCounterLifecycle:
 class TestDiscardReclaimCountsForClosedIssues:
     """#512: クローズ済みIssueの回収回数を台帳から破棄する単一の規則。"""
 
+    def _issue_record(self, number, state):
+        return IssueRecord(
+            number=number,
+            title=f"#{number}",
+            body="",
+            labels=("status:done",),
+            created_at="2026-01-01T00:00:00+00:00",
+            state=state,
+        )
+
     def _issues(self, records):
-        issues = [
-            IssueRecord(
-                number=number,
-                title=f"#{number}",
-                body="",
-                labels=("status:done",),
-                created_at="2026-01-01T00:00:00+00:00",
-                state=state,
-            )
-            for number, state in records
-        ]
+        issues = [self._issue_record(number, state) for number, state in records]
         return IssuesByStatus(
             queued=[],
             locked=[],
@@ -613,9 +649,44 @@ class TestDiscardReclaimCountsForClosedIssues:
         # 一覧で状態が分かった分は追加の問い合わせをしない
         config.forge.get_issue_state.assert_not_called()
 
-    def test_issue_absent_from_the_listing_is_queried_directly(self, tmp_path):
-        """PR#520レビュー7巡目対応(Codex P2): `status:blocked-human-review`のまま
-        閉じられたIssueなど、ラベル別の一覧に現れない記録は直接問い合わせる。"""
+    def test_terminal_label_issues_are_resolved_in_bulk(self, tmp_path):
+        """PR#520レビュー8巡目対応(Codex P2): `status:blocked-human-review`のまま
+        閉じられたIssueは、1件ずつではなくラベル単位の一括取得で解決する。
+
+        エスカレーション済みタスクは本機能自身が作り、クローズされるまで台帳に
+        残るため、1件1リクエストだと毎サイクルのAPI呼び出しが線形に増えてしまう。
+        """
+        run_state = RunState(
+            task_reclaim_counts={
+                number: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)
+                for number in range(280, 285)
+            }
+        )
+        config = self._config(tmp_path)
+        config.forge.list_issues_by_label.side_effect = lambda label, state="open": (
+            [
+                self._issue_record(280, "CLOSED"),
+                self._issue_record(281, "OPEN"),
+                self._issue_record(282, "CLOSED"),
+                self._issue_record(283, "OPEN"),
+                self._issue_record(284, "CLOSED"),
+            ]
+            if label == "status:blocked-human-review"
+            else []
+        )
+
+        removed = discard_reclaim_counts_for_closed_issues(
+            run_state, self._issues([]), config
+        )
+
+        assert removed == [280, 282, 284]
+        assert set(run_state.task_reclaim_counts) == {281, 283}
+        # 一括取得で解決できた分は1件ずつ問い合わせない
+        config.forge.get_issue_state.assert_not_called()
+        assert config.forge.list_issues_by_label.call_count == 1
+
+    def test_issue_outside_every_listing_is_queried_directly(self, tmp_path):
+        """どの一覧にも現れない記録（status:*ラベルを持たない等）だけを直接問い合わせる。"""
         run_state = RunState(
             task_reclaim_counts={
                 280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW),
@@ -623,6 +694,7 @@ class TestDiscardReclaimCountsForClosedIssues:
             }
         )
         config = self._config(tmp_path)
+        config.forge.list_issues_by_label.return_value = []
         config.forge.get_issue_state.side_effect = lambda number: (
             "CLOSED" if number == 280 else "OPEN"
         )
@@ -634,6 +706,25 @@ class TestDiscardReclaimCountsForClosedIssues:
         assert removed == [280]
         assert set(run_state.task_reclaim_counts) == {281}
 
+    def test_bulk_lookup_failure_falls_back_to_direct_queries(self, tmp_path, capsys):
+        run_state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
+            }
+        )
+        config = self._config(tmp_path)
+        config.forge.list_issues_by_label.side_effect = RuntimeError(
+            "gh: search failed"
+        )
+        config.forge.get_issue_state.return_value = "CLOSED"
+
+        removed = discard_reclaim_counts_for_closed_issues(
+            run_state, self._issues([]), config
+        )
+
+        assert removed == [280]
+        assert "gh: search failed" in capsys.readouterr().err
+
     def test_unverifiable_issue_keeps_its_count(self, tmp_path, capsys):
         """問い合わせに失敗した記録は保持する（回数を失う方が危険）。"""
         run_state = RunState(
@@ -642,6 +733,7 @@ class TestDiscardReclaimCountsForClosedIssues:
             }
         )
         config = self._config(tmp_path)
+        config.forge.list_issues_by_label.return_value = []
         config.forge.get_issue_state.side_effect = RuntimeError("gh: API rate limited")
 
         removed = discard_reclaim_counts_for_closed_issues(
@@ -661,3 +753,4 @@ class TestDiscardReclaimCountsForClosedIssues:
 
         assert removed == []
         config.forge.get_issue_state.assert_not_called()
+        config.forge.list_issues_by_label.assert_not_called()

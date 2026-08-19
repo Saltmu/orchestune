@@ -54,6 +54,65 @@ class IssuesByStatus:
         )
 
 
+# #512/PR#520レビュー8巡目対応(Codex P2): 台帳に残るIssueの状態を一括で解決する
+# ためのラベル。`_fetch_issues`が取得しない終端ラベル——とりわけ本機能自身が付与する
+# `status:blocked-human-review`——を1リクエストずつ問い合わせると、エスカレーション
+# 済みのタスクが増えるほど毎サイクルのAPI呼び出しが線形に増えてしまう。
+_LEDGER_BULK_LOOKUP_LABELS = (
+    "status:blocked-human-review",
+    "status:manual-merge-required",
+)
+
+
+def _resolve_ledger_issue_states(
+    run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
+) -> dict[int, str]:
+    """台帳に記録があるIssueの状態（OPEN/CLOSED）を、API呼び出しを抑えつつ解決する。
+
+    1. サイクルが既に取得したIssue一覧（追加コストなし）
+    2. 1で解決できない分は、終端ラベルのIssueをラベル単位で一括取得
+       （エスカレーション済みタスクが何件あっても定数回のリクエストで済む）
+    3. それでも残る分（status:*ラベルを持たない等）のみ、Issue番号を直接問い合わせる
+
+    取得に失敗したIssueは結果に含めない（呼び出し側は記録を保持する＝安全側）。
+    """
+    recorded = set(run_state.task_reclaim_counts)
+    states = {
+        issue.number: issue.state.upper()
+        for issue in issues.all()
+        if issue.number in recorded
+    }
+    unresolved = recorded - set(states)
+    for label in _LEDGER_BULK_LOOKUP_LABELS:
+        if not unresolved:
+            return states
+        try:
+            fetched = config.resolved_forge.list_issues_by_label(label, state="all")
+        except Exception as e:  # noqa: BLE001 - 解決できない分は次の手段へ
+            print(
+                f"Warning: could not list {label!r} issues while checking reclaim "
+                f"counts: {e}",
+                file=sys.stderr,
+            )
+            continue
+        for issue in fetched:
+            if issue.number in unresolved:
+                states[issue.number] = issue.state.upper()
+        unresolved -= set(states)
+    for issue_number in sorted(unresolved):
+        try:
+            states[issue_number] = config.resolved_forge.get_issue_state(
+                issue_number
+            ).upper()
+        except Exception as e:  # noqa: BLE001 - 確認できない記録は保持する
+            print(
+                f"Warning: could not check whether issue #{issue_number} is "
+                f"closed; keeping its reclaim count: {e}",
+                file=sys.stderr,
+            )
+    return states
+
+
 def discard_reclaim_counts_for_closed_issues(
     run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
 ) -> list[int]:
@@ -64,41 +123,31 @@ def discard_reclaim_counts_for_closed_issues(
     破棄していたが、その時点ではIssueはまだ開いており、Integratorの仮マージCIが
     失敗すれば`handle_merge_failure`が同じIssueを`status:queued`へ差し戻す。
     そこで回数が0に戻っていると、「GC回収 → ワーカー完了 → 統合失敗」の繰り返しで
-    `max_task_reclaims`を素通りできてしまう。Issueがクローズされていれば、そのタスクが
-    再び起動されることはない（人間が再オープンした場合は新しい実行として数え直す）。
+    `max_task_reclaims`を素通りできてしまう。クローズ済みのIssueが自動で再起動
+    されることはないため、これが安全に破棄できる唯一のタイミングである。
 
-    PR#520レビュー7巡目対応(Codex P2): 判定にはまず取得済みのIssue一覧を使い、
-    そこに現れない台帳エントリだけ`get_issue_state`で直接問い合わせる。
+    PR#520レビュー7巡目対応(Codex P2): 判定は取得済みのIssue一覧だけに頼らない。
     `_fetch_issues`はステータスラベル別のopen検索（`status:done`/`status:not-needed`
     のみstate="all"）であり、`status:blocked-human-review`のまま閉じられたIssueや
     `--parent-issue`の対象外のIssueは一覧に現れないため、一覧だけを根拠にすると
-    それらのクローズを永久に観測できない。問い合わせは台帳に記録があるIssue
-    （＝GC回収されたまま未完了のもの、通常は0〜数件）に限られる。
+    それらのクローズを永久に観測できない（解決手順は`_resolve_ledger_issue_states`）。
 
     状態を確認できなかったエントリは保持する（安全側: 回数を失うと上限判定が
     0からやり直しになる）。この判定は毎サイクルGitHubから導出し直すため、破棄を
     ディスクへ即時永続化する必要はない（保存前に落ちても次サイクルで同じ結論に
     到達する）。
+
+    なお、クローズ後にディスパッチサイクルが1度もその状態を観測しないまま人手で
+    再オープンされた場合は、直前の回数がそのまま引き継がれる（そのIssueは常に
+    OPENに見えるため）。回数が多い側へ倒れる＝上限に早く到達して人間の確認へ回る
+    方向の誤差であり、終端の無い経路は生まれない。
     """
     if not run_state.task_reclaim_counts:
         return []
-    listed_states = {
-        issue.number: issue.state.upper() for issue in issues.all() if issue.number
-    }
+    states = _resolve_ledger_issue_states(run_state, issues, config)
     removed: list[int] = []
     for issue_number in sorted(run_state.task_reclaim_counts):
-        state = listed_states.get(issue_number)
-        if state is None:
-            try:
-                state = config.resolved_forge.get_issue_state(issue_number).upper()
-            except Exception as e:  # noqa: BLE001 - 確認できない記録は保持する
-                print(
-                    f"Warning: could not check whether issue #{issue_number} is "
-                    f"closed; keeping its reclaim count: {e}",
-                    file=sys.stderr,
-                )
-                continue
-        if state == "CLOSED":
+        if states.get(issue_number) == "CLOSED":
             del run_state.task_reclaim_counts[issue_number]
             removed.append(issue_number)
     return removed
