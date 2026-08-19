@@ -26,10 +26,11 @@ from __future__ import annotations
 import os
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_targets import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,
@@ -52,6 +53,16 @@ NOT_NEEDED_REJECTED_LABEL = "not-needed-review:failed"
 # #282: 対応不要判定によるクローズ時、事後の可視性確保のためメンションする、
 # 本リポジトリの唯一のメンテナー。
 NOT_NEEDED_ATTENTION_MENTION = "@Saltmu"
+
+# #511: どちらの結果ラベルも付かないまま保留され続けるstatus:not-needed検証
+# レビューのタイムアウト秒数の既定値。`DispatcherConfig.not_needed_review_timeout_seconds`
+# と同じ値（呼び出し元がconfigを経由しない直接呼び出し・テストでも有限の終端を
+# 既定で持つように、独立した定数として重複させている）。
+DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS = 86400.0
+
+# #511: タイムアウトしたstatus:not-needed検証レビューをエスカレーションする際に
+# 除去すべき、対象Issueが本来まだ保持しているはずの旧ラベル。
+_NOT_NEEDED_STATUS_LABEL = "status:not-needed"
 
 
 class RoutineFirer(Protocol):
@@ -211,7 +222,10 @@ def record_pending_not_needed_review(
 
 
 def process_pending_not_needed_reviews(
-    state_path: str | Path, forge: Forge | None = None
+    state_path: str | Path,
+    forge: Forge | None = None,
+    now: float | None = None,
+    timeout_seconds: float = DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
 ) -> dict:
     """#282: 保留中の`status:not-needed`検証レビューをポーリングし、検証に通った
     ものはIssueを決定論的にクローズする。レビューセッション自身はクローズを
@@ -226,7 +240,18 @@ def process_pending_not_needed_reviews(
     - `not-needed-review:failed` を検知 → `status:queued`への差し戻しは既に
       レビューセッション自身が行っているため、Python側はラベルを外して記録を
       消費するのみ。
-    - どちらのラベルもまだ無ければ、記録はそのまま保持し次サイクルで再確認する。
+    - どちらのラベルもまだ無い場合、`now - entry.dispatched_at`が`timeout_seconds`
+      未満なら記録はそのまま保持し次サイクルで再確認する。**超えていれば
+      （#511）**、レビューセッションのクラッシュ等で結果が永久に返らないと
+      判断し、`status:not-needed`を外して`status:blocked-human-review`へ
+      エスカレーションし理由をコメントする（`apply_human_review_escalation`を
+      再利用。新ラベルの付与を旧ラベル除去・コメントより先に確定させる、
+      #512/PR#520で確立した順序をそのまま踏襲する）。エスカレーションが
+      決定した瞬間（新ラベル付与の直後）に台帳から消費する: 消費を
+      `apply_human_review_escalation`の完了まで遅らせると、旧ラベル除去や
+      コメント投稿だけが失敗したときにローカルが未確定のまま残り、次サイクルも
+      同じタイムアウト条件が再び真になって、届いているはずの
+      `status:blocked-human-review`へ重複コメントを送り続けてしまう。
     - 1エントリの処理中の例外は他エントリの処理・状態保存を巻き込まない。
       失敗したエントリは警告ログを出したうえでpendingのまま保持し、次サイクルで
       自動的に再試行する。
@@ -237,14 +262,16 @@ def process_pending_not_needed_reviews(
       永久pending化」の両方（いずれも#205と同種のリーク）を防ぐ。
     """
     forge = forge or GitHubForge()
+    now = time.time() if now is None else now
     lock_path = Path(state_path).with_suffix(".lock")
     with file_lock(lock_path):
         state = load_not_needed_review_state(state_path)
         if not state.pending:
-            return {"closed": [], "reopened": [], "still_pending": 0}
+            return {"closed": [], "reopened": [], "timed_out": [], "still_pending": 0}
 
         closed_summary: list[int] = []
         reopened_summary: list[int] = []
+        timed_out_summary: list[int] = []
         # #226/PR#227: クローズ＋ラベル削除（またはreopenのラベル削除）まで成功し、
         # 完了シグナルを消費し終えたエントリのissue_number。台帳から確実に除外する対象。
         consumed: set[int] = set()
@@ -274,7 +301,27 @@ def process_pending_not_needed_reviews(
                         )
                         consumed.add(entry.issue_number)
                         reopened_summary.append(entry.issue_number)
-                    # どちらのラベルも無ければ消費しない（pendingのまま次サイクルで再確認）。
+                    elif now - entry.dispatched_at > timeout_seconds:
+                        # #511: どちらの結果ラベルも付かないまま上限を超えた。
+                        # 台帳への消費登録は、新ラベル(status:blocked-human-review)の
+                        # 付与が確定した瞬間に行う（on_label_applied）。旧ラベル除去や
+                        # コメント投稿だけが失敗しても、次サイクルはこの条件を
+                        # 再評価しない（重複コメント防止）。
+                        timed_out_issue_number = entry.issue_number
+
+                        def _mark_consumed(n: int = timed_out_issue_number) -> None:
+                            consumed.add(n)
+
+                        _escalate_timed_out_review(
+                            entry.issue_number,
+                            labels,
+                            timeout_seconds,
+                            forge,
+                            on_label_applied=_mark_consumed,
+                        )
+                        timed_out_summary.append(entry.issue_number)
+                    # どちらのラベルも無く、上限未満であれば消費しない
+                    # （pendingのまま次サイクルで再確認）。
                 except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
                     print(
                         f"Warning: failed to finalize not-needed review for issue "
@@ -299,6 +346,7 @@ def process_pending_not_needed_reviews(
     return {
         "closed": closed_summary,
         "reopened": reopened_summary,
+        "timed_out": timed_out_summary,
         "still_pending": len(remaining),
     }
 
@@ -319,3 +367,36 @@ def _close_verified_issue(issue_number: int, forge: Forge) -> None:
                 "自動的にクローズしました。誤りであれば再オープンしてください。"
             ),
         )
+
+
+def _escalate_timed_out_review(
+    issue_number: int,
+    labels: tuple[str, ...],
+    timeout_seconds: float,
+    forge: Forge,
+    on_label_applied: Callable[[], None],
+) -> None:
+    """#511: `status:not-needed`検証レビューが結果ラベルを一切返さないまま
+    タイムアウトしたエントリを、`status:blocked-human-review`へ終端させる。
+
+    除去対象は現在フェッチ済みの`labels`に実際に含まれる場合のみ渡す
+    （`apply_human_review_escalation`は`current_status_labels`に含まれる
+    ラベルしか除去しないため、無条件に渡しても副作用は無いが、実際に
+    保持しているラベルだけを「除去対象」として明示する方が意図が正確）。
+    """
+    stale_status_labels = tuple(
+        label for label in labels if label == _NOT_NEEDED_STATUS_LABEL
+    )
+    apply_human_review_escalation(
+        issue_number,
+        stale_status_labels,
+        (
+            "対応不要（`status:not-needed`）判定の独立検証レビューが、"
+            f"{timeout_seconds:.0f}秒以内に結果（`{NOT_NEEDED_VERIFIED_LABEL}`/"
+            f"`{NOT_NEEDED_REJECTED_LABEL}`）を返しませんでした"
+            "（レビューセッションのクラッシュ等が疑われます）。\n"
+            "自動判定を打ち切り、人間の確認が必要な状態へ変更しました。"
+        ),
+        forge=forge,
+        on_label_applied=on_label_applied,
+    )

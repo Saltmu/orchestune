@@ -12,7 +12,17 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 
-_REMOVABLE_STATUS_LABELS = ("status:in-progress", "status:queued", "status:blocked")
+# #511: `status:not-needed`（対応不要）検証レビューのタイムアウト時にも
+# この共通処理を再利用するため対象へ含める。既存の呼び出し元（GC/actor検証/
+# CHANGES_REQUESTED）はいずれも`status:in-progress`/`queued`/`blocked`の
+# タスクにしか作用しないため、`status:not-needed`が`current_status_labels`に
+# 含まれることはなく、この拡張は既存呼び出し元には影響しない。
+_REMOVABLE_STATUS_LABELS = (
+    "status:in-progress",
+    "status:queued",
+    "status:blocked",
+    "status:not-needed",
+)
 
 
 def apply_human_review_escalation(

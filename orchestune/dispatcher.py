@@ -115,6 +115,14 @@ def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
         default=Path("not_needed_review_state.json"),
         help="#282: 保留中のstatus:not-needed検証レビュー（合否ポーリング・自動クローズ待ち）の永続化先",
     )
+    parser.add_argument(
+        "--not-needed-review-timeout-seconds",
+        type=_non_negative_int,
+        default=86400,
+        help="#511: status:not-needed検証レビューがどちらの結果ラベルも返さないまま"
+        "保持され続ける秒数の上限。超過したエントリはstatus:blocked-human-reviewへ"
+        "エスカレーションする（無制限にはできない）",
+    )
 
 
 def _add_dispatch_target_arguments(parser: argparse.ArgumentParser) -> None:
@@ -288,6 +296,7 @@ def _config_defaults(
         "max_recompute_retries",
         "task_timeout_seconds",
         "max_task_reclaims",
+        "not_needed_review_timeout_seconds",
     }
     positive_int_keys = {"window_seconds", "parent_issue"}
     defaults: dict[str, Any] = {}
@@ -405,6 +414,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         max_tokens_per_window=args.max_tokens_per_window,
         max_tokens_per_task=args.max_tokens_per_task,
         not_needed_review_state_path=args.not_needed_review_state_path,
+        not_needed_review_timeout_seconds=args.not_needed_review_timeout_seconds,
         ci_command=shlex.split(args.ci_command) if args.ci_command else None,
         dag_ignore_patterns=inputs.dag_ignore_patterns,
         dag_similarity_threshold=inputs.dag_similarity_threshold,
@@ -429,6 +439,7 @@ def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
                 config.not_needed_review_state_path,
                 forge=config.forge,
                 auth_error=auth_error,
+                timeout_seconds=config.not_needed_review_timeout_seconds,
             )
             post_cycle_results.append(result)
         result = _run_semantic_integrator(

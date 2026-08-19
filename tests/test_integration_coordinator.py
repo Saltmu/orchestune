@@ -9,6 +9,7 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
 )
 from orchestune.integration_coordinator import (
+    DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
     NOT_NEEDED_REJECTED_LABEL,
     NOT_NEEDED_VERIFIED_LABEL,
     IntegrationCoordinator,
@@ -229,7 +230,12 @@ class TestProcessPendingNotNeededReviews:
     def test_no_pending_reviews_is_a_noop(self, fake_forge: MagicMock, tmp_path):
         path = tmp_path / "state.json"
         result = process_pending_not_needed_reviews(path, forge=fake_forge)
-        assert result == {"closed": [], "reopened": [], "still_pending": 0}
+        assert result == {
+            "closed": [],
+            "reopened": [],
+            "timed_out": [],
+            "still_pending": 0,
+        }
         fake_forge.get_issue_labels.assert_not_called()
 
     def test_verified_label_closes_issue_and_mentions_human(
@@ -371,6 +377,7 @@ class TestProcessPendingNotNeededReviews:
     def test_neither_label_present_keeps_entry_pending(
         self, fake_forge: MagicMock, tmp_path
     ):
+        """#511: タイムアウト未満であれば従来通り保留のまま（回帰なし）。"""
         path = tmp_path / "state.json"
         entry = PendingNotNeededReview(
             issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
@@ -378,10 +385,136 @@ class TestProcessPendingNotNeededReviews:
         self._state_with(entry, path=path)
         fake_forge.get_issue_labels.return_value = ("status:not-needed",)
 
-        result = process_pending_not_needed_reviews(path, forge=fake_forge)
+        result = process_pending_not_needed_reviews(
+            path, forge=fake_forge, now=100.0, timeout_seconds=3600.0
+        )
 
         assert result["still_pending"] == 1
+        assert result["timed_out"] == []
         assert load_not_needed_review_state(path).pending == [entry]
+        fake_forge.add_label.assert_not_called()
+
+    def test_timed_out_entry_escalates_to_human_review(
+        self, fake_forge: MagicMock, tmp_path
+    ):
+        """#511 再現テスト: どちらの結果ラベルも付かないままタイムアウトを
+        超えた保留エントリが、`status:blocked-human-review`へ決定論的に遷移し、
+        台帳から消費される（永久pendingの解消）こと。
+
+        修正前(Red): `still_pending`が減らず、何サイクル回しても保持され続ける。
+        修正後(Green): 上限超過後、エントリが終端状態へ遷移して台帳から消える。
+        """
+        path = tmp_path / "state.json"
+        entry = PendingNotNeededReview(
+            issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
+        )
+        self._state_with(entry, path=path)
+        fake_forge.get_issue_labels.return_value = ("status:not-needed",)
+
+        result = process_pending_not_needed_reviews(
+            path, forge=fake_forge, now=1.0 + 3600.0 + 1.0, timeout_seconds=3600.0
+        )
+
+        fake_forge.add_label.assert_called_once_with(250, "status:blocked-human-review")
+        fake_forge.remove_label.assert_called_once_with(250, "status:not-needed")
+        fake_forge.add_comment.assert_called_once()
+        assert result["timed_out"] == [250]
+        assert result["still_pending"] == 0
+        assert load_not_needed_review_state(path).pending == []
+
+    def test_timeout_boundary_is_exclusive(self, fake_forge: MagicMock, tmp_path):
+        """境界値: 経過時間が上限ちょうどの場合はまだ超過とみなさない
+        （`prune_run_state`等、本コードベースの他の窓判定と同じ、超過は
+        厳密な`>`で判定する意味論）。"""
+        path = tmp_path / "state.json"
+        entry = PendingNotNeededReview(
+            issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
+        )
+        self._state_with(entry, path=path)
+        fake_forge.get_issue_labels.return_value = ("status:not-needed",)
+
+        result = process_pending_not_needed_reviews(
+            path, forge=fake_forge, now=1.0 + 3600.0, timeout_seconds=3600.0
+        )
+
+        assert result["timed_out"] == []
+        assert result["still_pending"] == 1
+        fake_forge.add_label.assert_not_called()
+
+    def test_timeout_uses_the_default_when_unspecified(
+        self, fake_forge: MagicMock, tmp_path
+    ):
+        """呼び出し元がtimeout_secondsを指定しなければ、有限の既定値
+        （`DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS`）が使われること。
+        「終端がない経路を残さない」という#511の目的上、無指定でも必ず
+        有限の上限で終端することを固定する。"""
+        path = tmp_path / "state.json"
+        very_old = PendingNotNeededReview(
+            issue_number=250,
+            subtask_id="plot-api-routes",
+            dispatched_at=0.0,
+        )
+        self._state_with(very_old, path=path)
+        fake_forge.get_issue_labels.return_value = ("status:not-needed",)
+
+        result = process_pending_not_needed_reviews(
+            path,
+            forge=fake_forge,
+            now=DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS + 1.0,
+        )
+
+        assert result["timed_out"] == [250]
+
+    def test_escalation_removes_only_the_not_needed_label_actually_present(
+        self, fake_forge: MagicMock, tmp_path
+    ):
+        """`apply_human_review_escalation`へ渡す除去対象は、実際に現在フェッチ
+        できたラベルに含まれるものだけに絞る（無関係なラベルを誤って除去
+        除去対象扱いしない）。"""
+        path = tmp_path / "state.json"
+        entry = PendingNotNeededReview(
+            issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
+        )
+        self._state_with(entry, path=path)
+        fake_forge.get_issue_labels.return_value = (
+            "status:not-needed",
+            "priority:high",
+        )
+
+        process_pending_not_needed_reviews(
+            path, forge=fake_forge, now=1.0 + 3600.0 + 1.0, timeout_seconds=3600.0
+        )
+
+        fake_forge.remove_label.assert_called_once_with(250, "status:not-needed")
+
+    def test_comment_failure_still_consumes_the_entry(
+        self, fake_forge: MagicMock, tmp_path
+    ):
+        """#511: `status:blocked-human-review`の付与が確定した直後に台帳から
+        消費する。付与後のコメント投稿だけが失敗しても、新ラベル自体は
+        既にGitHub側で確定しているため、台帳へエントリを残して次サイクルへ
+        持ち越してはいけない（残すと同じタイムアウト条件を再評価し続け、
+        既に届いている`status:blocked-human-review`へ重複コメントを送る）。
+        `#512`/PR#520で確立した`on_label_applied`の順序と同じ設計。"""
+        path = tmp_path / "state.json"
+        entry = PendingNotNeededReview(
+            issue_number=250, subtask_id="plot-api-routes", dispatched_at=1.0
+        )
+        self._state_with(entry, path=path)
+        fake_forge.get_issue_labels.return_value = ("status:not-needed",)
+        fake_forge.add_comment.side_effect = RuntimeError("gh api error")
+
+        result = process_pending_not_needed_reviews(
+            path, forge=fake_forge, now=1.0 + 3600.0 + 1.0, timeout_seconds=3600.0
+        )
+
+        # 新ラベルの付与自体は成功している。
+        fake_forge.add_label.assert_called_once_with(250, "status:blocked-human-review")
+        # コメント失敗で例外が送出されるため、timed_outへのappendより前で
+        # 打ち切られる。ただし台帳の消費（on_label_applied）は既に確定済み。
+        assert result["timed_out"] == []
+        assert result["still_pending"] == 0
+        assert load_not_needed_review_state(path).pending == []
 
     def test_label_polling_failure_keeps_entry_pending(
         self, fake_forge: MagicMock, tmp_path
@@ -426,7 +559,9 @@ class TestProcessPendingNotNeededReviews:
         fake_forge.get_issue_labels.side_effect = labels_side_effect
 
         with pytest.raises(KeyboardInterrupt):
-            process_pending_not_needed_reviews(path, forge=fake_forge)
+            process_pending_not_needed_reviews(
+                path, forge=fake_forge, now=100.0, timeout_seconds=3600.0
+            )
 
         # 中断時でも、まだ消費していないエントリ（未処理・要再試行）は温存される。
         remaining = {p.issue_number for p in load_not_needed_review_state(path).pending}
