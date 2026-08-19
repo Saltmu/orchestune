@@ -592,6 +592,42 @@ class TestReclaimRetryBound:
             count=1, last_reclaimed_at=_NOW, pending=False
         )
 
+    def test_comment_failure_after_escalation_settles_and_releases(self, tmp_path):
+        """PR#520レビュー12巡目対応(Codex P1): エスカレーションのコメントだけが
+        失敗しても、ラベルが付いた時点で予約を確定しエントリを解放する。
+
+        ここを確定させないと、次サイクルでは当該Issueが取得対象外
+        （status:blocked-human-review）となり`already_escalated`にも該当しないため、
+        エスカレーションを延々と再試行しながらクオータを占有し続けてしまう。
+        """
+        active = _active(worktree_path=str(tmp_path / "missing-280"))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path, max_task_reclaims=0)
+        labels: list[tuple[str, str]] = []
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: labels.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=RuntimeError("gh: comment failed"),
+            ),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert [event["action"] for event in events] == [
+            "escalated_reclaim_limit_exceeded"
+        ]
+        assert ("add", "status:blocked-human-review") in labels
+        assert run_state.active_worktrees == {}
+        persisted = load_run_state(config.run_state_path)
+        assert persisted.active_worktrees == {}
+        assert persisted.task_reclaim_counts[280].pending is False
+
     def test_comment_failure_after_requeue_still_settles_the_count(self, tmp_path):
         """PR#520レビュー10巡目対応(Codex P2): `status:queued`が見えた時点で予約を
         確定させる。
@@ -815,6 +851,87 @@ class TestDirtyWorktreeHoldLimit:
 
         assert ctx.run_state.task_reclaim_counts[280].count == 2
         assert ctx.run_state.task_reclaim_counts[280].pending is False
+
+    def test_escalation_failure_does_not_abort_the_cycle(self, tmp_path):
+        """PR#520レビュー12巡目対応(Codex P1): エスカレーションの失敗で
+        サイクル全体を止めない（1タスクが全体のスケジューリングを妨げない）。
+
+        ラベル遷移すら失敗した場合は保留のまま次サイクルで再試行し、回数は
+        GitHubへ触れる前に永続化済みであることを確認する。
+        """
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 0
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        task = _task(status_labels=("status:in-progress",))
+
+        with (
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={
+                    "action": "completion_skipped_dirty_worktree",
+                    "issue_number": 280,
+                    "worktree_path": active.worktree_path,
+                },
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=RuntimeError("gh: API is unavailable"),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
+        assert set(ctx.run_state.active_worktrees) == {"1"}
+        # 回数はGitHubへ触れる前にディスクへ載っている
+        assert (
+            load_run_state(ctx.config.run_state_path).task_reclaim_counts[280].count
+            == 1
+        )
+
+    def test_comment_failure_after_escalation_still_releases_the_entry(self, tmp_path):
+        """ラベル遷移が成功していればコメント失敗でもエントリを解放する。"""
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 0
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        task = _task(status_labels=("status:in-progress",))
+
+        with (
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={
+                    "action": "completion_skipped_dirty_worktree",
+                    "issue_number": 280,
+                    "worktree_path": active.worktree_path,
+                },
+            ),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=RuntimeError("gh: comment failed"),
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert outcome.completion_event["action"] == "escalated_reclaim_limit_exceeded"
+        assert ctx.run_state.active_worktrees == {}
+        assert load_run_state(ctx.config.run_state_path).active_worktrees == {}
 
     def test_dry_run_does_not_count_the_hold(self, tmp_path):
         ctx = _ctx()

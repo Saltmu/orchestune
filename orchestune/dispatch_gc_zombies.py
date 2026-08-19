@@ -271,11 +271,13 @@ def _notify_reclaim(
     エントリを破棄してタスクが再起動されたあと、その回収が同じ回数を再利用して
     しまい、コメント投稿の失敗1回につき起動枠が1回増えてしまう。
 
-    エスカレーション（`apply_human_review_escalation`）はラベル遷移とコメントを
-    まとめて行うため分割しない。コメントだけ失敗した場合は予約が`pending`のまま
-    残るが、`status:blocked-human-review`が付いた時点で自動的な再起動は起きず、
-    次サイクルの回収（`already_escalated`分岐）で予約が確定するため、起動枠が
-    増えることはない。
+    #512/PR#520レビュー12巡目対応(Codex P1): エスカレーションも同様に、
+    `apply_human_review_escalation`の`on_label_applied`フックで
+    `status:blocked-human-review`が付いた時点で`settle`する。ここを確定させないと、
+    コメント投稿だけが失敗した場合に帳簿エントリが残り、次サイクルでは当該Issueが
+    `_fetch_issues`の取得対象外（＝`status_labels`が既定の`status:in-progress`に
+    なる）ため`already_escalated`にも該当せず、エスカレーションを延々と再試行しながら
+    クオータを占有し続けてしまう。
     """
     active = reclaim.active
     reason = reclaim.reason
@@ -310,8 +312,11 @@ def _notify_reclaim(
             f"最後の回収理由: {reason}\n"
             "タイムアウト設定やサブタスクの粒度、実行環境を確認してください。",
             forge=config.resolved_forge,
+            # status:blocked-human-reviewが付いた時点で予約を確定させる
+            # （コメント投稿だけが失敗しても、次サイクルで再エスカレーションを
+            # 繰り返さない）。
+            on_label_applied=settle,
         )
-        settle()
         return
     # #381レビュー対応(Codex P2): stacked launch等の中断した遷移で
     # status:blockedが取り残されている場合も併せて除去し、

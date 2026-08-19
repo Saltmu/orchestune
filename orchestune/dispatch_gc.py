@@ -111,6 +111,19 @@ def _rule_not_needed(
     )
 
 
+def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
+    """run_stateをその場で永続化する（失敗はサイクル終端の保存に委ねて警告のみ）。"""
+    try:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+    except Exception as e:  # noqa: BLE001 - ベストエフォートの永続化
+        print(f"Warning: failed to persist {what}: {e}", file=sys.stderr)
+
+
 def _apply_dirty_worktree_hold(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> str:
@@ -128,6 +141,13 @@ def _apply_dirty_worktree_hold(
     作業データを保全するため、worktreeは削除せずに残す（回収時のバックアップ失敗と
     同じ扱い）。
 
+    #512/PR#520レビュー12巡目対応(Codex P1): 回数はGitHubへ触れる前に永続化し、
+    エスカレーションの失敗は捕捉する。ここで例外を伝播させると、その1タスクの
+    ためにディスパッチサイクル全体が毎回中断し（＝他タスクのスケジューリングも
+    止まり）、しかも回数が保存されないまま同じ失敗を繰り返してしまう。
+    ラベル遷移が成功した時点で帳簿エントリを解放・永続化するため、後続の
+    コメント投稿だけが失敗しても再エスカレーションのループにはならない。
+
     戻り値は確定後のイベントaction。
     """
     if not ctx.config.apply:
@@ -137,13 +157,28 @@ def _apply_dirty_worktree_hold(
     ctx.run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
         count=hold_count, last_reclaimed_at=time.time()
     )
-    action = "completion_skipped_dirty_worktree"
-    if hold_count > ctx.config.max_task_reclaims:
-        status_labels = (
-            active_task.status_labels
-            if active_task is not None
-            else ("status:in-progress",)
+    _persist_run_state_best_effort(
+        ctx, f"the dirty-worktree hold count for issue #{active.issue_number}"
+    )
+    if hold_count <= ctx.config.max_task_reclaims:
+        return "completion_skipped_dirty_worktree"
+
+    released = False
+
+    def _release_entry() -> None:
+        nonlocal released
+        released = True
+        ctx.run_state.active_worktrees.pop(key, None)
+        _persist_run_state_best_effort(
+            ctx, f"the released ledger entry for issue #{active.issue_number}"
         )
+
+    status_labels = (
+        active_task.status_labels
+        if active_task is not None
+        else ("status:in-progress",)
+    )
+    try:
         apply_human_review_escalation(
             active.issue_number,
             status_labels,
@@ -155,23 +190,18 @@ def _apply_dirty_worktree_hold(
             "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
             f"{active.worktree_path}",
             forge=ctx.config.resolved_forge,
+            on_label_applied=_release_entry,
         )
-        del ctx.run_state.active_worktrees[key]
-        action = "escalated_reclaim_limit_exceeded"
-    try:
-        save_run_state(
-            ctx.run_state,
-            ctx.config.run_state_path,
-            launch_window_seconds=ctx.config.window_seconds,
-            open_prs=ctx.prs,
-        )
-    except Exception as e:  # noqa: BLE001 - サイクル終端の保存に委ねる
+    except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
         print(
-            f"Warning: failed to persist the dirty-worktree hold count for issue "
+            f"Warning: failed to escalate the held dirty worktree of issue "
             f"#{active.issue_number}: {e}",
             file=sys.stderr,
         )
-    return action
+        if not released:
+            # ラベルすら付けられていない。次サイクルで再試行する。
+            return "completion_skipped_dirty_worktree"
+    return "escalated_reclaim_limit_exceeded"
 
 
 def _record_completed_worktree(
