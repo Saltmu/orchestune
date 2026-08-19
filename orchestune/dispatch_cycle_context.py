@@ -63,6 +63,12 @@ _LEDGER_BULK_LOOKUP_LABELS = (
     "status:manual-merge-required",
 )
 
+# #512/PR#520レビュー14巡目対応(Codex P2): 一括取得の取得件数と、1サイクルあたりの
+# 個別問い合わせ件数の上限。台帳には件数上限を設けていない（未完了タスクの回数を
+# 失わないため）ので、解決処理側でAPI呼び出し回数を有界に保つ。
+_LEDGER_BULK_LOOKUP_MIN_LIMIT = 1000
+_LEDGER_DIRECT_LOOKUPS_PER_CYCLE = 50
+
 
 def _resolve_ledger_issue_states(
     run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
@@ -75,6 +81,14 @@ def _resolve_ledger_issue_states(
     3. それでも残る分（status:*ラベルを持たない等）のみ、Issue番号を直接問い合わせる
 
     取得に失敗したIssueは結果に含めない（呼び出し側は記録を保持する＝安全側）。
+
+    PR#520レビュー14巡目対応(Codex P2): 2の一括取得は台帳の記録数を賄える件数を
+    明示的に要求し（既定の1000件で頭打ちにしない）、3の個別問い合わせは1サイクル
+    あたり`_LEDGER_DIRECT_LOOKUPS_PER_CYCLE`件までに制限する。台帳自体は有界化して
+    いない（未完了タスクの回数を失わないため）ので、ここを無制限にすると
+    大規模リポジトリで毎サイクル数千回の逐次API呼び出しになり、ディスパッチ全体が
+    詰まりかねない。上限に掛かって未解決のまま残った記録は保持され、次サイクル以降で
+    順次確認される（記録が残る側＝安全側の遅延にすぎない）。
     """
     recorded = set(run_state.task_reclaim_counts)
     states = {
@@ -87,7 +101,11 @@ def _resolve_ledger_issue_states(
         if not unresolved:
             return states
         try:
-            fetched = config.resolved_forge.list_issues_by_label(label, state="all")
+            fetched = config.resolved_forge.list_issues_by_label(
+                label,
+                state="all",
+                limit=max(_LEDGER_BULK_LOOKUP_MIN_LIMIT, len(unresolved) * 2),
+            )
         except Exception as e:  # noqa: BLE001 - 解決できない分は次の手段へ
             print(
                 f"Warning: could not list {label!r} issues while checking reclaim "
@@ -99,7 +117,7 @@ def _resolve_ledger_issue_states(
             if issue.number in unresolved:
                 states[issue.number] = issue.state.upper()
         unresolved -= set(states)
-    for issue_number in sorted(unresolved):
+    for issue_number in sorted(unresolved)[:_LEDGER_DIRECT_LOOKUPS_PER_CYCLE]:
         try:
             states[issue_number] = config.resolved_forge.get_issue_state(
                 issue_number

@@ -1117,16 +1117,18 @@ class TestDiscardReclaimCountsForClosedIssues:
             }
         )
         config = self._config(tmp_path)
-        config.forge.list_issues_by_label.side_effect = lambda label, state="open": (
-            [
-                self._issue_record(280, "CLOSED"),
-                self._issue_record(281, "OPEN"),
-                self._issue_record(282, "CLOSED"),
-                self._issue_record(283, "OPEN"),
-                self._issue_record(284, "CLOSED"),
-            ]
-            if label == "status:blocked-human-review"
-            else []
+        config.forge.list_issues_by_label.side_effect = (
+            lambda label, state="open", limit=1000: (
+                [
+                    self._issue_record(280, "CLOSED"),
+                    self._issue_record(281, "OPEN"),
+                    self._issue_record(282, "CLOSED"),
+                    self._issue_record(283, "OPEN"),
+                    self._issue_record(284, "CLOSED"),
+                ]
+                if label == "status:blocked-human-review"
+                else []
+            )
         )
 
         removed = discard_reclaim_counts_for_closed_issues(
@@ -1197,6 +1199,49 @@ class TestDiscardReclaimCountsForClosedIssues:
         assert removed == []
         assert set(run_state.task_reclaim_counts) == {280}
         assert "API rate limited" in capsys.readouterr().err
+
+    def test_bulk_lookup_requests_enough_results_for_the_ledger(self, tmp_path):
+        """PR#520レビュー14巡目対応(Codex P2): 既定の1000件で頭打ちにしない。"""
+        run_state = RunState(
+            task_reclaim_counts={
+                number: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)
+                for number in range(2_000)
+            }
+        )
+        config = self._config(tmp_path)
+        config.forge.list_issues_by_label.return_value = []
+        config.forge.get_issue_state.return_value = "OPEN"
+
+        discard_reclaim_counts_for_closed_issues(run_state, self._issues([]), config)
+
+        assert (
+            config.forge.list_issues_by_label.call_args_list[0].kwargs["limit"] >= 2_000
+        )
+
+    def test_direct_lookups_are_bounded_per_cycle(self, tmp_path):
+        """個別問い合わせは1サイクルあたりの上限で頭打ちにする。
+
+        台帳に件数上限を設けていないため、ここを無制限にすると大規模リポジトリで
+        毎サイクル数千回の逐次API呼び出しになり、ディスパッチ全体が詰まる。
+        未解決の記録は保持され、次サイクル以降で順次確認される。
+        """
+        run_state = RunState(
+            task_reclaim_counts={
+                number: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)
+                for number in range(500)
+            }
+        )
+        config = self._config(tmp_path)
+        config.forge.list_issues_by_label.return_value = []
+        config.forge.get_issue_state.return_value = "CLOSED"
+
+        removed = discard_reclaim_counts_for_closed_issues(
+            run_state, self._issues([]), config
+        )
+
+        assert config.forge.get_issue_state.call_count == 50
+        assert len(removed) == 50
+        assert len(run_state.task_reclaim_counts) == 450
 
     def test_empty_ledger_makes_no_api_call(self, tmp_path):
         config = self._config(tmp_path)
