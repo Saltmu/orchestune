@@ -743,6 +743,95 @@ class TestReclaimCounterLifecycle:
         assert ctx.run_state.task_reclaim_counts == {280: record}
 
 
+class TestDirtyWorktreeHoldLimit:
+    """#512/PR#520レビュー11巡目対応(Codex P1): #212のdirty worktree保留も上限で終端する。
+
+    保留中のworktreeは`run_gc_phase`がGC対象から除外するため、ゾンビ/タイムアウト
+    回収の上限判定には到達しない。保留自体を同じ台帳で数えないと、対象タスクは
+    `status:in-progress`のままクオータを占有し続ける。
+    """
+
+    def _hold_cycle(self, ctx, active, task):
+        with (
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={
+                    "action": "completion_skipped_dirty_worktree",
+                    "issue_number": 280,
+                    "worktree_path": active.worktree_path,
+                },
+            ),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+        return outcome, mock_add_label, mock_add_comment
+
+    def test_repeated_holds_escalate_at_the_limit(self, tmp_path):
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 2
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        task = _task(status_labels=("status:in-progress",))
+
+        actions = []
+        for _ in range(3):
+            ctx.run_state.active_worktrees.setdefault("1", active)
+            outcome, mock_add_label, _ = self._hold_cycle(ctx, active, task)
+            assert outcome is not None
+            actions.append(outcome.completion_event["action"])
+
+        assert actions == [
+            "completion_skipped_dirty_worktree",
+            "completion_skipped_dirty_worktree",
+            "escalated_reclaim_limit_exceeded",
+        ]
+        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
+        # 未コミットの作業を守るためworktreeは残し、帳簿エントリのみ解放する
+        assert ctx.run_state.active_worktrees == {}
+        assert load_run_state(ctx.config.run_state_path).active_worktrees == {}
+
+    def test_hold_count_shares_the_reclaim_ledger(self, tmp_path):
+        """回収回数と同じ台帳を共有する（保留と回収を通算して上限に到達する）。"""
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 3
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
+            count=1, last_reclaimed_at=_NOW
+        )
+        task = _task(status_labels=("status:in-progress",))
+
+        self._hold_cycle(ctx, active, task)
+
+        assert ctx.run_state.task_reclaim_counts[280].count == 2
+        assert ctx.run_state.task_reclaim_counts[280].pending is False
+
+    def test_dry_run_does_not_count_the_hold(self, tmp_path):
+        ctx = _ctx()
+        ctx.config.apply = False
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        task = _task(status_labels=("status:in-progress",))
+
+        outcome, _, _ = self._hold_cycle(ctx, active, task)
+
+        assert outcome is not None
+        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
+        assert ctx.run_state.task_reclaim_counts == {}
+
+
 class TestDiscardReclaimCountsForClosedIssues:
     """#512: クローズ済みIssueの回収回数を台帳から破棄する単一の規則。"""
 

@@ -6,10 +6,12 @@ Implementation helpers are re-exported for backward-compatible imports.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import replace
 
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_completion import (
     CompletedWorktreeDecision,
     _active_dispatch_handle,
@@ -46,6 +48,8 @@ from orchestune.dispatch_state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,
+    TaskReclaimRecord,
+    save_run_state,
 )
 from orchestune.models import PrRecord, Usage
 from orchestune.process_utils import is_process_alive
@@ -100,6 +104,106 @@ def _rule_not_needed(
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
+    return ActiveWorktreeRuleOutcome(
+        completion_event=completion_event,
+        completed_subtask_id=completed_subtask_id,
+        terminal=True,
+    )
+
+
+def _apply_dirty_worktree_hold(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> str:
+    """#212のdirty worktree保留にも`max_task_reclaims`の上限を効かせる。
+
+    #512/PR#520レビュー11巡目対応(Codex P1): 未コミット変更の残るworktreeは、
+    人間の確認まで完了処理を保留する（#212）。ところが保留は毎サイクル黙って
+    繰り返されるだけで、対象タスクは`status:in-progress`のままクオータを占有し
+    続ける。しかも`run_gc_phase`が保留中のworktreeをGCの対象から外すため、
+    ゾンビ/タイムアウト回収による上限判定にも到達しない——本Issueが塞ごうとして
+    いる「終端の無い経路」そのものになっていた。
+
+    そこで保留も1回分として同じ台帳へ数え、上限を超えたら
+    `status:blocked-human-review`へ遷移させて帳簿エントリを解放する。未コミットの
+    作業データを保全するため、worktreeは削除せずに残す（回収時のバックアップ失敗と
+    同じ扱い）。
+
+    戻り値は確定後のイベントaction。
+    """
+    if not ctx.config.apply:
+        return "completion_skipped_dirty_worktree"
+    previous = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+    hold_count = (previous.count if previous else 0) + 1
+    ctx.run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
+        count=hold_count, last_reclaimed_at=time.time()
+    )
+    action = "completion_skipped_dirty_worktree"
+    if hold_count > ctx.config.max_task_reclaims:
+        status_labels = (
+            active_task.status_labels
+            if active_task is not None
+            else ("status:in-progress",)
+        )
+        apply_human_review_escalation(
+            active.issue_number,
+            status_labels,
+            "エージェントプロセスの終了を検知しましたが、worktreeに未コミットの変更が"
+            "残っているため、完了処理を保留しました。\n"
+            f"保留・回収の累計回数が上限（max_task_reclaims="
+            f"{ctx.config.max_task_reclaims}）を超えた（今回で{hold_count}回目）ため、"
+            "自動処理を打ち切り、status:blocked-human-reviewへ遷移しました。\n"
+            "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
+            f"{active.worktree_path}",
+            forge=ctx.config.resolved_forge,
+        )
+        del ctx.run_state.active_worktrees[key]
+        action = "escalated_reclaim_limit_exceeded"
+    try:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+    except Exception as e:  # noqa: BLE001 - サイクル終端の保存に委ねる
+        print(
+            f"Warning: failed to persist the dirty-worktree hold count for issue "
+            f"#{active.issue_number}: {e}",
+            file=sys.stderr,
+        )
+    return action
+
+
+def _record_completed_worktree(
+    ctx: CycleContext,
+    key: str,
+    completion_active: ActiveWorktree,
+    active_task: Task | None,
+    completion_event: dict,
+) -> ActiveWorktreeRuleOutcome:
+    """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
+    action = completion_event["action"]
+    completed_subtask_id = None
+    if action == "completed" and active_task is not None and active_task.subtask_id:
+        completed_subtask_id = active_task.subtask_id
+    if ctx.config.apply:
+        raw_usage = completion_event.get("usage")
+        usage_obj = Usage(**raw_usage) if raw_usage else None
+        ctx.run_state.completed_worktrees.append(
+            CompletedWorktree(
+                issue_number=completion_active.issue_number,
+                subtask_id=active_task.subtask_id if active_task else "",
+                branch=completion_active.branch,
+                started_at=completion_active.started_at,
+                completed_at=time.time(),
+                recompute_count=completion_active.recompute_count,
+                forced_serial=completion_active.forced_serial,
+                commit_sha=completion_event.get("commit_sha"),
+                base_branch=completion_active.base_branch,
+                usage=usage_obj,
+            )
+        )
+        del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         completed_subtask_id=completed_subtask_id,
@@ -272,36 +376,14 @@ def _rule_completed(
     )
     action = completion_event["action"]
     if action in ("completed", "escalated_token_limit_exceeded"):
-        completed_subtask_id = None
-        if action == "completed" and active_task is not None and active_task.subtask_id:
-            completed_subtask_id = active_task.subtask_id
-        if ctx.config.apply:
-            raw_usage = completion_event.get("usage")
-            usage_obj = Usage(**raw_usage) if raw_usage else None
-            ctx.run_state.completed_worktrees.append(
-                CompletedWorktree(
-                    issue_number=completion_active.issue_number,
-                    subtask_id=active_task.subtask_id if active_task else "",
-                    branch=completion_active.branch,
-                    started_at=completion_active.started_at,
-                    completed_at=time.time(),
-                    recompute_count=completion_active.recompute_count,
-                    forced_serial=completion_active.forced_serial,
-                    commit_sha=completion_event.get("commit_sha"),
-                    base_branch=completion_active.base_branch,
-                    usage=usage_obj,
-                )
-            )
-            del ctx.run_state.active_worktrees[key]
-        return ActiveWorktreeRuleOutcome(
-            completion_event=completion_event,
-            completed_subtask_id=completed_subtask_id,
-            terminal=True,
+        return _record_completed_worktree(
+            ctx, key, completion_active, active_task, completion_event
         )
     if action == "completed_no_commits":
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
-        return ActiveWorktreeRuleOutcome(
-            completion_event=completion_event, terminal=True
+    elif action == "completion_skipped_dirty_worktree":
+        completion_event["action"] = _apply_dirty_worktree_hold(
+            ctx, key, completion_active, active_task
         )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)

@@ -133,9 +133,12 @@ independently of the lifecycle above (see "External lock" below).
   Neither `status:done` (the worker finished) nor dispatching the independent
   `status:not-needed` review clears it: the former can still be returned to
   `status:queued` by an Integrator provisional-merge CI failure, the latter by a
-  rejected review. A closed Issue is never relaunched (if a human reopens it, the
-  next run starts counting from zero), and because the rule is re-derived from
-  GitHub every cycle, the discard does not need to be persisted immediately.
+  rejected review. A closed Issue is never relaunched automatically, and because
+  the rule is re-derived from GitHub every cycle, the discard does not need to be
+  persisted immediately. Note that if an Issue is closed and reopened before any
+  cycle observes the closure, the previous count is inherited — the reopened task
+  can therefore reach human-review escalation sooner than a fresh one (the error
+  is on the safe side: it stops earlier rather than looping).
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review` (GC reclaim limit exceeded)
 - Source: `_apply_zombie_or_timeout_reclaim` in `orchestune/dispatch_gc_zombies.py`
@@ -144,10 +147,12 @@ independently of the lifecycle above (see "External lock" below).
   for human review with the reclaim count and the last reason posted as a
   comment — so a task that structurally always times out cannot be relaunched
   forever. Like transitions 5-7, it goes through `apply_human_review_escalation`.
-- The same limit also applies when the reclaim keeps being skipped because the WIP
-  backup commit cannot be created (`_apply_backup_failure`). In that case the
-  worktree is deliberately left in place to preserve the uncommitted work, and its
-  path is named in the comment.
+- The same limit also applies to the two paths where the GC repeatedly fails to
+  finish a task on its own: when the WIP backup commit cannot be created
+  (`_apply_backup_failure`), and when completion is held back because the worktree
+  still has uncommitted changes (`_apply_dirty_worktree_hold`, the hold introduced
+  by #212). In both cases the worktree is deliberately left in place to preserve
+  the uncommitted work, and its path is named in the comment.
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
 - Source: `_finalize_not_needed_worktree` in `orchestune/dispatch_gc.py`

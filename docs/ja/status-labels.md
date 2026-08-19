@@ -132,8 +132,11 @@ stateDiagram-v2
   `status:done`（ワーカーの完了）や`status:not-needed`の独立検証レビューへの
   送り出しでは破棄しない——前者はIntegratorの仮マージCI失敗で、後者はレビュー
   不合格で、それぞれ`status:queued`へ差し戻され得るため。クローズ済みのIssueが
-  再び起動されることはなく（人間が再オープンした場合は新しい実行として数え直す）、
-  この判定は毎サイクルGitHubから導出し直すため、破棄の即時永続化は不要。
+  自動で再起動されることはなく、この判定は毎サイクルGitHubから導出し直すため、
+  破棄の即時永続化は不要。なお、クローズ後にディスパッチサイクルが一度もその状態を
+  観測しないまま再オープンされた場合は、直前の回数がそのまま引き継がれる
+  （再オープンしたタスクは新規のタスクより早く人間の確認へ回り得る。回数が多い側＝
+  ループせずに早く停止する方向の誤差）。
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review`（GC回収の上限超過）
 - 発生元: `orchestune/dispatch_gc_zombies.py`の`_apply_zombie_or_timeout_reclaim`
@@ -142,9 +145,13 @@ stateDiagram-v2
   コメントした上で人間の確認待ちで停止する（構造的に必ずタイムアウトする
   タスクが無限に再起動され続けるのを防ぐため）。
   遷移自体は5〜7と同じ`apply_human_review_escalation`へ集約している。
-- WIPバックアップコミットの作成に失敗して回収自体をスキップし続けている場合も、
-  同じ上限で本遷移を行う（`_apply_backup_failure`）。この場合、未コミットの
-  作業データを保全するためworktreeは削除せずに残し、そのパスをコメントで示す。
+- GCがタスクを自力で片付けられないまま繰り返す次の2経路も、同じ上限で本遷移を行う。
+  いずれも未コミットの作業データを保全するためworktreeは削除せずに残し、そのパスを
+  コメントで示す。
+  - WIPバックアップコミットの作成に失敗して回収自体をスキップし続けている場合
+    （`_apply_backup_failure`）
+  - 未コミット変更が残るため完了処理を保留し続けている場合
+    （`_apply_dirty_worktree_hold`。#212で導入された保留）
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree`
