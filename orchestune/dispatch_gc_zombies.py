@@ -240,6 +240,121 @@ def _apply_backup_failure(
     return None
 
 
+def _notify_reclaim(
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    worktree_note: str,
+    already_escalated: bool,
+    escalating: bool,
+) -> None:
+    """回収結果をGitHubへ反映する（ラベル遷移とコメント）。"""
+    active = reclaim.active
+    reason = reclaim.reason
+    if already_escalated:
+        # 中断した以前の遷移でstatus:blocked-human-review/
+        # status:manual-merge-requiredが既に付与されている場合、
+        # status:queuedへ書き換えると人間の確認要求を握りつぶして
+        # 自動的に再起動してしまう。物理的な後始末のみ行い、
+        # ラベルには一切触れない。
+        config.resolved_forge.add_comment(
+            active.issue_number,
+            f"タスク実行が {reason} のため、GCにより{worktree_note}"
+            "後始末しました。既に人間の確認が必要な状態のため、"
+            "status:*ラベルは変更していません。",
+        )
+        return
+    if escalating:
+        # #512: 回収・再投入の累計が上限を超えたタスクは、status:queuedへ
+        # 戻さずstatus:blocked-human-reviewで停止させる（台帳の更新・永続化は
+        # 呼び出し側でラベル遷移より先に済ませている）。
+        apply_human_review_escalation(
+            active.issue_number,
+            reclaim.status_labels,
+            f"タスク実行が {reason} のため、GCにより{worktree_note}"
+            "後始末しました。\n"
+            f"回収・再投入の累計回数が上限（max_task_reclaims="
+            f"{config.max_task_reclaims}）を超えた"
+            f"（今回で{reclaim.reclaim_count}回目）ため、"
+            "status:queuedへの再投入を打ち切り、"
+            "status:blocked-human-reviewへ遷移しました。\n"
+            f"最後の回収理由: {reason}\n"
+            "タイムアウト設定やサブタスクの粒度、実行環境を確認してください。",
+            forge=config.resolved_forge,
+        )
+        return
+    # #381レビュー対応(Codex P2): stacked launch等の中断した遷移で
+    # status:blockedが取り残されている場合も併せて除去し、
+    # status:queuedへ確実に収束させる。
+    stale_labels = tuple(
+        label
+        for label in ("status:in-progress", "status:blocked")
+        if label in reclaim.status_labels
+    )
+    transition_status_label(
+        config.resolved_forge,
+        active.issue_number,
+        "status:queued",
+        stale_labels,
+    )
+    config.resolved_forge.add_comment(
+        active.issue_number,
+        f"タスク実行が {reason} のため、GCにより{worktree_note}"
+        "タスクを再キューイング（status:queued）しました"
+        f"（回収{reclaim.reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
+    )
+
+
+def _mark_reclaim_for_retry(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+    error: BaseException,
+) -> None:
+    """#512/PR#520レビュー7巡目対応(Codex P1): GitHubへの反映に失敗した回収を、
+    次サイクルで必ず拾い直せる状態にして残す。
+
+    ここへ来た時点でworktreeは削除済み・プロセスは停止済みだが、GitHub側の
+    ラベルは`status:in-progress`のまま、`active_worktrees`のエントリも残る。
+    タイムアウト判定が無効（`--task-timeout-seconds 0`、既定）な構成では、
+    `_check_zombie_and_timeout`は「worktree不在 + started_at既知」を回収対象と
+    判定しないため、この帳簿エントリが同時実行スロットを永久に占有しかねない。
+
+    そこで、タイムアウト判定が無効な場合に限り`started_at`を未知（None）へ落とし、
+    #383のゾンビ復旧経路（プロセス不在 + worktree不在 + 開始時刻不明）に載せる。
+    タイムアウトが有効な構成では`started_at`を保ったままでも次サイクルの
+    タイムアウト判定が再び拾うため、KPI集計に使う開始時刻を壊さない。
+
+    回収回数は既に永続化済みのため、次サイクルの再回収でも二重には数えない
+    （増えるのは上限に対して厳しくなる方向のみ）。
+    """
+    print(
+        f"Warning: failed to apply the GC reclaim of issue "
+        f"#{reclaim.active.issue_number} on GitHub: {error}",
+        file=sys.stderr,
+    )
+    if config.task_timeout_seconds > 0:
+        return
+    active = run_state.active_worktrees.get(reclaim.key)
+    if active is None or active.started_at is None:
+        return
+    active.started_at = None
+    try:
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            now=reclaim.now,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
+    except Exception as e:  # noqa: BLE001 - ベストエフォートの後始末
+        print(
+            f"Warning: failed to persist the retry marker for issue "
+            f"#{reclaim.active.issue_number}: {e}",
+            file=sys.stderr,
+        )
+
+
 def _apply_zombie_or_timeout_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
@@ -270,6 +385,11 @@ def _apply_zombie_or_timeout_reclaim(
     毎サイクル続くようなタスクこそ人間の確認へ回すべきであり、副作用を先に
     実行して回数だけ失う（次サイクルで数えられないまま再起動できてしまう）よりも
     安全側である。
+
+    #512/PR#520レビュー7巡目対応(Codex P1): GitHubへの反映（コメント・ラベル遷移・
+    エスカレーション）が例外で失敗した場合は、帳簿エントリを消さずに
+    `_mark_reclaim_for_retry`で次サイクルが拾い直せる状態にしてからNoneを返す。
+    一時的なAPI障害でスロットを占有したままになるのを防ぐ。
     """
     active = reclaim.active
     reason = reclaim.reason
@@ -295,73 +415,27 @@ def _apply_zombie_or_timeout_reclaim(
             except Exception:
                 pass
         worktree_exists = os.path.exists(active.worktree_path)
-        if worktree_exists:
-            backup_error = backup_wip_commit(
-                active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
-            )
-            if backup_error is not None:
-                return _apply_backup_failure(
-                    run_state, reclaim, config, escalating, backup_error
+        try:
+            if worktree_exists:
+                backup_error = backup_wip_commit(
+                    active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
                 )
-        if worktree_exists:
-            remove_worktree(active.worktree_path)
-        worktree_note = (
-            "作業ブランチにWIPコミットを退避した上で、"
-            if worktree_exists
-            else "物理worktreeが見つからなかったため、"
-        )
-        if already_escalated:
-            # 中断した以前の遷移でstatus:blocked-human-review/
-            # status:manual-merge-requiredが既に付与されている場合、
-            # status:queuedへ書き換えると人間の確認要求を握りつぶして
-            # 自動的に再起動してしまう。物理的な後始末のみ行い、
-            # ラベルには一切触れない。
-            config.resolved_forge.add_comment(
-                active.issue_number,
-                f"タスク実行が {reason} のため、GCにより{worktree_note}"
-                "後始末しました。既に人間の確認が必要な状態のため、"
-                "status:*ラベルは変更していません。",
+                if backup_error is not None:
+                    return _apply_backup_failure(
+                        run_state, reclaim, config, escalating, backup_error
+                    )
+                remove_worktree(active.worktree_path)
+            worktree_note = (
+                "作業ブランチにWIPコミットを退避した上で、"
+                if worktree_exists
+                else "物理worktreeが見つからなかったため、"
             )
-        elif escalating:
-            # #512: 回収・再投入の累計が上限を超えたタスクは、status:queuedへ
-            # 戻さずstatus:blocked-human-reviewで停止させる（台帳の更新・永続化は
-            # 上のとおりラベル遷移より先に済ませている）。
-            apply_human_review_escalation(
-                active.issue_number,
-                reclaim.status_labels,
-                f"タスク実行が {reason} のため、GCにより{worktree_note}"
-                "後始末しました。\n"
-                f"回収・再投入の累計回数が上限（max_task_reclaims="
-                f"{config.max_task_reclaims}）を超えた"
-                f"（今回で{reclaim.reclaim_count}回目）ため、"
-                "status:queuedへの再投入を打ち切り、"
-                "status:blocked-human-reviewへ遷移しました。\n"
-                f"最後の回収理由: {reason}\n"
-                "タイムアウト設定やサブタスクの粒度、実行環境を確認してください。",
-                forge=config.resolved_forge,
+            _notify_reclaim(
+                reclaim, config, worktree_note, already_escalated, escalating
             )
-        else:
-            # #381レビュー対応(Codex P2): stacked launch等の中断した遷移で
-            # status:blockedが取り残されている場合も併せて除去し、
-            # status:queuedへ確実に収束させる。
-            stale_labels = tuple(
-                label
-                for label in ("status:in-progress", "status:blocked")
-                if label in reclaim.status_labels
-            )
-            transition_status_label(
-                config.resolved_forge,
-                active.issue_number,
-                "status:queued",
-                stale_labels,
-            )
-            config.resolved_forge.add_comment(
-                active.issue_number,
-                f"タスク実行が {reason} のため、GCにより{worktree_note}"
-                "タスクを再キューイング（status:queued）しました"
-                f"（回収{reclaim.reclaim_count}回目 / 上限"
-                f"{config.max_task_reclaims}回）。",
-            )
+        except Exception as e:  # noqa: BLE001 - 次サイクルでの再回収へ委ねる
+            _mark_reclaim_for_retry(run_state, reclaim, config, open_prs, e)
+            return None
         del run_state.active_worktrees[reclaim.key]
 
     return _reclaim_event(

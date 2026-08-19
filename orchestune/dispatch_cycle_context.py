@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -54,7 +55,7 @@ class IssuesByStatus:
 
 
 def discard_reclaim_counts_for_closed_issues(
-    run_state: RunState, issues: IssuesByStatus
+    run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
 ) -> list[int]:
     """#512: GitHub上でクローズ済みと確認できたIssueの回収回数を台帳から破棄する。
 
@@ -66,21 +67,41 @@ def discard_reclaim_counts_for_closed_issues(
     `max_task_reclaims`を素通りできてしまう。Issueがクローズされていれば、そのタスクが
     再び起動されることはない（人間が再オープンした場合は新しい実行として数え直す）。
 
-    この判定はGitHubを真実として毎サイクル導出し直すため、破棄をディスクへ即時
-    永続化する必要はない（保存前に落ちても次サイクルで同じ結論に到達する）。
-    逆に、取得できたIssueの中で**クローズが確認できたものだけ**を破棄対象とするため、
-    Issue取得が部分的だったり、`--parent-issue`で対象が絞られていたり、
-    `status:blocked-human-review`のように取得対象ラベルに含まれない状態であっても、
-    未完了タスクのカウンタを誤って落とすことはない。
+    PR#520レビュー7巡目対応(Codex P2): 判定にはまず取得済みのIssue一覧を使い、
+    そこに現れない台帳エントリだけ`get_issue_state`で直接問い合わせる。
+    `_fetch_issues`はステータスラベル別のopen検索（`status:done`/`status:not-needed`
+    のみstate="all"）であり、`status:blocked-human-review`のまま閉じられたIssueや
+    `--parent-issue`の対象外のIssueは一覧に現れないため、一覧だけを根拠にすると
+    それらのクローズを永久に観測できない。問い合わせは台帳に記録があるIssue
+    （＝GC回収されたまま未完了のもの、通常は0〜数件）に限られる。
+
+    状態を確認できなかったエントリは保持する（安全側: 回数を失うと上限判定が
+    0からやり直しになる）。この判定は毎サイクルGitHubから導出し直すため、破棄を
+    ディスクへ即時永続化する必要はない（保存前に落ちても次サイクルで同じ結論に
+    到達する）。
     """
-    closed_issue_numbers = {
-        issue.number for issue in issues.all() if issue.state.upper() == "CLOSED"
+    if not run_state.task_reclaim_counts:
+        return []
+    listed_states = {
+        issue.number: issue.state.upper() for issue in issues.all() if issue.number
     }
-    return [
-        issue_number
-        for issue_number in sorted(closed_issue_numbers)
-        if run_state.task_reclaim_counts.pop(issue_number, None) is not None
-    ]
+    removed: list[int] = []
+    for issue_number in sorted(run_state.task_reclaim_counts):
+        state = listed_states.get(issue_number)
+        if state is None:
+            try:
+                state = config.resolved_forge.get_issue_state(issue_number).upper()
+            except Exception as e:  # noqa: BLE001 - 確認できない記録は保持する
+                print(
+                    f"Warning: could not check whether issue #{issue_number} is "
+                    f"closed; keeping its reclaim count: {e}",
+                    file=sys.stderr,
+                )
+                continue
+        if state == "CLOSED":
+            del run_state.task_reclaim_counts[issue_number]
+            removed.append(issue_number)
+    return removed
 
 
 def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:

@@ -52,7 +52,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         issues = _fetch_issues(config)
         # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
         # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
-        discard_reclaim_counts_for_closed_issues(run_state, issues)
+        discard_reclaim_counts_for_closed_issues(run_state, issues, config)
         run_self_heal_phase(run_state, config, now)
         issues = issues.filtered_by_parent(config.parent_issue_number)
 

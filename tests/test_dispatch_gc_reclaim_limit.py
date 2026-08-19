@@ -6,7 +6,7 @@
 へ遷移して停止することを検証する。
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle_context import (
@@ -402,6 +402,77 @@ class TestReclaimRetryBound:
         assert "worktreeは削除せずに残しています" in comments[0]
         assert "fatal: unable to write new index file" in comments[0]
 
+    def test_github_failure_leaves_the_entry_reclaimable_next_cycle(self, tmp_path):
+        """PR#520レビュー7巡目対応(Codex P1): GitHubへの反映が失敗しても、
+        帳簿エントリがスロットを占有し続けない。
+
+        worktreeは削除済みなので、タイムアウト判定が無効な構成では
+        `started_at`を未知へ落として#383のゾンビ復旧経路に載せる。
+        """
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        active = _active(worktree_path=str(worktree))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path, task_timeout_seconds=0, max_task_reclaims=0)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=RuntimeError("gh: API is unavailable"),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert events == []
+        # エントリは残したまま、次サイクルのゾンビ判定で拾える形にする
+        assert set(run_state.active_worktrees) == {"280"}
+        assert run_state.active_worktrees["280"].started_at is None
+        # 回数は永続化済みのまま（二重には数えない）
+        persisted = load_run_state(config.run_state_path)
+        assert persisted.task_reclaim_counts[280].count == 1
+        assert persisted.active_worktrees["280"].started_at is None
+
+    def test_github_failure_keeps_started_at_when_timeout_is_enabled(self, tmp_path):
+        """タイムアウトが有効なら、次サイクルのタイムアウト判定が拾うため
+        開始時刻（KPI集計に使う）を壊さない。"""
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        active = _active(worktree_path=str(worktree))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path, task_timeout_seconds=60, max_task_reclaims=0)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=RuntimeError("gh: API is unavailable"),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert events == []
+        assert run_state.active_worktrees["280"].started_at == active.started_at
+
     def test_decide_layer_does_not_mutate_the_ledger(self, tmp_path):
         """decide層は副作用を持たない（台帳の更新はapply層の責務）。"""
         active = _active(worktree_path=str(tmp_path / "missing-280"))
@@ -515,40 +586,78 @@ class TestDiscardReclaimCountsForClosedIssues:
             not_needed=[],
         )
 
-    def test_closed_issue_loses_its_reclaim_count(self):
+    def _config(self, tmp_path, **overrides):
+        defaults = dict(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            forge=MagicMock(),
+        )
+        defaults.update(overrides)
+        return DispatcherConfig(**defaults)
+
+    def test_closed_issue_loses_its_reclaim_count(self, tmp_path):
         run_state = RunState(
             task_reclaim_counts={
                 280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW),
                 281: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW),
             }
         )
+        config = self._config(tmp_path)
 
         removed = discard_reclaim_counts_for_closed_issues(
-            run_state, self._issues([(280, "CLOSED"), (281, "OPEN")])
+            run_state, self._issues([(280, "CLOSED"), (281, "OPEN")]), config
+        )
+
+        assert removed == [280]
+        assert set(run_state.task_reclaim_counts) == {281}
+        # 一覧で状態が分かった分は追加の問い合わせをしない
+        config.forge.get_issue_state.assert_not_called()
+
+    def test_issue_absent_from_the_listing_is_queried_directly(self, tmp_path):
+        """PR#520レビュー7巡目対応(Codex P2): `status:blocked-human-review`のまま
+        閉じられたIssueなど、ラベル別の一覧に現れない記録は直接問い合わせる。"""
+        run_state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW),
+                281: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW),
+            }
+        )
+        config = self._config(tmp_path)
+        config.forge.get_issue_state.side_effect = lambda number: (
+            "CLOSED" if number == 280 else "OPEN"
+        )
+
+        removed = discard_reclaim_counts_for_closed_issues(
+            run_state, self._issues([]), config
         )
 
         assert removed == [280]
         assert set(run_state.task_reclaim_counts) == {281}
 
-    def test_issues_absent_from_the_listing_keep_their_counts(self):
-        """取得対象に現れないIssue（status:blocked-human-review、別の親配下、
-        取得失敗など）のカウンタは落とさない——落とすと上限がリセットされる。"""
+    def test_unverifiable_issue_keeps_its_count(self, tmp_path, capsys):
+        """問い合わせに失敗した記録は保持する（回数を失う方が危険）。"""
         run_state = RunState(
             task_reclaim_counts={
                 280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
             }
         )
-
-        removed = discard_reclaim_counts_for_closed_issues(run_state, self._issues([]))
-
-        assert removed == []
-        assert set(run_state.task_reclaim_counts) == {280}
-
-    def test_closed_issue_without_a_record_is_not_reported(self):
-        run_state = RunState(task_reclaim_counts={})
+        config = self._config(tmp_path)
+        config.forge.get_issue_state.side_effect = RuntimeError("gh: API rate limited")
 
         removed = discard_reclaim_counts_for_closed_issues(
-            run_state, self._issues([(280, "CLOSED")])
+            run_state, self._issues([]), config
         )
 
         assert removed == []
+        assert set(run_state.task_reclaim_counts) == {280}
+        assert "API rate limited" in capsys.readouterr().err
+
+    def test_empty_ledger_makes_no_api_call(self, tmp_path):
+        config = self._config(tmp_path)
+
+        removed = discard_reclaim_counts_for_closed_issues(
+            RunState(), self._issues([(280, "CLOSED")]), config
+        )
+
+        assert removed == []
+        config.forge.get_issue_state.assert_not_called()
