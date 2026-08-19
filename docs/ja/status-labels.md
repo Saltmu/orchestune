@@ -139,6 +139,9 @@ stateDiagram-v2
   コメントした上で人間の確認待ちで停止する（構造的に必ずタイムアウトする
   タスクが無限に再起動され続けるのを防ぐため）。
   遷移自体は5〜7と同じ`apply_human_review_escalation`へ集約している。
+- WIPバックアップコミットの作成に失敗して回収自体をスキップし続けている場合も、
+  同じ上限で本遷移を行う（`_apply_backup_failure`）。この場合、未コミットの
+  作業データを保全するためworktreeは削除せずに残し、そのパスをコメントで示す。
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree`

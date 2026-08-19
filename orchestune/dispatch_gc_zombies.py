@@ -178,6 +178,68 @@ def _record_reclaim(
     return True
 
 
+def _reclaim_event(reclaim: ZombieOrTimeoutReclaim, action: str, counted: bool) -> dict:
+    """回収結果イベントを組み立てる（`_apply_zombie_or_timeout_reclaim`の戻り値）。"""
+    return {
+        "issue_number": reclaim.active.issue_number,
+        "subtask_id": reclaim.subtask_id,
+        "action": action,
+        "reason": reclaim.reason,
+        # 数えない分岐（既に人間の確認待ち）では、台帳が保持している既存の
+        # 回数（今回分を含まない値）をそのまま報告する。
+        "reclaim_count": (
+            reclaim.reclaim_count if counted else reclaim.reclaim_count - 1
+        ),
+    }
+
+
+def _apply_backup_failure(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    escalating: bool,
+    backup_error: str,
+) -> dict | None:
+    """WIPバックアップコミットの作成に失敗した場合の後始末。
+
+    未コミットの作業データ消失を防ぐため、worktreeは削除せずに残す。
+
+    #512/PR#520レビュー3巡目対応(Codex P1): 回収回数が上限を超えている場合は、
+    毎サイクル「スキップした」とコメントし続ける代わりに
+    `status:blocked-human-review`へ遷移させ、帳簿エントリも解放する。
+    バックアップが恒常的に失敗するタスク（ディスク枯渇・破損したworktree等）は、
+    この分岐が無いと`status:in-progress`のままクオータを占有し続け、回収回数と
+    失敗コメントだけが無限に積み上がる——本Issueが塞ごうとしている終端の無い
+    経路そのものになってしまう。worktreeは残したまま人間へ引き渡す。
+    """
+    if escalating:
+        apply_human_review_escalation(
+            reclaim.active.issue_number,
+            reclaim.status_labels,
+            f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
+            "WIPバックアップコミットの作成に失敗しました。\n"
+            f"回収の累計回数が上限（max_task_reclaims={config.max_task_reclaims}）"
+            f"を超えた（今回で{reclaim.reclaim_count}回目）ため、自動回収を打ち切り、"
+            "status:blocked-human-reviewへ遷移しました。\n"
+            "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
+            f"{reclaim.active.worktree_path}\n"
+            f"エラー詳細:\n```\n{backup_error}\n```",
+            forge=config.resolved_forge,
+        )
+        del run_state.active_worktrees[reclaim.key]
+        return _reclaim_event(reclaim, "escalated_reclaim_limit_exceeded", True)
+
+    config.resolved_forge.add_comment(
+        reclaim.active.issue_number,
+        f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
+        "WIPバックアップコミットの作成に失敗しました。\n"
+        "未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を"
+        "一時スキップしました。\n"
+        f"エラー詳細:\n```\n{backup_error}\n```",
+    )
+    return None
+
+
 def _apply_zombie_or_timeout_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
@@ -195,7 +257,10 @@ def _apply_zombie_or_timeout_reclaim(
 
     WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
     消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
-    （active_worktreesは変更せず、次サイクルでの再試行に委ねる）。
+    （active_worktreesは変更せず、次サイクルでの再試行に委ねる）。ただし回収回数が
+    上限を超えている場合は、そのスキップ自体が終端の無いループになるため、
+    worktreeを残したまま`status:blocked-human-review`へ遷移させる
+    （`_apply_backup_failure`）。
 
     #512/PR#520レビュー2巡目対応(Codex P2): 回収回数の記録・永続化は、
     プロセスkill・worktree削除・ラベル遷移といったあらゆる副作用より**先**に行う。
@@ -235,13 +300,9 @@ def _apply_zombie_or_timeout_reclaim(
                 active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
             )
             if backup_error is not None:
-                config.resolved_forge.add_comment(
-                    active.issue_number,
-                    f"タスク実行が {reason} のためGCによる回収を試みましたが、WIPバックアップコミットの作成に失敗しました。\n"
-                    "未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を一時スキップしました。\n"
-                    f"エラー詳細:\n```\n{backup_error}\n```",
+                return _apply_backup_failure(
+                    run_state, reclaim, config, escalating, backup_error
                 )
-                return None
         if worktree_exists:
             remove_worktree(active.worktree_path)
         worktree_note = (
@@ -303,19 +364,11 @@ def _apply_zombie_or_timeout_reclaim(
             )
         del run_state.active_worktrees[reclaim.key]
 
-    return {
-        "issue_number": active.issue_number,
-        "subtask_id": reclaim.subtask_id,
-        "action": (
-            "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed"
-        ),
-        "reason": reason,
-        # 数えない分岐（既に人間の確認待ち）では、台帳が保持している既存の
-        # 回数（今回分を含まない値）をそのまま報告する。
-        "reclaim_count": (
-            reclaim.reclaim_count if counted else reclaim.reclaim_count - 1
-        ),
-    }
+    return _reclaim_event(
+        reclaim,
+        "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
+        counted,
+    )
 
 
 def _collect_zombies_and_timeouts(

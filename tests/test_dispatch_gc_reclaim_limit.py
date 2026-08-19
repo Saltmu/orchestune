@@ -6,6 +6,7 @@
 へ遷移して停止することを検証する。
 """
 
+import time
 from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -22,6 +23,7 @@ from orchestune.dispatch_state import (
     RunState,
     TaskReclaimRecord,
     load_run_state,
+    save_run_state,
 )
 from tests.dispatch_gc_test_support import _ctx
 
@@ -341,6 +343,62 @@ class TestReclaimRetryBound:
 
         assert run_state.task_reclaim_counts == {280: previous}
 
+    def _reclaim_with_failing_backup(self, tmp_path, run_state, config):
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir(exist_ok=True)
+        run_state.active_worktrees["280"] = _active(worktree_path=str(worktree))
+        comments: list[str] = []
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=lambda issue, body: comments.append(body),
+            ),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+        return events, comments, mock_add_label, mock_remove_worktree
+
+    def test_repeated_wip_backup_failures_escalate_at_the_limit(self, tmp_path):
+        """PR#520レビュー3巡目対応(Codex P1): WIPバックアップが失敗し続けるタスクも
+        上限で終端する（status:in-progressのままクオータを占有し続けない）。"""
+        run_state = RunState(active_worktrees={})
+        config = _config(tmp_path, max_task_reclaims=1)
+
+        # 1巡目: 従来どおりスキップ（コメントのみ、帳簿エントリは保持）
+        events, comments, mock_add_label, mock_remove_worktree = (
+            self._reclaim_with_failing_backup(tmp_path, run_state, config)
+        )
+        assert events == []
+        mock_add_label.assert_not_called()
+        mock_remove_worktree.assert_not_called()
+        assert "一時スキップ" in comments[0]
+        assert "280" in run_state.active_worktrees
+
+        # 2巡目: 上限超過につき人間の確認へ回す
+        events, comments, mock_add_label, mock_remove_worktree = (
+            self._reclaim_with_failing_backup(tmp_path, run_state, config)
+        )
+        assert [event["action"] for event in events] == [
+            "escalated_reclaim_limit_exceeded"
+        ]
+        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
+        # 未コミットの作業データを守るため、worktreeは削除しない
+        mock_remove_worktree.assert_not_called()
+        assert (tmp_path / "wt-280").exists()
+        # 帳簿エントリは解放し、クオータを占有し続けない
+        assert run_state.active_worktrees == {}
+        assert "worktreeは削除せずに残しています" in comments[0]
+        assert "fatal: unable to write new index file" in comments[0]
+
     def test_decide_layer_does_not_mutate_the_ledger(self, tmp_path):
         """decide層は副作用を持たない（台帳の更新はapply層の責務）。"""
         active = _active(worktree_path=str(tmp_path / "missing-280"))
@@ -382,6 +440,64 @@ class TestReclaimCounterLifecycle:
 
         assert outcome is not None
         assert ctx.run_state.task_reclaim_counts == {}
+
+    def test_discarded_reclaim_count_is_persisted_immediately(self, tmp_path):
+        """PR#520レビュー3巡目対応(Codex P2): 破棄も加算と同様、その場でディスクへ
+        書く（サイクル終端の保存前に落ちても古い回数が残らない）。"""
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
+            count=2, last_reclaimed_at=time.time()
+        )
+        save_run_state(ctx.run_state, ctx.config.run_state_path)
+        task = _task(status_labels=("status:in-progress",))
+
+        with (
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completed", "commit_sha": "abc123d"},
+            ),
+        ):
+            _rule_completed(ctx, "1", active, task)
+
+        assert load_run_state(ctx.config.run_state_path).task_reclaim_counts == {}
+
+    def test_failed_discard_persist_does_not_break_completion(self, tmp_path, capsys):
+        """破棄の書き込みに失敗しても完了処理は続行し、警告のみ出す。"""
+        ctx = _ctx()
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
+            count=2, last_reclaimed_at=time.time()
+        )
+        task = _task(status_labels=("status:in-progress",))
+
+        with (
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.dispatch_gc._finalize_completed_worktree",
+                return_value={"action": "completed", "commit_sha": "abc123d"},
+            ),
+            patch(
+                "orchestune.dispatch_gc.save_run_state",
+                side_effect=OSError("no space left on device"),
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert ctx.run_state.task_reclaim_counts == {}
+        assert "no space left on device" in capsys.readouterr().err
 
     def test_token_limit_escalation_keeps_the_reclaim_count(self):
         """完了ではないエスカレーションでは、回収回数を保持する。"""

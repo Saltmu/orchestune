@@ -140,6 +140,10 @@ independently of the lifecycle above (see "External lock" below).
   for human review with the reclaim count and the last reason posted as a
   comment — so a task that structurally always times out cannot be relaunched
   forever. Like transitions 5-7, it goes through `apply_human_review_escalation`.
+- The same limit also applies when the reclaim keeps being skipped because the WIP
+  backup commit cannot be created (`_apply_backup_failure`). In that case the
+  worktree is deliberately left in place to preserve the uncommitted work, and its
+  path is named in the comment.
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
 - Source: `_finalize_not_needed_worktree` in `orchestune/dispatch_gc.py`

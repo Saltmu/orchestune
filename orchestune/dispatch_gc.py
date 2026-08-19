@@ -6,6 +6,7 @@ Implementation helpers are re-exported for backward-compatible imports.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import replace
 
@@ -42,7 +43,12 @@ from orchestune.dispatch_gc_zombies import (
 )
 from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.dispatch_state import (
+    ActiveWorktree,
+    CompletedWorktree,
+    RunState,
+    save_run_state,
+)
 from orchestune.models import PrRecord, Usage
 from orchestune.process_utils import is_process_alive
 
@@ -95,10 +101,8 @@ def _rule_not_needed(
         if active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
-            _discard_reclaim_count(
-                ctx.run_state, active.issue_number, completion_event["action"]
-            )
             del ctx.run_state.active_worktrees[key]
+            _discard_reclaim_count(ctx, active.issue_number, completion_event["action"])
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         completed_subtask_id=completed_subtask_id,
@@ -120,7 +124,7 @@ def _rule_not_needed(
 _RECLAIM_COUNT_CLEARING_ACTIONS = frozenset({"completed", "not_needed"})
 
 
-def _discard_reclaim_count(run_state: RunState, issue_number: int, action: str) -> None:
+def _discard_reclaim_count(ctx: CycleContext, issue_number: int, action: str) -> None:
     """#512: 完了したタスクのゾンビ／タイムアウト回収回数を台帳から破棄する。
 
     残したままだと、同じIssueが（人間による再オープン等で）再度ディスパッチ
@@ -129,9 +133,31 @@ def _discard_reclaim_count(run_state: RunState, issue_number: int, action: str) 
 
     トークン上限超過（`escalated_token_limit_exceeded`）や空コミット完了は
     完了ではなく人間の確認待ちへの遷移のため、破棄せず回数を保持する。
+
+    PR#520レビュー3巡目対応(Codex P2): 回数の加算（`_record_reclaim`）と同様に、
+    破棄もその場でディスクへ書く。GitHub側の完了処理は済んでいるため、
+    サイクル終端の`save_run_state`まで待つと、その間の異常終了で古い回数だけが
+    `run_state.json`に残り、Issueの再オープン・再投入時に引き継がれてしまう。
+    書き込みに失敗しても完了自体は取り消せないため、警告のみ出してサイクル終端の
+    保存に委ねる（記録が残っても上限判定は安全側＝より早く停止する方向に働く）。
     """
-    if action in _RECLAIM_COUNT_CLEARING_ACTIONS:
-        run_state.task_reclaim_counts.pop(issue_number, None)
+    if action not in _RECLAIM_COUNT_CLEARING_ACTIONS:
+        return
+    if ctx.run_state.task_reclaim_counts.pop(issue_number, None) is None:
+        return
+    try:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+    except Exception as e:  # noqa: BLE001 - ベストエフォートの後始末
+        print(
+            f"Warning: failed to persist the discarded reclaim count for issue "
+            f"#{issue_number} to {ctx.config.run_state_path}: {e}",
+            file=sys.stderr,
+        )
 
 
 def _decide_stale_active_entry(
@@ -319,10 +345,8 @@ def _rule_completed(
                     usage=usage_obj,
                 )
             )
-            _discard_reclaim_count(
-                ctx.run_state, completion_active.issue_number, action
-            )
             del ctx.run_state.active_worktrees[key]
+            _discard_reclaim_count(ctx, completion_active.issue_number, action)
         return ActiveWorktreeRuleOutcome(
             completion_event=completion_event,
             completed_subtask_id=completed_subtask_id,
