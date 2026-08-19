@@ -55,8 +55,10 @@ class TaskReclaimRecord:
     「回収 → 再投入 → 再起動」を跨いで回数を保持できず、上限判定が常に0から
     やり直しになってしまう。
 
-    `last_reclaimed_at`は`prune_run_state`が古い台帳エントリを刈り込むための
-    もので、上限判定そのものには使わない。
+    `last_reclaimed_at`は診断用（`run_state.json`を人が読むとき、そのタスクが
+    最後にいつ回収されたかを示す）。上限判定には使わず、刈り込みにも使わない
+    （PR#520レビュー5巡目対応: 経過時間による刈り込みは未完了タスクの回数を
+    落とし得るため廃止した。`_retained_task_reclaim_counts`参照）。
     """
 
     count: int = 0
@@ -85,8 +87,7 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
     - Issue番号として読めないキー・`count`が整数でない/負数/boolのエントリは、
       エントリごと捨てる（＝回数0）。
     - `last_reclaimed_at`だけが壊れている（欠落・非数値・非有限）場合は回数を
-      活かし、時刻のみ`0.0`（最古）へ倒す。この場合、当該エントリは次回の
-      `prune_run_state`で保持期間切れとして刈り込まれ得る（activeなタスクは保護）。
+      活かし、時刻のみ`0.0`へ倒す（診断用の値であり、上限判定には影響しない）。
     """
     if not isinstance(raw, dict):
         return {}
@@ -160,38 +161,31 @@ def load_run_state(path: str | Path) -> RunState:
     )
 
 
-def _prune_task_reclaim_counts(
-    state: RunState, min_reclaimed_time: float
-) -> dict[int, TaskReclaimRecord]:
-    """#512: 回収回数の台帳から、もう参照されない古いエントリを落とす
-    （`prune_run_state`のヘルパー）。
+def _retained_task_reclaim_counts(state: RunState) -> dict[int, TaskReclaimRecord]:
+    """#512: 回収回数の台帳は`prune_run_state`では一切刈り込まない。
 
-    保持ポリシーは「経過時間」のみで、`completed_worktrees`のような**件数上限は
-    意図的に設けない**（PR#520レビュー4巡目対応(Codex P2)）。件数で古い順に
-    追い出すと、上限に達している未完了タスクが多数ある状況——例えば失敗を
-    繰り返すタスクが件数上限を超えて存在し、順番に起動される状況——で、
-    次の試行の前にそのタスクのカウンタが追い出され、毎回1回目からやり直しに
-    なって`max_task_reclaims`を素通りできてしまう。それは本Issueが塞ごうと
-    している終端の無い経路そのものである。
+    PR#520レビュー4〜5巡目対応(Codex P2): 件数上限でも経過時間でも、
+    「まだ終わっていないタスクのカウンタ」を消し得る刈り込みは、本Issueが
+    塞ごうとしている終端の無い経路を作り直してしまう。
 
-    経過時間による刈り込みは同じ穴にならない: ループしているタスクは毎サイクル
-    回収されて`last_reclaimed_at`が更新されるため、保持期間
-    （`completed_retention_seconds`、既定30日）を超えて落ちるのは、その間まったく
-    回収されていない＝ループしていないタスクだけである。実行中（active）の
-    タスクのエントリは、経過時間に関わらず保護する。
+    - 件数上限で古い順に追い出すと、失敗を繰り返す未完了タスクが上限を超えて
+      存在する場合に、次の試行の前にそのタスクのカウンタが追い出される。
+    - 経過時間で落とすと、既定の起動レート（`--max-launches-per-window`）に対して
+      バックログが大きい場合など、回収から次の起動までが保持期間を超えるタスクの
+      カウンタが落ちる。
 
-    台帳の規模自体は「直近30日以内に回収され、かつまだ完了していないIssue」の
-    数で抑えられる（完了時には`dispatch_gc`側が記録を破棄する）。
+    いずれも次の回収が1回目からやり直しになり、`max_task_reclaims`を素通り
+    できてしまう。したがって記録の削除は「タスクが終わったことが分かる経路」——
+    完了・`status:not-needed`によるクローズ（`dispatch_gc`）、独立検証レビュー
+    合格によるクローズ（`dispatch_postcycle`）——にのみ委ねる。
+
+    台帳の規模: エントリはGC回収が起きたIssueにしか作られず、完了時に削除される。
+    残り得るのは「GC回収されたのち、上記以外の経路で終わったIssue」（人手での
+    クローズ等）だけで、1件あたり数十バイトの `{"count": int,
+    "last_reclaimed_at": float}` にすぎない。将来これを刈り込む必要が出た場合も、
+    経過時間や件数ではなく「GitHub上でIssueが閉じているか」を根拠にすること。
     """
-    active_issue_numbers = {
-        active.issue_number for active in state.active_worktrees.values()
-    }
-    return {
-        issue_number: record
-        for issue_number, record in state.task_reclaim_counts.items()
-        if issue_number in active_issue_numbers
-        or record.last_reclaimed_at >= min_reclaimed_time
-    }
+    return dict(state.task_reclaim_counts)
 
 
 def prune_run_state(
@@ -210,10 +204,10 @@ def prune_run_state(
       ただし、現在 open 状態にある PR (`open_prs`) の重複判定に必要な `last_completed` (commit_sha) を保護するため、
       open PR に紐づく Issue / ブランチの最新 1 件の `CompletedWorktree` は経過時間に関わらず保護する。
       さらに、全完了履歴の件数は `max_completed_worktrees` 件を超えないよう有界に保持する。
-    - `task_reclaim_counts` (#512): `completed_retention_seconds` 以内に回収された台帳エントリを保持する
-      （現在 active なタスクのエントリは経過時間に関わらず保護する）。回収回数を失うと
-      `max_task_reclaims` による上限判定が0からやり直しになるため、件数による上限は設けない。
-      詳細は `_prune_task_reclaim_counts` のdocstringを参照。
+    - `task_reclaim_counts` (#512): ここでは刈り込まない。未完了タスクのカウンタを失うと
+      `max_task_reclaims` による上限判定が0からやり直しになり、終端の無い経路が復活するため、
+      削除はタスクの完了・クローズ経路にのみ委ねる。詳細は
+      `_retained_task_reclaim_counts` のdocstringを参照。
     """
     import time
 
@@ -271,16 +265,15 @@ def prune_run_state(
         protected_selected + unprotected_selected, key=lambda x: x.completed_at
     )
 
-    pruned_task_reclaim_counts = _prune_task_reclaim_counts(
-        state, min_reclaimed_time=min_completed_time
-    )
+    # #512: 台帳は刈り込まない（理由は`_retained_task_reclaim_counts`のdocstring）。
+    retained_task_reclaim_counts = _retained_task_reclaim_counts(state)
 
     return RunState(
         active_worktrees=state.active_worktrees,
         launch_history=pruned_launch_history,
         completed_worktrees=pruned_completed,
         last_reconciled_at=state.last_reconciled_at,
-        task_reclaim_counts=pruned_task_reclaim_counts,
+        task_reclaim_counts=retained_task_reclaim_counts,
     )
 
 

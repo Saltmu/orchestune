@@ -460,7 +460,13 @@ class TestTaskReclaimCounts:
             280: TaskReclaimRecord(count=1, last_reclaimed_at=0.0)
         }
 
-    def test_prune_drops_stale_records_but_keeps_active_ones(self):
+    def test_prune_keeps_records_regardless_of_age(self):
+        """PR#520レビュー5巡目対応(Codex P2): 経過時間でも刈り込まない。
+
+        起動レートに対してバックログが大きい場合、回収から次の起動までが
+        保持期間を超え得る。そこでカウンタが落ちると次の回収が1回目から
+        やり直しになり、`max_task_reclaims`を素通りできてしまう。
+        """
         now = 1700000000.0
         state = RunState(
             active_worktrees={
@@ -474,8 +480,8 @@ class TestTaskReclaimCounts:
                 )
             },
             task_reclaim_counts={
-                # activeなタスクは、どれだけ古くても保護する
                 10: TaskReclaimRecord(count=1, last_reclaimed_at=now - 100 * 86400.0),
+                # activeでなく、保持期間（既定30日）よりはるかに古くても残す
                 11: TaskReclaimRecord(count=1, last_reclaimed_at=now - 100 * 86400.0),
                 12: TaskReclaimRecord(count=1, last_reclaimed_at=now - 86400.0),
             },
@@ -483,9 +489,20 @@ class TestTaskReclaimCounts:
 
         pruned = prune_run_state(state, now=now)
 
-        assert set(pruned.task_reclaim_counts) == {10, 12}
+        assert set(pruned.task_reclaim_counts) == {10, 11, 12}
 
-    def test_prune_keeps_every_recent_record_regardless_of_count(self):
+    def test_prune_does_not_alias_the_original_ledger(self):
+        """刈り込み結果は元のdictと別インスタンス（意図しない共有変更を避ける）。"""
+        state = RunState(
+            task_reclaim_counts={10: TaskReclaimRecord(count=1, last_reclaimed_at=1.0)}
+        )
+
+        pruned = prune_run_state(state, now=1700000000.0)
+        pruned.task_reclaim_counts.pop(10)
+
+        assert set(state.task_reclaim_counts) == {10}
+
+    def test_prune_keeps_every_record_regardless_of_count(self):
         """PR#520レビュー4巡目対応(Codex P2): 件数上限で古い順に追い出さない。
 
         追い出すと、未完了のまま繰り返し失敗しているタスクのカウンタが次の試行の
