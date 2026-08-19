@@ -13,7 +13,11 @@ import time
 from pathlib import Path
 
 from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle_context import _build_cycle_context, _fetch_issues
+from orchestune.dispatch_cycle_context import (
+    _build_cycle_context,
+    _fetch_issues,
+    discard_reclaim_counts_for_closed_issues,
+)
 from orchestune.dispatch_cycle_report import (
     CycleReport,
     append_event_log,
@@ -46,6 +50,9 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         ensure_parent_branch_ready(config)
 
         issues = _fetch_issues(config)
+        # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
+        # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
+        discard_reclaim_counts_for_closed_issues(run_state, issues)
         run_self_heal_phase(run_state, config, now)
         issues = issues.filtered_by_parent(config.parent_issue_number)
 

@@ -53,6 +53,36 @@ class IssuesByStatus:
         )
 
 
+def discard_reclaim_counts_for_closed_issues(
+    run_state: RunState, issues: IssuesByStatus
+) -> list[int]:
+    """#512: GitHub上でクローズ済みと確認できたIssueの回収回数を台帳から破棄する。
+
+    PR#520レビュー6巡目対応(Codex P2): 破棄の根拠は「Issueが閉じたこと」ただ一つに
+    統一する。`_finalize_completed_worktree`が完了を検知した時点（`status:done`）で
+    破棄していたが、その時点ではIssueはまだ開いており、Integratorの仮マージCIが
+    失敗すれば`handle_merge_failure`が同じIssueを`status:queued`へ差し戻す。
+    そこで回数が0に戻っていると、「GC回収 → ワーカー完了 → 統合失敗」の繰り返しで
+    `max_task_reclaims`を素通りできてしまう。Issueがクローズされていれば、そのタスクが
+    再び起動されることはない（人間が再オープンした場合は新しい実行として数え直す）。
+
+    この判定はGitHubを真実として毎サイクル導出し直すため、破棄をディスクへ即時
+    永続化する必要はない（保存前に落ちても次サイクルで同じ結論に到達する）。
+    逆に、取得できたIssueの中で**クローズが確認できたものだけ**を破棄対象とするため、
+    Issue取得が部分的だったり、`--parent-issue`で対象が絞られていたり、
+    `status:blocked-human-review`のように取得対象ラベルに含まれない状態であっても、
+    未完了タスクのカウンタを誤って落とすことはない。
+    """
+    closed_issue_numbers = {
+        issue.number for issue in issues.all() if issue.state.upper() == "CLOSED"
+    }
+    return [
+        issue_number
+        for issue_number in sorted(closed_issue_numbers)
+        if run_state.task_reclaim_counts.pop(issue_number, None) is not None
+    ]
+
+
 def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
     """#156: `forge.list_sub_issues`が返す親Issue配下の全Issueを、
     `list_issues_by_label`のstate引数（open/all）と同じ意味論でステータス

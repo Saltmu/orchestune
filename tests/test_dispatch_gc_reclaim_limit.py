@@ -6,10 +6,13 @@
 へ遷移して停止することを検証する。
 """
 
-import time
 from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch_cycle_context import (
+    IssuesByStatus,
+    discard_reclaim_counts_for_closed_issues,
+)
 from orchestune.dispatch_gc import _rule_completed, _rule_not_needed
 from orchestune.dispatch_gc_zombies import (
     ZombieOrTimeoutReclaim,
@@ -23,8 +26,8 @@ from orchestune.dispatch_state import (
     RunState,
     TaskReclaimRecord,
     load_run_state,
-    save_run_state,
 )
+from orchestune.models import IssueRecord
 from tests.dispatch_gc_test_support import _ctx
 
 _NOW = 2_000.0
@@ -416,8 +419,14 @@ class TestReclaimRetryBound:
 
 
 class TestReclaimCounterLifecycle:
-    def test_completed_task_discards_its_reclaim_count(self):
-        """正常完了したタスクのカウンタは台帳に残らない。"""
+    """#512: 回収回数の台帳から記録が破棄される条件。
+
+    PR#520レビュー6巡目対応(Codex P2): 破棄の根拠は「GitHub上でIssueが
+    クローズされたこと」ただ一つ。`status:done`（ワーカー完了）の時点では
+    Integratorの仮マージCI失敗で`status:queued`へ差し戻され得るため破棄しない。
+    """
+
+    def _completed_ctx(self, action="completed"):
         ctx = _ctx()
         ctx.config.apply = True
         active = ctx.run_state.active_worktrees.setdefault(
@@ -427,133 +436,42 @@ class TestReclaimCounterLifecycle:
             count=2, last_reclaimed_at=_NOW
         )
         task = _task(status_labels=("status:in-progress",))
-
         with (
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
-                return_value={"action": "completed", "commit_sha": "abc123d"},
+                return_value={"action": action, "commit_sha": "abc123d"},
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
+        return ctx, outcome
+
+    def test_worker_completion_alone_keeps_the_reclaim_count(self):
+        """ワーカー完了（status:done）だけでは破棄しない。
+
+        `_finalize_completed_worktree`はIssueをクローズしないため、この時点で
+        破棄すると、Integratorの仮マージCI失敗（`handle_merge_failure`）で
+        `status:queued`へ差し戻されたタスクが回数0から再開してしまい、
+        「GC回収 → ワーカー完了 → 統合失敗」の繰り返しで上限を素通りできる。
+        """
+        ctx, outcome = self._completed_ctx()
 
         assert outcome is not None
-        assert ctx.run_state.task_reclaim_counts == {}
-
-    def test_discarded_reclaim_count_is_persisted_immediately(self, tmp_path):
-        """PR#520レビュー3巡目対応(Codex P2): 破棄も加算と同様、その場でディスクへ
-        書く（サイクル終端の保存前に落ちても古い回数が残らない）。"""
-        ctx = _ctx()
-        ctx.config.apply = True
-        ctx.config.run_state_path = tmp_path / "run_state.json"
-        active = ctx.run_state.active_worktrees.setdefault(
-            "1", _active(issue_number=280, worktree_path="worktrees/w1")
-        )
-        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
-            count=2, last_reclaimed_at=time.time()
-        )
-        save_run_state(ctx.run_state, ctx.config.run_state_path)
-        task = _task(status_labels=("status:in-progress",))
-
-        with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
-                return_value={"action": "completed", "commit_sha": "abc123d"},
-            ),
-        ):
-            _rule_completed(ctx, "1", active, task)
-
-        assert load_run_state(ctx.config.run_state_path).task_reclaim_counts == {}
-
-    def test_failed_discard_persist_does_not_break_completion(self, tmp_path, capsys):
-        """破棄の書き込みに失敗しても完了処理は続行し、警告のみ出す。"""
-        ctx = _ctx()
-        ctx.config.apply = True
-        ctx.config.run_state_path = tmp_path / "run_state.json"
-        active = ctx.run_state.active_worktrees.setdefault(
-            "1", _active(issue_number=280, worktree_path="worktrees/w1")
-        )
-        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
-            count=2, last_reclaimed_at=time.time()
-        )
-        task = _task(status_labels=("status:in-progress",))
-
-        with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
-                return_value={"action": "completed", "commit_sha": "abc123d"},
-            ),
-            patch(
-                "orchestune.dispatch_gc.save_run_state",
-                side_effect=OSError("no space left on device"),
-            ),
-        ):
-            outcome = _rule_completed(ctx, "1", active, task)
-
-        assert outcome is not None
-        assert ctx.run_state.task_reclaim_counts == {}
-        assert "no space left on device" in capsys.readouterr().err
+        assert ctx.run_state.task_reclaim_counts == {
+            280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
+        }
 
     def test_token_limit_escalation_keeps_the_reclaim_count(self):
-        """完了ではないエスカレーションでは、回収回数を保持する。"""
-        ctx = _ctx()
-        ctx.config.apply = True
-        active = ctx.run_state.active_worktrees.setdefault(
-            "1", _active(issue_number=280, worktree_path="worktrees/w1")
-        )
-        record = TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
-        ctx.run_state.task_reclaim_counts[280] = record
-        task = _task(status_labels=("status:in-progress",))
-
-        with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
-                return_value={"action": "escalated_token_limit_exceeded"},
-            ),
-        ):
-            outcome = _rule_completed(ctx, "1", active, task)
+        ctx, outcome = self._completed_ctx(action="escalated_token_limit_exceeded")
 
         assert outcome is not None
-        assert ctx.run_state.task_reclaim_counts == {280: record}
+        assert ctx.run_state.task_reclaim_counts == {
+            280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
+        }
 
-    def test_not_needed_completion_discards_its_reclaim_count(self):
-        """PR#520レビュー対応(Codex P2): `status:not-needed`で走り切って即クローズ
-        されたタスクのカウンタも残さない。"""
-        action = "not_needed"
-        ctx = _ctx()
-        ctx.config.apply = True
-        active = ctx.run_state.active_worktrees.setdefault(
-            "1", _active(issue_number=280, worktree_path="worktrees/w1")
-        )
-        ctx.run_state.task_reclaim_counts[280] = TaskReclaimRecord(
-            count=2, last_reclaimed_at=_NOW
-        )
-        task = _task(status_labels=("status:not-needed",))
-
-        with patch(
-            "orchestune.dispatch_gc._finalize_not_needed_worktree",
-            return_value={"action": action, "issue_number": 280},
-        ):
-            outcome = _rule_not_needed(ctx, "1", active, task)
-
-        assert outcome is not None
-        assert ctx.run_state.task_reclaim_counts == {}
-
-    def test_pending_not_needed_review_keeps_the_reclaim_count(self):
-        """PR#520レビュー2巡目対応(Codex P2): 独立検証レビューへ送り出しただけの
-        時点ではカウンタを破棄しない。
-
-        ここで破棄すると「回収枠を使い切る → status:not-neededを自己申告 →
-        レビュー不合格でstatus:queuedへ差し戻し → 回数0から再開」という、
-        本Issueが塞ごうとしている無限再起動の抜け道ができてしまう。
-        """
+    def test_not_needed_completion_keeps_the_count_until_the_issue_is_closed(self):
+        """`status:not-needed`経路でも、破棄はクローズ確認まで待つ。"""
         ctx = _ctx()
         ctx.config.apply = True
         active = ctx.run_state.active_worktrees.setdefault(
@@ -565,34 +483,72 @@ class TestReclaimCounterLifecycle:
 
         with patch(
             "orchestune.dispatch_gc._finalize_not_needed_worktree",
-            return_value={
-                "action": "not_needed_review_dispatched",
-                "issue_number": 280,
-            },
+            return_value={"action": "not_needed", "issue_number": 280},
         ):
             outcome = _rule_not_needed(ctx, "1", active, task)
 
         assert outcome is not None
         assert ctx.run_state.task_reclaim_counts == {280: record}
 
-    def test_dirty_worktree_not_needed_keeps_the_reclaim_count(self):
-        """完了が保留された（dirty worktree）場合はカウンタを保持する。"""
-        ctx = _ctx()
-        ctx.config.apply = True
-        active = ctx.run_state.active_worktrees.setdefault(
-            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+
+class TestDiscardReclaimCountsForClosedIssues:
+    """#512: クローズ済みIssueの回収回数を台帳から破棄する単一の規則。"""
+
+    def _issues(self, records):
+        issues = [
+            IssueRecord(
+                number=number,
+                title=f"#{number}",
+                body="",
+                labels=("status:done",),
+                created_at="2026-01-01T00:00:00+00:00",
+                state=state,
+            )
+            for number, state in records
+        ]
+        return IssuesByStatus(
+            queued=[],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=issues,
+            not_needed=[],
         )
-        record = TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
-        ctx.run_state.task_reclaim_counts[280] = record
-        task = _task(status_labels=("status:not-needed",))
 
-        with patch(
-            "orchestune.dispatch_gc._finalize_not_needed_worktree",
-            return_value={
-                "action": "completion_skipped_dirty_worktree",
-                "issue_number": 280,
-            },
-        ):
-            _rule_not_needed(ctx, "1", active, task)
+    def test_closed_issue_loses_its_reclaim_count(self):
+        run_state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW),
+                281: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW),
+            }
+        )
 
-        assert ctx.run_state.task_reclaim_counts == {280: record}
+        removed = discard_reclaim_counts_for_closed_issues(
+            run_state, self._issues([(280, "CLOSED"), (281, "OPEN")])
+        )
+
+        assert removed == [280]
+        assert set(run_state.task_reclaim_counts) == {281}
+
+    def test_issues_absent_from_the_listing_keep_their_counts(self):
+        """取得対象に現れないIssue（status:blocked-human-review、別の親配下、
+        取得失敗など）のカウンタは落とさない——落とすと上限がリセットされる。"""
+        run_state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
+            }
+        )
+
+        removed = discard_reclaim_counts_for_closed_issues(run_state, self._issues([]))
+
+        assert removed == []
+        assert set(run_state.task_reclaim_counts) == {280}
+
+    def test_closed_issue_without_a_record_is_not_reported(self):
+        run_state = RunState(task_reclaim_counts={})
+
+        removed = discard_reclaim_counts_for_closed_issues(
+            run_state, self._issues([(280, "CLOSED")])
+        )
+
+        assert removed == []

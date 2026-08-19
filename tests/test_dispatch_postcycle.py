@@ -7,7 +7,6 @@
 合わせて分離している。
 """
 
-import time
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -17,7 +16,6 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import CycleReport
 from orchestune.dispatch_postcycle import (
     _decide_semantic_review_enabled,
-    _discard_reclaim_counts_for_closed_issues,
     _poll_pending_not_needed_reviews,
     _post_event_log_comment,
     _process_parent_completion,
@@ -25,12 +23,6 @@ from orchestune.dispatch_postcycle import (
     _run_semantic_integrator,
 )
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatch_state import (
-    RunState,
-    TaskReclaimRecord,
-    load_run_state,
-    save_run_state,
-)
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     LocalProcessDispatchTarget,
@@ -796,117 +788,3 @@ class TestPostEventLogComment:
         assert result.retryable is False
         assert "auth-failed" in result.error_message
         assert "auth-failed" in capsys.readouterr().err
-
-
-class TestDiscardReclaimCountsForClosedIssues:
-    """#512/PR#520レビュー2巡目対応(Codex P2): status:not-needed独立検証レビューに
-    合格してクローズされたIssueの回収回数を台帳から破棄する。"""
-
-    def _config(self, tmp_path):
-        return DispatcherConfig(
-            run_state_path=tmp_path / "run_state.json",
-            events_log_path=tmp_path / "events.jsonl",
-            forge=MagicMock(),
-        )
-
-    @staticmethod
-    def _now():
-        # 保持期間（既定30日）内であること。古い固定値だと保存時の刈り込みで
-        # 台帳ごと消えてしまい、テストが検証したい破棄処理に到達しない。
-        return time.time()
-
-    def _seed(self, config, counts):
-        save_run_state(
-            RunState(task_reclaim_counts=dict(counts)), config.run_state_path
-        )
-
-    def test_closed_issues_lose_their_reclaim_counts(self, tmp_path):
-        config = self._config(tmp_path)
-        config.forge.list_prs.return_value = []
-        self._seed(
-            config,
-            {
-                280: TaskReclaimRecord(count=2, last_reclaimed_at=self._now()),
-                281: TaskReclaimRecord(count=1, last_reclaimed_at=self._now()),
-            },
-        )
-
-        _discard_reclaim_counts_for_closed_issues(config, [280])
-
-        remaining = load_run_state(config.run_state_path).task_reclaim_counts
-        assert set(remaining) == {281}
-        assert remaining[281].count == 1
-
-    def test_pruning_receives_the_configured_window_and_open_prs(self, tmp_path):
-        """刈り込みでレート制限用の起動履歴・重複起動判定用の完了履歴を
-        巻き添えで落とさないよう、サイクル側と同じパラメータで保存する。"""
-        config = self._config(tmp_path)
-        config.forge.list_prs.return_value = []
-        self._seed(
-            config, {280: TaskReclaimRecord(count=1, last_reclaimed_at=self._now())}
-        )
-
-        with patch("orchestune.dispatch_postcycle.save_run_state") as mock_save:
-            _discard_reclaim_counts_for_closed_issues(config, [280])
-
-        assert mock_save.call_count == 1
-        kwargs = mock_save.call_args.kwargs
-        assert kwargs["launch_window_seconds"] == config.window_seconds
-        assert kwargs["open_prs"] == []
-        config.forge.list_prs.assert_called_once_with(state="open")
-
-    def test_no_write_and_no_api_call_when_nothing_matches(self, tmp_path):
-        config = self._config(tmp_path)
-        self._seed(
-            config, {281: TaskReclaimRecord(count=1, last_reclaimed_at=self._now())}
-        )
-
-        with patch("orchestune.dispatch_postcycle.save_run_state") as mock_save:
-            _discard_reclaim_counts_for_closed_issues(config, [280])
-            _discard_reclaim_counts_for_closed_issues(config, [])
-
-        mock_save.assert_not_called()
-        config.forge.list_prs.assert_not_called()
-
-    def test_poll_discards_counts_for_issues_closed_by_the_review(self, tmp_path):
-        config = self._config(tmp_path)
-        config.forge.list_prs.return_value = []
-        self._seed(
-            config, {280: TaskReclaimRecord(count=3, last_reclaimed_at=self._now())}
-        )
-
-        with patch(
-            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
-            return_value={"closed": [280], "reopened": [], "still_pending": 0},
-        ):
-            result = _poll_pending_not_needed_reviews(
-                config.not_needed_review_state_path, config=config
-            )
-
-        assert result.status == PhaseStatus.SUCCESS
-        assert load_run_state(config.run_state_path).task_reclaim_counts == {}
-
-    def test_poll_still_succeeds_when_discarding_fails(self, tmp_path, capsys):
-        """台帳の後始末に失敗しても、ポーリング自体は成功として扱う
-        （記録が残るだけで、上限判定は安全側＝より早く停止する方向に働く）。"""
-        config = self._config(tmp_path)
-        self._seed(
-            config, {280: TaskReclaimRecord(count=3, last_reclaimed_at=self._now())}
-        )
-
-        with (
-            patch(
-                "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
-                return_value={"closed": [280], "reopened": [], "still_pending": 0},
-            ),
-            patch(
-                "orchestune.dispatch_postcycle.save_run_state",
-                side_effect=OSError("no space left on device"),
-            ),
-        ):
-            result = _poll_pending_not_needed_reviews(
-                config.not_needed_review_state_path, config=config
-            )
-
-        assert result.status == PhaseStatus.SUCCESS
-        assert "no space left on device" in capsys.readouterr().err

@@ -127,10 +127,13 @@ stateDiagram-v2
   超過した場合は下記9-bへ遷移する。回数は`run_state.json`の`task_reclaim_counts`
   台帳へ、ラベル遷移より先に永続化される（ラベルだけ先に`status:queued`へ戻して
   保存前に停止すると、回数が数えられないまま再起動できてしまうため）。
-  台帳の記録は、タスクが完了してIssueがクローズされた時点で破棄する
-  （`status:not-needed`の独立検証レビュー経由の場合は、レビュー合格による
-  クローズ時にpost-cycleが破棄する。レビュー不合格で`status:queued`へ
-  差し戻される可能性があるため、レビューへ送り出した時点では破棄しない）。
+  台帳の記録は、ディスパッチサイクルがGitHub上で**Issueのクローズを確認した
+  時点**で破棄する（`dispatch_cycle_context.discard_reclaim_counts_for_closed_issues`）。
+  `status:done`（ワーカーの完了）や`status:not-needed`の独立検証レビューへの
+  送り出しでは破棄しない——前者はIntegratorの仮マージCI失敗で、後者はレビュー
+  不合格で、それぞれ`status:queued`へ差し戻され得るため。クローズ済みのIssueが
+  再び起動されることはなく（人間が再オープンした場合は新しい実行として数え直す）、
+  この判定は毎サイクルGitHubから導出し直すため、破棄の即時永続化は不要。
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review`（GC回収の上限超過）
 - 発生元: `orchestune/dispatch_gc_zombies.py`の`_apply_zombie_or_timeout_reclaim`
