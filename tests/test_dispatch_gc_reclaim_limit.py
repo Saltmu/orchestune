@@ -1243,6 +1243,39 @@ class TestDiscardReclaimCountsForClosedIssues:
         assert len(removed) == 50
         assert len(run_state.task_reclaim_counts) == 450
 
+    def test_capped_direct_lookups_rotate_between_cycles(self, tmp_path):
+        """PR#520レビュー15巡目対応(Codex P2): 常に若い番号の50件だけを見ない。
+
+        固定だと、その後ろでクローズされた記録の回数が永久に台帳へ残り、
+        毎サイクル同じ50件へAPIを浪費してしまう。
+        """
+        config = self._config(tmp_path)
+        config.forge.list_issues_by_label.return_value = []
+        config.forge.get_issue_state.return_value = "OPEN"
+
+        def _queried_numbers(now):
+            run_state = RunState(
+                task_reclaim_counts={
+                    number: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)
+                    for number in range(500)
+                }
+            )
+            config.forge.get_issue_state.reset_mock()
+            with patch("orchestune.dispatch_cycle_context.time.time", return_value=now):
+                discard_reclaim_counts_for_closed_issues(
+                    run_state, self._issues([]), config
+                )
+            return {
+                call.args[0] for call in config.forge.get_issue_state.call_args_list
+            }
+
+        first = _queried_numbers(1_000.0)
+        second = _queried_numbers(1_120.0)
+
+        assert len(first) == 50
+        assert len(second) == 50
+        assert first != second
+
     def test_empty_ledger_makes_no_api_call(self, tmp_path):
         config = self._config(tmp_path)
 

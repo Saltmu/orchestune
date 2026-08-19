@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -70,6 +71,27 @@ _LEDGER_BULK_LOOKUP_MIN_LIMIT = 1000
 _LEDGER_DIRECT_LOOKUPS_PER_CYCLE = 50
 
 
+def _rotated_lookup_batch(unresolved: set[int]) -> list[int]:
+    """個別問い合わせに回す記録を、サイクルごとに位置をずらして選ぶ。
+
+    PR#520レビュー15巡目対応(Codex P2): 常にIssue番号の若い順で先頭N件を見ると、
+    それより後ろの記録は永久に確認されない（若い番号のIssueが開いたままなら、
+    その後ろでクローズされた記録の回数がいつまでも台帳に残る）。開始位置を
+    サイクルごとにずらし、いずれ全件が確認されるようにする。
+
+    ずらし幅は現在時刻から求める。ここで決めるのは「クローズ確認をどの順で
+    行うか」だけで、ディスパッチの判断（起動対象・エスカレーションの有無）は
+    この順序に依存しない——確認できなかった記録は保持され、次サイクル以降で
+    確認されるだけである。
+    """
+    ordered = sorted(unresolved)
+    if len(ordered) <= _LEDGER_DIRECT_LOOKUPS_PER_CYCLE:
+        return ordered
+    offset = int(time.time()) % len(ordered)
+    rotated = ordered[offset:] + ordered[:offset]
+    return rotated[:_LEDGER_DIRECT_LOOKUPS_PER_CYCLE]
+
+
 def _resolve_ledger_issue_states(
     run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
 ) -> dict[int, str]:
@@ -88,7 +110,9 @@ def _resolve_ledger_issue_states(
     いない（未完了タスクの回数を失わないため）ので、ここを無制限にすると
     大規模リポジトリで毎サイクル数千回の逐次API呼び出しになり、ディスパッチ全体が
     詰まりかねない。上限に掛かって未解決のまま残った記録は保持され、次サイクル以降で
-    順次確認される（記録が残る側＝安全側の遅延にすぎない）。
+    順次確認される（記録が残る側＝安全側の遅延にすぎない）。問い合わせ対象は
+    `_rotated_lookup_batch`がサイクルごとにずらして選ぶため、特定の記録だけが
+    永久に確認されないということはない。
     """
     recorded = set(run_state.task_reclaim_counts)
     states = {
@@ -117,7 +141,7 @@ def _resolve_ledger_issue_states(
             if issue.number in unresolved:
                 states[issue.number] = issue.state.upper()
         unresolved -= set(states)
-    for issue_number in sorted(unresolved)[:_LEDGER_DIRECT_LOOKUPS_PER_CYCLE]:
+    for issue_number in _rotated_lookup_batch(unresolved):
         try:
             states[issue_number] = config.resolved_forge.get_issue_state(
                 issue_number
