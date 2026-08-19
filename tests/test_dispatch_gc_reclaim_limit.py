@@ -592,6 +592,43 @@ class TestReclaimRetryBound:
             count=1, last_reclaimed_at=_NOW, pending=False
         )
 
+    def test_comment_failure_after_requeue_still_settles_the_count(self, tmp_path):
+        """PR#520レビュー10巡目対応(Codex P2): `status:queued`が見えた時点で予約を
+        確定させる。
+
+        予約を`pending`のまま残すと、次サイクルでstaleエントリが破棄されて
+        タスクが再起動され、その回収が同じ回数を再利用してしまうため、コメント
+        投稿の失敗1回につき起動枠が1回増えてしまう。
+        """
+        active = _active(worktree_path=str(tmp_path / "missing-280"))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path)
+        labels: list[tuple[str, str]] = []
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: labels.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=RuntimeError("gh: comment failed"),
+            ),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        # 再投入は成立しているので回収イベントを返し、予約も確定させる
+        assert [event["action"] for event in events] == ["gc_reclaimed"]
+        assert ("add", "status:queued") in labels
+        assert run_state.active_worktrees == {}
+        assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
+            count=1, last_reclaimed_at=_NOW, pending=False
+        )
+        persisted = load_run_state(config.run_state_path)
+        assert persisted.task_reclaim_counts[280].pending is False
+
     def test_backup_failure_settles_the_reserved_count(self, tmp_path):
         """バックアップ失敗によるスキップは1回分を使い切る（上限で終端させるため）。"""
         worktree = tmp_path / "wt-280"

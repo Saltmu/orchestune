@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -260,8 +260,23 @@ def _notify_reclaim(
     worktree_note: str,
     already_escalated: bool,
     escalating: bool,
+    settle: Callable[[], None],
 ) -> None:
-    """回収結果をGitHubへ反映する（ラベル遷移とコメント）。"""
+    """回収結果をGitHubへ反映する（ラベル遷移とコメント）。
+
+    #512/PR#520レビュー10巡目対応(Codex P2): 再キューイングでは、`status:queued`が
+    見えた時点で`settle`（予約の確定と帳簿エントリの解放・永続化）を呼ぶ。
+    後続のコメント投稿が失敗しても、再投入自体は既に成立しているためである。
+    ここで予約を`pending`のまま残すと、次サイクルで`_rule_stale_entry`が
+    エントリを破棄してタスクが再起動されたあと、その回収が同じ回数を再利用して
+    しまい、コメント投稿の失敗1回につき起動枠が1回増えてしまう。
+
+    エスカレーション（`apply_human_review_escalation`）はラベル遷移とコメントを
+    まとめて行うため分割しない。コメントだけ失敗した場合は予約が`pending`のまま
+    残るが、`status:blocked-human-review`が付いた時点で自動的な再起動は起きず、
+    次サイクルの回収（`already_escalated`分岐）で予約が確定するため、起動枠が
+    増えることはない。
+    """
     active = reclaim.active
     reason = reclaim.reason
     if already_escalated:
@@ -276,6 +291,7 @@ def _notify_reclaim(
             "後始末しました。既に人間の確認が必要な状態のため、"
             "status:*ラベルは変更していません。",
         )
+        settle()
         return
     if escalating:
         # #512: 回収・再投入の累計が上限を超えたタスクは、status:queuedへ
@@ -295,6 +311,7 @@ def _notify_reclaim(
             "タイムアウト設定やサブタスクの粒度、実行環境を確認してください。",
             forge=config.resolved_forge,
         )
+        settle()
         return
     # #381レビュー対応(Codex P2): stacked launch等の中断した遷移で
     # status:blockedが取り残されている場合も併せて除去し、
@@ -310,12 +327,21 @@ def _notify_reclaim(
         "status:queued",
         stale_labels,
     )
-    config.resolved_forge.add_comment(
-        active.issue_number,
-        f"タスク実行が {reason} のため、GCにより{worktree_note}"
-        "タスクを再キューイング（status:queued）しました"
-        f"（回収{reclaim.reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
-    )
+    # status:queuedが見えた時点で再投入は成立している。コメントより先に確定させる。
+    settle()
+    try:
+        config.resolved_forge.add_comment(
+            active.issue_number,
+            f"タスク実行が {reason} のため、GCにより{worktree_note}"
+            "タスクを再キューイング（status:queued）しました"
+            f"（回収{reclaim.reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
+        )
+    except Exception as e:  # noqa: BLE001 - 通知の失敗で回収をやり直さない
+        print(
+            f"Warning: requeued issue #{active.issue_number} but failed to post "
+            f"the GC reclaim comment: {e}",
+            file=sys.stderr,
+        )
 
 
 def _mark_reclaim_for_retry(
@@ -485,6 +511,15 @@ def _apply_zombie_or_timeout_reclaim(
             except Exception:
                 pass
         worktree_exists = os.path.exists(active.worktree_path)
+        settled = False
+
+        def _settle_once() -> None:
+            nonlocal settled
+            if settled:
+                return
+            settled = True
+            _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
+
         try:
             if worktree_exists:
                 backup_error = backup_wip_commit(
@@ -501,12 +536,24 @@ def _apply_zombie_or_timeout_reclaim(
                 else "物理worktreeが見つからなかったため、"
             )
             _notify_reclaim(
-                reclaim, config, worktree_note, already_escalated, escalating
+                reclaim,
+                config,
+                worktree_note,
+                already_escalated,
+                escalating,
+                _settle_once,
             )
         except Exception as e:  # noqa: BLE001 - 次サイクルでの再回収へ委ねる
-            _mark_reclaim_for_retry(run_state, reclaim, config, open_prs, e)
-            return None
-        _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
+            if not settled:
+                _mark_reclaim_for_retry(run_state, reclaim, config, open_prs, e)
+                return None
+            # GitHub側は適用済み（＝回収は成立）。以降の失敗は警告に留める。
+            print(
+                f"Warning: applied the GC reclaim of issue "
+                f"#{active.issue_number} but a later step failed: {e}",
+                file=sys.stderr,
+            )
+        _settle_once()
 
     return _reclaim_event(
         reclaim,
