@@ -279,7 +279,10 @@ class TestReclaimRetryBound:
             _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         assert persisted
-        assert persisted[0] == {280: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)}
+        # ラベル遷移の時点では「予約中（pending）」として載っている
+        assert persisted[0] == {
+            280: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW, pending=True)
+        }
 
     def test_reclaim_is_skipped_when_the_ledger_cannot_be_persisted(
         self, tmp_path, capsys
@@ -508,6 +511,111 @@ class TestReclaimRetryBound:
 
         assert events == []
         assert run_state.active_worktrees["280"].started_at == active.started_at
+
+    def test_settled_reclaim_is_persisted_immediately(self, tmp_path):
+        """PR#520レビュー9巡目対応(Codex P1): 反映成功後の帳簿エントリ削除を、
+        サイクル終端の保存を待たずにその場で永続化する。
+
+        `status:blocked-human-review`のIssueは`_fetch_issues`の取得対象外のため、
+        エントリだけが残るとstale判定にもゾンビ判定にも掛からず、同時実行スロットを
+        永久に占有してしまう。
+        """
+        active = _active(worktree_path=str(tmp_path / "missing-280"))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path, max_task_reclaims=0)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert events[0]["action"] == "escalated_reclaim_limit_exceeded"
+        persisted = load_run_state(config.run_state_path)
+        assert persisted.active_worktrees == {}
+        assert persisted.task_reclaim_counts[280].pending is False
+
+    def test_github_failure_retry_reuses_the_reserved_count(self, tmp_path):
+        """PR#520レビュー9巡目対応(Codex P2): 反映に失敗した回収の再試行は、
+        同じ回数を再利用して枠を二重に消費しない。
+
+        一時的なAPI障害の再試行で`status:queued`への差し戻しが一度も起きないまま
+        上限に達してしまうと、「再投入の回数」を拘束するという仕様に反する。
+        """
+        config = _config(tmp_path, max_task_reclaims=1)
+        run_state = RunState(active_worktrees={})
+        failing = patch(
+            "orchestune.forge.GitHubForge.add_label",
+            side_effect=RuntimeError("gh: API is unavailable"),
+        )
+
+        # 3サイクル連続で反映に失敗しても、予約された回数は1のまま
+        for _ in range(3):
+            run_state.active_worktrees["280"] = _active(
+                worktree_path=str(tmp_path / "missing-280")
+            )
+            with (
+                patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+                failing,
+                patch("orchestune.forge.GitHubForge.remove_label"),
+                patch("orchestune.forge.GitHubForge.add_comment"),
+            ):
+                assert (
+                    _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+                    == []
+                )
+            assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
+                count=1, last_reclaimed_at=_NOW, pending=True
+            )
+
+        # 復旧後の再試行は1回目の再投入として成立する（エスカレーションしない）
+        run_state.active_worktrees["280"] = _active(
+            worktree_path=str(tmp_path / "missing-280")
+        )
+        labels: list[tuple[str, str]] = []
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: labels.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert [event["action"] for event in events] == ["gc_reclaimed"]
+        assert ("add", "status:queued") in labels
+        assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
+            count=1, last_reclaimed_at=_NOW, pending=False
+        )
+
+    def test_backup_failure_settles_the_reserved_count(self, tmp_path):
+        """バックアップ失敗によるスキップは1回分を使い切る（上限で終端させるため）。"""
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        run_state = RunState(
+            active_worktrees={"280": _active(worktree_path=str(worktree))}
+        )
+        config = _config(tmp_path, max_task_reclaims=3)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            assert (
+                _collect_zombies_and_timeouts(run_state, {280: _task()}, config) == []
+            )
+
+        assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
+            count=1, last_reclaimed_at=_NOW, pending=False
+        )
 
     def test_decide_layer_does_not_mutate_the_ledger(self, tmp_path):
         """decide層は副作用を持たない（台帳の更新はapply層の責務）。"""

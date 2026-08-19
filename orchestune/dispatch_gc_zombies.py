@@ -103,8 +103,18 @@ def _decide_zombie_or_timeout_reclaims(
         active_task = tasks_by_issue.get(active.issue_number)
         # #512: 台帳の累計回数＋今回分が上限を超えるかを判定する。台帳への
         # 書き戻しはapply層の責務（decide層は副作用を持たない）。
+        #
+        # PR#520レビュー9巡目対応(Codex P2): 前回の回収がGitHubへ反映できないまま
+        # 終わっていた場合（`pending`）は、その予約分を再利用して回数を進めない。
+        # 一時的なAPI障害の再試行で`status:queued`への差し戻しが一度も起きないまま
+        # 上限に達してしまうのを防ぐ（＝上限は「再投入の回数」を拘束する）。
         previous_record = run_state.task_reclaim_counts.get(active.issue_number)
-        reclaim_count = (previous_record.count if previous_record else 0) + 1
+        if previous_record is None:
+            reclaim_count = 1
+        elif previous_record.pending:
+            reclaim_count = previous_record.count
+        else:
+            reclaim_count = previous_record.count + 1
         reclaims.append(
             ZombieOrTimeoutReclaim(
                 key=key,
@@ -154,7 +164,7 @@ def _record_reclaim(
     """
     previous = run_state.task_reclaim_counts.get(reclaim.active.issue_number)
     run_state.task_reclaim_counts[reclaim.active.issue_number] = TaskReclaimRecord(
-        count=reclaim.reclaim_count, last_reclaimed_at=reclaim.now
+        count=reclaim.reclaim_count, last_reclaimed_at=reclaim.now, pending=True
     )
     try:
         save_run_state(
@@ -199,6 +209,7 @@ def _apply_backup_failure(
     config: DispatcherConfig,
     escalating: bool,
     backup_error: str,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> dict | None:
     """WIPバックアップコミットの作成に失敗した場合の後始末。
 
@@ -226,7 +237,7 @@ def _apply_backup_failure(
             f"エラー詳細:\n```\n{backup_error}\n```",
             forge=config.resolved_forge,
         )
-        del run_state.active_worktrees[reclaim.key]
+        _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
         return _reclaim_event(reclaim, "escalated_reclaim_limit_exceeded", True)
 
     config.resolved_forge.add_comment(
@@ -237,6 +248,9 @@ def _apply_backup_failure(
         "一時スキップしました。\n"
         f"エラー詳細:\n```\n{backup_error}\n```",
     )
+    # スキップした回収も1回分として確定させる（予約のまま残すと、バックアップが
+    # 失敗し続けるタスクが上限に到達できず終端しなくなる）。
+    _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=False)
     return None
 
 
@@ -366,6 +380,51 @@ def _mark_reclaim_for_retry(
         )
 
 
+def _settle_reclaim(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+    *,
+    release_entry: bool,
+) -> None:
+    """今サイクル分の回収を確定させ、その場でディスクへ書く。
+
+    #512/PR#520レビュー9巡目対応(Codex P1): `active_worktrees`からの削除を
+    サイクル終端の`save_run_state`任せにすると、`status:blocked-human-review`を
+    付与した直後にプロセスが止まった場合、次サイクルではそのIssueが
+    `_fetch_issues`の取得対象（open な status:queued/in-progress/blocked/…）に
+    含まれないため`tasks_by_issue`にも現れず、staleエントリ破棄ルールが
+    働かない。タイムアウト判定が無効な既定構成では「worktree不在 +
+    started_at既知」もゾンビ判定に該当しないため、この帳簿エントリが同時実行
+    スロットを永久に占有しかねない。
+
+    同(Codex P2): 併せて、予約中（`pending`）の回収回数を確定済みへ落とす。
+    ここまで到達した回収は、再キューイング・エスカレーション・バックアップ失敗に
+    よるスキップのいずれであれ「1回分を使い切った」ものとして扱う
+    （バックアップが失敗し続けるタスクも上限で終端させるため）。
+    """
+    record = run_state.task_reclaim_counts.get(reclaim.active.issue_number)
+    if record is not None and record.pending:
+        record.pending = False
+    if release_entry:
+        run_state.active_worktrees.pop(reclaim.key, None)
+    try:
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            now=reclaim.now,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
+    except Exception as e:  # noqa: BLE001 - サイクル終端の保存に委ねる
+        print(
+            f"Warning: failed to persist the settled GC reclaim of issue "
+            f"#{reclaim.active.issue_number}: {e}",
+            file=sys.stderr,
+        )
+
+
 def _apply_zombie_or_timeout_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
@@ -433,7 +492,7 @@ def _apply_zombie_or_timeout_reclaim(
                 )
                 if backup_error is not None:
                     return _apply_backup_failure(
-                        run_state, reclaim, config, escalating, backup_error
+                        run_state, reclaim, config, escalating, backup_error, open_prs
                     )
                 remove_worktree(active.worktree_path)
             worktree_note = (
@@ -447,7 +506,7 @@ def _apply_zombie_or_timeout_reclaim(
         except Exception as e:  # noqa: BLE001 - 次サイクルでの再回収へ委ねる
             _mark_reclaim_for_retry(run_state, reclaim, config, open_prs, e)
             return None
-        del run_state.active_worktrees[reclaim.key]
+        _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
 
     return _reclaim_event(
         reclaim,

@@ -63,6 +63,11 @@ class TaskReclaimRecord:
 
     count: int = 0
     last_reclaimed_at: float = 0.0
+    # #512/PR#520レビュー9巡目対応(Codex P2): この回数が「まだGitHubへ反映できて
+    # いない回収」の予約分であることを示す。反映（ラベル遷移・コメント）に失敗した
+    # 回収を次サイクルで再試行する際、同じ回数を再利用して枠を二重に消費しない
+    # ようにするために使う。反映が確定した時点で`False`へ戻す。
+    pending: bool = False
 
 
 @dataclass
@@ -88,6 +93,8 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
       エントリごと捨てる（＝回数0）。
     - `last_reclaimed_at`だけが壊れている（欠落・非数値・非有限）場合は回数を
       活かし、時刻のみ`0.0`へ倒す（診断用の値であり、上限判定には影響しない）。
+    - `pending`は`true`のときのみ真として扱う（欠落＝本フィールド導入前の
+      `run_state.json`は「予約中ではない」＝次の回収で回数を1つ進める）。
     """
     if not isinstance(raw, dict):
         return {}
@@ -112,7 +119,9 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
         ):
             last_reclaimed_at = 0.0
         records[issue_number] = TaskReclaimRecord(
-            count=count, last_reclaimed_at=float(last_reclaimed_at)
+            count=count,
+            last_reclaimed_at=float(last_reclaimed_at),
+            pending=value.get("pending") is True,
         )
     return records
 

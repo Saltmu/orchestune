@@ -417,6 +417,40 @@ class TestTaskReclaimCounts:
 
         assert loaded.task_reclaim_counts == {}
 
+    def test_pending_flag_round_trips(self, tmp_path):
+        """#512: 予約中フラグ（pending）も永続化・復元される。"""
+        path = tmp_path / "run_state.json"
+        now = 1700000000.0
+        state = RunState(
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=now, pending=True)
+            }
+        )
+        save_run_state(state, path, now=now)
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts[280].pending is True
+
+    def test_missing_pending_flag_defaults_to_false(self, tmp_path):
+        """本フィールド導入前のrun_state.jsonは「予約中ではない」として扱う。"""
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "launch_history": [],
+                    "task_reclaim_counts": {
+                        "280": {"count": 1, "last_reclaimed_at": 1700000000.0}
+                    },
+                }
+            )
+        )
+
+        loaded = load_run_state(path)
+
+        assert loaded.task_reclaim_counts[280].pending is False
+
     def test_broken_entries_are_ignored(self, tmp_path):
         path = tmp_path / "run_state.json"
         path.write_text(
