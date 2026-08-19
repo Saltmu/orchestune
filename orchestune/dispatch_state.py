@@ -161,37 +161,37 @@ def load_run_state(path: str | Path) -> RunState:
 
 
 def _prune_task_reclaim_counts(
-    state: RunState,
-    min_reclaimed_time: float,
-    max_task_reclaim_records: int,
+    state: RunState, min_reclaimed_time: float
 ) -> dict[int, TaskReclaimRecord]:
-    """#512: 回収回数の台帳を有界に保つ（`prune_run_state`のヘルパー）。
+    """#512: 回収回数の台帳から、もう参照されない古いエントリを落とす
+    （`prune_run_state`のヘルパー）。
 
-    active なタスクのエントリを最優先で保護し、残りの枠を「直近に回収された順」で
-    埋める。刈り込まれたエントリはカウンタが0へ戻るが、それは
-    `completed_retention_seconds`（既定30日）以上放置されたタスクか、
-    台帳が `max_task_reclaim_records` 件を超えた場合に限られる。
+    保持ポリシーは「経過時間」のみで、`completed_worktrees`のような**件数上限は
+    意図的に設けない**（PR#520レビュー4巡目対応(Codex P2)）。件数で古い順に
+    追い出すと、上限に達している未完了タスクが多数ある状況——例えば失敗を
+    繰り返すタスクが件数上限を超えて存在し、順番に起動される状況——で、
+    次の試行の前にそのタスクのカウンタが追い出され、毎回1回目からやり直しに
+    なって`max_task_reclaims`を素通りできてしまう。それは本Issueが塞ごうと
+    している終端の無い経路そのものである。
+
+    経過時間による刈り込みは同じ穴にならない: ループしているタスクは毎サイクル
+    回収されて`last_reclaimed_at`が更新されるため、保持期間
+    （`completed_retention_seconds`、既定30日）を超えて落ちるのは、その間まったく
+    回収されていない＝ループしていないタスクだけである。実行中（active）の
+    タスクのエントリは、経過時間に関わらず保護する。
+
+    台帳の規模自体は「直近30日以内に回収され、かつまだ完了していないIssue」の
+    数で抑えられる（完了時には`dispatch_gc`側が記録を破棄する）。
     """
     active_issue_numbers = {
         active.issue_number for active in state.active_worktrees.values()
     }
-    protected = {
+    return {
         issue_number: record
         for issue_number, record in state.task_reclaim_counts.items()
         if issue_number in active_issue_numbers
+        or record.last_reclaimed_at >= min_reclaimed_time
     }
-    remaining_capacity = max(max_task_reclaim_records - len(protected), 0)
-    retained = sorted(
-        (
-            (issue_number, record)
-            for issue_number, record in state.task_reclaim_counts.items()
-            if issue_number not in protected
-            and record.last_reclaimed_at >= min_reclaimed_time
-        ),
-        key=lambda item: item[1].last_reclaimed_at,
-        reverse=True,
-    )[:remaining_capacity]
-    return {**protected, **dict(retained)}
 
 
 def prune_run_state(
@@ -201,7 +201,6 @@ def prune_run_state(
     completed_retention_seconds: float = 30 * 86400.0,
     open_prs: Sequence[Any] | None = None,
     max_completed_worktrees: int = 500,
-    max_task_reclaim_records: int = 500,
 ) -> RunState:
     """#214: 長期運用による run_state.json の単調肥大化を防止するための有界刈り込み処理。
 
@@ -211,10 +210,10 @@ def prune_run_state(
       ただし、現在 open 状態にある PR (`open_prs`) の重複判定に必要な `last_completed` (commit_sha) を保護するため、
       open PR に紐づく Issue / ブランチの最新 1 件の `CompletedWorktree` は経過時間に関わらず保護する。
       さらに、全完了履歴の件数は `max_completed_worktrees` 件を超えないよう有界に保持する。
-    - `task_reclaim_counts` (#512): `completed_retention_seconds` 以内に回収された台帳エントリのみを、
-      最大 `max_task_reclaim_records` 件まで保持する。ただし現在 active なタスクのエントリは、
-      回収からの経過時間・件数上限に関わらず保護する（実行中のタスクの回収回数を失うと、
-      `max_task_reclaims` による上限判定が0からやり直しになるため）。
+    - `task_reclaim_counts` (#512): `completed_retention_seconds` 以内に回収された台帳エントリを保持する
+      （現在 active なタスクのエントリは経過時間に関わらず保護する）。回収回数を失うと
+      `max_task_reclaims` による上限判定が0からやり直しになるため、件数による上限は設けない。
+      詳細は `_prune_task_reclaim_counts` のdocstringを参照。
     """
     import time
 
@@ -273,9 +272,7 @@ def prune_run_state(
     )
 
     pruned_task_reclaim_counts = _prune_task_reclaim_counts(
-        state,
-        min_reclaimed_time=min_completed_time,
-        max_task_reclaim_records=max_task_reclaim_records,
+        state, min_reclaimed_time=min_completed_time
     )
 
     return RunState(
@@ -295,7 +292,6 @@ def save_run_state(
     completed_retention_seconds: float = 30 * 86400.0,
     open_prs: Sequence[Any] | None = None,
     max_completed_worktrees: int = 500,
-    max_task_reclaim_records: int = 500,
 ) -> None:
     state = prune_run_state(
         state,
@@ -304,7 +300,6 @@ def save_run_state(
         completed_retention_seconds=completed_retention_seconds,
         open_prs=open_prs,
         max_completed_worktrees=max_completed_worktrees,
-        max_task_reclaim_records=max_task_reclaim_records,
     )
     data = {
         "active_worktrees": {

@@ -485,18 +485,23 @@ class TestTaskReclaimCounts:
 
         assert set(pruned.task_reclaim_counts) == {10, 12}
 
-    def test_prune_bounds_the_ledger_size(self):
+    def test_prune_keeps_every_recent_record_regardless_of_count(self):
+        """PR#520レビュー4巡目対応(Codex P2): 件数上限で古い順に追い出さない。
+
+        追い出すと、未完了のまま繰り返し失敗しているタスクのカウンタが次の試行の
+        前に消え、毎回1回目からやり直しになって`max_task_reclaims`を素通り
+        できてしまう（本Issueが塞ごうとしている終端の無い経路そのもの）。
+        """
         now = 1700000000.0
         state = RunState(
             task_reclaim_counts={
                 issue_number: TaskReclaimRecord(
                     count=1, last_reclaimed_at=now - issue_number
                 )
-                for issue_number in range(10)
+                for issue_number in range(1_000)
             },
         )
 
-        pruned = prune_run_state(state, now=now, max_task_reclaim_records=3)
+        pruned = prune_run_state(state, now=now)
 
-        # 直近に回収されたものから優先して残す
-        assert set(pruned.task_reclaim_counts) == {0, 1, 2}
+        assert len(pruned.task_reclaim_counts) == 1_000
