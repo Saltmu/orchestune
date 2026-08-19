@@ -185,6 +185,19 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--task-timeout-seconds", "3600"])
         assert args.task_timeout_seconds == 3600
 
+    def test_max_task_reclaims_defaults_to_a_finite_value(self):
+        """#512: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.max_task_reclaims == 3
+
+    def test_max_task_reclaims_arg_is_parsed(self):
+        from orchestune.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--max-task-reclaims", "5"])
+        assert args.max_task_reclaims == 5
+
     def test_zombie_gc_defaults_to_true(self):
         from orchestune.dispatcher import _build_arg_parser
 
@@ -253,10 +266,12 @@ class TestConfigDefaults:
         parser = _build_arg_parser()
         config_data = {
             "task-timeout-seconds": 1200,
+            "max-task-reclaims": 5,
             "zombie-gc": False,
         }
         defaults = _config_defaults(parser, config_data)
         assert defaults["task_timeout_seconds"] == 1200
+        assert defaults["max_task_reclaims"] == 5
         assert defaults["zombie_gc"] is False
 
     def test_config_defaults_validation_error(self):
@@ -270,6 +285,9 @@ class TestConfigDefaults:
 
         with pytest.raises(SystemExit):
             _config_defaults(parser, {"zombie-gc": "invalid"})
+
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"max-task-reclaims": -1})
 
     def test_dag_ignore_patterns_key_is_ignored_not_rejected(self):
         """#398/#404レビュー指摘: orchestune-dag CLIが同じ設定ファイル

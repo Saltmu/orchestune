@@ -33,6 +33,11 @@ class DispatcherConfig:
     max_recompute_retries: int = 2
     task_timeout_seconds: int = 0
     zombie_gc: bool = True
+    # #512: ゾンビ/タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。
+    # 超過したタスクは`status:blocked-human-review`へ遷移し、再投入されなくなる。
+    # 「無制限」を表す値は用意しない（終端のない経路を作らないため）。`0`は
+    # 「1回目の回収で即エスカレーション」を意味する。
+    max_task_reclaims: int = 3
     # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
     max_tokens_per_window: int | None = None
     max_tokens_per_task: int | None = None

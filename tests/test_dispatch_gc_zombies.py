@@ -412,6 +412,8 @@ class TestApplyZombieOrTimeoutReclaim:
             "subtask_id": "task-a",
             "action": "gc_reclaimed",
             "reason": "process disappeared",
+            # #512: 今回を含む累計回収回数
+            "reclaim_count": 1,
         }
 
     def test_reclaim_adds_queued_before_removing_in_progress(self, tmp_path):
@@ -727,6 +729,8 @@ class TestApplyZombieOrTimeoutReclaim:
             "subtask_id": "task-a",
             "action": "gc_reclaimed",
             "reason": "process disappeared",
+            # #512: 今回を含む累計回収回数
+            "reclaim_count": 1,
         }
 
     def test_event_shape_omits_worktree_path(self, tmp_path):
@@ -745,6 +749,7 @@ class TestApplyZombieOrTimeoutReclaim:
             "subtask_id",
             "action",
             "reason",
+            "reclaim_count",
         }
 
     def test_apply_backs_up_worktree_created_after_decide(self, tmp_path):

@@ -103,6 +103,20 @@ def _rule_not_needed(
     )
 
 
+def _discard_reclaim_count(run_state: RunState, issue_number: int, action: str) -> None:
+    """#512: 正常完了したタスクのゾンビ／タイムアウト回収回数を台帳から破棄する。
+
+    残したままだと、同じIssueが（人間による再オープン等で）再度ディスパッチ
+    された際に前回の回収回数が引き継がれ、実際には初回の回収なのに早期に
+    `status:blocked-human-review`へ落ちてしまう。
+
+    トークン上限超過（`escalated_token_limit_exceeded`）は完了ではなく人間の
+    確認待ちへの遷移のため、破棄せず回数を保持する。
+    """
+    if action == "completed":
+        run_state.task_reclaim_counts.pop(issue_number, None)
+
+
 def _decide_stale_active_entry(
     active: ActiveWorktree, active_task: Task | None
 ) -> dict | None:
@@ -287,6 +301,9 @@ def _rule_completed(
                     base_branch=completion_active.base_branch,
                     usage=usage_obj,
                 )
+            )
+            _discard_reclaim_count(
+                ctx.run_state, completion_active.issue_number, action
             )
             del ctx.run_state.active_worktrees[key]
         return ActiveWorktreeRuleOutcome(

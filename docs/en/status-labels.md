@@ -44,6 +44,7 @@ stateDiagram-v2
     in_progress --> blocked_human_review: Upstream PR got CHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: Automatic rebase failed\n(_apply_auto_rebase)
     in_progress --> queued: Zombie/timeout reclaimed by GC\n(_collect_zombies_and_timeouts)
+    in_progress --> blocked_human_review: GC reclaim limit exceeded\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: status:not-needed label detected\n(closed, or pending review)
     in_progress --> blocked: Stale bookkeeping entry discarded\n(_apply_stale_active_entry_discard;\nthe label itself was already changed externally)
 
@@ -121,6 +122,19 @@ independently of the lifecycle above (see "External lock" below).
 - Condition: the process disappeared while uncommitted changes remain
   (zombie), or the task timed out. Uncommitted work is stashed as a WIP
   commit before requeuing.
+- Retry bound ([#512](https://github.com/Saltmu/orchestune/issues/512)): the same
+  task may be requeued at most `max_task_reclaims` times (`--max-task-reclaims`,
+  3 by default); beyond that it takes transition 9-b below. The count lives in
+  the `task_reclaim_counts` ledger in `run_state.json` and is discarded once the
+  task completes normally.
+
+### 9-b. `status:in-progress` → `status:blocked-human-review` (GC reclaim limit exceeded)
+- Source: `_apply_zombie_or_timeout_reclaim` in `orchestune/dispatch_gc_zombies.py`
+- Condition: the cumulative number of zombie/timeout reclaims for a task exceeds
+  `max_task_reclaims`. Instead of returning it to `status:queued`, the task stops
+  for human review with the reclaim count and the last reason posted as a
+  comment — so a task that structurally always times out cannot be relaunched
+  forever. Like transitions 5-7, it goes through `apply_human_review_escalation`.
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
 - Source: `_finalize_not_needed_worktree` in `orchestune/dispatch_gc.py`

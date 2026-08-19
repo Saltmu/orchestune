@@ -68,6 +68,14 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         help="ゾンビ・タイムアウトGCを実行するタスクのタイムアウト秒数（0でタイムアウトGCは無効、ゾンビ検知のみ実行）",
     )
     parser.add_argument(
+        "--max-task-reclaims",
+        type=int,
+        default=3,
+        help="ゾンビ・タイムアウトGCが同一タスクをstatus:queuedへ差し戻せる回数の上限"
+        "（#512）。超過したタスクはstatus:blocked-human-reviewへ遷移し再投入されなくなる。"
+        "0を指定すると1回目の回収で即エスカレーションする（無制限にはできない）",
+    )
+    parser.add_argument(
         "--zombie-gc",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -263,6 +271,7 @@ def _config_defaults(
         "deviation_buffer_lines",
         "max_recompute_retries",
         "task_timeout_seconds",
+        "max_task_reclaims",
     }
     positive_int_keys = {"window_seconds", "parent_issue"}
     defaults: dict[str, Any] = {}
@@ -375,6 +384,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         deviation_buffer_lines=args.deviation_buffer_lines,
         max_recompute_retries=args.max_recompute_retries,
         task_timeout_seconds=args.task_timeout_seconds,
+        max_task_reclaims=args.max_task_reclaims,
         zombie_gc=args.zombie_gc,
         max_tokens_per_window=args.max_tokens_per_window,
         max_tokens_per_task=args.max_tokens_per_task,

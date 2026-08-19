@@ -208,6 +208,8 @@ orchestune-dispatch
 | `--max-tokens-per-window <int>` | - | 指定した時間窓（`--window-seconds`）内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止する。未指定時は無制限。 |
 | `--max-tokens-per-task <int>` | - | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送り `status:blocked-human-review` へエスカレーションする。未指定時は無制限。 |
 | `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のDAG再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
+| `--task-timeout-seconds <int>` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行する。無人運転時は正の値を設定することを推奨。 |
+| `--max-task-reclaims <int>` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移し、以降は再投入されない。`0`は「1回目の回収で即エスカレーション」を意味する（無制限にする設定値は存在しない）。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
 ### 設定ファイルによるオプションの省略
@@ -238,7 +240,7 @@ run-state-path = "run_state.json"
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
-> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
+> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
 
 ---
 

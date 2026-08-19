@@ -208,6 +208,8 @@ orchestune-dispatch
 | `--max-tokens-per-window <int>` | - | Quota limit: maximum total tokens consumed across completed tasks within `--window-seconds`. When reached, new task launches are paused. Unlimited if omitted. |
 | `--max-tokens-per-task <int>` | - | Per-task limit: maximum token consumption allowed for a single subtask. If exceeded upon completion, automatic completion is halted and escalated to `status:blocked-human-review`. Unlimited if omitted. |
 | `--max-recompute-retries <int>` | `2` | Maximum DAG recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
+| `--task-timeout-seconds <int>` | `0` | Seconds after which a running task is treated as timed out and reclaimed by the GC. `0` (the default) disables timeout reclamation and only detects zombies. Set a positive value before leaving a run unattended. |
+| `--max-task-reclaims <int>` | `3` | Maximum number of times the zombie/timeout GC may return the same task to `status:queued`. Once exceeded, the task moves to `status:blocked-human-review` and is no longer requeued. `0` means the very first reclaim escalates; there is no value that makes it unlimited. |
 | `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
 
 ### Configuration File for Omitting Options
@@ -238,7 +240,7 @@ run-state-path = "run_state.json"
 > [!NOTE]
 > Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
-> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, and `max-recompute-retries` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
+> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, and `max-task-reclaims` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
 
 ---
 

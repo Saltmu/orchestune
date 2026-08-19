@@ -43,6 +43,7 @@ stateDiagram-v2
     in_progress --> blocked_human_review: 依存元PRがCHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: 自動リベース失敗\n(_apply_auto_rebase)
     in_progress --> queued: ゾンビ/タイムアウト検知によるGC\n(_collect_zombies_and_timeouts)
+    in_progress --> blocked_human_review: GC回収回数が上限超過\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: status:not-neededラベル検知\n(クローズ or 検証レビュー)
     in_progress --> blocked: staleな帳簿エントリの破棄\n(_apply_stale_active_entry_discard、\nラベル自体は外部で既に変更済み)
 
@@ -121,6 +122,18 @@ stateDiagram-v2
 - 発生元: `orchestune/dispatch_gc.py`の`_collect_zombies_and_timeouts`
 - 条件: プロセス消失かつ未コミット変更あり（ゾンビ）、またはタイムアウト
   超過の場合。未コミット変更はWIPコミットとして退避した上で再キューイングする。
+- 回数上限（[#512](https://github.com/Saltmu/orchestune/issues/512)）: 同一タスクを
+  差し戻せるのは`max_task_reclaims`回（`--max-task-reclaims`、既定3回）まで。
+  超過した場合は下記9-bへ遷移する。回数は`run_state.json`の`task_reclaim_counts`
+  台帳に保持され、タスクが正常完了した時点で破棄される。
+
+### 9-b. `status:in-progress` → `status:blocked-human-review`（GC回収の上限超過）
+- 発生元: `orchestune/dispatch_gc_zombies.py`の`_apply_zombie_or_timeout_reclaim`
+- 条件: ゾンビ／タイムアウト回収による再投入の累計回数が`max_task_reclaims`を
+  超えた場合。`status:queued`への差し戻しを打ち切り、回収回数と最終理由を
+  コメントした上で人間の確認待ちで停止する（構造的に必ずタイムアウトする
+  タスクが無限に再起動され続けるのを防ぐため）。
+  遷移自体は5〜7と同じ`apply_human_review_escalation`へ集約している。
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree`

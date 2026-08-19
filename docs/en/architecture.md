@@ -97,11 +97,10 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 
 The detailed behaviour of each mechanism — its exclusion rules, its skip conditions, how it differs per dispatch target — belongs to that mechanism's own section and to the docstring of its implementation. All that matters here is that each one follows from the same principle.
 
-And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries and launches per window are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries, launches per window, and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default) are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
-> **Known gaps**: three paths currently never reach a terminal state.
+> **Known gaps**: two paths currently never reach a terminal state.
 > - The `status:not-needed` re-verification on the Cloud Routine target. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle (`dispatched_at` is recorded but never used for a timeout). [#511](https://github.com/Saltmu/orchestune/issues/511)
-> - Requeueing of a reclaimed timed-out task. Even with a positive `--task-timeout-seconds`, `_apply_zombie_or_timeout_reclaim` keeps no per-task reclaim counter, so a task that keeps timing out is returned to `status:queued` forever. [#512](https://github.com/Saltmu/orchestune/issues/512)
 > - **Token usage is not observable.** `max_tokens_per_window` never fires on the cloud dispatch targets (`ClaudeCodeCloudRoutineDispatchTarget`, `CodexCloudDispatchTarget`): the default `collect_usage` returns `None` and neither target overrides it, because no polling API is published for a cloud session's consumption — even `is_complete` falls back to PR creation as a proxy signal. So **the token cap is inert on the primary unattended path**. This is upstream of persistence (the data is never produced in the first place) and is revisited when such an API becomes available. `recompute_count`/`forced_serial` (child Issue body) and `launch_history` (parent Issue body) are persisted and outside this gap.
 
 What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.
@@ -213,6 +212,8 @@ Typically, orchestrator states are tracked in a local state file like `run_state
 
 * **GitHub as the Source of Truth**:
   By fetching active PR branches and GitHub Issue labels (`status:in-progress`, `status:blocked`, `status:queued`), Orchestune rebuilds the DAG state in memory and resumes the cycle seamlessly from where it left off.
+* **Reclaim counts (#512)**:
+  The zombie/timeout reclaim counts (the `task_reclaim_counts` ledger behind `--max-task-reclaims`) live only in `run_state.json`, so losing that file resets them to zero. A task that already exceeded the limit stays stopped even so, because its `status:blocked-human-review` label on GitHub is the source of truth — only tasks still below the limit start their count over.
 
 ---
 
