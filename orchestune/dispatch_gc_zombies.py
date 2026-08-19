@@ -222,35 +222,69 @@ def _apply_backup_failure(
     この分岐が無いと`status:in-progress`のままクオータを占有し続け、回収回数と
     失敗コメントだけが無限に積み上がる——本Issueが塞ごうとしている終端の無い
     経路そのものになってしまう。worktreeは残したまま人間へ引き渡す。
+
+    #512/PR#520レビュー13巡目対応(Codex P1): 「バックアップに失敗して1回分を
+    使い切った」という事実の確定（`_settle_reclaim`）は、Issueへの通知が成功したか
+    どうかとは独立に行う。コメント投稿が失敗し続ける環境（権限不足等）で予約を
+    `pending`のまま残すと、次サイクルが同じ回数を再利用して上限に到達できず、
+    dirty worktreeを抱えたタスクがクオータを占有し続けてしまう。
     """
     if escalating:
-        apply_human_review_escalation(
-            reclaim.active.issue_number,
-            reclaim.status_labels,
-            f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
-            "WIPバックアップコミットの作成に失敗しました。\n"
-            f"回収の累計回数が上限（max_task_reclaims={config.max_task_reclaims}）"
-            f"を超えた（今回で{reclaim.reclaim_count}回目）ため、自動回収を打ち切り、"
-            "status:blocked-human-reviewへ遷移しました。\n"
-            "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
-            f"{reclaim.active.worktree_path}\n"
-            f"エラー詳細:\n```\n{backup_error}\n```",
-            forge=config.resolved_forge,
-        )
-        _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
+        released = False
+
+        def _release_entry() -> None:
+            nonlocal released
+            released = True
+            _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
+
+        try:
+            apply_human_review_escalation(
+                reclaim.active.issue_number,
+                reclaim.status_labels,
+                f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
+                "WIPバックアップコミットの作成に失敗しました。\n"
+                f"回収の累計回数が上限（max_task_reclaims={config.max_task_reclaims}）"
+                f"を超えた（今回で{reclaim.reclaim_count}回目）ため、自動回収を打ち切り、"
+                "status:blocked-human-reviewへ遷移しました。\n"
+                "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
+                f"{reclaim.active.worktree_path}\n"
+                f"エラー詳細:\n```\n{backup_error}\n```",
+                forge=config.resolved_forge,
+                # ラベルが付いた時点で確定させる（コメント失敗で再試行し続けない）
+                on_label_applied=_release_entry,
+            )
+        except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
+            print(
+                f"Warning: failed to escalate the GC reclaim of issue "
+                f"#{reclaim.active.issue_number} after a WIP backup failure: {e}",
+                file=sys.stderr,
+            )
+            if not released:
+                # ラベルすら付けられていない。回数だけ確定させ、次サイクルで再試行する。
+                _settle_reclaim(
+                    run_state, reclaim, config, open_prs, release_entry=False
+                )
+                return None
         return _reclaim_event(reclaim, "escalated_reclaim_limit_exceeded", True)
 
-    config.resolved_forge.add_comment(
-        reclaim.active.issue_number,
-        f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
-        "WIPバックアップコミットの作成に失敗しました。\n"
-        "未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を"
-        "一時スキップしました。\n"
-        f"エラー詳細:\n```\n{backup_error}\n```",
-    )
-    # スキップした回収も1回分として確定させる（予約のまま残すと、バックアップが
-    # 失敗し続けるタスクが上限に到達できず終端しなくなる）。
+    # スキップした回収も1回分として、通知より先に確定させる（予約のまま残すと、
+    # バックアップが失敗し続けるタスクが上限に到達できず終端しなくなる）。
     _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=False)
+    try:
+        config.resolved_forge.add_comment(
+            reclaim.active.issue_number,
+            f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
+            "WIPバックアップコミットの作成に失敗しました。\n"
+            "未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を"
+            "一時スキップしました。\n"
+            f"エラー詳細:\n```\n{backup_error}\n```",
+        )
+    except Exception as e:  # noqa: BLE001 - 通知の失敗で確定を巻き戻さない
+        print(
+            f"Warning: skipped the GC reclaim of issue "
+            f"#{reclaim.active.issue_number} but failed to post the reason: {e}",
+            file=sys.stderr,
+        )
     return None
 
 

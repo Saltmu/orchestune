@@ -665,6 +665,109 @@ class TestReclaimRetryBound:
         persisted = load_run_state(config.run_state_path)
         assert persisted.task_reclaim_counts[280].pending is False
 
+    def test_backup_failure_settles_even_when_the_comment_fails(self, tmp_path):
+        """PR#520レビュー13巡目対応(Codex P1): 通知の成否と関係なく1回分を確定する。
+
+        予約を`pending`のまま残すと、コメント投稿が失敗し続ける環境では次サイクルが
+        同じ回数を再利用して上限に到達できず、dirty worktreeを抱えたタスクが
+        クオータを占有し続けてしまう。
+        """
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        run_state = RunState(
+            active_worktrees={"280": _active(worktree_path=str(worktree))}
+        )
+        config = _config(tmp_path, max_task_reclaims=3)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=RuntimeError("gh: comment permission denied"),
+            ),
+        ):
+            assert (
+                _collect_zombies_and_timeouts(run_state, {280: _task()}, config) == []
+            )
+
+        assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
+            count=1, last_reclaimed_at=_NOW, pending=False
+        )
+        assert (
+            load_run_state(config.run_state_path).task_reclaim_counts[280].pending
+            is False
+        )
+        # worktreeもエントリも残す（未コミットの作業を守るため）
+        assert set(run_state.active_worktrees) == {"280"}
+        assert worktree.exists()
+
+    def test_backup_failure_escalation_releases_on_label_success(self, tmp_path):
+        """上限超過時は、コメントが失敗してもラベル付与の時点でエントリを解放する。"""
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        run_state = RunState(
+            active_worktrees={"280": _active(worktree_path=str(worktree))}
+        )
+        config = _config(tmp_path, max_task_reclaims=0)
+        labels: list[tuple[str, str]] = []
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=lambda issue, label: labels.append(("add", label)),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=RuntimeError("gh: comment permission denied"),
+            ),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert [event["action"] for event in events] == [
+            "escalated_reclaim_limit_exceeded"
+        ]
+        assert ("add", "status:blocked-human-review") in labels
+        assert run_state.active_worktrees == {}
+        assert worktree.exists()
+
+    def test_backup_failure_escalation_retries_when_the_label_fails(self, tmp_path):
+        """ラベルすら付けられない場合は、回数だけ確定させて次サイクルで再試行する。"""
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        run_state = RunState(
+            active_worktrees={"280": _active(worktree_path=str(worktree))}
+        )
+        config = _config(tmp_path, max_task_reclaims=0)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                return_value="fatal: unable to write new index file",
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.add_label",
+                side_effect=RuntimeError("gh: API is unavailable"),
+            ),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert events == []
+        assert set(run_state.active_worktrees) == {"280"}
+        assert run_state.task_reclaim_counts[280].pending is False
+
     def test_backup_failure_settles_the_reserved_count(self, tmp_path):
         """バックアップ失敗によるスキップは1回分を使い切る（上限で終端させるため）。"""
         worktree = tmp_path / "wt-280"
