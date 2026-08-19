@@ -78,6 +78,11 @@ class RunState:
     last_reconciled_at: float | None = None
     # #512: Issue番号 -> 回収回数。`max_task_reclaims`超過の判定に使う。
     task_reclaim_counts: dict[int, TaskReclaimRecord] = field(default_factory=dict)
+    # #512/PR#520レビュー16巡目対応(Codex P2): 台帳のクローズ確認を1サイクルあたり
+    # 一定件数に絞る際の走査位置。サイクルをまたいで進めることで、どの記録も
+    # いずれ確認される（壁時計に基づくローテーションでは、一定周期で起動される
+    # ディスパッチャーが同じ位置ばかり見てしまう組み合わせがあるため）。
+    task_reclaim_lookup_cursor: int = 0
 
 
 def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
@@ -126,6 +131,17 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
     return records
 
 
+def _parse_lookup_cursor(value: object) -> int:
+    """#512: `task_reclaim_lookup_cursor`を検証しつつ復元する。
+
+    欠落（本フィールド導入前の`run_state.json`）や壊れた値は`0`へ倒す。
+    走査位置は毎サイクル記録数で丸められるため、0から始めても取りこぼしはない。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def load_run_state(path: str | Path) -> RunState:
     data = read_json_with_recovery(path, label="run_state.json")
     if data is None:
@@ -167,6 +183,9 @@ def load_run_state(path: str | Path) -> RunState:
         completed_worktrees=completed_worktrees,
         last_reconciled_at=data.get("last_reconciled_at"),
         task_reclaim_counts=_parse_task_reclaim_counts(data.get("task_reclaim_counts")),
+        task_reclaim_lookup_cursor=_parse_lookup_cursor(
+            data.get("task_reclaim_lookup_cursor")
+        ),
     )
 
 
@@ -283,6 +302,7 @@ def prune_run_state(
         completed_worktrees=pruned_completed,
         last_reconciled_at=state.last_reconciled_at,
         task_reclaim_counts=retained_task_reclaim_counts,
+        task_reclaim_lookup_cursor=state.task_reclaim_lookup_cursor,
     )
 
 
@@ -319,5 +339,6 @@ def save_run_state(
             str(issue_number): dataclasses.asdict(record)
             for issue_number, record in state.task_reclaim_counts.items()
         },
+        "task_reclaim_lookup_cursor": state.task_reclaim_lookup_cursor,
     }
     write_json_atomic(path, data)

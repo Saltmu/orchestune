@@ -592,6 +592,37 @@ class TestReclaimRetryBound:
             count=1, last_reclaimed_at=_NOW, pending=False
         )
 
+    def test_stale_label_removal_failure_still_releases_the_entry(self, tmp_path):
+        """PR#520レビュー16巡目対応(Codex P1): 終端ラベルが付いた瞬間に確定させる。
+
+        `status:blocked-human-review`の付与に成功して`status:in-progress`の除去が
+        失敗した場合、Issueは両方のラベルを持つため以後もin-progressとして
+        発見され続ける。ここで確定させないと、毎サイクル同じエスカレーションを
+        再試行しながらクオータを占有してしまう。
+        """
+        active = _active(worktree_path=str(tmp_path / "missing-280"))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path, max_task_reclaims=0)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=RuntimeError("gh: label removal failed"),
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert [event["action"] for event in events] == [
+            "escalated_reclaim_limit_exceeded"
+        ]
+        assert run_state.active_worktrees == {}
+        persisted = load_run_state(config.run_state_path)
+        assert persisted.active_worktrees == {}
+        assert persisted.task_reclaim_counts[280].pending is False
+
     def test_comment_failure_after_escalation_settles_and_releases(self, tmp_path):
         """PR#520レビュー12巡目対応(Codex P1): エスカレーションのコメントだけが
         失敗しても、ラベルが付いた時点で予約を確定しエントリを解放する。
@@ -1243,38 +1274,38 @@ class TestDiscardReclaimCountsForClosedIssues:
         assert len(removed) == 50
         assert len(run_state.task_reclaim_counts) == 450
 
-    def test_capped_direct_lookups_rotate_between_cycles(self, tmp_path):
-        """PR#520レビュー15巡目対応(Codex P2): 常に若い番号の50件だけを見ない。
+    def test_capped_direct_lookups_advance_a_persisted_cursor(self, tmp_path):
+        """PR#520レビュー15/16巡目対応(Codex P2): 走査位置をカーソルで順送りする。
 
-        固定だと、その後ろでクローズされた記録の回数が永久に台帳へ残り、
-        毎サイクル同じ50件へAPIを浪費してしまう。
+        常に若い番号の50件だけを見ると、その後ろでクローズされた記録の回数が
+        永久に台帳へ残る。壁時計によるローテーションでも、一定周期で起動される
+        ディスパッチャーでは同じ位置ばかり見る組み合わせが生じるため、
+        `run_state`のカーソルで進める。
         """
         config = self._config(tmp_path)
         config.forge.list_issues_by_label.return_value = []
         config.forge.get_issue_state.return_value = "OPEN"
-
-        def _queried_numbers(now):
-            run_state = RunState(
-                task_reclaim_counts={
-                    number: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)
-                    for number in range(500)
-                }
-            )
-            config.forge.get_issue_state.reset_mock()
-            with patch("orchestune.dispatch_cycle_context.time.time", return_value=now):
-                discard_reclaim_counts_for_closed_issues(
-                    run_state, self._issues([]), config
-                )
-            return {
-                call.args[0] for call in config.forge.get_issue_state.call_args_list
+        run_state = RunState(
+            task_reclaim_counts={
+                number: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)
+                for number in range(500)
             }
+        )
 
-        first = _queried_numbers(1_000.0)
-        second = _queried_numbers(1_120.0)
+        seen: list[set[int]] = []
+        for _ in range(10):
+            config.forge.get_issue_state.reset_mock()
+            discard_reclaim_counts_for_closed_issues(
+                run_state, self._issues([]), config
+            )
+            seen.append(
+                {call.args[0] for call in config.forge.get_issue_state.call_args_list}
+            )
 
-        assert len(first) == 50
-        assert len(second) == 50
-        assert first != second
+        # 10サイクル（50件 x 10）で全500件を一巡し、重複なく進む
+        assert all(len(batch) == 50 for batch in seen)
+        assert set().union(*seen) == set(range(500))
+        assert run_state.task_reclaim_lookup_cursor == 0
 
     def test_empty_ledger_makes_no_api_call(self, tmp_path):
         config = self._config(tmp_path)

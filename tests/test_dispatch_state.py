@@ -451,6 +451,26 @@ class TestTaskReclaimCounts:
 
         assert loaded.task_reclaim_counts[280].pending is False
 
+    def test_lookup_cursor_round_trips_and_defaults_to_zero(self, tmp_path):
+        """#512: 走査カーソルの永続化と、欠落・壊れた値のフォールバック。"""
+        path = tmp_path / "run_state.json"
+        save_run_state(RunState(task_reclaim_lookup_cursor=120), path)
+        assert load_run_state(path).task_reclaim_lookup_cursor == 120
+
+        path.write_text(json.dumps({"active_worktrees": {}, "launch_history": []}))
+        assert load_run_state(path).task_reclaim_lookup_cursor == 0
+
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "launch_history": [],
+                    "task_reclaim_lookup_cursor": -3,
+                }
+            )
+        )
+        assert load_run_state(path).task_reclaim_lookup_cursor == 0
+
     def test_broken_entries_are_ignored(self, tmp_path):
         path = tmp_path / "run_state.json"
         path.write_text(

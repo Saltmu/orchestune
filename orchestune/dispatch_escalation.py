@@ -30,10 +30,12 @@ def apply_human_review_escalation(
     は呼び出し側の責務とし、この関数自体は常に無条件で実行する。
 
     #512/PR#520レビュー12巡目対応(Codex P1): `on_label_applied`が渡された場合、
-    ラベル遷移が成功した直後（コメント投稿の前）に呼び出す。GC回収の呼び出し元は
-    ここでローカルの帳簿を確定させる: コメント投稿だけが失敗したときにローカルを
-    未確定のまま残すと、GitHub側は既にstatus:blocked-human-reviewなのに次サイクルも
-    エスカレーションを再試行し続け、帳簿エントリがクオータを占有し続けてしまう。
+    `status:blocked-human-review`が付いた瞬間——旧ラベルの除去やコメント投稿より
+    **前**——に呼び出す（16巡目対応: 呼び出し位置を`transition_status_label`の
+    内部へ移動）。GC回収の呼び出し元はここでローカルの帳簿を確定させる:
+    旧ラベルの除去やコメント投稿だけが失敗したときにローカルを未確定のまま残すと、
+    GitHub側は既に終端ラベルを持っているのに次サイクルもエスカレーションを
+    再試行し続け、帳簿エントリがクオータを占有し続けてしまう。
     """
     forge = forge or GitHubForge()
     transition_status_label(
@@ -41,9 +43,10 @@ def apply_human_review_escalation(
         issue_number,
         "status:blocked-human-review",
         (label for label in _REMOVABLE_STATUS_LABELS if label in current_status_labels),
+        # #512/PR#520レビュー16巡目対応(Codex P1): 旧ラベルの除去より前、
+        # status:blocked-human-reviewが付いた瞬間に確定させる。
+        on_label_added=on_label_applied,
     )
-    if on_label_applied is not None:
-        on_label_applied()
     forge.add_comment(issue_number, comment)
 
 
