@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -18,7 +20,13 @@ from orchestune.dispatch_labels import (
     transition_status_label,
 )
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.dispatch_state import (
+    ActiveWorktree,
+    RunState,
+    TaskReclaimRecord,
+    save_run_state,
+)
+from orchestune.models import PrRecord
 from orchestune.process_utils import is_process_alive
 
 
@@ -118,22 +126,63 @@ def _decide_zombie_or_timeout_reclaims(
     return reclaims
 
 
-def _record_reclaim(run_state: RunState, reclaim: ZombieOrTimeoutReclaim) -> None:
-    """#512: 回収回数の台帳（`RunState.task_reclaim_counts`）を更新する。
+def _record_reclaim(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+) -> bool:
+    """#512: 回収回数の台帳（`RunState.task_reclaim_counts`）を更新し永続化する。
 
-    ディスクへの永続化はサイクル終端の`save_run_state`が担う。回収に伴う
-    `active_worktrees`からの削除と同じ書き込みで永続化されるため、両者が
-    食い違うことはない（クラッシュ時は「まだ回収していない」状態へ揃って戻る）。
+    PR#520レビュー2巡目対応(Codex P2): 「使う前に予約する」順序で、GitHub側の
+    ラベル遷移より**先**にディスクへ書く。サイクル終端の`save_run_state`任せに
+    すると、`status:queued`の露出後・保存前に落ちた場合（後続のforge呼び出しの
+    例外を含む）、`run_state.json`には古い回数と古いactiveエントリだけが残る。
+    次サイクルでは`_rule_stale_entry`がそのactiveエントリを破棄して再起動を許す
+    ため、回収が1回も数えられないまま再投入が繰り返され、断続的な障害下では
+    上限を超えて起動し続けてしまう。
+
+    永続化に失敗した場合は`False`を返し、呼び出し側は今回の回収自体を見送る
+    （fail-closed。ラベルだけ`status:queued`にして回数を失うより、次サイクルで
+    回収をやり直す方が安全）。逆に、書き込み成功直後・ラベル遷移前に落ちた場合は
+    「回数は数えられているがIssueはstatus:in-progressのまま」となり、次サイクルで
+    同じタスクが再度タイムアウト回収される（上限に対して厳しくなる方向の非対称）。
+
+    刈り込みパラメータはサイクル終端の保存と揃える（`launch_window_seconds`を
+    渡さないと既定の24時間窓で起動履歴を削り、`open_prs`を渡さないと重複起動
+    判定に必要な完了履歴の保護が外れる）。
     """
+    previous = run_state.task_reclaim_counts.get(reclaim.active.issue_number)
     run_state.task_reclaim_counts[reclaim.active.issue_number] = TaskReclaimRecord(
         count=reclaim.reclaim_count, last_reclaimed_at=reclaim.now
     )
+    try:
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            now=reclaim.now,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
+    except Exception as e:  # noqa: BLE001 - 保存失敗時は回収を見送る
+        if previous is None:
+            run_state.task_reclaim_counts.pop(reclaim.active.issue_number, None)
+        else:
+            run_state.task_reclaim_counts[reclaim.active.issue_number] = previous
+        print(
+            f"Warning: skipping GC reclaim of issue #{reclaim.active.issue_number}: "
+            f"failed to persist the reclaim count to {config.run_state_path}: {e}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def _apply_zombie_or_timeout_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> dict | None:
     """decide層が判定した回収対象に基づき、安全に副作用を適用する。
 
@@ -146,7 +195,16 @@ def _apply_zombie_or_timeout_reclaim(
 
     WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
     消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
-    （run_stateは変更せず、次サイクルでの再試行に委ねる）。
+    （active_worktreesは変更せず、次サイクルでの再試行に委ねる）。
+
+    #512/PR#520レビュー2巡目対応(Codex P2): 回収回数の記録・永続化は、
+    プロセスkill・worktree削除・ラベル遷移といったあらゆる副作用より**先**に行う。
+    永続化に失敗した場合はfail-closedで、何も壊さずにNoneを返して次サイクルへ
+    委ねる。この順序では、上記のWIPバックアップ失敗でスキップした回収も1回として
+    数えられる（＝上限に対して厳しくなる方向の非対称）が、バックアップ失敗が
+    毎サイクル続くようなタスクこそ人間の確認へ回すべきであり、副作用を先に
+    実行して回数だけ失う（次サイクルで数えられないまま再起動できてしまう）よりも
+    安全側である。
     """
     active = reclaim.active
     reason = reclaim.reason
@@ -159,6 +217,9 @@ def _apply_zombie_or_timeout_reclaim(
     counted = not already_escalated
     escalating = counted and reclaim.escalate
     if config.apply:
+        # #512: 破壊的な副作用より先に回数を確定・永続化する（ローカル先行）。
+        if counted and not _record_reclaim(run_state, reclaim, config, open_prs):
+            return None
         # #385: タイムアウトかつプロセス生存中の場合、対象プロセスがまだ
         # worktreeへ書き込み中の可能性がある。WIPバックアップより先に停止させ
         # ないと、書き込み途中の不整合なスナップショットやgit操作のロック
@@ -202,11 +263,8 @@ def _apply_zombie_or_timeout_reclaim(
             )
         elif escalating:
             # #512: 回収・再投入の累計が上限を超えたタスクは、status:queuedへ
-            # 戻さずstatus:blocked-human-reviewで停止させる。台帳の更新は
-            # GitHub側のラベル遷移より先に行う（ローカル先行）: 逆順だと、
-            # ラベル成功後にプロセスが落ちた場合に「GitHub上は確認待ちだが
-            # ローカルの回数は上限未満」という非対称が残る。
-            _record_reclaim(run_state, reclaim)
+            # 戻さずstatus:blocked-human-reviewで停止させる（台帳の更新・永続化は
+            # 上のとおりラベル遷移より先に済ませている）。
             apply_human_review_escalation(
                 active.issue_number,
                 reclaim.status_labels,
@@ -230,8 +288,6 @@ def _apply_zombie_or_timeout_reclaim(
                 for label in ("status:in-progress", "status:blocked")
                 if label in reclaim.status_labels
             )
-            # #512: ラベル遷移より先に回数を記録する（上のescalate分岐と同じ理由）。
-            _record_reclaim(run_state, reclaim)
             transition_status_label(
                 config.resolved_forge,
                 active.issue_number,
@@ -267,6 +323,7 @@ def _collect_zombies_and_timeouts(
     tasks_by_issue: dict[int, Task],
     config: DispatcherConfig,
     held_worktree_paths: set[str] | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> list[dict]:
     """Decide and apply zombie and timeout reclamations."""
     reclaims = _decide_zombie_or_timeout_reclaims(
@@ -274,7 +331,7 @@ def _collect_zombies_and_timeouts(
     )
     events: list[dict] = []
     for reclaim in reclaims:
-        event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+        event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config, open_prs)
         if event is not None:
             events.append(event)
     return events

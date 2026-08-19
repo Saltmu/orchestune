@@ -8,8 +8,6 @@
 
 from unittest.mock import patch
 
-import pytest
-
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_gc import _rule_completed, _rule_not_needed
 from orchestune.dispatch_gc_zombies import (
@@ -19,7 +17,12 @@ from orchestune.dispatch_gc_zombies import (
     _decide_zombie_or_timeout_reclaims,
 )
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.dispatch_state import (
+    ActiveWorktree,
+    RunState,
+    TaskReclaimRecord,
+    load_run_state,
+)
 from tests.dispatch_gc_test_support import _ctx
 
 _NOW = 2_000.0
@@ -241,6 +244,103 @@ class TestReclaimRetryBound:
         )
         assert run_state.active_worktrees == {"280": active}
 
+    def test_reclaim_count_is_persisted_before_the_label_transition(self, tmp_path):
+        """PR#520レビュー2巡目対応(Codex P2): `status:queued`を露出させる前に、
+        回収回数がディスクへ書かれていること（ローカル先行）。
+
+        逆順だと、ラベル遷移後・サイクル終端の保存前に落ちた場合に
+        `run_state.json`へ回数が残らず、次サイクルのstaleエントリ破棄経由で
+        回収を数えないまま再起動できてしまう。
+        """
+        active = _active(worktree_path=str(tmp_path / "missing-280"))
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path)
+        persisted: list[dict] = []
+
+        def _record_persisted(issue_number, label):
+            persisted.append(load_run_state(config.run_state_path).task_reclaim_counts)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.forge.GitHubForge.add_label", side_effect=_record_persisted
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=_record_persisted,
+            ),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert persisted
+        assert persisted[0] == {280: TaskReclaimRecord(count=1, last_reclaimed_at=_NOW)}
+
+    def test_reclaim_is_skipped_when_the_ledger_cannot_be_persisted(
+        self, tmp_path, capsys
+    ):
+        """永続化に失敗した回収はfail-closedで見送り、プロセスkill・worktree削除・
+        ラベル遷移のいずれの副作用も起こさない（記録が先、破壊は後）。"""
+        worktree = tmp_path / "wt-280"
+        worktree.mkdir()
+        active = _active(worktree_path=str(worktree), pid=4242)
+        run_state = RunState(active_worktrees={"280": active})
+        config = _config(tmp_path)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch_gc_zombies.save_run_state",
+                side_effect=OSError("no space left on device"),
+            ),
+            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch(
+                "orchestune.dispatch_gc_zombies.remove_worktree"
+            ) as mock_remove_worktree,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert events == []
+        mock_kill.assert_not_called()
+        mock_backup.assert_not_called()
+        mock_remove_worktree.assert_not_called()
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_add_comment.assert_not_called()
+        # 次サイクルでやり直せるよう、台帳もactiveエントリもそのまま残す
+        assert run_state.task_reclaim_counts == {}
+        assert run_state.active_worktrees == {"280": active}
+        assert "no space left on device" in capsys.readouterr().err
+
+    def test_failed_persist_restores_a_previous_reclaim_count(self, tmp_path):
+        """永続化に失敗しても、既存の回数をインクリメント後の値で汚さない。"""
+        active = _active(worktree_path=str(tmp_path / "missing-280"))
+        previous = TaskReclaimRecord(count=1, last_reclaimed_at=1.0)
+        run_state = RunState(
+            active_worktrees={"280": active},
+            task_reclaim_counts={280: previous},
+        )
+        config = _config(tmp_path)
+
+        with (
+            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch(
+                "orchestune.dispatch_gc_zombies.save_run_state",
+                side_effect=OSError("boom"),
+            ),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert run_state.task_reclaim_counts == {280: previous}
+
     def test_decide_layer_does_not_mutate_the_ledger(self, tmp_path):
         """decide層は副作用を持たない（台帳の更新はapply層の責務）。"""
         active = _active(worktree_path=str(tmp_path / "missing-280"))
@@ -307,10 +407,10 @@ class TestReclaimCounterLifecycle:
         assert outcome is not None
         assert ctx.run_state.task_reclaim_counts == {280: record}
 
-    @pytest.mark.parametrize("action", ["not_needed", "not_needed_review_dispatched"])
-    def test_not_needed_completion_discards_its_reclaim_count(self, action):
-        """PR#520レビュー対応(Codex P2): `status:not-needed`で走り切ったタスクの
-        カウンタも残さない（独立検証レビューへ回した場合を含む）。"""
+    def test_not_needed_completion_discards_its_reclaim_count(self):
+        """PR#520レビュー対応(Codex P2): `status:not-needed`で走り切って即クローズ
+        されたタスクのカウンタも残さない。"""
+        action = "not_needed"
         ctx = _ctx()
         ctx.config.apply = True
         active = ctx.run_state.active_worktrees.setdefault(
@@ -329,6 +429,35 @@ class TestReclaimCounterLifecycle:
 
         assert outcome is not None
         assert ctx.run_state.task_reclaim_counts == {}
+
+    def test_pending_not_needed_review_keeps_the_reclaim_count(self):
+        """PR#520レビュー2巡目対応(Codex P2): 独立検証レビューへ送り出しただけの
+        時点ではカウンタを破棄しない。
+
+        ここで破棄すると「回収枠を使い切る → status:not-neededを自己申告 →
+        レビュー不合格でstatus:queuedへ差し戻し → 回数0から再開」という、
+        本Issueが塞ごうとしている無限再起動の抜け道ができてしまう。
+        """
+        ctx = _ctx()
+        ctx.config.apply = True
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        record = TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
+        ctx.run_state.task_reclaim_counts[280] = record
+        task = _task(status_labels=("status:not-needed",))
+
+        with patch(
+            "orchestune.dispatch_gc._finalize_not_needed_worktree",
+            return_value={
+                "action": "not_needed_review_dispatched",
+                "issue_number": 280,
+            },
+        ):
+            outcome = _rule_not_needed(ctx, "1", active, task)
+
+        assert outcome is not None
+        assert ctx.run_state.task_reclaim_counts == {280: record}
 
     def test_dirty_worktree_not_needed_keeps_the_reclaim_count(self):
         """完了が保留された（dirty worktree）場合はカウンタを保持する。"""

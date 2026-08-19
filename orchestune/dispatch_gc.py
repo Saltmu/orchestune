@@ -107,14 +107,17 @@ def _rule_not_needed(
 
 
 # #512/PR#520レビュー対応(Codex P2): 回収回数の台帳から記録を破棄してよい
-# 「タスクが自力で走り切った」完了アクション。`not_needed_review_dispatched`も
-# 含めるのは、エージェントが対応不要と自己申告して走り切った時点で、その実行は
-# GCによる回収なしに終端しているため（独立検証レビューはpost-cycleの別フェーズが
-# 別の台帳で追跡しており、run_stateへは触れられない）。レビューが不合格で
-# `status:queued`へ差し戻された場合は、新しい実行として回数0から数え直す。
-_RECLAIM_COUNT_CLEARING_ACTIONS = frozenset(
-    {"completed", "not_needed", "not_needed_review_dispatched"}
-)
+# 「タスクが走り切ってIssueがクローズされた」完了アクション。
+#
+# レビュー2巡目指摘: `not_needed_review_dispatched`（クラウドルーチンでの
+# status:not-needed独立検証レビューへの送り出し）はここに含めない。この時点では
+# レビューの合否が未確定で、不合格なら`status:queued`へ差し戻される
+# （`process_pending_not_needed_reviews`）ため、ここで破棄すると「回収枠を使い切る
+# → status:not-neededを自己申告 → レビュー不合格 → 回数0から再開」という
+# 本Issueが塞ごうとしている無限再起動の抜け道を作ってしまう。レビュー合格による
+# クローズ時の破棄は、post-cycle側（`dispatch_postcycle`の
+# `_discard_reclaim_counts_for_closed_issues`）が担当する。
+_RECLAIM_COUNT_CLEARING_ACTIONS = frozenset({"completed", "not_needed"})
 
 
 def _discard_reclaim_count(run_state: RunState, issue_number: int, action: str) -> None:

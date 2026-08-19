@@ -125,7 +125,12 @@ stateDiagram-v2
 - 回数上限（[#512](https://github.com/Saltmu/orchestune/issues/512)）: 同一タスクを
   差し戻せるのは`max_task_reclaims`回（`--max-task-reclaims`、既定3回）まで。
   超過した場合は下記9-bへ遷移する。回数は`run_state.json`の`task_reclaim_counts`
-  台帳に保持され、タスクが正常完了した時点で破棄される。
+  台帳へ、ラベル遷移より先に永続化される（ラベルだけ先に`status:queued`へ戻して
+  保存前に停止すると、回数が数えられないまま再起動できてしまうため）。
+  台帳の記録は、タスクが完了してIssueがクローズされた時点で破棄する
+  （`status:not-needed`の独立検証レビュー経由の場合は、レビュー合格による
+  クローズ時にpost-cycleが破棄する。レビュー不合格で`status:queued`へ
+  差し戻される可能性があるため、レビューへ送り出した時点では破棄しない）。
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review`（GC回収の上限超過）
 - 発生元: `orchestune/dispatch_gc_zombies.py`の`_apply_zombie_or_timeout_reclaim`

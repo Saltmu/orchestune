@@ -429,6 +429,7 @@ def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
                 config.not_needed_review_state_path,
                 forge=config.forge,
                 auth_error=auth_error,
+                config=config,
             )
             post_cycle_results.append(result)
         result = _run_semantic_integrator(

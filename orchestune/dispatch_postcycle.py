@@ -11,13 +11,15 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import CycleReport
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
+from orchestune.dispatch_state import load_run_state, save_run_state
 from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
+from orchestune.dispatch_worktree import file_lock
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integration_coordinator import (
     IntegrationCoordinator,
@@ -86,18 +88,77 @@ def _run_best_effort_phase(
         )
 
 
+def _discard_reclaim_counts_for_closed_issues(
+    config: DispatcherConfig, closed_issue_numbers: Sequence[int]
+) -> None:
+    """#512/PR#520レビュー2巡目対応(Codex P2): 独立検証レビューに合格して
+    クローズされたIssueのゾンビ／タイムアウト回収回数を台帳から破棄する。
+
+    `status:not-needed`をクラウドルーチンで検証する経路では、レビューへ送り出した
+    時点ではまだ合否が確定していない（不合格なら`status:queued`へ差し戻される）。
+    そのため破棄はディスパッチサイクル側では行わず、実際にIssueがクローズされた
+    ここで行う。
+
+    `run_state.json`はディスパッチサイクルと同じ`run_state.lock`で保護し、
+    刈り込みパラメータもサイクル側と揃える（`launch_window_seconds`を渡さないと
+    既定の24時間窓でレート制限用の起動履歴を削ってしまい、`open_prs`を渡さないと
+    重複起動判定に必要な完了履歴の保護が外れる）。破棄すべき記録が実際に
+    存在する場合のみ、追加のAPI呼び出し（open PRの取得）と書き込みを行う。
+    """
+    if not closed_issue_numbers:
+        return
+    lock_path = Path(config.run_state_path).with_suffix(".lock")
+    with file_lock(lock_path):
+        run_state = load_run_state(config.run_state_path)
+        removed = [
+            issue_number
+            for issue_number in closed_issue_numbers
+            if run_state.task_reclaim_counts.pop(issue_number, None) is not None
+        ]
+        if not removed:
+            return
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+            open_prs=config.resolved_forge.list_prs(state="open"),
+        )
+        print(
+            "Discarded task reclaim counts for closed issues: "
+            f"{', '.join(f'#{issue_number}' for issue_number in removed)}",
+            file=sys.stderr,
+        )
+
+
 def _poll_pending_not_needed_reviews(
     state_path: Path,
     forge: Forge | None = None,
     auth_error: ForgeAuthError | None = None,
+    config: DispatcherConfig | None = None,
 ) -> PhaseResult:
     """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
 
     ベストエフォート処理: 失敗しても警告を出すだけでmain()は続行する。
+
+    #512: `config`が渡された場合、レビュー合格でクローズされたIssueの回収回数を
+    `run_state.json`の台帳から破棄する。台帳の更新に失敗しても（記録が残るだけで
+    上限判定は安全側に働くため）ポーリング自体の結果は成功のまま警告に留める。
     """
 
     def work() -> dict:
-        return process_pending_not_needed_reviews(state_path, forge=forge)
+        report = process_pending_not_needed_reviews(state_path, forge=forge)
+        if config is not None:
+            try:
+                _discard_reclaim_counts_for_closed_issues(
+                    config, report.get("closed", [])
+                )
+            except Exception as e:  # noqa: BLE001 - ベストエフォートの後始末
+                print(
+                    "Warning: failed to discard task reclaim counts for closed "
+                    f"issues: {e}",
+                    file=sys.stderr,
+                )
+        return report
 
     return _run_best_effort_phase(
         phase_name="poll_pending_not_needed_reviews",

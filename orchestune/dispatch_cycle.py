@@ -59,7 +59,11 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         ) = _process_active_worktrees(ctx)
 
         completion_events = run_gc_phase(
-            ctx.run_state, ctx.tasks_by_issue, config, completion_events
+            ctx.run_state,
+            ctx.tasks_by_issue,
+            config,
+            completion_events,
+            open_prs=ctx.prs,
         )
 
         promotion_events = run_blocked_promotion_phase(

@@ -125,8 +125,13 @@ independently of the lifecycle above (see "External lock" below).
 - Retry bound ([#512](https://github.com/Saltmu/orchestune/issues/512)): the same
   task may be requeued at most `max_task_reclaims` times (`--max-task-reclaims`,
   3 by default); beyond that it takes transition 9-b below. The count lives in
-  the `task_reclaim_counts` ledger in `run_state.json` and is discarded once the
-  task completes normally.
+  the `task_reclaim_counts` ledger in `run_state.json` and is persisted *before*
+  the label transition (exposing `status:queued` first and stopping before the
+  save would let a relaunch happen without counting the reclaim). The record is
+  discarded once the task completes and its Issue is closed — for the
+  `status:not-needed` independent review path, that happens post-cycle when the
+  review passes and the Issue is actually closed, not when the review is
+  dispatched (a rejected review requeues the task to `status:queued`).
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review` (GC reclaim limit exceeded)
 - Source: `_apply_zombie_or_timeout_reclaim` in `orchestune/dispatch_gc_zombies.py`
