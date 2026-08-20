@@ -10,9 +10,9 @@ echo "Setting up Git hooks..."
 chmod +x scripts/local-ci.sh
 chmod +x scripts/install-gitleaks.sh
 
-# Proactively install gitleaks so the pre-push hook's local CI run doesn't
+# Proactively install gitleaks so local CI runs don't
 # fail on first use. Non-fatal: local-ci.sh retries this automatically.
-./scripts/install-gitleaks.sh || echo "WARNING: gitleaks auto-install failed; local-ci.sh will retry on push."
+./scripts/install-gitleaks.sh || echo "WARNING: gitleaks auto-install failed; local-ci.sh will retry on execution."
 
 # Resolve Git hooks directory dynamically to support standard repos, worktrees, and submodules
 HOOKS_DIR="$(git rev-parse --git-path hooks 2>/dev/null || echo ".git/hooks")"
@@ -48,21 +48,11 @@ EOF
 
 chmod +x "$PRE_COMMIT_HOOK"
 
-# Create the pre-push hook
+# Clean up legacy pre-push hook if present
 PRE_PUSH_HOOK="${HOOKS_DIR}/pre-push"
-
-cat << 'EOF' > "$PRE_PUSH_HOOK"
-#!/usr/bin/env bash
-# Git pre-push hook to enforce local CI run before pushing
-
-# Unset Git internal environment variables before invoking CI
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_GRAFT_FILE GIT_SUPER_PREFIX
-
-# Run local CI script
-./scripts/local-ci.sh
-EOF
-
-chmod +x "$PRE_PUSH_HOOK"
+if [ -f "$PRE_PUSH_HOOK" ]; then
+  rm -f "$PRE_PUSH_HOOK"
+  echo "Removed deprecated pre-push hook at $PRE_PUSH_HOOK."
+fi
 
 echo "Git pre-commit hook installed successfully at $PRE_COMMIT_HOOK."
-echo "Git pre-push hook installed successfully at $PRE_PUSH_HOOK."

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 
-def test_setup_git_hooks_ps1_content_contains_git_env_unset():
-    """Verify setup-git-hooks.ps1 configures pre-push hook with GIT_* unset and uses rev-parse for hooks dir."""
+def test_setup_git_hooks_ps1_content_uses_rev_parse():
+    """Verify setup-git-hooks.ps1 uses rev-parse for hooks dir."""
     script_path = (
         Path(__file__).resolve().parent.parent / "scripts" / "setup-git-hooks.ps1"
     )
@@ -17,12 +17,10 @@ def test_setup_git_hooks_ps1_content_contains_git_env_unset():
 
     # Should use dynamic hooks dir resolution via git rev-parse
     assert "git rev-parse --git-path hooks" in content or "git rev-parse" in content
-    # Should contain git env cleanup in pre-push hook or script
-    assert "GIT_DIR" in content
 
 
-def test_setup_git_hooks_sh_content_contains_git_env_unset():
-    """Verify setup-git-hooks.sh configures pre-push hook with GIT_* unset and uses rev-parse for hooks dir."""
+def test_setup_git_hooks_sh_content_uses_rev_parse():
+    """Verify setup-git-hooks.sh uses rev-parse for hooks dir."""
     script_path = (
         Path(__file__).resolve().parent.parent / "scripts" / "setup-git-hooks.sh"
     )
@@ -30,8 +28,6 @@ def test_setup_git_hooks_sh_content_contains_git_env_unset():
 
     # Should use dynamic hooks dir resolution via git rev-parse
     assert "git rev-parse --git-path hooks" in content or "git rev-parse" in content
-    # Should contain git env cleanup in pre-push hook or script
-    assert "GIT_DIR" in content
 
 
 def test_local_ci_scripts_unset_git_env():
@@ -47,15 +43,13 @@ def test_local_ci_scripts_unset_git_env():
 
 
 def test_scripts_contain_all_dangerous_git_env_vars():
-    """Verify all 4 shell/powershell scripts contain every variable from DANGEROUS_GIT_ENV_VARS (SSOT)."""
+    """Verify local-ci shell/powershell scripts contain every variable from DANGEROUS_GIT_ENV_VARS (SSOT)."""
     from orchestune.git_cli import DANGEROUS_GIT_ENV_VARS
 
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     target_scripts = [
         "local-ci.ps1",
         "local-ci.sh",
-        "setup-git-hooks.ps1",
-        "setup-git-hooks.sh",
     ]
 
     for script_name in target_scripts:
@@ -164,7 +158,7 @@ def test_git_rev_parse_hooks_in_worktree(tmp_path: Path):
 
 
 def test_setup_git_hooks_ps1_execution_in_worktree(tmp_path: Path):
-    """Verify setup-git-hooks.ps1 executes successfully inside a worktree and creates hooks in the common hooks dir."""
+    """Verify setup-git-hooks.ps1 executes successfully inside a worktree, creates pre-commit hook, and does not create pre-push hook."""
     import shutil
     import sys
 
@@ -255,17 +249,60 @@ def test_setup_git_hooks_ps1_execution_in_worktree(tmp_path: Path):
     assert (
         common_hooks_dir / "pre-commit"
     ).exists(), "pre-commit hook was not created in common hooks dir"
-    assert (
+    assert not (
         common_hooks_dir / "pre-push"
-    ).exists(), "pre-push hook was not created in common hooks dir"
+    ).exists(), "pre-push hook should not be created in common hooks dir"
 
-    # Verify pre-push content in common hooks contains GIT_* unset
-    pre_push_content = (common_hooks_dir / "pre-push").read_text(encoding="utf-8")
-    assert "unset GIT_DIR" in pre_push_content
+
+def test_setup_git_hooks_ps1_cleans_up_existing_pre_push_hook(tmp_path: Path):
+    """Verify setup-git-hooks.ps1 removes any pre-existing pre-push hook."""
+    import shutil
+    import sys
+
+    from tests.conftest import get_clean_git_env
+
+    clean_env = get_clean_git_env()
+    main_repo = tmp_path / "repo_ps1_cleanup"
+    main_repo.mkdir()
+
+    subprocess.run(["git", "init"], cwd=str(main_repo), check=True, env=clean_env)
+    common_hooks_dir = main_repo / ".git" / "hooks"
+    common_hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pre-create a legacy pre-push hook
+    legacy_pre_push = common_hooks_dir / "pre-push"
+    legacy_pre_push.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    assert legacy_pre_push.exists()
+
+    # Copy real scripts directory
+    real_scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    target_scripts_dir = main_repo / "scripts"
+    shutil.copytree(real_scripts_dir, target_scripts_dir)
+
+    ps_exe = "powershell.exe" if sys.platform == "win32" else "pwsh"
+    if not shutil.which(ps_exe):
+        pytest.skip(f"PowerShell ({ps_exe}) not found on PATH")
+
+    res = subprocess.run(
+        [
+            ps_exe,
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(target_scripts_dir / "setup-git-hooks.ps1"),
+        ],
+        cwd=str(main_repo),
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    )
+    assert res.returncode == 0
+    assert (common_hooks_dir / "pre-commit").exists(), "pre-commit hook was not created"
+    assert not legacy_pre_push.exists(), "legacy pre-push hook was not removed"
 
 
 def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
-    """Verify setup-git-hooks.sh executes successfully inside a worktree and creates hooks in the common hooks dir."""
+    """Verify setup-git-hooks.sh executes successfully inside a worktree, creates pre-commit hook, and does not create pre-push hook."""
     import shutil
     import sys
 
@@ -354,10 +391,52 @@ def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
     assert (
         common_hooks_dir / "pre-commit"
     ).exists(), "pre-commit hook was not created in common hooks dir"
-    assert (
+    assert not (
         common_hooks_dir / "pre-push"
-    ).exists(), "pre-push hook was not created in common hooks dir"
+    ).exists(), "pre-push hook should not be created in common hooks dir"
 
-    # Verify pre-push content in common hooks contains GIT_* unset
-    pre_push_content = (common_hooks_dir / "pre-push").read_text(encoding="utf-8")
-    assert "unset GIT_DIR" in pre_push_content
+
+def test_setup_git_hooks_sh_cleans_up_existing_pre_push_hook(tmp_path: Path):
+    """Verify setup-git-hooks.sh removes any pre-existing pre-push hook."""
+    import shutil
+    import sys
+
+    from tests.conftest import get_clean_git_env
+
+    if sys.platform == "win32":
+        pytest.skip(
+            "setup-git-hooks.sh execution test is only applicable on non-Windows platforms"
+        )
+
+    bash_path = shutil.which("bash")
+    if not bash_path:
+        pytest.skip("bash not found on PATH")
+
+    clean_env = get_clean_git_env()
+    main_repo = tmp_path / "repo_sh_cleanup"
+    main_repo.mkdir()
+
+    subprocess.run(["git", "init"], cwd=str(main_repo), check=True, env=clean_env)
+    common_hooks_dir = main_repo / ".git" / "hooks"
+    common_hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pre-create a legacy pre-push hook
+    legacy_pre_push = common_hooks_dir / "pre-push"
+    legacy_pre_push.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    assert legacy_pre_push.exists()
+
+    # Copy real scripts directory
+    real_scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    target_scripts_dir = main_repo / "scripts"
+    shutil.copytree(real_scripts_dir, target_scripts_dir)
+
+    res = subprocess.run(
+        ["bash", str(target_scripts_dir / "setup-git-hooks.sh")],
+        cwd=str(main_repo),
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    )
+    assert res.returncode == 0
+    assert (common_hooks_dir / "pre-commit").exists(), "pre-commit hook was not created"
+    assert not legacy_pre_push.exists(), "legacy pre-push hook was not removed"

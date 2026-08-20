@@ -27,7 +27,8 @@ def test_powershell_setup_git_hooks_contract():
     content = setup_hooks_ps1.read_text(encoding="utf-8")
 
     assert "pre-commit" in content
-    assert "pre-push" in content
+    # pre-push hook creation was removed; the script now only removes the legacy hook
+    assert "Removed deprecated pre-push hook" in content
     assert "local-ci.ps1" in content
 
 

@@ -12,7 +12,7 @@ Ensure you have Python 3.12+, Poetry, and the GitHub CLI (`gh auth status`) inst
 poetry install
 ```
 
-Then install the local Git hooks so the local CI script (including the gitleaks scan) runs automatically before every `git push` and blocks it on failure:
+Then install the local Git pre-commit hook to prevent force-added `.gitignore` files from being committed accidentally (this also cleans up any legacy `pre-push` hook):
 
 * **POSIX (Linux / macOS)**:
   ```bash
@@ -23,7 +23,7 @@ Then install the local Git hooks so the local CI script (including the gitleaks 
   .\scripts\setup-git-hooks.ps1
   ```
 
-`setup-git-hooks` also installs [gitleaks](https://github.com/gitleaks/gitleaks#installing) to `~/.local/bin` if it isn't already on your `PATH` (see `scripts/install-gitleaks.sh` / `.ps1`). `local-ci.sh` / `.ps1` retry this automatically too, so a missing `gitleaks` binary shouldn't block a fresh environment from pushing. If automatic installation fails (e.g. no network access, unsupported OS/architecture), install it manually from the link above.
+`setup-git-hooks` also installs [gitleaks](https://github.com/gitleaks/gitleaks#installing) to `~/.local/bin` if it isn't already on your `PATH` (see `scripts/install-gitleaks.sh` / `.ps1`). `local-ci.sh` / `.ps1` retry this automatically too, so a missing `gitleaks` binary shouldn't block local CI execution in a fresh environment. If automatic installation fails (e.g. no network access, unsupported OS/architecture), install it manually from the link above.
 
 ## Running Tests
 
