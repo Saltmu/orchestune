@@ -757,3 +757,107 @@ def test_architecture_docs_document_the_determinism_principle() -> None:
             f"{lang}のarchitecture.mdの0.1節に、終端状態'{escalation_label}'への"
             "言及がありません"
         )
+
+
+def _collect_dict_assignments(tree: ast.AST) -> dict[str, list[ast.Dict]]:
+    dict_assignments: dict[str, list[ast.Dict]] = defaultdict(list)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    dict_assignments[target.id].append(node.value)
+    return dict_assignments
+
+
+def _is_subprocess_call(node: ast.Call) -> bool:
+    if isinstance(node.func, ast.Attribute) and node.func.attr in _SUBPROCESS_CALLS:
+        return (
+            isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"
+        )
+    if isinstance(node.func, ast.Name):
+        return node.func.id in _SUBPROCESS_CALLS
+    return False
+
+
+def _call_text_and_encoding_flags(
+    node: ast.Call, dict_assignments: dict[str, list[ast.Dict]]
+) -> tuple[bool, bool]:
+    keyword_names = {kw.arg for kw in node.keywords if kw.arg is not None}
+    has_text = "text" in keyword_names or "universal_newlines" in keyword_names
+    has_encoding = "encoding" in keyword_names
+
+    for kw in node.keywords:
+        if kw.arg is None and isinstance(kw.value, ast.Name):
+            for d in dict_assignments.get(kw.value.id, []):
+                d_keys = [
+                    k.value
+                    for k in d.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                ]
+                if "text" in d_keys or "universal_newlines" in d_keys:
+                    has_text = True
+                if "encoding" in d_keys:
+                    has_encoding = True
+
+    return has_text, has_encoding
+
+
+def _unencoded_text_subprocess_calls() -> list[str]:
+    """subprocess呼び出しでtext/universal_newlinesが有効なのにencodingが未指定の箇所を返す。
+
+    #531: 非UTF-8ロケール（Windows cp932等）でsubprocess.run(text=True)を
+    呼ぶと、encoding未指定時にlocale.getpreferredencoding()が使われ、
+    非ASCIIの入出力でデコード/エンコードエラーが発生する。これを防ぐため、
+    textモードを有効にする呼び出しは必ず明示的なencoding（"utf-8"等）を
+    伴わなければならない。
+    """
+    violations: list[str] = []
+    for module, path in _package_modules().items():
+        short_name = module.removeprefix(f"{PACKAGE_NAME}.")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dict_assignments = _collect_dict_assignments(tree)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not _is_subprocess_call(node):
+                continue
+
+            has_text, has_encoding = _call_text_and_encoding_flags(
+                node, dict_assignments
+            )
+            if has_text and not has_encoding:
+                violations.append(
+                    f"{short_name}:{node.lineno}:subprocess call with text=True missing encoding"
+                )
+
+    return sorted(violations)
+
+
+def _unencoded_write_text_calls() -> list[str]:
+    """Path.write_text呼び出しでencodingが未指定の箇所を返す。
+
+    #531: write_textのencoding未指定はロケール依存のエンコーディングを使用するため、
+    必ずencoding="utf-8"を明示しなければならない。
+    """
+    violations: list[str] = []
+    for module, path in _package_modules().items():
+        short_name = module.removeprefix(f"{PACKAGE_NAME}.")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "write_text":
+                keyword_names = {kw.arg for kw in node.keywords if kw.arg is not None}
+                has_encoding = len(node.args) >= 2 or "encoding" in keyword_names
+                if not has_encoding:
+                    violations.append(
+                        f"{short_name}:{node.lineno}:write_text missing encoding"
+                    )
+    return sorted(violations)
+
+
+def test_subprocess_text_mode_requires_explicit_encoding() -> None:
+    assert _unencoded_text_subprocess_calls() == []
+
+
+def test_path_write_text_requires_explicit_encoding() -> None:
+    assert _unencoded_write_text_calls() == []

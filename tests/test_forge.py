@@ -73,6 +73,19 @@ class TestGitHubForgeCheckAuth:
 
         assert mock_run.call_args.kwargs.get("check") is not True
 
+    def test_check_auth_specifies_utf8_encoding_and_replace_errors(self):
+        with (
+            patch("orchestune.forge.shutil.which", return_value="/usr/bin/gh"),
+            patch("orchestune.forge.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            GitHubForge().check_auth()
+
+        assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
+        assert mock_run.call_args.kwargs.get("errors") == "replace"
+
 
 class TestGitHubForgeEnsureLabels:
     def _labels(self):
@@ -164,6 +177,18 @@ class TestGitHubForgeEnsureLabels:
             "risky",
         ]
         assert "--force" not in argv
+        assert create_call.kwargs.get("encoding") == "utf-8"
+        assert create_call.kwargs.get("errors") == "replace"
+
+    def test_list_labels_specifies_utf8_encoding_and_replace_errors(self):
+        with patch("orchestune.forge.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="[]", stderr=""
+            )
+            GitHubForge()._list_existing_label_names()
+
+        assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
+        assert mock_run.call_args.kwargs.get("errors") == "replace"
 
     def test_ensure_labels_is_idempotent_when_all_labels_exist(self):
         labels = self._labels()
@@ -365,3 +390,61 @@ class TestForgeProtocols:
             "forge_issues.py",
             "forge_prs.py",
         }
+
+
+class TestGitHubForgeRun:
+    def test_run_specifies_utf8_encoding_and_replace_errors(self):
+        with patch("orchestune.forge.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="output", stderr=""
+            )
+            res = GitHubForge()._run(["gh", "issue", "view", "1"])
+
+        assert res == "output"
+        assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
+        assert mock_run.call_args.kwargs.get("errors") == "replace"
+        assert mock_run.call_args.kwargs.get("text") is True
+        assert mock_run.call_args.kwargs.get("check") is True
+
+    def test_run_passes_input_text_with_utf8(self):
+        with patch("orchestune.forge.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="created", stderr=""
+            )
+            res = GitHubForge()._run(
+                ["gh", "issue", "create", "--body-file", "-"],
+                input_text="日本語本文とタイトル\n🌟",
+            )
+
+        assert res == "created"
+        assert mock_run.call_args.kwargs.get("input") == "日本語本文とタイトル\n🌟"
+        assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
+        assert mock_run.call_args.kwargs.get("errors") == "replace"
+
+    def test_run_handles_invalid_utf8_bytes_via_replace_errors(self, monkeypatch):
+        # 実際にsubprocess.runを実行した際に、不正バイト列が含まれていても
+        # errors="replace"により\ufffdに置換されて正常にstrが返ること
+        import sys
+
+        # UTF-8として不正なバイト列 b"hello \xff\xfe world" を標準出力に吐くコマンド
+        cmd = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'hello \\xff\\xfe world\\n')",
+        ]
+        out = GitHubForge()._run(cmd)
+        assert "hello " in out
+        assert "\ufffd" in out
+        assert "world" in out
+
+    def test_run_decodes_japanese_utf8_output_without_crash(self):
+        # UTF-8の日本語文字列を標準出力に吐くコマンド
+        import sys
+
+        cmd = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write('日本語テスト出力'.encode('utf-8'))",
+        ]
+        out = GitHubForge()._run(cmd)
+        assert out == "日本語テスト出力"

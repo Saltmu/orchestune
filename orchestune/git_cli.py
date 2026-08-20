@@ -1,7 +1,7 @@
 """ローカルgit実行の単一の実行口。
 
-`git`の`subprocess`呼び出しをこのモジュールに集約し、`text=True`統一・
-`cwd=`パラメータ統一（`-C <path>`引数との混在を解消）・一貫した
+`git`の`subprocess`呼び出しをこのモジュールに集約し、`text=True`・`encoding="utf-8"`・
+`errors="replace"`統一・`cwd=`パラメータ統一（`-C <path>`引数との混在を解消）・一貫した
 エラーハンドリング（`CalledProcessError`/`OSError`は握り潰さずそのまま
 伝播させ、握り潰す/文字列化する判断は呼び出し側に委ねる）を提供する。
 """
@@ -72,13 +72,20 @@ def run_git(
     `check=True`（既定）の場合、非ゼロ終了は`subprocess.CalledProcessError`
     としてそのまま伝播する。実行自体ができなかった場合は`OSError`が伝播する。
     握り潰す/文字列化するかどうかの判断は呼び出し側の責務とする。
+
+    #531: 出力デコードには`encoding="utf-8"`および`errors="replace"`を使用する。
+    リポジトリ内の不正なバイト列を含むファイル名等があってもプロセスを落とさず、
+    置換文字(`\\ufffd`)へ縮退させて安全に処理を継続する。
     """
     kwargs: dict[str, Any] = {
         "cwd": cwd,
         "capture_output": True,
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
         "check": check,
     }
+
     if env is not None:
         if isolate_git_env and any(var in env for var in DANGEROUS_GIT_ENV_VARS):
             kwargs["env"] = {

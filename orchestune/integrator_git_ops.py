@@ -147,9 +147,12 @@ class IntegrationMerger:
                     cwd=str(self.repository_root),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     check=True,
                     env=env,
                 )
+
                 p = Path(res.stdout.strip())
                 if p.exists():
                     venv_path = p

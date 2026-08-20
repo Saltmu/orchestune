@@ -756,8 +756,11 @@ class TestCodexCloudDispatchTarget:
             "cwd": tmp_path / "wt",
             "capture_output": True,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
             "check": True,
         }
+
         command = submit_call.args[0]
         assert command[:7] == [
             "codex",
