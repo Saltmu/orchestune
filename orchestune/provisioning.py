@@ -913,8 +913,6 @@ def provision_issues(
             resolved_forge, parent_issue_number, plan_path
         ):
             plan_synced = False
-        else:
-            plan_synced = True
 
     return ProvisionResult(
         parent_issue_number=parent_issue_number,

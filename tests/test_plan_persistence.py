@@ -452,3 +452,58 @@ def test_resolve_parent_issue_reports_sync_status(tmp_path: Path):
     number, sync_ok = _resolve_parent_issue(forge, metadata, plan_path)
     assert number in forge.issues
     assert sync_ok is False
+
+
+def test_provision_initial_sync_failure_sticks_even_when_subtask_sync_succeeds(
+    tmp_path: Path,
+):
+    template_file = tmp_path / "issue_template.md"
+    template_file.write_text(
+        "### Task {{subtask_id}}\n\n"
+        "```yaml\n"
+        "subtask_id: {{subtask_id_yaml}}\n"
+        "depends_on: {{depends_on}}\n"
+        "parent_issue_number: {{parent_issue_number}}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    plan_file = tmp_path / "decomposition_plan.md"
+    plan_file.write_text(
+        "---\n"
+        "title: Sticky Plan Test\n"
+        "parent_issue_number: null\n"
+        "subtasks:\n"
+        "  - id: step-1\n"
+        "    description: Step 1\n"
+        "    footprint: []\n"
+        "    symbols: []\n"
+        "    depends_on: []\n"
+        "    issue_number: null\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    class FailingFirstUpdateBodyForge(FakeForge):
+        def __init__(self):
+            super().__init__()
+            self._update_count = 0
+
+        def update_issue_body(self, issue_number: int | str, body: str) -> None:
+            self._update_count += 1
+            if self._update_count == 1:
+                # First update (initial parent sync) fails
+                raise RuntimeError("Network error on initial parent sync")
+            super().update_issue_body(issue_number, body)
+
+    forge = FailingFirstUpdateBodyForge()
+    result = provision_issues(
+        plan_path=plan_file,
+        forge=forge,
+        template_path=template_file,
+        repo_root=tmp_path,
+    )
+
+    assert result.applied is True
+    # plan_synced must stay False because initial sync failed, even though subtask sync succeeded
+    assert result.plan_synced is False
+    assert len(result.created) == 1
