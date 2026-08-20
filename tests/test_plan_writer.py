@@ -521,13 +521,20 @@ class TestWriteParentIssueSource:
     def test_preserves_comments_and_formatting(self, tmp_path: Path):
         path = tmp_path / "decomposition_plan.md"
         path.write_text(
-            '---\ntitle: "T"  # Plan title\nparent_issue_number: null  # auto-filled\nsubtasks:\n  - id: task-a\n---\n',
+            '---\ntitle: "T"  # Plan title\nparent_issue_number: null  # auto-filled\nparent_issue_source: derived  # source comment\nsubtasks:\n  - id: task-a\n    issue_number: null  # subtask comment\n---\n',
             encoding="utf-8",
         )
-        write_issue_numbers(path, parent_issue_number=10, parent_issue_source="adopted")
+        write_issue_numbers(
+            path,
+            {"task-a": 101},
+            parent_issue_number=10,
+            parent_issue_source="adopted",
+        )
         text = path.read_text(encoding="utf-8")
         assert "# Plan title" in text
-        assert "parent_issue_source: adopted" in text
+        assert "parent_issue_number: 10  # auto-filled" in text
+        assert "parent_issue_source: adopted  # source comment" in text
+        assert "issue_number: 101  # subtask comment" in text
 
 
 def test_missing_frontmatter_raises(tmp_path: Path):

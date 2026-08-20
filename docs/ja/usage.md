@@ -137,7 +137,7 @@ orchestune provision --plan decomposition_plan.md --parent-issue 123
 
 指定したIssueがまだOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっていなければ、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
 
-`--parent-issue` を指定して実行すると、計画ファイルのフロントマターへ `parent_issue_source: adopted` が自動的に永続化されます。そのため、**2回目以降の `orchestune provision` では `--parent-issue` を再指定しなくても自動的に同じ親Issueが採用・再利用されます**。もし採用済みの親Issueが存在しないか親マーカーが失われている場合は、重複起票を防ぐために新規作成へ倒れずエラーで停止します。
+`--parent-issue` を指定して実行すると、計画ファイルのフロントマターへ `parent_issue_source: adopted` が自動的に永続化されます。そのため、**2回目以降の `orchestune provision` では `--parent-issue` を再指定しなくても自動的に同じ親Issueが採用・再利用されます**。もし採用済みの親Issueが存在しない場合は、重複起票を防ぐために新規作成へ倒れずエラーで停止します。
 
 > [!NOTE]
 > `orchestune-dispatch` の実行時には、対象親Issue配下の子ブランチを親ブランチ（`parent/issue-<番号>`）経由で二層マージさせるため、引き続き `--parent-issue <番号>` を指定してください。

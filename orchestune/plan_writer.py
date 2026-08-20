@@ -28,9 +28,15 @@ import yaml
 
 _FRONTMATTER_DELIMITER = re.compile(r"^---\s*$")
 _TITLE_LINE = re.compile(r"^title:\s*.*$")
-_PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
-_PARENT_ISSUE_SOURCE_LINE = re.compile(r"^(parent_issue_source:\s*).*$")
-_ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
+_PARENT_ISSUE_NUMBER_LINE = re.compile(
+    r"^(parent_issue_number:\s*)(?:'[^']*'|\"[^\"]*\"|[^ \t\n#]+)?([ \t]*(?:#.*)?)\r?\n?$"
+)
+_PARENT_ISSUE_SOURCE_LINE = re.compile(
+    r"^(parent_issue_source:\s*)(?:'[^']*'|\"[^\"]*\"|[^ \t\n#]+)?([ \t]*(?:#.*)?)\r?\n?$"
+)
+_ISSUE_NUMBER_LINE = re.compile(
+    r"^(\s*)(issue_number:\s*)(?:'[^']*'|\"[^\"]*\"|[^ \t\n#]+)?([ \t]*(?:#.*)?)\r?\n?$"
+)
 _LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
 _MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 _FLOW_ITEM_OPEN = re.compile(r"^(\s*)-(\s*)\{")
@@ -334,7 +340,7 @@ def _write_parent_issue_number(
     for index in range(start, end):
         match = _PARENT_ISSUE_NUMBER_LINE.match(lines[index])
         if match:
-            lines[index] = f"{match.group(1)}{number}\n"
+            lines[index] = f"{match.group(1)}{number}{match.group(2)}\n"
             return end
     insert_at = start
     for index in range(start, end):
@@ -351,7 +357,7 @@ def _write_parent_issue_source(
     for index in range(start, end):
         match = _PARENT_ISSUE_SOURCE_LINE.match(lines[index])
         if match:
-            lines[index] = f"{match.group(1)}{source}\n"
+            lines[index] = f"{match.group(1)}{source}{match.group(2)}\n"
             return end
     insert_at = start
     for index in range(start, end):
@@ -392,7 +398,9 @@ def _write_subtask_issue_number(
         if existing_index is not None:
             existing = _ISSUE_NUMBER_LINE.match(lines[existing_index])
             assert existing is not None
-            lines[existing_index] = f"{existing.group(1)}{existing.group(2)}{number}\n"
+            lines[existing_index] = (
+                f"{existing.group(1)}{existing.group(2)}{number}{existing.group(3)}\n"
+            )
             return end
         indent_str = " " * field_indent
         lines.insert(id_index + 1, f"{indent_str}issue_number: {number}\n")
