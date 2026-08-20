@@ -364,3 +364,65 @@ def test_incremental_parent_sync_on_partial_failure(tmp_path: Path):
     step_2 = next(s for s in extracted["subtasks"] if s["id"] == "step-2")
     assert step_1["issue_number"] == 101
     assert step_2["issue_number"] is None
+
+
+def test_provision_reports_plan_synced_false_on_sync_failure(tmp_path: Path):
+    # Test that when parent issue sync fails, provision_issues surfaces plan_synced=False
+    template_file = tmp_path / "issue_template.md"
+    template_file.write_text(
+        "### Task {{subtask_id}}\n\n"
+        "```yaml\n"
+        "subtask_id: {{subtask_id_yaml}}\n"
+        "depends_on: {{depends_on}}\n"
+        "parent_issue_number: {{parent_issue_number}}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    plan_file = tmp_path / "decomposition_plan.md"
+    plan_file.write_text(
+        "---\n"
+        "title: Failing Sync Rock\n"
+        "parent_issue_number: null\n"
+        "subtasks:\n"
+        "  - id: step-1\n"
+        "    description: Step 1\n"
+        "    footprint: []\n"
+        "    symbols: []\n"
+        "    depends_on: []\n"
+        "    issue_number: null\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    class FailingUpdateBodyForge(FakeForge):
+        def update_issue_body(self, issue_number: int | str, body: str) -> None:
+            raise RuntimeError("Network error on update_issue_body")
+
+    forge = FailingUpdateBodyForge()
+    result = provision_issues(
+        plan_path=plan_file,
+        forge=forge,
+        template_path=template_file,
+        repo_root=tmp_path,
+    )
+
+    assert result.applied is True
+    assert result.plan_synced is False
+    assert len(result.created) == 1
+
+
+def test_print_result_warns_on_plan_sync_failure(capsys):
+    from orchestune.provisioning import ProvisionResult, _print_result
+
+    res = ProvisionResult(
+        parent_issue_number=100,
+        applied=True,
+        created={"step-1": 101},
+        reused={},
+        plan_synced=False,
+    )
+    _print_result(res)
+    captured = capsys.readouterr()
+    assert (
+        "Warning: could not sync decomposition plan into #100's body." in captured.out
+    )

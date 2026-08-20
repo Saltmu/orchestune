@@ -97,6 +97,8 @@ class ProvisionResult:
     # #485: ネイティブSub-issue/blocked_by関係のリンクに失敗し、本文metadata
     # フォールバックのみで縮退したsubtask_idの一覧（起動時/完了時に報告する）。
     degraded_subtask_ids: tuple[str, ...] = ()
+    # #532: 親Issue本文への分解計画同期が成功したかどうか（同期失敗時はFalse）
+    plan_synced: bool = True
 
 
 def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
@@ -189,26 +191,39 @@ def restore_plan_file_from_parent(
 
 def _sync_parent_decomposition_plan(
     forge: IssueForge, parent_issue_number: int, plan_path: str | Path
-) -> None:
-    """#532: 親Issue本文へ最新の分解計画（Frontmatter YAML）を埋め込み・同期する。"""
+) -> bool:
+    """#532: 親Issue本文へ最新の分解計画（Frontmatter YAML）を埋め込み・同期する。
+
+    同期に成功した場合（または差分なしでスキップした場合）はTrue、失敗した場合はFalseを返す。
+    """
     try:
         parent_issue = forge.get_issue(parent_issue_number)
         if parent_issue is None:
-            return
+            print(
+                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: parent issue not found",
+                file=sys.stderr,
+            )
+            return False
         text = Path(plan_path).read_text(encoding="utf-8")
         raw_frontmatter, _ = extract_frontmatter_and_body(text)
         if not raw_frontmatter:
-            return
+            print(
+                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: no frontmatter in {plan_path}",
+                file=sys.stderr,
+            )
+            return False
         updated_body = embed_decomposition_plan_in_parent_body(
             parent_issue.body, raw_frontmatter
         )
         if updated_body != parent_issue.body:
             forge.update_issue_body(parent_issue_number, updated_body)
+        return True
     except Exception as e:
         print(
             f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: {e}",
             file=sys.stderr,
         )
+        return False
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
@@ -842,6 +857,7 @@ def provision_issues(
     created: dict[str, int] = {}
     reused: dict[str, int] = {}
     degraded_subtask_ids: list[str] = []
+    plan_synced = True
 
     for subtask_id in dag.topological_order:
         subtask = dag.subtasks[subtask_id]
@@ -892,7 +908,10 @@ def provision_issues(
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
-        _sync_parent_decomposition_plan(resolved_forge, parent_issue_number, plan_path)
+        if not _sync_parent_decomposition_plan(
+            resolved_forge, parent_issue_number, plan_path
+        ):
+            plan_synced = False
 
     return ProvisionResult(
         parent_issue_number=parent_issue_number,
@@ -900,6 +919,7 @@ def provision_issues(
         created=created,
         reused=reused,
         degraded_subtask_ids=tuple(degraded_subtask_ids),
+        plan_synced=plan_synced,
     )
 
 
@@ -935,6 +955,12 @@ def _print_result(result: ProvisionResult) -> None:
     else:
         print(
             "\nOperating mode: full (native sub-issue/blocked_by relationships linked)"
+        )
+
+    if not result.plan_synced:
+        print(
+            f"\nWarning: could not sync decomposition plan into #{result.parent_issue_number}'s body."
+            f"\nThe local plan file was updated, but the parent Issue body does not reflect the latest state."
         )
 
 
