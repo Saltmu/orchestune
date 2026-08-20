@@ -11,7 +11,11 @@ from orchestune.issue_parsing import (
     embed_decomposition_plan_in_parent_body,
     restore_plan_markdown_from_parent_body,
 )
-from orchestune.provisioning import provision_issues
+from orchestune.provisioning import (
+    PlanMetadata,
+    _resolve_parent_issue,
+    provision_issues,
+)
 from tests.test_provisioning import FakeForge
 
 
@@ -428,24 +432,10 @@ def test_print_result_warns_on_plan_sync_failure(capsys):
     )
 
 
-def test_provision_zero_subtasks_initial_sync_failure_reported(tmp_path: Path):
-    template_file = tmp_path / "issue_template.md"
-    template_file.write_text(
-        "### Task {{subtask_id}}\n\n"
-        "```yaml\n"
-        "subtask_id: {{subtask_id_yaml}}\n"
-        "depends_on: {{depends_on}}\n"
-        "parent_issue_number: {{parent_issue_number}}\n"
-        "```\n",
-        encoding="utf-8",
-    )
-    plan_file = tmp_path / "decomposition_plan.md"
-    plan_file.write_text(
-        "---\n"
-        "title: Zero Subtask Plan\n"
-        "parent_issue_number: null\n"
-        "subtasks: []\n"
-        "---\n",
+def test_resolve_parent_issue_reports_sync_status(tmp_path: Path):
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
         encoding="utf-8",
     )
 
@@ -454,13 +444,11 @@ def test_provision_zero_subtasks_initial_sync_failure_reported(tmp_path: Path):
             raise RuntimeError("Network error on update_issue_body")
 
     forge = FailingUpdateBodyForge()
-    result = provision_issues(
-        plan_path=plan_file,
-        forge=forge,
-        template_path=template_file,
-        repo_root=tmp_path,
+    metadata = PlanMetadata(
+        title="My Big Rock",
+        parent_issue_number=None,
+        description="Epic details",
     )
-
-    assert result.applied is True
-    assert result.plan_synced is False
-    assert len(result.created) == 0
+    number, sync_ok = _resolve_parent_issue(forge, metadata, plan_path)
+    assert number in forge.issues
+    assert sync_ok is False
