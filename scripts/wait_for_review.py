@@ -1,14 +1,14 @@
-"""Script to wait for AI review completion on a GitHub Pull Request.
+"""Script to trigger and detect AI review activity on a GitHub Pull Request.
 
-Encapsulates review trigger posting, multi-bot polling (Claude & Codex),
-and findings analysis into a single blocking process.
+Posts a review trigger (optional) and polls for any new or updated activity
+from the specified bot (Claude, Codex, etc.), returning the latest comment
+and inline remarks directly to stdout for LLM evaluation.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 import time
@@ -78,7 +78,8 @@ def _get_pr_data(pr_number: int) -> dict[str, list[dict[str, Any]]]:
     def fetch_endpoint(endpoint: str) -> list[dict[str, Any]]:
         try:
             return _run_gh_api(endpoint)
-        except Exception:
+        except Exception as e:
+            print(f"Warning: Failed to fetch {endpoint}: {e}", file=sys.stderr)
             return []
 
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -113,122 +114,6 @@ def _is_bot_user(user_login: str, bot_name: str) -> bool:
     return target in login
 
 
-def is_review_completed_comment(
-    comment_or_review: dict[str, Any], bot_name: str
-) -> bool:
-    user_login = (comment_or_review.get("user") or {}).get("login", "")
-    if not _is_bot_user(user_login, bot_name):
-        return False
-    body = comment_or_review.get("body", "")
-
-    # Only treat as in-progress if explicit in-progress indicators are present
-    if (
-        "is working…" in body
-        or "### Review in progress" in body
-        or "### Re-review in progress" in body
-        or "Review in progress <img" in body
-    ):
-        return False
-
-    # Typical review completion indicators
-    if (
-        "Re-review complete" in body
-        or "Review complete" in body
-        or "Claude finished" in body
-        or "### Summary" in body
-        or "### Findings" in body
-        or "inline findings" in body.lower()
-        or "Codex Review" in body
-        or "💡 Codex Review" in body
-        or "Here are some automated review suggestions" in body
-    ):
-        return True
-    return False
-
-
-def analyze_review_findings(
-    review_body: str, inline_comments: list[dict[str, Any]]
-) -> dict[str, Any]:
-    inline_findings = []
-    for comment in inline_comments:
-        c_body = comment.get("body", "")
-        path = comment.get("path", "unknown")
-        line = comment.get("line") or comment.get("original_line") or "N/A"
-        first_line = c_body.strip().split("\n")[0] if c_body else ""
-        inline_findings.append(
-            {
-                "path": path,
-                "line": line,
-                "summary": first_line,
-                "body": c_body,
-            }
-        )
-
-    # Analyze review body for findings
-    body_findings = []
-    has_blocking_findings = False
-
-    # Check for Claude style findings section
-    findings_match = re.search(
-        r"###\s*Findings\s*\n(.*?)(?=\n###|\Z)", review_body, re.DOTALL
-    )
-    if findings_match:
-        findings_text = findings_match.group(1).strip()
-        if findings_text:
-            body_findings.append(findings_text)
-            has_blocking_findings = True
-
-    # Check for explicit finding icons or unresolved flags
-    if "🔴" in review_body or "Still open — Bug:" in review_body:
-        has_blocking_findings = True
-
-    # Check for inline findings mentioned in summary
-    if inline_findings or "inline findings" in review_body.lower():
-        has_blocking_findings = True
-
-    # Check for explicit LGTM indicators
-    is_lgtm = False
-    if not has_blocking_findings:
-        if (
-            "LGTM" in review_body
-            or "All checks passed" in review_body
-            or "All checks pass" in review_body
-            or "no further blocking findings" in review_body.lower()
-            or "no issues found" in review_body.lower()
-        ):
-            is_lgtm = True
-
-    has_findings = has_blocking_findings or (not is_lgtm and len(inline_findings) > 0)
-    status = "FINDINGS_DETECTED" if has_findings else "ALL_CLEAR"
-
-    summary_lines = [
-        f"- Status: {status}",
-    ]
-    if inline_findings:
-        summary_lines.append(f"- Inline Findings: {len(inline_findings)} item(s)")
-        for item in inline_findings:
-            summary_lines.append(
-                f"  * {item['path']}:{item['line']} — {item['summary']}"
-            )
-    if body_findings:
-        summary_lines.append("- Review Body Findings:")
-        for fb in body_findings:
-            snippet = "\n".join(fb.splitlines()[:5])
-            summary_lines.append(f"  {snippet}")
-    elif "🔴" in review_body:
-        for line in review_body.splitlines():
-            if "🔴" in line:
-                summary_lines.append(f"  * {line.strip()}")
-
-    return {
-        "status": status,
-        "has_findings": has_findings,
-        "inline_findings": inline_findings,
-        "body_findings": body_findings,
-        "summary": "\n".join(summary_lines),
-    }
-
-
 def _get_item_timestamp(item: dict[str, Any]) -> str:
     return (
         item.get("updated_at")
@@ -238,17 +123,104 @@ def _get_item_timestamp(item: dict[str, Any]) -> str:
     )
 
 
+def _build_snapshot(
+    data: dict[str, list[dict[str, Any]]], bot_name: str
+) -> dict[str, str]:
+    """Record state of each bot item as id -> timestamp + body length."""
+    snapshot: dict[str, str] = {}
+    for c in data.get("issue_comments", []):
+        user = (c.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            cid = str(c.get("id"))
+            ts = _get_item_timestamp(c)
+            body = c.get("body", "")
+            snapshot[f"comment_{cid}"] = f"{ts}:{len(body)}"
+
+    for r in data.get("reviews", []):
+        user = (r.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            rid = str(r.get("id"))
+            ts = _get_item_timestamp(r)
+            body = r.get("body", "")
+            snapshot[f"review_{rid}"] = f"{ts}:{len(body)}"
+
+    for ic in data.get("inline_comments", []):
+        user = (ic.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            icid = str(ic.get("id"))
+            ts = _get_item_timestamp(ic)
+            snapshot[f"inline_{icid}"] = ts
+
+    return snapshot
+
+
+def _extract_review_result(
+    current_data: dict[str, list[dict[str, Any]]], bot_name: str
+) -> dict[str, Any] | None:
+    # Collect all matching bot comments / reviews
+    candidate_items: list[dict[str, Any]] = []
+    for c in current_data.get("issue_comments", []):
+        user = (c.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            candidate_items.append(c)
+
+    for r in current_data.get("reviews", []):
+        user = (r.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            candidate_items.append(r)
+
+    if not candidate_items:
+        return None
+
+    candidate_items.sort(key=_get_item_timestamp)
+    latest_item = candidate_items[-1]
+    latest_body = latest_item.get("body", "")
+
+    # Collect bot inline comments
+    inline_items: list[dict[str, Any]] = []
+    for ic in current_data.get("inline_comments", []):
+        user = (ic.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            inline_items.append(
+                {
+                    "path": ic.get("path", "unknown"),
+                    "line": ic.get("line") or ic.get("original_line") or "N/A",
+                    "body": ic.get("body", ""),
+                }
+            )
+
+    print("\n" + "=" * 60)
+    print(f"[AI Review Update Detected - @{bot_name}]")
+    print(f"Timestamp: {_get_item_timestamp(latest_item)}")
+    if inline_items:
+        print(f"Inline Comments: {len(inline_items)} item(s)")
+        for item in inline_items:
+            first_line = item["body"].strip().split("\n")[0] if item["body"] else ""
+            print(f"  * {item['path']}:{item['line']} — {first_line}")
+    print("=" * 60 + "\n")
+    print(latest_body)
+
+    return {
+        "review_body": latest_body,
+        "inline_comments": inline_items,
+        "timestamp": _get_item_timestamp(latest_item),
+    }
+
+
 def wait_for_review(
     pr_number: int,
     *,
-    timeout: int = 600,
-    interval: int = 10,
+    timeout: int = 300,
+    interval: int = 5,
     bot_name: str = "claude",
     post_trigger: bool = True,
     body: str | None = None,
     body_file: str | None = None,
 ) -> dict[str, Any]:
-    trigger_time = ""
+    # Capture initial state before triggering/waiting
+    initial_data = _get_pr_data(pr_number)
+    initial_snapshot = _build_snapshot(initial_data, bot_name)
+
     if post_trigger:
         print(f"Posting review trigger comment for @{bot_name} on PR #{pr_number}...")
         trigger_info = post_review_trigger(
@@ -259,62 +231,26 @@ def wait_for_review(
             f"Trigger posted (Comment ID: {trigger_info.get('id')}, time: {trigger_time})"
         )
 
-    print(f"Waiting for @{bot_name} review on PR #{pr_number} (timeout: {timeout}s)...")
+    print(
+        f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
+    )
     start_time = time.time()
 
     while True:
         try:
-            pr_data = _get_pr_data(pr_number)
-            candidate_reviews: list[dict[str, Any]] = []
+            current_data = _get_pr_data(pr_number)
+            current_snapshot = _build_snapshot(current_data, bot_name)
 
-            # Check issue comments (Claude, etc.)
-            for c in pr_data.get("issue_comments", []):
-                c_time = _get_item_timestamp(c)
-                if trigger_time and c_time < trigger_time:
-                    continue
-                if is_review_completed_comment(c, bot_name):
-                    candidate_reviews.append(c)
+            # Check if any new item appeared or existing item was updated
+            has_changes = any(
+                k not in initial_snapshot or initial_snapshot[k] != v
+                for k, v in current_snapshot.items()
+            )
 
-            # Check PR reviews (Codex, etc.)
-            for r in pr_data.get("reviews", []):
-                r_time = _get_item_timestamp(r)
-                if trigger_time and r_time < trigger_time:
-                    continue
-                if is_review_completed_comment(r, bot_name):
-                    candidate_reviews.append(r)
-
-            if candidate_reviews:
-                # Sort candidates chronologically by latest timestamp
-                candidate_reviews.sort(key=_get_item_timestamp)
-                latest_review = candidate_reviews[-1]
-                review_body = latest_review.get("body", "")
-
-                # Collect inline comments created around or after the review/trigger
-                relevant_inline = []
-                for ic in pr_data.get("inline_comments", []):
-                    ic_user = (ic.get("user") or {}).get("login", "")
-                    if not _is_bot_user(ic_user, bot_name):
-                        continue
-                    ic_time = _get_item_timestamp(ic)
-                    if trigger_time and ic_time < trigger_time:
-                        continue
-                    relevant_inline.append(ic)
-
-                analysis = analyze_review_findings(review_body, relevant_inline)
-
-                print("\n" + "=" * 60)
-                print(f"[AI Review Summary - @{bot_name}]")
-                print(analysis["summary"])
-                print("=" * 60 + "\n")
-                print(review_body)
-
-                return {
-                    "review_body": review_body,
-                    "status": analysis["status"],
-                    "has_findings": analysis["has_findings"],
-                    "inline_findings": analysis["inline_findings"],
-                    "summary": analysis["summary"],
-                }
+            if has_changes:
+                result = _extract_review_result(current_data, bot_name)
+                if result is not None:
+                    return result
 
         except Exception as e:
             print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
@@ -324,13 +260,13 @@ def wait_for_review(
         time.sleep(interval)
 
     raise TimeoutError(
-        f"Timed out waiting for @{bot_name} review on PR #{pr_number} after {timeout}s."
+        f"Timed out waiting for @{bot_name} activity on PR #{pr_number} after {timeout}s."
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Trigger and wait for an AI review on a GitHub PR in a single blocking process."
+        description="Trigger and detect AI review activity on a GitHub PR in a single blocking process."
     )
     parser.add_argument(
         "--pr",
@@ -341,14 +277,14 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=600,
-        help="Maximum time to wait in seconds (default: 600)",
+        default=300,
+        help="Maximum time to wait in seconds (default: 300)",
     )
     parser.add_argument(
         "--interval",
         type=int,
-        default=10,
-        help="Polling interval in seconds (default: 10)",
+        default=5,
+        help="Polling interval in seconds (default: 5)",
     )
     parser.add_argument(
         "--bot-name",
@@ -371,7 +307,7 @@ def main() -> None:
     parser.add_argument(
         "--no-post",
         action="store_true",
-        help="Skip posting a review trigger comment and only wait for review",
+        help="Skip posting a review trigger comment and only wait for activity",
     )
 
     args = parser.parse_args()
