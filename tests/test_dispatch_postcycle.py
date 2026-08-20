@@ -135,7 +135,38 @@ class TestPollPendingNotNeededReviews:
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.SUCCESS
         assert result.report == {"processed": 1}
-        mock_poll.assert_called_once_with(state_path, forge=ANY)
+        mock_poll.assert_called_once_with(state_path, forge=ANY, timeout_seconds=ANY)
+
+    def test_propagates_timeout_seconds_to_the_poll(self, tmp_path):
+        """#511: `timeout_seconds`未指定時は有限の既定値
+        （`DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS`）を使い、指定時はそのまま
+        `process_pending_not_needed_reviews`へ伝播する。"""
+        state_path = tmp_path / "s.json"
+        with patch(
+            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
+            return_value={"processed": 1},
+        ) as mock_poll:
+            _poll_pending_not_needed_reviews(state_path, timeout_seconds=1800.0)
+
+        mock_poll.assert_called_once_with(state_path, forge=ANY, timeout_seconds=1800.0)
+
+    def test_defaults_to_a_finite_timeout_when_unspecified(self, tmp_path):
+        from orchestune.integration_coordinator import (
+            DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
+        )
+
+        state_path = tmp_path / "s.json"
+        with patch(
+            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
+            return_value={"processed": 1},
+        ) as mock_poll:
+            _poll_pending_not_needed_reviews(state_path)
+
+        mock_poll.assert_called_once_with(
+            state_path,
+            forge=ANY,
+            timeout_seconds=DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
+        )
 
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
         state_path = tmp_path / "s.json"

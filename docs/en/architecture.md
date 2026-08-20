@@ -99,8 +99,7 @@ The detailed behaviour of each mechanism — its exclusion rules, its skip condi
 
 And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries, launches per window, and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default) are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
 
-> **Known gaps**: two paths currently never reach a terminal state.
-> - The `status:not-needed` re-verification on the Cloud Routine target. If the review session disappears without applying either outcome label, the pending entry is retained on every cycle (`dispatched_at` is recorded but never used for a timeout). [#511](https://github.com/Saltmu/orchestune/issues/511)
+> **Known gaps**: one path currently never reaches a terminal state.
 > - **Token usage is not observable.** `max_tokens_per_window` never fires on the cloud dispatch targets (`ClaudeCodeCloudRoutineDispatchTarget`, `CodexCloudDispatchTarget`): the default `collect_usage` returns `None` and neither target overrides it, because no polling API is published for a cloud session's consumption — even `is_complete` falls back to PR creation as a proxy signal. So **the token cap is inert on the primary unattended path**. This is upstream of persistence (the data is never produced in the first place) and is revisited when such an API becomes available. `recompute_count`/`forced_serial` (child Issue body) and `launch_history` (parent Issue body) are persisted and outside this gap.
 
 What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.

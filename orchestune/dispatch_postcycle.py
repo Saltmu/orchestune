@@ -20,6 +20,7 @@ from orchestune.dispatch_result import PhaseResult, PhaseStatus
 from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integration_coordinator import (
+    DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
     IntegrationCoordinator,
     process_pending_not_needed_reviews,
 )
@@ -90,6 +91,7 @@ def _poll_pending_not_needed_reviews(
     state_path: Path,
     forge: Forge | None = None,
     auth_error: ForgeAuthError | None = None,
+    timeout_seconds: float = DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
 ) -> PhaseResult:
     """#282: status:not-needed判定の独立検証レビュー（保留分）をポーリングする。
 
@@ -99,10 +101,16 @@ def _poll_pending_not_needed_reviews(
     破棄は、ここではなく次のディスパッチサイクルが行う——GitHub上でクローズ済みと
     確認できたIssueをまとめて落とす単一の規則（`dispatch_cycle_context`の
     `discard_reclaim_counts_for_closed_issues`）に集約している。
+
+    #511: どちらの結果ラベルも付かないまま`timeout_seconds`を超えたエントリは、
+    `process_pending_not_needed_reviews`が`status:blocked-human-review`へ
+    終端させる（既定値は`config.not_needed_review_timeout_seconds`から伝播）。
     """
 
     def work() -> dict:
-        return process_pending_not_needed_reviews(state_path, forge=forge)
+        return process_pending_not_needed_reviews(
+            state_path, forge=forge, timeout_seconds=timeout_seconds
+        )
 
     return _run_best_effort_phase(
         phase_name="poll_pending_not_needed_reviews",

@@ -43,6 +43,12 @@ class DispatcherConfig:
     max_tokens_per_task: int | None = None
     # #282: status:not-needed判定の独立検証レビュー（保留分）の永続化先。
     not_needed_review_state_path: Path = Path("not_needed_review_state.json")
+    # #511: 上記の保留エントリが、どちらの結果ラベル
+    # （not-needed-review:passed/failed）も付かないまま保持され続ける秒数の上限。
+    # レビューセッションのクラッシュ等で結果が返らなかった場合に永久pending化
+    # しないための終端。#512の`max_task_reclaims`と同じ理由で「無制限」を表す
+    # 値は用意しない（終端のない経路を作らないため）。
+    not_needed_review_timeout_seconds: int = 86400
     # #394: Integratorが統合ブランチ上で実行するCIコマンド。未指定（None）の場合、
     # IntegratorはOrchestune自身のリポジトリ固有の既定値（./scripts/local-ci.sh）
     # にフォールバックする。導入先リポジトリのCIエントリーポイントに合わせて
