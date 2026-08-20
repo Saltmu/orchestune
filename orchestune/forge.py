@@ -151,6 +151,12 @@ class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin
     """Compatibility facade composing focused GitHub Forge implementations."""
 
     def _run(self, args: list[str], input_text: str | None = None) -> str:
+        if input_text is not None:
+            # Windows上のtext=Trueなsubprocess stdin書き込みは\nを
+            # os.linesep(\r\n)へ変換する。既にCRLFを含む文字列(GitHubから
+            # 再取得した既存Issue本文など)をそのまま渡すと、書き込みの
+            # たびに\rが積み上がってしまうため、事前にLFへ正規化する。
+            input_text = input_text.replace("\r\n", "\n").replace("\r", "\n")
         result = subprocess.run(
             args,
             input=input_text,
