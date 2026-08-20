@@ -358,8 +358,6 @@ def _write_parent_issue_source(
         if _PARENT_ISSUE_NUMBER_LINE.match(lines[index]):
             insert_at = index + 1
             break
-        if _TITLE_LINE.match(lines[index]):
-            insert_at = index + 1
     lines.insert(insert_at, f"parent_issue_source: {source}\n")
     return end + 1
 
