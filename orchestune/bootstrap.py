@@ -45,7 +45,7 @@ def _initialize_empty_repo(cwd: Path) -> None:
 
     readme_path = cwd / "README.md"
     if not readme_path.exists():
-        readme_path.write_text("# Initialized by Orchestune\n")
+        readme_path.write_text("# Initialized by Orchestune\n", encoding="utf-8")
 
     run_git(["add", "README.md"], cwd=cwd, check=True)
     run_git(["commit", "-m", "Initial commit"], cwd=cwd, check=True)

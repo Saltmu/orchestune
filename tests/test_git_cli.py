@@ -24,7 +24,43 @@ class TestRunGit:
         assert mock_run.call_args.args[0] == ["git", "status"]
         assert mock_run.call_args.kwargs["cwd"] == tmp_path
         assert mock_run.call_args.kwargs["text"] is True
+        assert mock_run.call_args.kwargs["encoding"] == "utf-8"
+        assert mock_run.call_args.kwargs["errors"] == "replace"
         assert result == GitResult(returncode=0, stdout="out", stderr="err")
+
+    def test_run_git_handles_invalid_utf8_bytes_via_replace_errors(self, tmp_path):
+        # 不正なバイト列を含むstdoutを受け取った場合でもerrors="replace"により\ufffdで安全に返ること
+        import sys
+
+        real_run = subprocess.run
+        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+
+            def fake_run(args, **kwargs):
+                # 渡されたkwargsを使ってsys.executableで不正バイトを出力するプロセスを実行
+                return real_run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys; sys.stdout.buffer.write(b'diff --git a/\\xff\\xfe b/\\xff\\xfe\\n')",
+                    ],
+                    **kwargs,
+                )
+
+            mock_run.side_effect = fake_run
+            result = run_git(["diff"], cwd=tmp_path)
+
+        assert "\ufffd" in result.stdout
+        assert "diff --git" in result.stdout
+
+    def test_run_git_specifies_utf8_encoding_and_replace_errors_in_kwargs(self):
+        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="日本語コミットメッセージ", stderr=""
+            )
+            result = run_git(["log", "-1"], cwd=None)
+        assert result.stdout == "日本語コミットメッセージ"
+        assert mock_run.call_args.kwargs["encoding"] == "utf-8"
+        assert mock_run.call_args.kwargs["errors"] == "replace"
 
     def test_check_true_propagates_called_process_error(self):
         with patch("orchestune.git_cli.subprocess.run") as mock_run:

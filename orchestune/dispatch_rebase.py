@@ -413,8 +413,11 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
             cwd=active.worktree_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
+
         if ci_res.returncode != 0:
             raise subprocess.CalledProcessError(
                 ci_res.returncode,

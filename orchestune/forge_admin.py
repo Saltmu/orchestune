@@ -43,7 +43,11 @@ class GitHubRepoAdminMixin:
                 "gh CLIが見つかりません。https://cli.github.com/ からインストールしてください。"
             )
         result = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             raise ForgeAuthError(
@@ -73,6 +77,8 @@ class GitHubRepoAdminMixin:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=True,
             )
             created.append(label.name)
@@ -93,9 +99,12 @@ class GitHubRepoAdminMixin:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
         raw = json.loads(result.stdout)
+
         if len(raw) >= _LABEL_LIST_LIMIT:
             raise ForgeError(
                 f"既存ラベル一覧の取得件数が上限({_LABEL_LIST_LIMIT}件)に達しました。"

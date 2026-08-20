@@ -628,8 +628,11 @@ class TestPreventDuplicateSessions:
             cwd=None,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
+
         mock_remove_label.assert_any_call(1, "status:queued")
         mock_add_label.assert_any_call(1, "status:blocked-human-review")
         mock_add_comment.assert_called_once()
