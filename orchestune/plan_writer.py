@@ -334,38 +334,55 @@ def _find_subtasks_bounds(lines: list[str], start: int, end: int) -> tuple[int, 
     raise ValueError("decomposition_plan.md に 'subtasks:' フィールドが見つかりません")
 
 
-def _write_parent_issue_number(
-    lines: list[str], start: int, end: int, number: int
+def _write_frontmatter_field(
+    lines: list[str],
+    start: int,
+    end: int,
+    field_pattern: re.Pattern[str],
+    anchor_pattern: re.Pattern[str],
+    field_name: str,
+    value: int | str,
 ) -> int:
     for index in range(start, end):
-        match = _PARENT_ISSUE_NUMBER_LINE.match(lines[index])
+        match = field_pattern.match(lines[index])
         if match:
-            lines[index] = f"{match.group(1)}{number}{match.group(2)}\n"
+            lines[index] = f"{match.group(1)}{value}{match.group(2)}\n"
             return end
     insert_at = start
     for index in range(start, end):
-        if _TITLE_LINE.match(lines[index]):
+        if anchor_pattern.match(lines[index]):
             insert_at = index + 1
             break
-    lines.insert(insert_at, f"parent_issue_number: {number}\n")
+    lines.insert(insert_at, f"{field_name}: {value}\n")
     return end + 1
+
+
+def _write_parent_issue_number(
+    lines: list[str], start: int, end: int, number: int
+) -> int:
+    return _write_frontmatter_field(
+        lines,
+        start,
+        end,
+        _PARENT_ISSUE_NUMBER_LINE,
+        _TITLE_LINE,
+        "parent_issue_number",
+        number,
+    )
 
 
 def _write_parent_issue_source(
     lines: list[str], start: int, end: int, source: str
 ) -> int:
-    for index in range(start, end):
-        match = _PARENT_ISSUE_SOURCE_LINE.match(lines[index])
-        if match:
-            lines[index] = f"{match.group(1)}{source}{match.group(2)}\n"
-            return end
-    insert_at = start
-    for index in range(start, end):
-        if _PARENT_ISSUE_NUMBER_LINE.match(lines[index]):
-            insert_at = index + 1
-            break
-    lines.insert(insert_at, f"parent_issue_source: {source}\n")
-    return end + 1
+    return _write_frontmatter_field(
+        lines,
+        start,
+        end,
+        _PARENT_ISSUE_SOURCE_LINE,
+        _PARENT_ISSUE_NUMBER_LINE,
+        "parent_issue_source",
+        source,
+    )
 
 
 def _write_subtask_issue_number(

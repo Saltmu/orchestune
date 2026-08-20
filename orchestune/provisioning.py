@@ -550,7 +550,11 @@ def _resolve_parent_issue(
 
     # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用・正規化する。
     if metadata.parent_issue_source == "adopted":
-        assert metadata.parent_issue_number is not None
+        if metadata.parent_issue_number is None:
+            raise ValueError(
+                "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+                "'parent_issue_number' が設定されていません"
+            )
         return _resolve_explicit_parent_issue(
             forge, metadata.parent_issue_number, plan_path, metadata
         )
