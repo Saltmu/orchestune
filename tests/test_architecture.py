@@ -762,10 +762,11 @@ def test_architecture_docs_document_the_determinism_principle() -> None:
 def _collect_dict_assignments(tree: ast.AST) -> dict[str, list[ast.Dict]]:
     dict_assignments: dict[str, list[ast.Dict]] = defaultdict(list)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
-            for target in node.targets:
+        targets, value = _assigned_names(node)
+        if isinstance(value, ast.Dict):
+            for target in targets:
                 if isinstance(target, ast.Name):
-                    dict_assignments[target.id].append(node.value)
+                    dict_assignments[target.id].append(value)
     return dict_assignments
 
 
@@ -861,3 +862,16 @@ def test_subprocess_text_mode_requires_explicit_encoding() -> None:
 
 def test_path_write_text_requires_explicit_encoding() -> None:
     assert _unencoded_write_text_calls() == []
+
+
+def test_collect_dict_assignments_captures_annotated_assignments() -> None:
+    """#531 review: git_cli.pyのkwargs: dict[str, Any] = {...} のような
+    型注釈付き代入（ast.AnnAssign）も_collect_dict_assignmentsが正しく捕捉すること。"""
+    code = """
+kwargs: dict[str, Any] = {"text": True, "encoding": "utf-8"}
+unannotated = {"text": True}
+"""
+    tree = ast.parse(code)
+    assignments = _collect_dict_assignments(tree)
+    assert "kwargs" in assignments
+    assert "unannotated" in assignments
