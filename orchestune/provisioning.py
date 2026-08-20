@@ -505,6 +505,11 @@ def _resolve_explicit_parent_issue(
             f"Adopted parent issue #{parent_issue_number} does not exist; "
             "refusing to provision subtasks under it."
         )
+    if issue.state.upper() == "CLOSED":
+        raise RuntimeError(
+            f"Adopted parent issue #{parent_issue_number} is closed; "
+            "refusing to adopt a closed issue as EPIC parent."
+        )
     if not is_epic_issue(issue):
         new_title = (
             issue.title

@@ -165,6 +165,7 @@ class FakeForge:
             body=entry["body"],
             labels=tuple(entry["labels"]),
             created_at="",
+            state=entry.get("state", "OPEN"),
             parent=native_parent,
         )
 
@@ -1694,6 +1695,28 @@ class TestResolveParentIssue:
         )
         assert PARENT_MARKER in forge.issues[existing_number]["body"]
         assert len(forge.issues) == 1
+
+    def test_adopted_parent_issue_closed_raises_runtime_error(self, tmp_path: Path):
+        """#533: parent_issue_source: adopted の親が CLOSED の場合、エラーで停止する。"""
+        plan_path = tmp_path / "plan.md"
+        forge = FakeForge()
+        closed_number = forge.create_issue("Closed issue", "Description.")
+        forge.issues[closed_number]["state"] = "CLOSED"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\n"
+            f"parent_issue_number: {closed_number}\n"
+            "parent_issue_source: adopted\n"
+            "subtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=closed_number,
+            parent_issue_source="adopted",
+            description="",
+        )
+        with pytest.raises(RuntimeError, match="is closed; refusing to adopt"):
+            _resolve_parent_issue(forge, metadata, plan_path)
 
     def test_explicit_parent_issue_persists_parent_issue_source_adopted(
         self, tmp_path: Path
