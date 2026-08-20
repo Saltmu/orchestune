@@ -1581,7 +1581,9 @@ class TestResolveParentIssue:
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=None, description=""
         )
-        with pytest.raises(RuntimeError, match="--parent-issue 999"):
+        with pytest.raises(
+            RuntimeError, match="Adopted parent issue #999 does not exist"
+        ):
             _resolve_parent_issue(forge, metadata, plan_path, explicit_parent_issue=999)
 
     def test_explicit_parent_issue_overrides_stale_persisted_value(
@@ -1662,13 +1664,16 @@ class TestResolveParentIssue:
             _resolve_parent_issue(forge, metadata, plan_path)
         assert len(forge.issues) == 0
 
-    def test_adopted_parent_issue_missing_marker_raises_runtime_error(
+    def test_adopted_parent_issue_normalizes_plain_title_and_missing_marker(
         self, tmp_path: Path
     ):
-        """#533: parent_issue_source: adopted の親にPARENT_MARKERがない場合、エラーで停止する。"""
+        """#533: 初回採用時、未正規化のIssueをフロントマターのみで adopted 指定した場合でも、
+        [EPIC] プレフィックスと PARENT_MARKER が付与されて正規化・採用される。"""
         plan_path = tmp_path / "plan.md"
         forge = FakeForge()
-        existing_number = forge.create_issue("No marker issue", "Body without marker")
+        existing_number = forge.create_issue(
+            "Human-filed plain title", "Plain description without marker"
+        )
         plan_path.write_text(
             "---\ntitle: 'My Big Rock'\n"
             f"parent_issue_number: {existing_number}\n"
@@ -1682,8 +1687,13 @@ class TestResolveParentIssue:
             parent_issue_source="adopted",
             description="",
         )
-        with pytest.raises(RuntimeError, match="missing the parent marker"):
-            _resolve_parent_issue(forge, metadata, plan_path)
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
+        assert number == existing_number
+        assert (
+            forge.issues[existing_number]["title"] == "[EPIC] Human-filed plain title"
+        )
+        assert PARENT_MARKER in forge.issues[existing_number]["body"]
+        assert len(forge.issues) == 1
 
     def test_explicit_parent_issue_persists_parent_issue_source_adopted(
         self, tmp_path: Path

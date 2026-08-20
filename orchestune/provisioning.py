@@ -479,10 +479,10 @@ def _build_subtask_issue_body(
 def _resolve_explicit_parent_issue(
     forge: IssueForge, parent_issue_number: int, plan_path: str | Path
 ) -> tuple[int, bool]:
-    """`--parent-issue`で明示指定された既存Issueを親として採用する。
+    """既存Issueを親（EPIC）として採用・正規化する。
 
-    `_resolve_parent_issue`の通常経路と異なり、`metadata.title`とのタイトル
-    一致は要求しない（人間が事前に起票したEPICのタイトルは、plan由来の
+    `_resolve_parent_issue`の通常（derived）経路と異なり、`metadata.title`との
+    タイトル一致は要求しない（人間が事前に起票したEPICのタイトルは、plan由来の
     タイトルとは一般に一致しないため）。まだ`is_epic_issue`の形（`[EPIC] `
     プレフィックス + `PARENT_MARKER`）を満たしていなければ、既存の内容は
     保持したままその場で正規化する。
@@ -493,7 +493,7 @@ def _resolve_explicit_parent_issue(
     issue = forge.get_issue(parent_issue_number)
     if issue is None:
         raise RuntimeError(
-            f"--parent-issue {parent_issue_number} does not exist; "
+            f"Adopted parent issue #{parent_issue_number} does not exist; "
             "refusing to provision subtasks under it."
         )
     if not is_epic_issue(issue):
@@ -527,28 +527,16 @@ def _resolve_parent_issue(
     if explicit_parent_issue is not None:
         return _resolve_explicit_parent_issue(forge, explicit_parent_issue, plan_path)
 
-    # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用する。
+    # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用・正規化する。
     if metadata.parent_issue_source == "adopted":
         if metadata.parent_issue_number is None:
             raise ValueError(
                 "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
                 "'parent_issue_number' が設定されていません"
             )
-        candidate = forge.get_issue(metadata.parent_issue_number)
-        if candidate is None:
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} does not exist; "
-                "refusing to provision subtasks under it."
-            )
-        if PARENT_MARKER not in candidate.body:
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} is missing the parent marker "
-                f"('{PARENT_MARKER}'); refusing to provision subtasks under it."
-            )
-        sync_ok = _sync_parent_decomposition_plan(
+        return _resolve_explicit_parent_issue(
             forge, metadata.parent_issue_number, plan_path
         )
-        return metadata.parent_issue_number, sync_ok
 
     parent_issue_number = metadata.parent_issue_number
     parent_title = f"[EPIC] {metadata.title}"
