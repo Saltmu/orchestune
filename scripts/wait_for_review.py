@@ -74,7 +74,27 @@ def post_review_trigger(
     return cast(dict[str, Any], json.loads(stdout))
 
 
-def _get_pr_data(pr_number: int) -> dict[str, list[dict[str, Any]]]:
+def _filter_bot_items(
+    items: list[dict[str, Any]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> list[dict[str, Any]]:
+    """Filter list of items to those posted by the specified bot, excluding ignored IDs."""
+    filtered: list[dict[str, Any]] = []
+    excluded = exclude_ids or set()
+    for item in items:
+        item_id = item.get("id")
+        if item_id in excluded or str(item_id) in excluded:
+            continue
+        user = (item.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            filtered.append(item)
+    return filtered
+
+
+def _get_pr_data(
+    pr_number: int, executor: ThreadPoolExecutor | None = None
+) -> dict[str, list[dict[str, Any]]]:
     def fetch_endpoint(endpoint: str) -> list[dict[str, Any]]:
         try:
             return _run_gh_api(endpoint)
@@ -82,26 +102,27 @@ def _get_pr_data(pr_number: int) -> dict[str, list[dict[str, Any]]]:
             print(f"Warning: Failed to fetch {endpoint}: {e}", file=sys.stderr)
             return []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        f_comments = executor.submit(
-            fetch_endpoint, f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments"
-        )
-        f_reviews = executor.submit(
-            fetch_endpoint, f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews"
-        )
-        f_inlines = executor.submit(
-            fetch_endpoint, f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments"
-        )
+    endpoints = [
+        f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
+        f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews",
+        f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments",
+    ]
 
-        issue_comments = f_comments.result()
-        reviews = f_reviews.result()
-        inline_comments = f_inlines.result()
+    if executor is not None:
+        futures = [executor.submit(fetch_endpoint, ep) for ep in endpoints]
+        return {
+            "issue_comments": futures[0].result(),
+            "reviews": futures[1].result(),
+            "inline_comments": futures[2].result(),
+        }
 
-    return {
-        "issue_comments": issue_comments,
-        "reviews": reviews,
-        "inline_comments": inline_comments,
-    }
+    with ThreadPoolExecutor(max_workers=3) as local_executor:
+        futures = [local_executor.submit(fetch_endpoint, ep) for ep in endpoints]
+        return {
+            "issue_comments": futures[0].result(),
+            "reviews": futures[1].result(),
+            "inline_comments": futures[2].result(),
+        }
 
 
 def _is_bot_user(user_login: str, bot_name: str) -> bool:
@@ -124,70 +145,69 @@ def _get_item_timestamp(item: dict[str, Any]) -> str:
 
 
 def _build_snapshot(
-    data: dict[str, list[dict[str, Any]]], bot_name: str
+    data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
 ) -> dict[str, str]:
     """Record state of each bot item as id -> timestamp + body length."""
     snapshot: dict[str, str] = {}
-    for c in data.get("issue_comments", []):
-        user = (c.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            cid = str(c.get("id"))
-            ts = _get_item_timestamp(c)
-            body = c.get("body", "")
-            snapshot[f"comment_{cid}"] = f"{ts}:{len(body)}"
+    for c in _filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids):
+        cid = str(c.get("id"))
+        ts = _get_item_timestamp(c)
+        body = c.get("body") or ""
+        snapshot[f"comment_{cid}"] = f"{ts}:{len(body)}"
 
-    for r in data.get("reviews", []):
-        user = (r.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            rid = str(r.get("id"))
-            ts = _get_item_timestamp(r)
-            body = r.get("body", "")
-            snapshot[f"review_{rid}"] = f"{ts}:{len(body)}"
+    for r in _filter_bot_items(data.get("reviews", []), bot_name, exclude_ids):
+        rid = str(r.get("id"))
+        ts = _get_item_timestamp(r)
+        body = r.get("body") or ""
+        snapshot[f"review_{rid}"] = f"{ts}:{len(body)}"
 
-    for ic in data.get("inline_comments", []):
-        user = (ic.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            icid = str(ic.get("id"))
-            ts = _get_item_timestamp(ic)
-            snapshot[f"inline_{icid}"] = ts
+    for ic in _filter_bot_items(data.get("inline_comments", []), bot_name, exclude_ids):
+        icid = str(ic.get("id"))
+        ts = _get_item_timestamp(ic)
+        snapshot[f"inline_{icid}"] = ts
 
     return snapshot
 
 
 def _extract_review_result(
-    current_data: dict[str, list[dict[str, Any]]], bot_name: str
+    current_data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
     # Collect all matching bot comments / reviews
-    candidate_items: list[dict[str, Any]] = []
-    for c in current_data.get("issue_comments", []):
-        user = (c.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            candidate_items.append(c)
-
-    for r in current_data.get("reviews", []):
-        user = (r.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            candidate_items.append(r)
+    candidate_items = [
+        *_filter_bot_items(
+            current_data.get("issue_comments", []), bot_name, exclude_ids
+        ),
+        *_filter_bot_items(current_data.get("reviews", []), bot_name, exclude_ids),
+    ]
 
     if not candidate_items:
         return None
 
     candidate_items.sort(key=_get_item_timestamp)
     latest_item = candidate_items[-1]
-    latest_body = latest_item.get("body", "")
+    latest_body = latest_item.get("body") or ""
 
     # Collect bot inline comments
     inline_items: list[dict[str, Any]] = []
-    for ic in current_data.get("inline_comments", []):
-        user = (ic.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            inline_items.append(
-                {
-                    "path": ic.get("path", "unknown"),
-                    "line": ic.get("line") or ic.get("original_line") or "N/A",
-                    "body": ic.get("body", ""),
-                }
-            )
+    for ic in _filter_bot_items(
+        current_data.get("inline_comments", []), bot_name, exclude_ids
+    ):
+        inline_items.append(
+            {
+                "path": ic.get("path", "unknown"),
+                "line": ic.get("line") or ic.get("original_line") or "N/A",
+                "body": ic.get("body") or "",
+            }
+        )
+
+    if not latest_body and inline_items:
+        latest_body = (
+            f"(No review summary body; see {len(inline_items)} inline comment(s) below)"
+        )
 
     print("\n" + "=" * 60)
     print(f"[AI Review Update Detected - @{bot_name}]")
@@ -217,47 +237,61 @@ def wait_for_review(
     body: str | None = None,
     body_file: str | None = None,
 ) -> dict[str, Any]:
-    # Capture initial state before triggering/waiting
-    initial_data = _get_pr_data(pr_number)
-    initial_snapshot = _build_snapshot(initial_data, bot_name)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Capture initial state before triggering/waiting
+        initial_data = _get_pr_data(pr_number, executor=executor)
+        initial_snapshot = _build_snapshot(initial_data, bot_name)
+        excluded_ids: set[int | str] = set()
 
-    if post_trigger:
-        print(f"Posting review trigger comment for @{bot_name} on PR #{pr_number}...")
-        trigger_info = post_review_trigger(
-            pr_number, bot_name=bot_name, body=body, body_file=body_file
-        )
-        trigger_time = trigger_info.get("created_at", "")
-        print(
-            f"Trigger posted (Comment ID: {trigger_info.get('id')}, time: {trigger_time})"
-        )
-
-    print(
-        f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
-    )
-    start_time = time.time()
-
-    while True:
-        try:
-            current_data = _get_pr_data(pr_number)
-            current_snapshot = _build_snapshot(current_data, bot_name)
-
-            # Check if any new item appeared or existing item was updated
-            has_changes = any(
-                k not in initial_snapshot or initial_snapshot[k] != v
-                for k, v in current_snapshot.items()
+        if post_trigger:
+            print(
+                f"Posting review trigger comment for @{bot_name} on PR #{pr_number}..."
             )
+            trigger_info = post_review_trigger(
+                pr_number, bot_name=bot_name, body=body, body_file=body_file
+            )
+            trigger_id = trigger_info.get("id")
+            trigger_time = trigger_info.get("created_at", "")
+            trigger_body = trigger_info.get("body") or ""
+            if trigger_id is not None:
+                excluded_ids.add(trigger_id)
+                # Seed into initial snapshot to prevent self-detection if posted under bot identity
+                initial_snapshot[f"comment_{trigger_id}"] = (
+                    f"{trigger_time}:{len(trigger_body)}"
+                )
+            print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
 
-            if has_changes:
-                result = _extract_review_result(current_data, bot_name)
-                if result is not None:
-                    return result
+        print(
+            f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
+        )
+        start_time = time.time()
 
-        except Exception as e:
-            print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
+        while True:
+            try:
+                current_data = _get_pr_data(pr_number, executor=executor)
+                current_snapshot = _build_snapshot(
+                    current_data, bot_name, exclude_ids=excluded_ids
+                )
 
-        if time.time() - start_time >= timeout:
-            break
-        time.sleep(interval)
+                # Check if any new item appeared or existing item was updated
+                has_changes = any(
+                    k not in initial_snapshot or initial_snapshot[k] != v
+                    for k, v in current_snapshot.items()
+                )
+
+                if has_changes:
+                    result = _extract_review_result(
+                        current_data, bot_name, exclude_ids=excluded_ids
+                    )
+                    if result is not None:
+                        return result
+
+            except Exception as e:
+                print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
+
+            if time.time() - start_time >= timeout:
+                break
+            time.sleep(interval)
 
     raise TimeoutError(
         f"Timed out waiting for @{bot_name} activity on PR #{pr_number} after {timeout}s."

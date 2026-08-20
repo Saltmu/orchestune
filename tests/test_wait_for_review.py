@@ -7,11 +7,51 @@ import pytest
 
 from scripts.wait_for_review import (
     _build_snapshot,
+    _extract_review_result,
+    _filter_bot_items,
     _get_item_timestamp,
     _is_bot_user,
     post_review_trigger,
     wait_for_review,
 )
+
+
+def test_filter_bot_items():
+    items = [
+        {"id": 1, "user": {"login": "claude[bot]"}},
+        {"id": 2, "user": {"login": "human"}},
+        {"id": 3, "user": {"login": "claude"}},
+    ]
+    assert _filter_bot_items(items, "claude") == [items[0], items[2]]
+    assert _filter_bot_items(items, "claude", exclude_ids={1}) == [items[2]]
+
+
+def test_extract_review_result_empty_body_fallback_to_inlines():
+    current_data = {
+        "issue_comments": [],
+        "reviews": [
+            {
+                "id": 1,
+                "user": {"login": "claude[bot]"},
+                "body": None,
+                "created_at": "2026-08-20T10:00:00Z",
+            }
+        ],
+        "inline_comments": [
+            {
+                "id": 2,
+                "user": {"login": "claude[bot]"},
+                "path": "app.py",
+                "line": 10,
+                "body": "Fix null pointer",
+                "created_at": "2026-08-20T10:00:00Z",
+            }
+        ],
+    }
+    result = _extract_review_result(current_data, "claude")
+    assert result is not None
+    assert "see 1 inline comment(s)" in result["review_body"]
+    assert len(result["inline_comments"]) == 1
 
 
 def test_is_bot_user():
@@ -390,3 +430,65 @@ def test_main_cli_unexpected_error():
             with pytest.raises(SystemExit) as exc:
                 main()
             assert exc.value.code == 2
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review.post_review_trigger")
+def test_wait_for_review_does_not_self_trigger_if_poster_is_bot(
+    mock_post, mock_get_data
+):
+    # If the user running this script is claude[bot], its own posted trigger comment (id: 100)
+    # should NOT be returned as the completed review on the first poll.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review",
+        "user": {"login": "claude[bot]"},
+    }
+
+    # First poll returns only the trigger comment.
+    # Second poll returns the real review comment from the reviewer (id: 101).
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {
+            "issue_comments": [
+                {
+                    "id": 100,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:44:44Z",
+                    "body": "@claude review",
+                }
+            ],
+            "reviews": [],
+            "inline_comments": [],
+        },
+        {
+            "issue_comments": [
+                {
+                    "id": 100,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:44:44Z",
+                    "body": "@claude review",
+                },
+                {
+                    "id": 101,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:46:00Z",
+                    "body": "### Review complete\nAll clear!",
+                },
+            ],
+            "reviews": [],
+            "inline_comments": [],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+    )
+    # Must pick the real review (id: 101), not the trigger comment (id: 100)
+    assert "### Review complete" in result["review_body"]
+    assert result["timestamp"] == "2026-08-20T07:46:00Z"
