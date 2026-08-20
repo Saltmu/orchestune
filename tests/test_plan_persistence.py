@@ -426,3 +426,41 @@ def test_print_result_warns_on_plan_sync_failure(capsys):
     assert (
         "Warning: could not sync decomposition plan into #100's body." in captured.out
     )
+
+
+def test_provision_zero_subtasks_initial_sync_failure_reported(tmp_path: Path):
+    template_file = tmp_path / "issue_template.md"
+    template_file.write_text(
+        "### Task {{subtask_id}}\n\n"
+        "```yaml\n"
+        "subtask_id: {{subtask_id_yaml}}\n"
+        "depends_on: {{depends_on}}\n"
+        "parent_issue_number: {{parent_issue_number}}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    plan_file = tmp_path / "decomposition_plan.md"
+    plan_file.write_text(
+        "---\n"
+        "title: Zero Subtask Plan\n"
+        "parent_issue_number: null\n"
+        "subtasks: []\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    class FailingUpdateBodyForge(FakeForge):
+        def update_issue_body(self, issue_number: int | str, body: str) -> None:
+            raise RuntimeError("Network error on update_issue_body")
+
+    forge = FailingUpdateBodyForge()
+    result = provision_issues(
+        plan_path=plan_file,
+        forge=forge,
+        template_path=template_file,
+        repo_root=tmp_path,
+    )
+
+    assert result.applied is True
+    assert result.plan_synced is False
+    assert len(result.created) == 0

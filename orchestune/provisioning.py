@@ -462,7 +462,7 @@ def _build_subtask_issue_body(
 
 def _resolve_explicit_parent_issue(
     forge: IssueForge, parent_issue_number: int, plan_path: str | Path
-) -> int:
+) -> tuple[int, bool]:
     """`--parent-issue`で明示指定された既存Issueを親として採用する。
 
     `_resolve_parent_issue`の通常経路と異なり、`metadata.title`とのタイトル
@@ -492,8 +492,8 @@ def _resolve_explicit_parent_issue(
                 parent_issue_number, ensure_parent_marker(issue.body)
             )
     write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
-    _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
-    return parent_issue_number
+    sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
+    return parent_issue_number, sync_ok
 
 
 def _resolve_parent_issue(
@@ -502,7 +502,7 @@ def _resolve_parent_issue(
     plan_path: str | Path,
     *,
     explicit_parent_issue: int | None = None,
-) -> int:
+) -> tuple[int, bool]:
     if explicit_parent_issue is not None:
         return _resolve_explicit_parent_issue(forge, explicit_parent_issue, plan_path)
     parent_issue_number = metadata.parent_issue_number
@@ -550,8 +550,10 @@ def _resolve_parent_issue(
                 ),
             )
         write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
-        _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
-    return parent_issue_number
+        sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
+    else:
+        sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
+    return parent_issue_number, sync_ok
 
 
 def _ensure_reused_issue_is_discoverable(
@@ -845,7 +847,7 @@ def provision_issues(
         )
 
     resolved_forge = forge or GitHubForge()
-    parent_issue_number = _resolve_parent_issue(
+    parent_issue_number, plan_synced = _resolve_parent_issue(
         resolved_forge, metadata, plan_path, explicit_parent_issue=parent_issue
     )
     existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
@@ -857,7 +859,6 @@ def provision_issues(
     created: dict[str, int] = {}
     reused: dict[str, int] = {}
     degraded_subtask_ids: list[str] = []
-    plan_synced = True
 
     for subtask_id in dag.topological_order:
         subtask = dag.subtasks[subtask_id]
@@ -912,6 +913,8 @@ def provision_issues(
             resolved_forge, parent_issue_number, plan_path
         ):
             plan_synced = False
+        else:
+            plan_synced = True
 
     return ProvisionResult(
         parent_issue_number=parent_issue_number,

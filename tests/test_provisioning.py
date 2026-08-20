@@ -1488,7 +1488,7 @@ class TestResolveParentIssue:
             parent_issue_number=None,
             description="Epic details",
         )
-        number = _resolve_parent_issue(forge, metadata, plan_path)
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
         assert number in forge.issues
         assert forge.issues[number]["title"] == "[EPIC] My Big Rock"
         assert f"parent_issue_number: {number}" in plan_path.read_text(encoding="utf-8")
@@ -1508,7 +1508,7 @@ class TestResolveParentIssue:
             parent_issue_number=None,
             description="",
         )
-        number = _resolve_parent_issue(forge, metadata, plan_path)
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
         assert number == orphan_number
         assert f"parent_issue_number: {orphan_number}" in plan_path.read_text(
             encoding="utf-8"
@@ -1529,7 +1529,7 @@ class TestResolveParentIssue:
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=None, description=""
         )
-        number = _resolve_parent_issue(
+        number, _ = _resolve_parent_issue(
             forge, metadata, plan_path, explicit_parent_issue=existing_number
         )
         assert number == existing_number
@@ -1563,7 +1563,7 @@ class TestResolveParentIssue:
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=None, description=""
         )
-        number = _resolve_parent_issue(
+        number, _ = _resolve_parent_issue(
             forge, metadata, plan_path, explicit_parent_issue=existing_number
         )
         assert number == existing_number
@@ -1600,7 +1600,7 @@ class TestResolveParentIssue:
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=stale_number, description=""
         )
-        number = _resolve_parent_issue(
+        number, _ = _resolve_parent_issue(
             forge, metadata, plan_path, explicit_parent_issue=new_number
         )
         assert number == new_number
