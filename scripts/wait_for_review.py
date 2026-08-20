@@ -20,6 +20,8 @@ def _run_gh_api(endpoint: str) -> Any:
         cmd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
