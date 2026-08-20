@@ -1668,7 +1668,7 @@ class TestResolveParentIssue:
     def test_adopted_parent_issue_normalizes_plain_title_and_missing_marker(
         self, tmp_path: Path
     ):
-        """#533: 初回採用時、未正規化のIssueをフロントマターのみで adopted 指定した場合でも、
+        """#533: 初回採用時、未正規化のIssueを --parent-issue で指定した場合、
         [EPIC] プレフィックスと PARENT_MARKER が付与されて正規化・採用される。"""
         plan_path = tmp_path / "plan.md"
         forge = FakeForge()
@@ -1677,24 +1677,50 @@ class TestResolveParentIssue:
         )
         plan_path.write_text(
             "---\ntitle: 'My Big Rock'\n"
-            f"parent_issue_number: {existing_number}\n"
-            "parent_issue_source: adopted\n"
+            "parent_issue_number: null\n"
             "subtasks: []\n---\n",
             encoding="utf-8",
         )
         metadata = PlanMetadata(
             title="My Big Rock",
-            parent_issue_number=existing_number,
-            parent_issue_source="adopted",
+            parent_issue_number=None,
             description="",
         )
-        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
+        number, _ = _resolve_parent_issue(
+            forge, metadata, plan_path, explicit_parent_issue=existing_number
+        )
         assert number == existing_number
         assert (
             forge.issues[existing_number]["title"] == "[EPIC] Human-filed plain title"
         )
         assert PARENT_MARKER in forge.issues[existing_number]["body"]
         assert len(forge.issues) == 1
+
+    def test_adopted_parent_auto_reuse_unconfirmed_plain_issue_raises_runtime_error(
+        self, tmp_path: Path
+    ):
+        """#533: 自動再利用時、フロントマターで指定されたIssueがOrchestune形式でなければ
+        誤爆防止のためエラーで停止し、--parent-issue の明示指定を促す。"""
+        plan_path = tmp_path / "plan.md"
+        forge = FakeForge()
+        unconfirmed_number = forge.create_issue(
+            "Unrelated plain issue", "Unrelated description"
+        )
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\n"
+            f"parent_issue_number: {unconfirmed_number}\n"
+            "parent_issue_source: adopted\n"
+            "subtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=unconfirmed_number,
+            parent_issue_source="adopted",
+            description="",
+        )
+        with pytest.raises(RuntimeError, match="is not an Orchestune EPIC issue"):
+            _resolve_parent_issue(forge, metadata, plan_path)
 
     def test_adopted_parent_issue_closed_raises_runtime_error(self, tmp_path: Path):
         """#533: parent_issue_source: adopted の親が CLOSED の場合、エラーで停止する。"""

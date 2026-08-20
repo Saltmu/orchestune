@@ -81,6 +81,21 @@ class PlanMetadata:
     parent_issue_source: str | None = None
     description: str = ""
 
+    def __post_init__(self) -> None:
+        if self.parent_issue_source is not None:
+            if self.parent_issue_source not in VALID_PARENT_ISSUE_SOURCES:
+                raise ValueError(
+                    f"decomposition_plan.md の 'parent_issue_source' は 'adopted' または 'derived' である必要があります: {self.parent_issue_source!r}"
+                )
+            if (
+                self.parent_issue_source == "adopted"
+                and self.parent_issue_number is None
+            ):
+                raise ValueError(
+                    "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+                    "'parent_issue_number' が設定されていません"
+                )
+
 
 @dataclass(frozen=True)
 class IssuePreview:
@@ -548,12 +563,32 @@ def _resolve_parent_issue(
             forge, explicit_parent_issue, plan_path, metadata
         )
 
-    # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用・正規化する。
+    # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用する。
+    # ただし、別リポジトリへのコピーやタイポで無関係な未確認オープンIssueを勝手に改変
+    # してしまう事故を防ぐため、自動再利用時はすでに対象IssueがOrchestune EPICとして
+    # 正規化済み（is_epic_issue）であることを検証する。
     if metadata.parent_issue_source == "adopted":
         if metadata.parent_issue_number is None:
             raise ValueError(
                 "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
                 "'parent_issue_number' が設定されていません"
+            )
+        candidate = forge.get_issue(metadata.parent_issue_number)
+        if candidate is None:
+            raise RuntimeError(
+                f"Adopted parent issue #{metadata.parent_issue_number} does not exist; "
+                "refusing to provision subtasks under it."
+            )
+        if candidate.state.upper() == "CLOSED":
+            raise RuntimeError(
+                f"Adopted parent issue #{metadata.parent_issue_number} is closed; "
+                "refusing to adopt a closed issue as EPIC parent."
+            )
+        if not is_epic_issue(candidate):
+            raise RuntimeError(
+                f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
+                "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
+                f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
             )
         return _resolve_explicit_parent_issue(
             forge, metadata.parent_issue_number, plan_path, metadata
