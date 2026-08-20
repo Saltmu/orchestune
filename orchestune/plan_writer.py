@@ -28,8 +28,15 @@ import yaml
 
 _FRONTMATTER_DELIMITER = re.compile(r"^---\s*$")
 _TITLE_LINE = re.compile(r"^title:\s*.*$")
-_PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
-_ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
+_PARENT_ISSUE_NUMBER_LINE = re.compile(
+    r"^(parent_issue_number:\s*)(?:'[^']*'|\"[^\"]*\"|[^ \t\n#]+)?([ \t]*(?:#.*)?)\r?\n?$"
+)
+_PARENT_ISSUE_SOURCE_LINE = re.compile(
+    r"^(parent_issue_source:\s*)(?:'[^']*'|\"[^\"]*\"|[^ \t\n#]+)?([ \t]*(?:#.*)?)\r?\n?$"
+)
+_ISSUE_NUMBER_LINE = re.compile(
+    r"^(\s*)(issue_number:\s*)(?:'[^']*'|\"[^\"]*\"|[^ \t\n#]+)?([ \t]*(?:#.*)?)\r?\n?$"
+)
 _LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
 _MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 _FLOW_ITEM_OPEN = re.compile(r"^(\s*)-(\s*)\{")
@@ -327,21 +334,55 @@ def _find_subtasks_bounds(lines: list[str], start: int, end: int) -> tuple[int, 
     raise ValueError("decomposition_plan.md に 'subtasks:' フィールドが見つかりません")
 
 
-def _write_parent_issue_number(
-    lines: list[str], start: int, end: int, number: int
+def _write_frontmatter_field(
+    lines: list[str],
+    start: int,
+    end: int,
+    field_pattern: re.Pattern[str],
+    anchor_pattern: re.Pattern[str],
+    field_name: str,
+    value: int | str,
 ) -> int:
     for index in range(start, end):
-        match = _PARENT_ISSUE_NUMBER_LINE.match(lines[index])
+        match = field_pattern.match(lines[index])
         if match:
-            lines[index] = f"{match.group(1)}{number}\n"
+            lines[index] = f"{match.group(1)}{value}{match.group(2)}\n"
             return end
     insert_at = start
     for index in range(start, end):
-        if _TITLE_LINE.match(lines[index]):
+        if anchor_pattern.match(lines[index]):
             insert_at = index + 1
             break
-    lines.insert(insert_at, f"parent_issue_number: {number}\n")
+    lines.insert(insert_at, f"{field_name}: {value}\n")
     return end + 1
+
+
+def _write_parent_issue_number(
+    lines: list[str], start: int, end: int, number: int
+) -> int:
+    return _write_frontmatter_field(
+        lines,
+        start,
+        end,
+        _PARENT_ISSUE_NUMBER_LINE,
+        _TITLE_LINE,
+        "parent_issue_number",
+        number,
+    )
+
+
+def _write_parent_issue_source(
+    lines: list[str], start: int, end: int, source: str
+) -> int:
+    return _write_frontmatter_field(
+        lines,
+        start,
+        end,
+        _PARENT_ISSUE_SOURCE_LINE,
+        _PARENT_ISSUE_NUMBER_LINE,
+        "parent_issue_source",
+        source,
+    )
 
 
 def _write_subtask_issue_number(
@@ -374,7 +415,9 @@ def _write_subtask_issue_number(
         if existing_index is not None:
             existing = _ISSUE_NUMBER_LINE.match(lines[existing_index])
             assert existing is not None
-            lines[existing_index] = f"{existing.group(1)}{existing.group(2)}{number}\n"
+            lines[existing_index] = (
+                f"{existing.group(1)}{existing.group(2)}{number}{existing.group(3)}\n"
+            )
             return end
         indent_str = " " * field_indent
         lines.insert(id_index + 1, f"{indent_str}issue_number: {number}\n")
@@ -414,6 +457,7 @@ def write_issue_numbers(
     subtask_issue_numbers: Mapping[str, int] | None = None,
     *,
     parent_issue_number: int | None = None,
+    parent_issue_source: str | None = None,
 ) -> None:
     """Write resolved issue numbers back into `decomposition_plan.md` in place.
 
@@ -427,6 +471,9 @@ def write_issue_numbers(
 
     if parent_issue_number is not None:
         end = _write_parent_issue_number(lines, start, end, parent_issue_number)
+
+    if parent_issue_source is not None:
+        end = _write_parent_issue_source(lines, start, end, parent_issue_source)
 
     for subtask_id, number in (subtask_issue_numbers or {}).items():
         subtasks_start, subtasks_end = _find_subtasks_bounds(lines, start, end)
