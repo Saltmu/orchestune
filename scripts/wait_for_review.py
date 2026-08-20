@@ -14,8 +14,8 @@ import time
 from typing import Any
 
 
-def _run_gh_api(endpoint: str) -> Any:
-    cmd = ["gh", "api", endpoint]
+def _run_gh_api(endpoint: str) -> list[dict[str, Any]]:
+    cmd = ["gh", "api", "--paginate", "--slurp", endpoint]
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -26,7 +26,15 @@ def _run_gh_api(endpoint: str) -> Any:
     )
     if result.returncode != 0:
         raise RuntimeError(f"gh api {endpoint} failed: {result.stderr.strip()}")
-    return json.loads(result.stdout)
+    pages = json.loads(result.stdout)
+    if isinstance(pages, list) and pages and isinstance(pages[0], list):
+        flattened: list[dict[str, Any]] = []
+        for page in pages:
+            flattened.extend(page)
+        return flattened
+    if isinstance(pages, list):
+        return pages
+    return [pages]
 
 
 def _get_pr_comments(pr_number: int) -> list[dict[str, Any]]:
@@ -38,7 +46,10 @@ def is_review_completed_comment(comment: dict[str, Any], bot_name: str) -> bool:
     if bot_name.lower() not in user_login:
         return False
     body = comment.get("body", "")
-    # If it's still a placeholder or progress indicator, not complete yet
+    # If it contains an unchecked checkbox or spinner img tag, it is in-progress
+    if "- [ ]" in body or "<img" in body:
+        return False
+    # If it contains known in-progress phrases, not complete yet
     if (
         "is working…" in body
         or "Review in progress" in body
@@ -50,12 +61,10 @@ def is_review_completed_comment(comment: dict[str, Any], bot_name: str) -> bool:
         "Re-review complete" in body
         or "Review complete" in body
         or "Claude finished" in body
-        or "Summary" in body
-        or "###" in body
+        or "### Summary" in body
     ):
         return True
-    # If body is substantial and doesn't look like a progress spinner
-    return len(body.strip()) > 100
+    return False
 
 
 def wait_for_review(
