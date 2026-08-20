@@ -1749,21 +1749,40 @@ class TestResolveParentIssue:
     def test_adopted_parent_without_parent_issue_number_raises_value_error(
         self, tmp_path: Path
     ):
-        """#533: parent_issue_source: adopted なのに parent_issue_number が null の場合エラー。"""
+        """#533: parent_issue_source: adopted なのに parent_issue_number が null の場合 _load_plan でエラー。"""
+        from orchestune.provisioning import _load_plan
+
         plan_path = tmp_path / "plan.md"
         plan_path.write_text(
             "---\ntitle: 'T'\nparent_issue_source: adopted\nsubtasks:\n  - id: task-a\n    description: 'd'\n---\n",
             encoding="utf-8",
         )
+        with pytest.raises(ValueError, match="parent_issue_number"):
+            _load_plan(plan_path)
+
+    def test_adopted_parent_skips_rewriting_plan_when_already_persisted(
+        self, tmp_path: Path
+    ):
+        """#533: 既に parent_issue_number と parent_issue_source: adopted が永続化されている場合、
+        余計な plan 書き戻し (write_issue_numbers) をスキップする。"""
+        plan_path = tmp_path / "plan.md"
         forge = FakeForge()
+        parent_num = forge.create_issue("[EPIC] Title", f"Body.\n\n{PARENT_MARKER}")
+        plan_path.write_text(
+            f"---\ntitle: 'Title'\nparent_issue_number: {parent_num}\nparent_issue_source: adopted\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
         metadata = PlanMetadata(
-            title="T",
-            parent_issue_number=None,
+            title="Title",
+            parent_issue_number=parent_num,
             parent_issue_source="adopted",
             description="",
         )
-        with pytest.raises(ValueError, match="parent_issue_number"):
-            _resolve_parent_issue(forge, metadata, plan_path)
+        # ファイルの更新日時を記録
+        mtime_before = plan_path.stat().st_mtime_ns
+        _resolve_parent_issue(forge, metadata, plan_path)
+        mtime_after = plan_path.stat().st_mtime_ns
+        assert mtime_before == mtime_after
 
     def test_provision_issues_second_run_without_flag_reuses_adopted_parent(
         self, tmp_path: Path, template_path: Path

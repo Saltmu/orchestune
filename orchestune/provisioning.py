@@ -143,6 +143,12 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
     else:
         parent_issue_source = None
 
+    if parent_issue_source == "adopted" and parent_issue_number is None:
+        raise ValueError(
+            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+            "'parent_issue_number' が設定されていません"
+        )
+
     metadata = PlanMetadata(
         title=str(raw.get("title") or "").strip(),
         parent_issue_number=parent_issue_number,
@@ -477,7 +483,10 @@ def _build_subtask_issue_body(
 
 
 def _resolve_explicit_parent_issue(
-    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
+    forge: IssueForge,
+    parent_issue_number: int,
+    plan_path: str | Path,
+    metadata: PlanMetadata | None = None,
 ) -> tuple[int, bool]:
     """既存Issueを親（EPIC）として採用・正規化する。
 
@@ -508,11 +517,16 @@ def _resolve_explicit_parent_issue(
             forge.update_issue_body(
                 parent_issue_number, ensure_parent_marker(issue.body)
             )
-    write_issue_numbers(
-        plan_path,
-        parent_issue_number=parent_issue_number,
-        parent_issue_source="adopted",
-    )
+    if (
+        metadata is None
+        or metadata.parent_issue_number != parent_issue_number
+        or metadata.parent_issue_source != "adopted"
+    ):
+        write_issue_numbers(
+            plan_path,
+            parent_issue_number=parent_issue_number,
+            parent_issue_source="adopted",
+        )
     sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
     return parent_issue_number, sync_ok
 
@@ -525,17 +539,15 @@ def _resolve_parent_issue(
     explicit_parent_issue: int | None = None,
 ) -> tuple[int, bool]:
     if explicit_parent_issue is not None:
-        return _resolve_explicit_parent_issue(forge, explicit_parent_issue, plan_path)
+        return _resolve_explicit_parent_issue(
+            forge, explicit_parent_issue, plan_path, metadata
+        )
 
     # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用・正規化する。
     if metadata.parent_issue_source == "adopted":
-        if metadata.parent_issue_number is None:
-            raise ValueError(
-                "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-                "'parent_issue_number' が設定されていません"
-            )
+        assert metadata.parent_issue_number is not None
         return _resolve_explicit_parent_issue(
-            forge, metadata.parent_issue_number, plan_path
+            forge, metadata.parent_issue_number, plan_path, metadata
         )
 
     parent_issue_number = metadata.parent_issue_number
