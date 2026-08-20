@@ -40,6 +40,101 @@ LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# #532: 親(EPIC) Issue本文へ分解計画（`decomposition_plan.md`のFrontmatter YAML）を
+# 永続化するブロックの目印。ローカルの計画ファイルがworktree破棄等で消失しても、
+# 親Issue本文から計画全体と各サブタスクのissue_number等のメタデータを復元できるようにする。
+DECOMPOSITION_PLAN_MARKER = "<!-- orchestune:decomposition-plan -->"
+DECOMPOSITION_PLAN_BLOCK_PATTERN = re.compile(
+    re.escape(DECOMPOSITION_PLAN_MARKER) + r"\n```yaml[^\n]*\n(.*?)\n```[ \t]*(?:\n|$)",
+    re.DOTALL,
+)
+
+
+def decomposition_plan_from_parent_body(body: str) -> dict | None:
+    """#532: 親Issue本文へ永続化された分解計画YAMLを読み取る。
+
+    マーカー欠落・壊れたYAML・辞書形式でないものはNoneを返す。
+    """
+    match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def embed_decomposition_plan_in_parent_body(body: str, plan_data: dict | str) -> str:
+    """#532: 親Issue本文の`decomposition_plan`ブロックを書き換えて返す。
+    ブロックが無ければ本文末尾へ追記する。
+
+    plan_dataがdictの場合はyaml.dumpでシリアライズする。
+    ブロック以外の本文はバイト単位で不変に保つ。
+    """
+    if isinstance(plan_data, dict):
+        block_body = yaml.dump(
+            plan_data,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    else:
+        block_body = plan_data.strip() + "\n"
+    new_block = f"{DECOMPOSITION_PLAN_MARKER}\n```yaml\n{block_body}```\n"
+    match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)
+    if match:
+        start, end = match.span()
+        return body[:start] + new_block + body[end:]
+    separator = "" if body.endswith("\n") else "\n"
+    return f"{body}{separator}\n{new_block}"
+
+
+def restore_plan_dict_to_markdown(
+    plan_dict: dict, prose_body: str | None = None
+) -> str:
+    """#532: 分解計画dictを`decomposition_plan.md`形式のテキスト文字列へ変換する。"""
+    frontmatter_yaml = yaml.dump(
+        plan_dict,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    if prose_body is not None and prose_body.strip():
+        body_content = prose_body.strip() + "\n"
+    else:
+        title = plan_dict.get("title", "Restored Decomposition Plan")
+        description = plan_dict.get("description", "")
+        body_content = f"# {title}\n"
+        if description:
+            body_content += f"\n{description}\n"
+    return f"---\n{frontmatter_yaml}---\n\n{body_content}"
+
+
+def restore_plan_markdown_from_parent_body(body: str) -> str | None:
+    """#532: 親Issue本文から分解計画dictを抽出し、`decomposition_plan.md`形式のMarkdown文書として復元する。
+
+    親Issue本文のマーカー前にあるProse本文（人間が記述した説明文・背景等）も引き継いで完全なMarkdownを復元する。
+    """
+    plan_dict = decomposition_plan_from_parent_body(body)
+    if not plan_dict:
+        return None
+    # Extract prose before the decomposition plan marker specifically
+    parts = re.split(re.escape(DECOMPOSITION_PLAN_MARKER), body, maxsplit=1)
+    prose_body = None
+    if parts:
+        raw_prose = parts[0]
+        # Strip PARENT_MARKER and standard auto-generated boilerplate if present
+        cleaned_prose = re.sub(re.escape(PARENT_MARKER), "", raw_prose)
+        cleaned_prose = re.sub(
+            r"配下のサブタスクはこのIssueのSub-issueとして紐付けられます。",
+            "",
+            cleaned_prose,
+        ).strip()
+        if cleaned_prose:
+            prose_body = cleaned_prose
+    return restore_plan_dict_to_markdown(plan_dict, prose_body=prose_body)
+
 
 def _parse_footprint_block(body: str) -> dict | None:
     """Footprint YAMLフェンスをdictとして返す（存在しない/壊れている場合はNone）。"""

@@ -684,7 +684,8 @@ class TestProvisionIssuesApply:
         assert parent_call[0] == "[EPIC] Example --- big rock with dashes"
         assert "# Real Description" in parent_call[1]
         assert "This is the actual markdown content." in parent_call[1]
-        assert "subtasks:" not in parent_call[1]
+        prose_before_marker = parent_call[1].split(PARENT_MARKER)[0]
+        assert "subtasks:" not in prose_before_marker
 
     def test_parent_body_extraction_preserves_indented_code_block(
         self, tmp_path: Path, template_path: Path
@@ -1487,7 +1488,7 @@ class TestResolveParentIssue:
             parent_issue_number=None,
             description="Epic details",
         )
-        number = _resolve_parent_issue(forge, metadata, plan_path)
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
         assert number in forge.issues
         assert forge.issues[number]["title"] == "[EPIC] My Big Rock"
         assert f"parent_issue_number: {number}" in plan_path.read_text(encoding="utf-8")
@@ -1507,7 +1508,7 @@ class TestResolveParentIssue:
             parent_issue_number=None,
             description="",
         )
-        number = _resolve_parent_issue(forge, metadata, plan_path)
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
         assert number == orphan_number
         assert f"parent_issue_number: {orphan_number}" in plan_path.read_text(
             encoding="utf-8"
@@ -1528,7 +1529,7 @@ class TestResolveParentIssue:
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=None, description=""
         )
-        number = _resolve_parent_issue(
+        number, _ = _resolve_parent_issue(
             forge, metadata, plan_path, explicit_parent_issue=existing_number
         )
         assert number == existing_number
@@ -1549,14 +1550,20 @@ class TestResolveParentIssue:
             encoding="utf-8",
         )
         forge = FakeForge()
+        plan_dict = {
+            "title": "My Big Rock",
+            "parent_issue_number": 100,
+            "subtasks": [],
+        }
         existing_number = forge.create_issue(
-            "[EPIC] Already Proper", _parent_body("Already Proper")
+            "[EPIC] Already Proper",
+            _parent_body("Already Proper", plan_data=plan_dict),
         )
         original_body = forge.issues[existing_number]["body"]
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=None, description=""
         )
-        number = _resolve_parent_issue(
+        number, _ = _resolve_parent_issue(
             forge, metadata, plan_path, explicit_parent_issue=existing_number
         )
         assert number == existing_number
@@ -1593,7 +1600,7 @@ class TestResolveParentIssue:
         metadata = PlanMetadata(
             title="My Big Rock", parent_issue_number=stale_number, description=""
         )
-        number = _resolve_parent_issue(
+        number, _ = _resolve_parent_issue(
             forge, metadata, plan_path, explicit_parent_issue=new_number
         )
         assert number == new_number

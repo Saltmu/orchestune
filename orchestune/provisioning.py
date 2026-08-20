@@ -41,10 +41,12 @@ from orchestune.issue_parsing import (
     PARENT_MARKER,
     backfill_parent_issue_number,
     effective_parent_number,
+    embed_decomposition_plan_in_parent_body,
     ensure_parent_marker,
     find_children_by_parent,
     is_epic_issue,
     parent_issue_number_from_body,
+    restore_plan_markdown_from_parent_body,
 )
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
@@ -95,6 +97,8 @@ class ProvisionResult:
     # #485: ネイティブSub-issue/blocked_by関係のリンクに失敗し、本文metadata
     # フォールバックのみで縮退したsubtask_idの一覧（起動時/完了時に報告する）。
     degraded_subtask_ids: tuple[str, ...] = ()
+    # #532: 親Issue本文への分解計画同期が成功したかどうか（同期失敗時はFalse）
+    plan_synced: bool = True
 
 
 def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
@@ -149,7 +153,9 @@ def _issue_title(subtask: SubTask) -> str:
     return f"[FEAT] {subtask.id}: {subtask.description}"
 
 
-def _parent_body(title: str, description: str = "") -> str:
+def _parent_body(
+    title: str, description: str = "", plan_data: dict | str | None = None
+) -> str:
     body = f"{title}"
     if description:
         body += f"\n\n{description}"
@@ -157,7 +163,67 @@ def _parent_body(title: str, description: str = "") -> str:
         f"\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
         f"\n\n{PARENT_MARKER}"
     )
+    if plan_data is not None:
+        body = embed_decomposition_plan_in_parent_body(body, plan_data)
     return body
+
+
+def restore_plan_file_from_parent(
+    forge: IssueForge,
+    parent_issue_number: int,
+    output_path: str | Path = "decomposition_plan.md",
+) -> Path:
+    """#532: 親Issue本文の`<!-- orchestune:decomposition-plan -->`から計画Markdownを復元してファイルへ書き出す。"""
+    parent_issue = forge.get_issue(parent_issue_number)
+    if parent_issue is None:
+        raise ValueError(
+            f"Parent issue #{parent_issue_number} was not found on the forge."
+        )
+    restored_markdown = restore_plan_markdown_from_parent_body(parent_issue.body)
+    if not restored_markdown:
+        raise ValueError(
+            f"Parent issue #{parent_issue_number} does not contain a valid decomposition plan block."
+        )
+    out_file = Path(output_path)
+    out_file.write_text(restored_markdown, encoding="utf-8")
+    return out_file
+
+
+def _sync_parent_decomposition_plan(
+    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
+) -> bool:
+    """#532: 親Issue本文へ最新の分解計画（Frontmatter YAML）を埋め込み・同期する。
+
+    同期に成功した場合（または差分なしでスキップした場合）はTrue、失敗した場合はFalseを返す。
+    """
+    try:
+        parent_issue = forge.get_issue(parent_issue_number)
+        if parent_issue is None:
+            print(
+                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: parent issue not found",
+                file=sys.stderr,
+            )
+            return False
+        text = Path(plan_path).read_text(encoding="utf-8")
+        raw_frontmatter, _ = extract_frontmatter_and_body(text)
+        if not raw_frontmatter:
+            print(
+                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: no frontmatter in {plan_path}",
+                file=sys.stderr,
+            )
+            return False
+        updated_body = embed_decomposition_plan_in_parent_body(
+            parent_issue.body, raw_frontmatter
+        )
+        if updated_body != parent_issue.body:
+            forge.update_issue_body(parent_issue_number, updated_body)
+        return True
+    except Exception as e:
+        print(
+            f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: {e}",
+            file=sys.stderr,
+        )
+        return False
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
@@ -396,7 +462,7 @@ def _build_subtask_issue_body(
 
 def _resolve_explicit_parent_issue(
     forge: IssueForge, parent_issue_number: int, plan_path: str | Path
-) -> int:
+) -> tuple[int, bool]:
     """`--parent-issue`で明示指定された既存Issueを親として採用する。
 
     `_resolve_parent_issue`の通常経路と異なり、`metadata.title`とのタイトル
@@ -426,7 +492,8 @@ def _resolve_explicit_parent_issue(
                 parent_issue_number, ensure_parent_marker(issue.body)
             )
     write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
-    return parent_issue_number
+    sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
+    return parent_issue_number, sync_ok
 
 
 def _resolve_parent_issue(
@@ -435,7 +502,7 @@ def _resolve_parent_issue(
     plan_path: str | Path,
     *,
     explicit_parent_issue: int | None = None,
-) -> int:
+) -> tuple[int, bool]:
     if explicit_parent_issue is not None:
         return _resolve_explicit_parent_issue(forge, explicit_parent_issue, plan_path)
     parent_issue_number = metadata.parent_issue_number
@@ -474,11 +541,19 @@ def _resolve_parent_issue(
         if marked_candidate is not None:
             parent_issue_number = marked_candidate.number
         else:
+            text = Path(plan_path).read_text(encoding="utf-8")
+            raw_frontmatter, _ = extract_frontmatter_and_body(text)
             parent_issue_number = forge.create_issue(
-                parent_title, _parent_body(metadata.title, metadata.description)
+                parent_title,
+                _parent_body(
+                    metadata.title, metadata.description, plan_data=raw_frontmatter
+                ),
             )
         write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
-    return parent_issue_number
+        sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
+    else:
+        sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
+    return parent_issue_number, sync_ok
 
 
 def _ensure_reused_issue_is_discoverable(
@@ -772,7 +847,7 @@ def provision_issues(
         )
 
     resolved_forge = forge or GitHubForge()
-    parent_issue_number = _resolve_parent_issue(
+    parent_issue_number, plan_synced = _resolve_parent_issue(
         resolved_forge, metadata, plan_path, explicit_parent_issue=parent_issue
     )
     existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
@@ -834,6 +909,10 @@ def provision_issues(
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
+        if not _sync_parent_decomposition_plan(
+            resolved_forge, parent_issue_number, plan_path
+        ):
+            plan_synced = False
 
     return ProvisionResult(
         parent_issue_number=parent_issue_number,
@@ -841,6 +920,7 @@ def provision_issues(
         created=created,
         reused=reused,
         degraded_subtask_ids=tuple(degraded_subtask_ids),
+        plan_synced=plan_synced,
     )
 
 
@@ -878,6 +958,12 @@ def _print_result(result: ProvisionResult) -> None:
             "\nOperating mode: full (native sub-issue/blocked_by relationships linked)"
         )
 
+    if not result.plan_synced:
+        print(
+            f"\nWarning: could not sync decomposition plan into #{result.parent_issue_number}'s body."
+            f"\nThe local plan file was updated, but the parent Issue body does not reflect the latest state."
+        )
+
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -909,6 +995,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "plan-derived title the persisted-parent auto-recovery relies on."
         ),
     )
+    parser.add_argument(
+        "--restore-plan",
+        type=int,
+        metavar="PARENT_ISSUE",
+        default=None,
+        help=(
+            "Restore the decomposition_plan.md file from the given parent EPIC issue's body "
+            "and exit without provisioning."
+        ),
+    )
     return parser
 
 
@@ -916,6 +1012,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
 
     try:
+        if args.restore_plan is not None:
+            forge = GitHubForge()
+            out = restore_plan_file_from_parent(
+                forge, args.restore_plan, output_path=args.plan
+            )
+            print(
+                f"Successfully restored decomposition plan from #{args.restore_plan} to {out}"
+            )
+            raise SystemExit(0)
+
         # footprintおよびorchestune.toml/[tool.orchestune]はリポジトリルート
         # からの相対パスとして定義されているため、呼び出し元のcwdではなく
         # --planファイル自身の位置を基点にする（dag_cli.pyと同じ規約。#404）。
