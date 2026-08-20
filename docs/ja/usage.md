@@ -14,7 +14,8 @@ Orchestuneの各CLIコマンド（`orchestune dag`、`orchestune provision`、`o
 ```markdown
 ---
 title: "大きな石（開発対象全体）の一行要約"
-parent_issue_number: null  # orchestune provision が親Issue作成後に書き戻す
+parent_issue_number: null  # orchestune provision が親Issue作成後に書き戻す（起票済Issue起点の場合はその番号）
+parent_issue_source: derived  # 起票済Issue採用時は "adopted"、新規EPIC作成時は "derived"
 subtasks:
   - id: setup-database
     description: "データベーススキーマとコネクションプールの初期化"
@@ -54,7 +55,8 @@ subtasks:
 トップレベルには以下のフィールドがあります：
 
 - **`title`** (文字列, 必須): 「大きな石」全体を表す一行要約。`orchestune provision`（後述）が親Issue（`[EPIC] <title>`）の起票に使用します。
-- **`parent_issue_number`** (整数または`null`, 任意, 既定値 `null`): 親Issueの番号。**手動で設定しないでください** — `orchestune provision`が親Issue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。部分失敗からの再実行時に、この値が設定済みであれば親Issueは重複作成されません。
+- **`parent_issue_number`** (整数または`null`, 任意, 既定値 `null`): 親Issueの番号。起票済みIssueを起点とする場合はその番号を指定します。手動で設定しない場合、`orchestune provision`が親Issue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。部分失敗からの再実行時に、この値が設定済みであれば親Issueは重複作成されません。
+- **`parent_issue_source`** (文字列, 任意, 既定値 `derived`): 親Issueの由来。`adopted`（既存Issueを採用）または `derived`（計画の `title` から自動生成・解決）のいずれか。`adopted` の場合、タイトル一致検証をスキップして親Issue番号と親マーカーで検証・再利用します。
 - **`subtasks`** (サブタスクのリスト, 必須): 各サブタスクは以下のフィールドを持ちます。
 
 各サブタスクは以下のフィールドを持ちます：
@@ -127,7 +129,7 @@ orchestune provision --plan decomposition_plan.md
 
 ### 既存EPIC Issueへの紐付け（`--parent-issue`）
 
-EPIC Issueを先に（手動、またはOrchestuneを使わず普通に）起票しておき、サブタスクの分解・起票だけにOrchestuneを使いたい場合は `--parent-issue <番号>` を指定します。
+EPIC Issueを先に（手動、またはOrchestuneを使わず普通に）起票しておき、サブタスクの分解・起票だけにOrchestuneを使いたい場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するか、CLIで `--parent-issue <番号>` を指定します。
 
 ```bash
 orchestune provision --plan decomposition_plan.md --parent-issue 123
@@ -135,7 +137,10 @@ orchestune provision --plan decomposition_plan.md --parent-issue 123
 
 指定したIssueがまだOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっていなければ、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
 
-**注意**: `--parent-issue` は、対象のplanに対する `orchestune provision` / `orchestune dispatch` の実行のたびに毎回指定する必要があります。人間が起票したEPICのタイトルはplan由来のタイトル（`"[EPIC] " + title`）と一致しないため、`parent_issue_number` フロントマターへ永続化された値だけでは自動認識できません（`orchestune dispatch` の `--parent-issue` フラグも同様に毎回必須です）。
+`--parent-issue` を指定して実行すると、計画ファイルのフロントマターへ `parent_issue_source: adopted` が自動的に永続化されます。そのため、**2回目以降の `orchestune provision` では `--parent-issue` を再指定しなくても自動的に同じ親Issueが採用・再利用されます**。もし採用済みの親Issueが存在しないか親マーカーが失われている場合は、重複起票を防ぐために新規作成へ倒れずエラーで停止します。
+
+> [!NOTE]
+> `orchestune-dispatch` の実行時には、対象親Issue配下の子ブランチを親ブランチ（`parent/issue-<番号>`）経由で二層マージさせるため、引き続き `--parent-issue <番号>` を指定してください。
 
 ### 起票ルール
 

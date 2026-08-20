@@ -29,6 +29,7 @@ import yaml
 _FRONTMATTER_DELIMITER = re.compile(r"^---\s*$")
 _TITLE_LINE = re.compile(r"^title:\s*.*$")
 _PARENT_ISSUE_NUMBER_LINE = re.compile(r"^(parent_issue_number:\s*).*$")
+_PARENT_ISSUE_SOURCE_LINE = re.compile(r"^(parent_issue_source:\s*).*$")
 _ISSUE_NUMBER_LINE = re.compile(r"^(\s*)(issue_number:\s*).*$")
 _LIST_ITEM_START = re.compile(r"^(\s*)-(\s*)(.*)$")
 _MAPPING_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
@@ -344,6 +345,25 @@ def _write_parent_issue_number(
     return end + 1
 
 
+def _write_parent_issue_source(
+    lines: list[str], start: int, end: int, source: str
+) -> int:
+    for index in range(start, end):
+        match = _PARENT_ISSUE_SOURCE_LINE.match(lines[index])
+        if match:
+            lines[index] = f"{match.group(1)}{source}\n"
+            return end
+    insert_at = start
+    for index in range(start, end):
+        if _PARENT_ISSUE_NUMBER_LINE.match(lines[index]):
+            insert_at = index + 1
+            break
+        if _TITLE_LINE.match(lines[index]):
+            insert_at = index + 1
+    lines.insert(insert_at, f"parent_issue_source: {source}\n")
+    return end + 1
+
+
 def _write_subtask_issue_number(
     lines: list[str], start: int, end: int, subtask_id: str, number: int
 ) -> int:
@@ -414,6 +434,7 @@ def write_issue_numbers(
     subtask_issue_numbers: Mapping[str, int] | None = None,
     *,
     parent_issue_number: int | None = None,
+    parent_issue_source: str | None = None,
 ) -> None:
     """Write resolved issue numbers back into `decomposition_plan.md` in place.
 
@@ -427,6 +448,9 @@ def write_issue_numbers(
 
     if parent_issue_number is not None:
         end = _write_parent_issue_number(lines, start, end, parent_issue_number)
+
+    if parent_issue_source is not None:
+        end = _write_parent_issue_source(lines, start, end, parent_issue_source)
 
     for subtask_id, number in (subtask_issue_numbers or {}).items():
         subtasks_start, subtasks_end = _find_subtasks_bounds(lines, start, end)

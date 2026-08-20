@@ -71,10 +71,14 @@ _PLACEHOLDER_PATTERN = re.compile(
 )
 
 
+VALID_PARENT_ISSUE_SOURCES = frozenset(("adopted", "derived"))
+
+
 @dataclass(frozen=True)
 class PlanMetadata:
     title: str
     parent_issue_number: int | None
+    parent_issue_source: str | None = None
     description: str = ""
 
 
@@ -128,9 +132,21 @@ def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
         else validate_issue_number(raw_parent)
     )
 
+    raw_parent_source = raw.get("parent_issue_source")
+    if raw_parent_source is not None and raw_parent_source != "":
+        parent_issue_source_str = str(raw_parent_source).strip()
+        if parent_issue_source_str not in VALID_PARENT_ISSUE_SOURCES:
+            raise ValueError(
+                f"decomposition_plan.md の 'parent_issue_source' は 'adopted' または 'derived' である必要があります: {raw_parent_source!r}"
+            )
+        parent_issue_source: str | None = parent_issue_source_str
+    else:
+        parent_issue_source = None
+
     metadata = PlanMetadata(
         title=str(raw.get("title") or "").strip(),
         parent_issue_number=parent_issue_number,
+        parent_issue_source=parent_issue_source,
         description=description,
     )
     return enriched, metadata
@@ -469,9 +485,10 @@ def _resolve_explicit_parent_issue(
     一致は要求しない（人間が事前に起票したEPICのタイトルは、plan由来の
     タイトルとは一般に一致しないため）。まだ`is_epic_issue`の形（`[EPIC] `
     プレフィックス + `PARENT_MARKER`）を満たしていなければ、既存の内容は
-    保持したままその場で正規化する。この経路は`--parent-issue`が渡された
-    実行のたびに毎回通る必要がある（永続化された`parent_issue_number`だけを
-    根拠にした自動認識はしない） — `dispatch --parent-issue`と同じ運用。
+    保持したままその場で正規化する。
+    #533: 採用後はフロントマターへ `parent_issue_source: adopted` として
+    永続化されるため、次回以降の実行では `--parent-issue` の再指定なしに
+    同じ親が再利用される。
     """
     issue = forge.get_issue(parent_issue_number)
     if issue is None:
@@ -491,7 +508,11 @@ def _resolve_explicit_parent_issue(
             forge.update_issue_body(
                 parent_issue_number, ensure_parent_marker(issue.body)
             )
-    write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
+    write_issue_numbers(
+        plan_path,
+        parent_issue_number=parent_issue_number,
+        parent_issue_source="adopted",
+    )
     sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
     return parent_issue_number, sync_ok
 
@@ -505,6 +526,30 @@ def _resolve_parent_issue(
 ) -> tuple[int, bool]:
     if explicit_parent_issue is not None:
         return _resolve_explicit_parent_issue(forge, explicit_parent_issue, plan_path)
+
+    # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用する。
+    if metadata.parent_issue_source == "adopted":
+        if metadata.parent_issue_number is None:
+            raise ValueError(
+                "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+                "'parent_issue_number' が設定されていません"
+            )
+        candidate = forge.get_issue(metadata.parent_issue_number)
+        if candidate is None:
+            raise RuntimeError(
+                f"Adopted parent issue #{metadata.parent_issue_number} does not exist; "
+                "refusing to provision subtasks under it."
+            )
+        if PARENT_MARKER not in candidate.body:
+            raise RuntimeError(
+                f"Adopted parent issue #{metadata.parent_issue_number} is missing the parent marker "
+                f"('{PARENT_MARKER}'); refusing to provision subtasks under it."
+            )
+        sync_ok = _sync_parent_decomposition_plan(
+            forge, metadata.parent_issue_number, plan_path
+        )
+        return metadata.parent_issue_number, sync_ok
+
     parent_issue_number = metadata.parent_issue_number
     parent_title = f"[EPIC] {metadata.title}"
     if parent_issue_number is not None:
@@ -549,7 +594,11 @@ def _resolve_parent_issue(
                     metadata.title, metadata.description, plan_data=raw_frontmatter
                 ),
             )
-        write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
+        write_issue_numbers(
+            plan_path,
+            parent_issue_number=parent_issue_number,
+            parent_issue_source="derived",
+        )
         sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
     else:
         sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
@@ -770,7 +819,7 @@ def _preview_only(
         for subtask_id in dag_order
     )
     return ProvisionResult(
-        parent_issue_number=None,
+        parent_issue_number=parent_issue_number,
         applied=False,
         created={},
         reused={},
@@ -927,6 +976,8 @@ def provision_issues(
 def _print_result(result: ProvisionResult) -> None:
     if not result.applied:
         print("Dry run (--no-apply): no Issues were created.")
+        if result.parent_issue_number is not None:
+            print(f"Target parent issue: #{result.parent_issue_number}")
         for preview in result.previews:
             status = "reuse expected" if preview.already_has_issue else "would create"
             print(f"\n=== {preview.subtask_id} ({status}) ===")
@@ -989,10 +1040,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Attach subtasks to this existing Issue as their EPIC parent "
             "instead of creating/reusing one derived from the plan's title. "
             "The Issue is normalized in place ('[EPIC] ' title prefix and "
-            "parent marker added if missing) if it isn't already EPIC-shaped. "
-            "Must be passed on every `provision` (and `dispatch`) run for "
-            "this plan, since a pre-existing Issue's title won't match the "
-            "plan-derived title the persisted-parent auto-recovery relies on."
+            "parent marker added if missing) if it isn't already EPIC-shaped, "
+            "and parent_issue_source: adopted is persisted into the plan."
         ),
     )
     parser.add_argument(

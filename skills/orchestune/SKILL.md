@@ -43,7 +43,8 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    ```markdown
    ---
    title: "One-line summary of the 'big rock' itself"
-   parent_issue_number: null  # filled in by orchestune-provision once the parent issue exists
+   parent_issue_number: null  # or <number> if decomposing an existing issue
+   parent_issue_source: derived  # "adopted" if decomposing an existing issue, "derived" if creating a new EPIC
    subtasks:
      - id: task-a
        description: "Implement feature XX"
@@ -71,7 +72,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    (The section below the frontmatter is free text to explain the design approach or background)
    ```
 
-   The top-level `title` is required — `orchestune-provision` uses it to create the parent tracking issue for the whole "big rock". `parent_issue_number` and each subtask's `issue_number` start as `null`; do not set them yourself — `orchestune-provision` writes the created (or reused) issue numbers back into this file and automatically synchronizes the entire plan into the parent issue body (`<!-- orchestune:decomposition-plan -->`), ensuring safe persistence even if the local working file is deleted when a worktree is cleaned up. If an EPIC issue for this "big rock" already exists (filed by hand ahead of time), don't set `parent_issue_number` either — pass `--parent-issue <number>` to `orchestune provision` instead (see [orchestune-provision SKILL.md](../orchestune-provision/SKILL.md)), which normalizes and attaches to that existing issue rather than creating a new one.
+   The top-level `title` is required — `orchestune-provision` uses it to create the parent tracking issue for the whole "big rock" (when `derived`). When decomposing an **existing, pre-filed Issue** (e.g. invoked via `/orchestune <Issue URL>`), set `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter from the start; `orchestune-provision` will adopt this issue as the EPIC parent by default without requiring an explicit `--parent-issue` flag. For greenfield tasks without an existing issue, leave `parent_issue_number: null` and `parent_issue_source: derived` (or omitted); `orchestune-provision` creates a new parent issue and writes back the resolved numbers and `parent_issue_source: derived`. In both cases, the complete plan is synchronized into the parent issue body (`<!-- orchestune:decomposition-plan -->`), ensuring safe persistence even if the local working file is deleted when a worktree is cleaned up. `--parent-issue <number>` can still be passed to `orchestune provision` as an explicit override flag.
 
 ### Stage 2: Validate DAG
 

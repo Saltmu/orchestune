@@ -486,6 +486,50 @@ class TestWriteParentIssueNumber:
         assert lines[title_index + 1] == "parent_issue_number: 7"
 
 
+class TestWriteParentIssueSource:
+    def test_inserts_parent_issue_source_when_absent(self, plan_path: Path):
+        write_issue_numbers(plan_path, parent_issue_source="adopted")
+        lines = plan_path.read_text(encoding="utf-8").splitlines()
+        assert "parent_issue_source: adopted" in lines
+
+    def test_replaces_existing_parent_issue_source(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            '---\ntitle: "T"\nparent_issue_number: 10\nparent_issue_source: derived\nsubtasks:\n  - id: task-a\n---\n',
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, parent_issue_source="adopted")
+        text = path.read_text(encoding="utf-8")
+        assert "parent_issue_source: adopted" in text
+        assert "parent_issue_source: derived" not in text
+
+    def test_writes_both_parent_issue_number_and_source(self, plan_path: Path):
+        write_issue_numbers(
+            plan_path, parent_issue_number=42, parent_issue_source="adopted"
+        )
+        lines = plan_path.read_text(encoding="utf-8").splitlines()
+        assert "parent_issue_number: 42" in lines
+        assert "parent_issue_source: adopted" in lines
+
+    def test_idempotent_on_repeated_identical_write(self, plan_path: Path):
+        write_issue_numbers(plan_path, parent_issue_source="adopted")
+        first = plan_path.read_text(encoding="utf-8")
+        write_issue_numbers(plan_path, parent_issue_source="adopted")
+        second = plan_path.read_text(encoding="utf-8")
+        assert first == second
+
+    def test_preserves_comments_and_formatting(self, tmp_path: Path):
+        path = tmp_path / "decomposition_plan.md"
+        path.write_text(
+            '---\ntitle: "T"  # Plan title\nparent_issue_number: null  # auto-filled\nsubtasks:\n  - id: task-a\n---\n',
+            encoding="utf-8",
+        )
+        write_issue_numbers(path, parent_issue_number=10, parent_issue_source="adopted")
+        text = path.read_text(encoding="utf-8")
+        assert "# Plan title" in text
+        assert "parent_issue_source: adopted" in text
+
+
 def test_missing_frontmatter_raises(tmp_path: Path):
     path = tmp_path / "decomposition_plan.md"
     path.write_text("# No frontmatter here\n", encoding="utf-8")

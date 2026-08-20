@@ -1553,6 +1553,7 @@ class TestResolveParentIssue:
         plan_dict = {
             "title": "My Big Rock",
             "parent_issue_number": 100,
+            "parent_issue_source": "adopted",
             "subtasks": [],
         }
         existing_number = forge.create_issue(
@@ -1607,6 +1608,191 @@ class TestResolveParentIssue:
         assert f"parent_issue_number: {new_number}" in plan_path.read_text(
             encoding="utf-8"
         )
+
+    def test_adopted_parent_issue_reused_without_flag_even_if_title_differs(
+        self, tmp_path: Path
+    ):
+        """#533: parent_issue_source: adopted の親は、titleがplanと異なっていても
+        --parent-issue の再指定なしに再利用される。"""
+        plan_path = tmp_path / "plan.md"
+        forge = FakeForge()
+        adopted_number = forge.create_issue(
+            "[EPIC] Human-filed title",
+            f"Description.\n\n{PARENT_MARKER}",
+        )
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\n"
+            f"parent_issue_number: {adopted_number}\n"
+            "parent_issue_source: adopted\n"
+            "subtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=adopted_number,
+            parent_issue_source="adopted",
+            description="",
+        )
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
+        assert number == adopted_number
+        assert len(forge.issues) == 1
+
+    def test_adopted_parent_issue_nonexistent_raises_runtime_error(
+        self, tmp_path: Path
+    ):
+        """#533: parent_issue_source: adopted の親が存在しない場合、新規作成へ倒れずエラーで停止する。"""
+        plan_path = tmp_path / "plan.md"
+        forge = FakeForge()
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\n"
+            "parent_issue_number: 999\n"
+            "parent_issue_source: adopted\n"
+            "subtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=999,
+            parent_issue_source="adopted",
+            description="",
+        )
+        with pytest.raises(
+            RuntimeError, match="Adopted parent issue #999 does not exist"
+        ):
+            _resolve_parent_issue(forge, metadata, plan_path)
+        assert len(forge.issues) == 0
+
+    def test_adopted_parent_issue_missing_marker_raises_runtime_error(
+        self, tmp_path: Path
+    ):
+        """#533: parent_issue_source: adopted の親にPARENT_MARKERがない場合、エラーで停止する。"""
+        plan_path = tmp_path / "plan.md"
+        forge = FakeForge()
+        existing_number = forge.create_issue("No marker issue", "Body without marker")
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\n"
+            f"parent_issue_number: {existing_number}\n"
+            "parent_issue_source: adopted\n"
+            "subtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        metadata = PlanMetadata(
+            title="My Big Rock",
+            parent_issue_number=existing_number,
+            parent_issue_source="adopted",
+            description="",
+        )
+        with pytest.raises(RuntimeError, match="missing the parent marker"):
+            _resolve_parent_issue(forge, metadata, plan_path)
+
+    def test_explicit_parent_issue_persists_parent_issue_source_adopted(
+        self, tmp_path: Path
+    ):
+        """#533: --parent-issue で指定された親は parent_issue_source: adopted として永続化される。"""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        parent_number = forge.create_issue("Pre-existing", "Description.")
+        metadata = PlanMetadata(
+            title="My Big Rock", parent_issue_number=None, description=""
+        )
+        _resolve_parent_issue(
+            forge, metadata, plan_path, explicit_parent_issue=parent_number
+        )
+        text = plan_path.read_text(encoding="utf-8")
+        assert f"parent_issue_number: {parent_number}" in text
+        assert "parent_issue_source: adopted" in text
+
+    def test_derived_parent_issue_persists_parent_issue_source_derived(
+        self, tmp_path: Path
+    ):
+        """#533: プランから新規作成された親は parent_issue_source: derived として永続化される。"""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        metadata = PlanMetadata(
+            title="My Big Rock", parent_issue_number=None, description=""
+        )
+        number, _ = _resolve_parent_issue(forge, metadata, plan_path)
+        text = plan_path.read_text(encoding="utf-8")
+        assert f"parent_issue_number: {number}" in text
+        assert "parent_issue_source: derived" in text
+
+    def test_load_plan_validates_parent_issue_source(self, tmp_path: Path):
+        """#533: _load_plan が parent_issue_source を正しくパースし、不正な値を弾く。"""
+        from orchestune.provisioning import _load_plan
+
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'T'\nparent_issue_number: 10\nparent_issue_source: invalid\nsubtasks:\n  - id: task-a\n    description: 'd'\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="parent_issue_source"):
+            _load_plan(plan_path)
+
+    def test_adopted_parent_without_parent_issue_number_raises_value_error(
+        self, tmp_path: Path
+    ):
+        """#533: parent_issue_source: adopted なのに parent_issue_number が null の場合エラー。"""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'T'\nparent_issue_source: adopted\nsubtasks:\n  - id: task-a\n    description: 'd'\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        metadata = PlanMetadata(
+            title="T",
+            parent_issue_number=None,
+            parent_issue_source="adopted",
+            description="",
+        )
+        with pytest.raises(ValueError, match="parent_issue_number"):
+            _resolve_parent_issue(forge, metadata, plan_path)
+
+    def test_provision_issues_second_run_without_flag_reuses_adopted_parent(
+        self, tmp_path: Path, template_path: Path
+    ):
+        """#533: 1回目のprovision_issuesで--parent-issueを指定後、2回目に指定がなくても親と子を再利用する。"""
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            "---\ntitle: 'My Big Rock'\nparent_issue_number: null\nsubtasks:\n  - id: task-a\n    description: 'Task A'\n    depends_on: []\n---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        existing_parent = forge.create_issue("Human Pre-existing EPIC", "Body.")
+        # 1回目の実行（--parent-issue を指定）
+        res1 = provision_issues(
+            plan_path,
+            forge=forge,
+            apply=True,
+            template_path=template_path,
+            parent_issue=existing_parent,
+        )
+        assert res1.parent_issue_number == existing_parent
+        assert len(res1.created) == 1
+        assert len(res1.reused) == 0
+        child_num = res1.created["task-a"]
+
+        # 2回目の実行（--parent-issue を渡さない）
+        res2 = provision_issues(
+            plan_path,
+            forge=forge,
+            apply=True,
+            template_path=template_path,
+            parent_issue=None,
+        )
+        assert res2.parent_issue_number == existing_parent
+        assert len(res2.created) == 0
+        assert len(res2.reused) == 1
+        assert res2.reused["task-a"] == child_num
+        # 新しい親Issueは作られていない（最初の1件 + 子Issue 1件 = 合計2件）
+        assert len(forge.issues) == 2
 
 
 class TestProvisionSubtask:
