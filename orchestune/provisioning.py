@@ -1018,8 +1018,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         # exit 1 for other failures (missing plan file, DagCycleError, etc.).
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-    except SystemExit:
-        raise
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error

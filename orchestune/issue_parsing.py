@@ -114,14 +114,25 @@ def restore_plan_dict_to_markdown(
 def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     """#532: 親Issue本文から分解計画dictを抽出し、`decomposition_plan.md`形式のMarkdown文書として復元する。
 
-    親Issue本文のマーカー前にあるProse本文も引き継いで完全なMarkdownを復元する。
+    親Issue本文のマーカー前にあるProse本文（人間が記述した説明文・背景等）も引き継いで完全なMarkdownを復元する。
     """
     plan_dict = decomposition_plan_from_parent_body(body)
     if not plan_dict:
         return None
-    # Extract prose before the first marker if present
-    prose_match = re.split(r"<!-- orchestune:.*-->", body, maxsplit=1)
-    prose_body = prose_match[0].strip() if prose_match else None
+    # Extract prose before the decomposition plan marker specifically
+    parts = re.split(re.escape(DECOMPOSITION_PLAN_MARKER), body, maxsplit=1)
+    prose_body = None
+    if parts:
+        raw_prose = parts[0]
+        # Strip PARENT_MARKER and standard auto-generated boilerplate if present
+        cleaned_prose = re.sub(re.escape(PARENT_MARKER), "", raw_prose)
+        cleaned_prose = re.sub(
+            r"配下のサブタスクはこのIssueのSub-issueとして紐付けられます。",
+            "",
+            cleaned_prose,
+        ).strip()
+        if cleaned_prose:
+            prose_body = cleaned_prose
     return restore_plan_dict_to_markdown(plan_dict, prose_body=prose_body)
 
 

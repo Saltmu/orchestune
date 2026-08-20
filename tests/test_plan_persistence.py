@@ -80,7 +80,8 @@ def test_restore_plan_markdown_from_parent_body():
         ],
     }
     initial_parent_body = (
-        f"# Restored Rock\n\nOriginal human rationale prose.\n\n{PARENT_MARKER}"
+        f"# Restored Rock\n\nOriginal human rationale prose.\n\n"
+        f"配下のサブタスクはこのIssueのSub-issueとして紐付けられます。\n\n{PARENT_MARKER}"
     )
     body = embed_decomposition_plan_in_parent_body(initial_parent_body, plan_dict)
     restored_markdown = restore_plan_markdown_from_parent_body(body)
@@ -90,8 +91,13 @@ def test_restore_plan_markdown_from_parent_body():
     assert "parent_issue_number: 300" in restored_markdown
     assert "id: task-1" in restored_markdown
     assert "issue_number: 301" in restored_markdown
-    # Prose should be preserved
+    # Prose should be preserved, but boilerplate and parent marker should be cleanly stripped
     assert "Original human rationale prose." in restored_markdown
+    assert (
+        "配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
+        not in restored_markdown
+    )
+    assert PARENT_MARKER not in restored_markdown
 
 
 def test_embed_and_parse_yaml_with_embedded_code_fence():
