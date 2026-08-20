@@ -12,7 +12,7 @@ Python 3.12以上、Poetry、GitHub CLI（`gh auth status`）がインストー�
 poetry install
 ```
 
-続けて、以下を実行してGit hooksをローカルにインストールしてください。これにより `git push` の直前にローカルCIスクリプト（gitleaksスキャンを含む）が自動実行され、失敗時はpushがブロックされます。
+続けて、以下を実行してGit pre-commitフックをローカルにインストールしてください。これにより `.gitignore` 対象ファイルの誤コミットが自動的にブロックされます（また、過去にインストールされた古い `pre-push` フックがあれば自動的に削除されます）。
 
 * **POSIX (Linux / macOS)**:
   ```bash
@@ -23,7 +23,7 @@ poetry install
   .\scripts\setup-git-hooks.ps1
   ```
 
-`setup-git-hooks`は、[gitleaks](https://github.com/gitleaks/gitleaks#installing)がまだ`PATH`上に無ければ`~/.local/bin`へ自動インストールします（`scripts/install-gitleaks.sh` / `.ps1`を参照）。`local-ci.sh` / `.ps1`側でも同様の自動リトライを行うため、新規環境で`gitleaks`が未インストールであることがpushの妨げにはなりません。自動インストールに失敗した場合（ネットワーク未接続、未対応のOS/アーキテクチャ等）は、上記リンクから手動でインストールしてください。
+`setup-git-hooks`は、[gitleaks](https://github.com/gitleaks/gitleaks#installing)がまだ`PATH`上に無ければ`~/.local/bin`へ自動インストールします（`scripts/install-gitleaks.sh` / `.ps1`を参照）。`local-ci.sh` / `.ps1`側でも同様の自動リトライを行うため、新規環境で`gitleaks`が未インストールであることがローカルCI実行の妨げにはなりません。自動インストールに失敗した場合（ネットワーク未接続、未対応のOS/アーキテクチャ等）は、上記リンクから手動でインストールしてください。
 
 ## テストの実行
 

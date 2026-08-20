@@ -6,12 +6,12 @@ Set-Location $ProjectRoot
 
 Write-Host "Setting up Git hooks (PowerShell)..."
 
-# Proactively install gitleaks so the pre-push hook's local CI run doesn't
+# Proactively install gitleaks so local CI runs don't
 # fail on first use. Non-fatal: local-ci.ps1 retries this automatically.
 try {
     & (Join-Path $PSScriptRoot "install-gitleaks.ps1")
 } catch {
-    Write-Warning "gitleaks auto-install failed; local-ci.ps1 will retry on push. ($_)"
+    Write-Warning "gitleaks auto-install failed; local-ci.ps1 will retry on execution. ($_)"
 }
 
 # Resolve Git hooks directory dynamically to support standard repos, worktrees, and submodules
@@ -68,23 +68,11 @@ fi
 
 [System.IO.File]::WriteAllText($PreCommitHook, $PreCommitContent.Replace("`r`n", "`n"), $Utf8NoBom)
 
-# Create pre-push hook
+# Clean up legacy pre-push hook if present
 $PrePushHook = Join-Path $HooksDir "pre-push"
-$PrePushContent = @'
-#!/usr/bin/env bash
-# Git pre-push hook to enforce local CI run before pushing
-
-# Unset Git internal environment variables before invoking CI
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_GRAFT_FILE GIT_SUPER_PREFIX
-
-if command -v powershell.exe >/dev/null 2>&1; then
-  powershell.exe -ExecutionPolicy Bypass -File ./scripts/local-ci.ps1
-elif [ -f ./scripts/local-ci.sh ]; then
-  ./scripts/local-ci.sh
-fi
-'@
-
-[System.IO.File]::WriteAllText($PrePushHook, $PrePushContent.Replace("`r`n", "`n"), $Utf8NoBom)
+if (Test-Path $PrePushHook) {
+    Remove-Item $PrePushHook -Force
+    Write-Host "Removed deprecated pre-push hook at $PrePushHook."
+}
 
 Write-Host "Git pre-commit hook installed successfully at $PreCommitHook."
-Write-Host "Git pre-push hook installed successfully at $PrePushHook."
