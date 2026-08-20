@@ -288,7 +288,7 @@ def test_post_review_trigger_failure():
         mock_run.return_value.returncode = 1
         mock_run.return_value.stderr = "Not authorized"
 
-        with pytest.raises(RuntimeError, match="Failed to post review comment"):
+        with pytest.raises(RuntimeError, match="gh command failed: Not authorized"):
             post_review_trigger(pr_number=540, bot_name="claude")
 
 
@@ -299,7 +299,7 @@ def test_run_gh_api_failure():
         mock_run.return_value.returncode = 1
         mock_run.return_value.stderr = "404 Not Found"
 
-        with pytest.raises(RuntimeError, match="gh api dummy failed"):
+        with pytest.raises(RuntimeError, match="gh command failed: 404 Not Found"):
             _run_gh_api("dummy")
 
 
@@ -435,3 +435,89 @@ def test_wait_for_review_polling_catches_exception_and_continues():
             post_trigger=False,
         )
         assert result["status"] == "ALL_CLEAR"
+
+
+def test_is_review_completed_comment_completed_with_unchecked_todo_in_findings():
+    # Edge case: Review completed but contains an unchecked suggestion checkbox
+    comment = {
+        "user": {"login": "claude[bot]"},
+        "body": "### Review complete\n\n- [x] All checks pass.\n\n### Findings\n- [ ] follow-up: consider adding rate limiting",
+    }
+    assert is_review_completed_comment(comment, "claude") is True
+
+
+def test_analyze_review_findings_mentions_past_bug_in_lgtm():
+    # Edge case: All-clear LGTM mentioning a previously resolved bug in text
+    body = (
+        "### Summary\n\n"
+        "Previously flagged Bug: null check issue in provisioning.py has been resolved.\n"
+        "All checks passed. LGTM! No further blocking findings."
+    )
+    result = analyze_review_findings(review_body=body, inline_comments=[])
+    assert result["has_findings"] is False
+    assert result["status"] == "ALL_CLEAR"
+
+
+def test_candidate_reviews_chronological_sorting():
+    with patch("scripts.wait_for_review._get_pr_data") as mock_get_data:
+        # Issue comment submitted earlier (07:00:00), PR review submitted later (07:05:00)
+        mock_get_data.return_value = {
+            "issue_comments": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:00:00Z",
+                    "body": "### Review complete\nOlder review.",
+                }
+            ],
+            "reviews": [
+                {
+                    "id": 2,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T07:05:00Z",
+                    "body": "### Review complete\nNewer review. LGTM!",
+                }
+            ],
+            "inline_comments": [],
+        }
+
+        result = wait_for_review(
+            pr_number=542,
+            timeout=10,
+            bot_name="claude",
+            post_trigger=False,
+        )
+        assert result["status"] == "ALL_CLEAR"
+        assert "Newer review" in result["review_body"]
+
+
+def test_wait_for_review_detects_updated_comment():
+    # Comment was created earlier than trigger but updated after trigger
+    with patch("scripts.wait_for_review._get_pr_data") as mock_get_data:
+        with patch("scripts.wait_for_review.post_review_trigger") as mock_post:
+            mock_post.return_value = {
+                "id": 10,
+                "created_at": "2026-08-20T09:20:00Z",
+                "body": "@claude review",
+            }
+            mock_get_data.return_value = {
+                "issue_comments": [
+                    {
+                        "id": 20,
+                        "user": {"login": "claude[bot]"},
+                        "created_at": "2026-08-20T09:19:00Z",
+                        "updated_at": "2026-08-20T09:25:00Z",
+                        "body": "### Review complete\nLGTM! All checks passed.",
+                    }
+                ],
+                "reviews": [],
+                "inline_comments": [],
+            }
+
+            result = wait_for_review(
+                pr_number=542,
+                timeout=10,
+                bot_name="claude",
+                post_trigger=True,
+            )
+            assert result["status"] == "ALL_CLEAR"

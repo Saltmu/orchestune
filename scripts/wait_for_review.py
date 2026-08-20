@@ -12,11 +12,17 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
-    cmd = ["gh", "api", "--paginate", "--slurp", endpoint, *extra_args]
+
+def _run_gh(args: list[str]) -> str:
+    cmd = ["gh", *args]
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -26,8 +32,13 @@ def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"gh api {endpoint} failed: {result.stderr.strip()}")
-    pages = json.loads(result.stdout)
+        raise RuntimeError(f"gh command failed: {result.stderr.strip()}")
+    return result.stdout
+
+
+def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
+    stdout = _run_gh(["api", "--paginate", "--slurp", endpoint, *extra_args])
+    pages = json.loads(stdout)
     if isinstance(pages, list) and pages and isinstance(pages[0], list):
         flattened: list[dict[str, Any]] = []
         for page in pages:
@@ -52,40 +63,39 @@ def post_review_trigger(
     else:
         comment_body = f"@{bot_name} review"
 
-    cmd = [
-        "gh",
-        "api",
-        f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
-        "-f",
-        f"body={comment_body}",
-    ]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+    stdout = _run_gh(
+        [
+            "api",
+            f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
+            "-f",
+            f"body={comment_body}",
+        ]
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to post review comment: {result.stderr.strip()}")
-    return cast(dict[str, Any], json.loads(result.stdout))
+    return cast(dict[str, Any], json.loads(stdout))
 
 
 def _get_pr_data(pr_number: int) -> dict[str, list[dict[str, Any]]]:
-    issue_comments = _run_gh_api(
-        f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments"
-    )
-    try:
-        reviews = _run_gh_api(f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews")
-    except Exception:
-        reviews = []
-    try:
-        inline_comments = _run_gh_api(
-            f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments"
+    def fetch_endpoint(endpoint: str) -> list[dict[str, Any]]:
+        try:
+            return _run_gh_api(endpoint)
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        f_comments = executor.submit(
+            fetch_endpoint, f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments"
         )
-    except Exception:
-        inline_comments = []
+        f_reviews = executor.submit(
+            fetch_endpoint, f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews"
+        )
+        f_inlines = executor.submit(
+            fetch_endpoint, f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments"
+        )
+
+        issue_comments = f_comments.result()
+        reviews = f_reviews.result()
+        inline_comments = f_inlines.result()
+
     return {
         "issue_comments": issue_comments,
         "reviews": reviews,
@@ -110,16 +120,16 @@ def is_review_completed_comment(
     if not _is_bot_user(user_login, bot_name):
         return False
     body = comment_or_review.get("body", "")
-    # If it contains an unchecked checkbox or spinner img tag, it is in-progress
-    if "- [ ]" in body or "<img" in body:
-        return False
-    # If it contains known in-progress phrases, not complete yet
+
+    # Only treat as in-progress if explicit in-progress indicators are present
     if (
         "is working…" in body
-        or "Review in progress" in body
-        or "Re-review in progress" in body
+        or "### Review in progress" in body
+        or "### Re-review in progress" in body
+        or "Review in progress <img" in body
     ):
         return False
+
     # Typical review completion indicators
     if (
         "Re-review complete" in body
@@ -127,6 +137,7 @@ def is_review_completed_comment(
         or "Claude finished" in body
         or "### Summary" in body
         or "### Findings" in body
+        or "inline findings" in body.lower()
         or "Codex Review" in body
         or "💡 Codex Review" in body
         or "Here are some automated review suggestions" in body
@@ -143,7 +154,6 @@ def analyze_review_findings(
         c_body = comment.get("body", "")
         path = comment.get("path", "unknown")
         line = comment.get("line") or comment.get("original_line") or "N/A"
-        # Extract title or badge if present
         first_line = c_body.strip().split("\n")[0] if c_body else ""
         inline_findings.append(
             {
@@ -158,7 +168,7 @@ def analyze_review_findings(
     body_findings = []
     has_blocking_findings = False
 
-    # Check for Claude style findings
+    # Check for Claude style findings section
     findings_match = re.search(
         r"###\s*Findings\s*\n(.*?)(?=\n###|\Z)", review_body, re.DOTALL
     )
@@ -168,14 +178,12 @@ def analyze_review_findings(
             body_findings.append(findings_text)
             has_blocking_findings = True
 
-    if (
-        "🔴" in review_body
-        or "Still open — Bug:" in review_body
-        or "Bug:" in review_body
-    ):
+    # Check for explicit finding icons or unresolved flags
+    if "🔴" in review_body or "Still open — Bug:" in review_body:
         has_blocking_findings = True
 
-    if inline_findings:
+    # Check for inline findings mentioned in summary
+    if inline_findings or "inline findings" in review_body.lower():
         has_blocking_findings = True
 
     # Check for explicit LGTM indicators
@@ -205,7 +213,6 @@ def analyze_review_findings(
     if body_findings:
         summary_lines.append("- Review Body Findings:")
         for fb in body_findings:
-            # take first few lines
             snippet = "\n".join(fb.splitlines()[:5])
             summary_lines.append(f"  {snippet}")
     elif "🔴" in review_body:
@@ -220,6 +227,15 @@ def analyze_review_findings(
         "body_findings": body_findings,
         "summary": "\n".join(summary_lines),
     }
+
+
+def _get_item_timestamp(item: dict[str, Any]) -> str:
+    return (
+        item.get("updated_at")
+        or item.get("submitted_at")
+        or item.get("created_at")
+        or ""
+    )
 
 
 def wait_for_review(
@@ -253,7 +269,7 @@ def wait_for_review(
 
             # Check issue comments (Claude, etc.)
             for c in pr_data.get("issue_comments", []):
-                c_time = c.get("created_at", "")
+                c_time = _get_item_timestamp(c)
                 if trigger_time and c_time < trigger_time:
                     continue
                 if is_review_completed_comment(c, bot_name):
@@ -261,14 +277,15 @@ def wait_for_review(
 
             # Check PR reviews (Codex, etc.)
             for r in pr_data.get("reviews", []):
-                r_time = r.get("submitted_at") or r.get("created_at", "")
+                r_time = _get_item_timestamp(r)
                 if trigger_time and r_time < trigger_time:
                     continue
                 if is_review_completed_comment(r, bot_name):
                     candidate_reviews.append(r)
 
             if candidate_reviews:
-                # Get the latest review
+                # Sort candidates chronologically by latest timestamp
+                candidate_reviews.sort(key=_get_item_timestamp)
                 latest_review = candidate_reviews[-1]
                 review_body = latest_review.get("body", "")
 
@@ -278,7 +295,7 @@ def wait_for_review(
                     ic_user = (ic.get("user") or {}).get("login", "")
                     if not _is_bot_user(ic_user, bot_name):
                         continue
-                    ic_time = ic.get("created_at", "")
+                    ic_time = _get_item_timestamp(ic)
                     if trigger_time and ic_time < trigger_time:
                         continue
                     relevant_inline.append(ic)
