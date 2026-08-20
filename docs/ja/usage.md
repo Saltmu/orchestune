@@ -80,6 +80,20 @@ subtasks:
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
 * **`issue_number`** (整数または`null`, 任意, 既定値 `null`): このサブタスクのIssue番号。**手動で設定しないでください** — `orchestune provision`がこのサブタスクのIssue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。設定済みの場合、`orchestune provision`はそのサブタスクのIssueを再作成せず再利用します。
 
+### 計画ファイルのライフサイクルと親Issueへの永続化（方針 (b)）
+
+`decomposition_plan.md` は、計画作成・DAG検証・ユーザー承認（Stage 1〜3）の段階ではローカル（または作業worktree）上のドラフトファイルとして扱われます。
+`orchestune provision`（Stage 4）を実行すると、親Issue（EPIC）の作成・採用とともに、親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへ最新の計画内容（Frontmatter YAML）が自動的に埋め込まれ、同期・永続化されます。
+
+- **親Issueが永続化の真実源（Source of Truth）**: AIエージェントの使い捨てworktreeが削除されてローカルの `decomposition_plan.md` が消失しても、親Issue本文に計画全体（各サブタスクの定義や起票された `issue_number`）が完全な形で記録として残ります。
+- **計画ファイルを失った状態からの安全な再実行**:
+  1. 親Issue本文の `<!-- orchestune:decomposition-plan -->` の下のYAMLブロックから内容を取り出すことで、いつでも `decomposition_plan.md` を復元できます。
+  2. ローカルファイルを失った状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--no-apply` でプレビューして既存の子Issueが正しく再利用されることを確認してください。
+- **複数 big rock（計画）の並行運用**:
+  複数の大きな石を並行して進める場合は、`orchestune provision --plan plans/rock-a.md` のように `--plan` オプションで個別パスを指定するか、別々のworktreeで作成してください。いずれの場合も `provision` 実行時に各big rockの親Issue本文へ個別に計画が永続化されるため、衝突することなく安全に分離・管理されます。
+- **`orchestune-dispatch` は計画ファイルを参照しない**:
+  `orchestune-dispatch` は、各サブタスクのGitHub Issue本文に埋め込まれた Footprint YAML（`subtask_id`, `depends_on`, `footprint` 等）から実行DAGを自律的に復元します。そのため、ローカルの `decomposition_plan.md` が存在しなくても、ディスパッチ・並列実行・自己修復・マージ統合は正常に動作します。
+
 > [!NOTE]
 > 必須フィールドは `id` のみです。`id` が欠落している、または空文字の場合はパース時にエラーで停止します。
 > それ以外のフィールドは省略可能で、上記の既定値へフォールバックします。ただし `description` または `footprint` を省略した場合、
@@ -92,7 +106,7 @@ subtasks:
 
 ## 2. Issue起票（orchestune provision）
 
-承認済みの `decomposition_plan.md` から、`title` を親Issue、各サブタスクを子Issue（Sub-issue）としてGitHub上に起票します。`.github/issue_template.md` のプレースホルダー規則に沿って本文を生成し、`depends_on` のトポロジカル順で起票、`--parent`/`--blocked-by` 相当のnative関係を設定します。起票したIssue番号は都度 `decomposition_plan.md` のフロントマター（`parent_issue_number`、各サブタスクの `issue_number`）へ書き戻されるため、**冪等**（既にIssueがあるサブタスクは再作成されない）かつ**部分失敗から再開可能**（N件目で失敗しても再実行時に1〜N-1件目は重複作成されない）です。
+承認済みの `decomposition_plan.md` から、`title` を親Issue、各サブタスクを子Issue（Sub-issue）としてGitHub上に起票します。`.github/issue_template.md` のプレースホルダー規則に沿って本文を生成し、`depends_on` のトポロジカル順で起票、`--parent`/`--blocked-by` 相当のnative関係を設定します。起票したIssue番号は都度 `decomposition_plan.md` のフロントマター（`parent_issue_number`、各サブタスクの `issue_number`）へ書き戻され、同時に親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへも最新の計画YAMLが同期されます。そのため、**冪等**（既にIssueがあるサブタスクは再作成されない）かつ**部分失敗から再開可能**（N件目で失敗しても再実行時に1〜N-1件目は重複作成されない）です。
 
 ```bash
 # プレビュー（GitHubへ書き込まず、生成される本文・ラベルのみ出力）

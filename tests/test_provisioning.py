@@ -684,7 +684,8 @@ class TestProvisionIssuesApply:
         assert parent_call[0] == "[EPIC] Example --- big rock with dashes"
         assert "# Real Description" in parent_call[1]
         assert "This is the actual markdown content." in parent_call[1]
-        assert "subtasks:" not in parent_call[1]
+        prose_before_marker = parent_call[1].split(PARENT_MARKER)[0]
+        assert "subtasks:" not in prose_before_marker
 
     def test_parent_body_extraction_preserves_indented_code_block(
         self, tmp_path: Path, template_path: Path
@@ -1549,8 +1550,14 @@ class TestResolveParentIssue:
             encoding="utf-8",
         )
         forge = FakeForge()
+        plan_dict = {
+            "title": "My Big Rock",
+            "parent_issue_number": 100,
+            "subtasks": [],
+        }
         existing_number = forge.create_issue(
-            "[EPIC] Already Proper", _parent_body("Already Proper")
+            "[EPIC] Already Proper",
+            _parent_body("Already Proper", plan_data=plan_dict),
         )
         original_body = forge.issues[existing_number]["body"]
         metadata = PlanMetadata(

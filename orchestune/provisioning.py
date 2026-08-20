@@ -41,6 +41,7 @@ from orchestune.issue_parsing import (
     PARENT_MARKER,
     backfill_parent_issue_number,
     effective_parent_number,
+    embed_decomposition_plan_in_parent_body,
     ensure_parent_marker,
     find_children_by_parent,
     is_epic_issue,
@@ -149,7 +150,9 @@ def _issue_title(subtask: SubTask) -> str:
     return f"[FEAT] {subtask.id}: {subtask.description}"
 
 
-def _parent_body(title: str, description: str = "") -> str:
+def _parent_body(
+    title: str, description: str = "", plan_data: dict | str | None = None
+) -> str:
     body = f"{title}"
     if description:
         body += f"\n\n{description}"
@@ -157,7 +160,33 @@ def _parent_body(title: str, description: str = "") -> str:
         f"\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
         f"\n\n{PARENT_MARKER}"
     )
+    if plan_data is not None:
+        body = embed_decomposition_plan_in_parent_body(body, plan_data)
     return body
+
+
+def _sync_parent_decomposition_plan(
+    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
+) -> None:
+    """#532: 親Issue本文へ最新の分解計画（Frontmatter YAML）を埋め込み・同期する。"""
+    try:
+        parent_issue = forge.get_issue(parent_issue_number)
+        if parent_issue is None:
+            return
+        text = Path(plan_path).read_text(encoding="utf-8")
+        raw_frontmatter, _ = extract_frontmatter_and_body(text)
+        if not raw_frontmatter:
+            return
+        updated_body = embed_decomposition_plan_in_parent_body(
+            parent_issue.body, raw_frontmatter
+        )
+        if updated_body != parent_issue.body:
+            forge.update_issue_body(parent_issue_number, updated_body)
+    except Exception as e:
+        print(
+            f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: {e}",
+            file=sys.stderr,
+        )
 
 
 def _yaml_inline_list(items: Sequence[str]) -> str:
@@ -426,6 +455,7 @@ def _resolve_explicit_parent_issue(
                 parent_issue_number, ensure_parent_marker(issue.body)
             )
     write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
+    _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
     return parent_issue_number
 
 
@@ -474,10 +504,16 @@ def _resolve_parent_issue(
         if marked_candidate is not None:
             parent_issue_number = marked_candidate.number
         else:
+            text = Path(plan_path).read_text(encoding="utf-8")
+            raw_frontmatter, _ = extract_frontmatter_and_body(text)
             parent_issue_number = forge.create_issue(
-                parent_title, _parent_body(metadata.title, metadata.description)
+                parent_title,
+                _parent_body(
+                    metadata.title, metadata.description, plan_data=raw_frontmatter
+                ),
             )
         write_issue_numbers(plan_path, parent_issue_number=parent_issue_number)
+        _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
     return parent_issue_number
 
 
@@ -834,6 +870,8 @@ def provision_issues(
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
+
+    _sync_parent_decomposition_plan(resolved_forge, parent_issue_number, plan_path)
 
     return ProvisionResult(
         parent_issue_number=parent_issue_number,

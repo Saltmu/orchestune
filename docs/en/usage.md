@@ -80,6 +80,20 @@ Each subtask item supports the following fields:
     Auto-detection does not apply to custom filenames outside those categories (e.g. `src/db/connection.py`, `src/custom_hook.py`), so for those you **must set `writes_shared_contract: true`**. Omitting it makes both subtasks count as consumers even when they share the same `shared_contract` tag, and no warning is emitted at all.
 * **`issue_number`** (integer or `null`, optional, defaults to `null`): This subtask's issue number. **Do not set this by hand** — `orchestune provision` writes it back after creating (or reusing) this subtask's issue. If it is already set, `orchestune provision` reuses that issue instead of creating a new one.
 
+### Plan Lifecycle and Parent Issue Persistence (Option b)
+
+`decomposition_plan.md` acts as a local draft/working file during the drafting, DAG validation, and user review stages (Stages 1–3).
+When `orchestune provision` (Stage 4) runs, the parent (EPIC) issue is created or adopted, and the latest plan contents (Frontmatter YAML) are automatically embedded and synchronized into the parent issue body within an `<!-- orchestune:decomposition-plan -->` block.
+
+- **Parent Issue as Source of Truth**: Even if an AI agent's disposable worktree is removed and the local `decomposition_plan.md` is lost, the entire plan (including all subtask definitions and resolved `issue_number`s) remains safely persisted in the parent issue body on GitHub.
+- **Safe Recovery from Lost Plan Files**:
+  1. You can restore `decomposition_plan.md` at any time by extracting the YAML block under `<!-- orchestune:decomposition-plan -->` from the parent issue body.
+  2. If re-running `orchestune provision` without a local plan file, specify `--parent-issue <parent_number>` and first run with `--no-apply` to preview and confirm that existing child issues will be reused.
+- **Concurrent Big Rocks**:
+  To manage multiple big rocks in parallel, specify separate plan paths (e.g. `orchestune provision --plan plans/rock-a.md`) or manage them in isolated worktrees. Since each big rock's plan is persisted directly in its corresponding parent issue body, they remain cleanly separated and never conflict.
+- **`orchestune-dispatch` Does Not Read Plan Files**:
+  `orchestune-dispatch` reconstructs the execution DAG exclusively from the Footprint YAML blocks embedded within the child GitHub Issue bodies (`subtask_id`, `depends_on`, `footprint`, etc.). It never reads `decomposition_plan.md`. Therefore, dispatching, parallel execution, self-healing, and merge integration remain completely intact even if the local plan file is absent.
+
 > [!NOTE]
 > `id` is the only required field. Parsing fails with an error if `id` is missing or blank.
 > Every other field may be omitted and falls back to the default above. However, omitting `description` or `footprint`
@@ -92,7 +106,7 @@ Each subtask item supports the following fields:
 
 ## 2. Provisioning Issues (orchestune provision)
 
-Files GitHub Issues from an approved `decomposition_plan.md`: `title` becomes the parent issue, and each subtask becomes a child issue (sub-issue). Issue bodies are rendered from `.github/issue_template.md`'s placeholder rules, subtasks are filed in `depends_on` topological order, and the native parent/blocked-by relationships are set via `--parent`/`--blocked-by`-equivalent operations. Every resolved issue number is written back into `decomposition_plan.md`'s frontmatter (`parent_issue_number`, each subtask's `issue_number`) as soon as it is known, which makes the command **idempotent** (a subtask that already has an issue is never recreated) and **resumable after a partial failure** (if subtask N fails, re-running does not duplicate subtasks 1..N-1).
+Files GitHub Issues from an approved `decomposition_plan.md`: `title` becomes the parent issue, and each subtask becomes a child issue (sub-issue). Issue bodies are rendered from `.github/issue_template.md`'s placeholder rules, subtasks are filed in `depends_on` topological order, and the native parent/blocked-by relationships are set via `--parent`/`--blocked-by`-equivalent operations. Every resolved issue number is written back into `decomposition_plan.md`'s frontmatter (`parent_issue_number`, each subtask's `issue_number`) as soon as it is known, and the complete plan YAML is synchronized into the parent issue's `<!-- orchestune:decomposition-plan -->` body block. This makes the command **idempotent** (a subtask that already has an issue is never recreated) and **resumable after a partial failure** (if subtask N fails, re-running does not duplicate subtasks 1..N-1).
 
 ```bash
 # Preview only (nothing is written to GitHub; prints the generated body/labels)
