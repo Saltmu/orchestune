@@ -1,7 +1,8 @@
-"""Script to wait for AI review completion on a GitHub Pull Request.
+"""Script to trigger and detect AI review activity on a GitHub Pull Request.
 
-Encapsulates waiting logic into a single blocking process so that agents
-do not need to loop or spawn multiple background tasks.
+Posts a review trigger (optional) and polls for any new or updated activity
+from the specified bot (Claude, Codex, etc.), returning the latest comment
+and inline remarks directly to stdout for LLM evaluation.
 """
 
 from __future__ import annotations
@@ -11,11 +12,17 @@ import json
 import subprocess
 import sys
 import time
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-def _run_gh_api(endpoint: str) -> list[dict[str, Any]]:
-    cmd = ["gh", "api", "--paginate", "--slurp", endpoint]
+def _run_gh(args: list[str]) -> str:
+    cmd = ["gh", *args]
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -25,8 +32,13 @@ def _run_gh_api(endpoint: str) -> list[dict[str, Any]]:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"gh api {endpoint} failed: {result.stderr.strip()}")
-    pages = json.loads(result.stdout)
+        raise RuntimeError(f"gh command failed: {result.stderr.strip()}")
+    return result.stdout
+
+
+def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
+    stdout = _run_gh(["api", "--paginate", "--slurp", endpoint, *extra_args])
+    pages = json.loads(stdout)
     if isinstance(pages, list) and pages and isinstance(pages[0], list):
         flattened: list[dict[str, Any]] = []
         for page in pages:
@@ -37,82 +49,258 @@ def _run_gh_api(endpoint: str) -> list[dict[str, Any]]:
     return [pages]
 
 
-def _get_pr_comments(pr_number: int) -> list[dict[str, Any]]:
-    return _run_gh_api(f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments")
+def post_review_trigger(
+    pr_number: int,
+    bot_name: str = "claude",
+    body: str | None = None,
+    body_file: str | None = None,
+) -> dict[str, Any]:
+    if body_file:
+        with open(body_file, encoding="utf-8") as f:
+            comment_body = f.read().strip()
+    elif body:
+        comment_body = body.strip()
+    else:
+        comment_body = f"@{bot_name} review"
+
+    stdout = _run_gh(
+        [
+            "api",
+            f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
+            "-f",
+            f"body={comment_body}",
+        ]
+    )
+    return cast(dict[str, Any], json.loads(stdout))
 
 
-def is_review_completed_comment(comment: dict[str, Any], bot_name: str) -> bool:
-    user_login = (comment.get("user") or {}).get("login", "").lower()
-    if bot_name.lower() not in user_login:
-        return False
-    body = comment.get("body", "")
-    # If it contains an unchecked checkbox or spinner img tag, it is in-progress
-    if "- [ ]" in body or "<img" in body:
-        return False
-    # If it contains known in-progress phrases, not complete yet
-    if (
-        "is working…" in body
-        or "Review in progress" in body
-        or "Re-review in progress" in body
+def _filter_bot_items(
+    items: list[dict[str, Any]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> list[dict[str, Any]]:
+    """Filter list of items to those posted by the specified bot, excluding ignored IDs."""
+    filtered: list[dict[str, Any]] = []
+    excluded = exclude_ids or set()
+    for item in items:
+        item_id = item.get("id")
+        if item_id in excluded or str(item_id) in excluded:
+            continue
+        user = (item.get("user") or {}).get("login", "")
+        if _is_bot_user(user, bot_name):
+            filtered.append(item)
+    return filtered
+
+
+def _get_pr_data(
+    pr_number: int, executor: ThreadPoolExecutor | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    def fetch_endpoint(endpoint: str) -> list[dict[str, Any]]:
+        try:
+            return _run_gh_api(endpoint)
+        except Exception as e:
+            print(f"Warning: Failed to fetch {endpoint}: {e}", file=sys.stderr)
+            return []
+
+    endpoints = [
+        f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
+        f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews",
+        f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/comments",
+    ]
+
+    if executor is not None:
+        futures = [executor.submit(fetch_endpoint, ep) for ep in endpoints]
+        return {
+            "issue_comments": futures[0].result(),
+            "reviews": futures[1].result(),
+            "inline_comments": futures[2].result(),
+        }
+
+    with ThreadPoolExecutor(max_workers=3) as local_executor:
+        futures = [local_executor.submit(fetch_endpoint, ep) for ep in endpoints]
+        return {
+            "issue_comments": futures[0].result(),
+            "reviews": futures[1].result(),
+            "inline_comments": futures[2].result(),
+        }
+
+
+def _is_bot_user(user_login: str, bot_name: str) -> bool:
+    login = user_login.lower()
+    target = bot_name.lower()
+    if target == "claude":
+        return "claude" in login
+    if target == "codex":
+        return "codex" in login or "chatgpt-codex-connector" in login
+    return target in login
+
+
+def _get_item_timestamp(item: dict[str, Any]) -> str:
+    return (
+        item.get("updated_at")
+        or item.get("submitted_at")
+        or item.get("created_at")
+        or ""
+    )
+
+
+def _build_snapshot(
+    data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> dict[str, str]:
+    """Record state of each bot item as id -> timestamp + body length."""
+    snapshot: dict[str, str] = {}
+    for c in _filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids):
+        cid = str(c.get("id"))
+        ts = _get_item_timestamp(c)
+        body = c.get("body") or ""
+        snapshot[f"comment_{cid}"] = f"{ts}:{len(body)}"
+
+    for r in _filter_bot_items(data.get("reviews", []), bot_name, exclude_ids):
+        rid = str(r.get("id"))
+        ts = _get_item_timestamp(r)
+        body = r.get("body") or ""
+        snapshot[f"review_{rid}"] = f"{ts}:{len(body)}"
+
+    for ic in _filter_bot_items(data.get("inline_comments", []), bot_name, exclude_ids):
+        icid = str(ic.get("id"))
+        ts = _get_item_timestamp(ic)
+        snapshot[f"inline_{icid}"] = ts
+
+    return snapshot
+
+
+def _extract_review_result(
+    current_data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> dict[str, Any] | None:
+    # Collect all matching bot comments / reviews
+    candidate_items = [
+        *_filter_bot_items(
+            current_data.get("issue_comments", []), bot_name, exclude_ids
+        ),
+        *_filter_bot_items(current_data.get("reviews", []), bot_name, exclude_ids),
+    ]
+
+    if not candidate_items:
+        return None
+
+    candidate_items.sort(key=_get_item_timestamp)
+    latest_item = candidate_items[-1]
+    latest_body = latest_item.get("body") or ""
+
+    # Collect bot inline comments
+    inline_items: list[dict[str, Any]] = []
+    for ic in _filter_bot_items(
+        current_data.get("inline_comments", []), bot_name, exclude_ids
     ):
-        return False
-    # Typical review completion indicators
-    if (
-        "Re-review complete" in body
-        or "Review complete" in body
-        or "Claude finished" in body
-        or "### Summary" in body
-    ):
-        return True
-    return False
+        inline_items.append(
+            {
+                "path": ic.get("path", "unknown"),
+                "line": ic.get("line") or ic.get("original_line") or "N/A",
+                "body": ic.get("body") or "",
+            }
+        )
+
+    if not latest_body and inline_items:
+        latest_body = (
+            f"(No review summary body; see {len(inline_items)} inline comment(s) below)"
+        )
+
+    print("\n" + "=" * 60)
+    print(f"[AI Review Update Detected - @{bot_name}]")
+    print(f"Timestamp: {_get_item_timestamp(latest_item)}")
+    if inline_items:
+        print(f"Inline Comments: {len(inline_items)} item(s)")
+        for item in inline_items:
+            first_line = item["body"].strip().split("\n")[0] if item["body"] else ""
+            print(f"  * {item['path']}:{item['line']} — {first_line}")
+    print("=" * 60 + "\n")
+    print(latest_body)
+
+    return {
+        "review_body": latest_body,
+        "inline_comments": inline_items,
+        "timestamp": _get_item_timestamp(latest_item),
+    }
 
 
 def wait_for_review(
     pr_number: int,
     *,
-    timeout: int = 600,
-    interval: int = 10,
+    timeout: int = 300,
+    interval: int = 5,
     bot_name: str = "claude",
-) -> str:
-    print(f"Waiting for @{bot_name} review on PR #{pr_number} (timeout: {timeout}s)...")
-    start_time = time.time()
+    post_trigger: bool = True,
+    body: str | None = None,
+    body_file: str | None = None,
+) -> dict[str, Any]:
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Capture initial state before triggering/waiting
+        initial_data = _get_pr_data(pr_number, executor=executor)
+        initial_snapshot = _build_snapshot(initial_data, bot_name)
+        excluded_ids: set[int | str] = set()
 
-    # Get initial comment IDs to ignore pre-existing comments
-    try:
-        initial_comments = _get_pr_comments(pr_number)
-        initial_ids = {
-            c["id"]
-            for c in initial_comments
-            if is_review_completed_comment(c, bot_name)
-        }
-    except Exception as e:
-        print(f"Warning: Could not fetch initial comments: {e}", file=sys.stderr)
-        initial_ids = set()
+        if post_trigger:
+            print(
+                f"Posting review trigger comment for @{bot_name} on PR #{pr_number}..."
+            )
+            trigger_info = post_review_trigger(
+                pr_number, bot_name=bot_name, body=body, body_file=body_file
+            )
+            trigger_id = trigger_info.get("id")
+            trigger_time = trigger_info.get("created_at", "")
+            trigger_body = trigger_info.get("body") or ""
+            if trigger_id is not None:
+                excluded_ids.add(trigger_id)
+                # Seed into initial snapshot to prevent self-detection if posted under bot identity
+                initial_snapshot[f"comment_{trigger_id}"] = (
+                    f"{trigger_time}:{len(trigger_body)}"
+                )
+            print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
 
-    while time.time() - start_time < timeout:
-        time.sleep(interval)
-        try:
-            current_comments = _get_pr_comments(pr_number)
-            for comment in reversed(current_comments):
-                if comment["id"] in initial_ids:
-                    continue
-                if is_review_completed_comment(comment, bot_name):
-                    print(
-                        f"\n[+] Review detected from @{bot_name} (comment ID: {comment['id']}):\n"
+        print(
+            f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
+        )
+        start_time = time.time()
+
+        while True:
+            try:
+                current_data = _get_pr_data(pr_number, executor=executor)
+                current_snapshot = _build_snapshot(
+                    current_data, bot_name, exclude_ids=excluded_ids
+                )
+
+                # Check if any new item appeared or existing item was updated
+                has_changes = any(
+                    k not in initial_snapshot or initial_snapshot[k] != v
+                    for k, v in current_snapshot.items()
+                )
+
+                if has_changes:
+                    result = _extract_review_result(
+                        current_data, bot_name, exclude_ids=excluded_ids
                     )
-                    print(comment["body"])
-                    return comment["body"]
-        except Exception as e:
-            print(f"Warning: Error checking comments: {e}", file=sys.stderr)
+                    if result is not None:
+                        return result
+
+            except Exception as e:
+                print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
+
+            if time.time() - start_time >= timeout:
+                break
+            time.sleep(interval)
 
     raise TimeoutError(
-        f"Timed out waiting for @{bot_name} review on PR #{pr_number} after {timeout}s."
+        f"Timed out waiting for @{bot_name} activity on PR #{pr_number} after {timeout}s."
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Wait for an AI review comment on a GitHub PR in a single blocking process."
+        description="Trigger and detect AI review activity on a GitHub PR in a single blocking process."
     )
     parser.add_argument(
         "--pr",
@@ -123,20 +311,37 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=600,
-        help="Maximum time to wait in seconds (default: 600)",
+        default=300,
+        help="Maximum time to wait in seconds (default: 300)",
     )
     parser.add_argument(
         "--interval",
         type=int,
-        default=10,
-        help="Polling interval in seconds (default: 10)",
+        default=5,
+        help="Polling interval in seconds (default: 5)",
     )
     parser.add_argument(
         "--bot-name",
         type=str,
         default="claude",
         help="Bot user name substring to wait for (default: 'claude')",
+    )
+    parser.add_argument(
+        "--body",
+        type=str,
+        default=None,
+        help="Custom comment body to post when triggering review",
+    )
+    parser.add_argument(
+        "--body-file",
+        type=str,
+        default=None,
+        help="Path to file containing custom comment body to post",
+    )
+    parser.add_argument(
+        "--no-post",
+        action="store_true",
+        help="Skip posting a review trigger comment and only wait for activity",
     )
 
     args = parser.parse_args()
@@ -146,6 +351,9 @@ def main() -> None:
             timeout=args.timeout,
             interval=args.interval,
             bot_name=args.bot_name,
+            post_trigger=not args.no_post,
+            body=args.body,
+            body_file=args.body_file,
         )
         sys.exit(0)
     except TimeoutError as e:
