@@ -47,6 +47,11 @@ Filing Issues from `decomposition_plan.md` is fully codified into the `orchestun
    orchestune provision --plan decomposition_plan.md --parent-issue <N>
    ```
    The target Issue is normalized in place if it doesn't already look like an Orchestune EPIC (a `"[EPIC] "` title prefix and parent marker are added as needed, preserving its existing content) — no title match against the plan's `title` is required. `--parent-issue` must be passed on **every** `provision` (and `dispatch`) run for this plan: because a pre-existing Issue's title generally won't match the plan-derived `"[EPIC] " + title`, the persisted `parent_issue_number` alone can't be auto-recognized on a later run without the flag.
+
+   **Restoring a lost plan file from parent**: if `decomposition_plan.md` was lost (e.g. after worktree cleanup), restore it directly from the parent Issue:
+   ```bash
+   orchestune provision --restore-plan <parent_number>
+   ```
 4. **Return the list of filed Issues to the [orchestune skill](../orchestune/SKILL.md)**, for it to report to the user or hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md).
 
 ### Fallback for environments without `gh` (manual filing)

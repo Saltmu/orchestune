@@ -85,10 +85,10 @@ Each subtask item supports the following fields:
 `decomposition_plan.md` acts as a local draft/working file during the drafting, DAG validation, and user review stages (Stages 1–3).
 When `orchestune provision` (Stage 4) runs, the parent (EPIC) issue is created or adopted, and the latest plan contents (Frontmatter YAML) are automatically embedded and synchronized into the parent issue body within an `<!-- orchestune:decomposition-plan -->` block.
 
-- **Parent Issue as Source of Truth**: Even if an AI agent's disposable worktree is removed and the local `decomposition_plan.md` is lost, the entire plan (including all subtask definitions and resolved `issue_number`s) remains safely persisted in the parent issue body on GitHub.
+- **Parent Issue as Source of Truth**: Even if an AI agent's disposable worktree is removed and the local `decomposition_plan.md` is lost, the entire plan (including all subtask definitions, resolved `issue_number`s, and prose description) remains safely persisted in the parent issue body on GitHub.
 - **Safe Recovery from Lost Plan Files**:
-  1. You can restore `decomposition_plan.md` at any time by extracting the YAML block under `<!-- orchestune:decomposition-plan -->` from the parent issue body.
-  2. If re-running `orchestune provision` without a local plan file, specify `--parent-issue <parent_number>` and first run with `--no-apply` to preview and confirm that existing child issues will be reused.
+  1. Run `orchestune provision --restore-plan <parent_number>` (and optionally `--plan <output_path>`) to automatically restore `decomposition_plan.md` (frontmatter and original prose description) directly from the parent issue body.
+  2. If re-running `orchestune provision` after restoring the plan file, specify `--parent-issue <parent_number>` and first run with `--no-apply` to preview and confirm that existing child issues will be reused.
 - **Concurrent Big Rocks**:
   To manage multiple big rocks in parallel, specify separate plan paths (e.g. `orchestune provision --plan plans/rock-a.md`) or manage them in isolated worktrees. Since each big rock's plan is persisted directly in its corresponding parent issue body, they remain cleanly separated and never conflict.
 - **`orchestune-dispatch` Does Not Read Plan Files**:

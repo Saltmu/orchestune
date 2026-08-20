@@ -79,9 +79,10 @@ def test_restore_plan_markdown_from_parent_body():
             }
         ],
     }
-    body = embed_decomposition_plan_in_parent_body(
-        f"Parent Body\n\n{PARENT_MARKER}", plan_dict
+    initial_parent_body = (
+        f"# Restored Rock\n\nOriginal human rationale prose.\n\n{PARENT_MARKER}"
     )
+    body = embed_decomposition_plan_in_parent_body(initial_parent_body, plan_dict)
     restored_markdown = restore_plan_markdown_from_parent_body(body)
     assert restored_markdown is not None
     assert restored_markdown.startswith("---\n")
@@ -89,6 +90,55 @@ def test_restore_plan_markdown_from_parent_body():
     assert "parent_issue_number: 300" in restored_markdown
     assert "id: task-1" in restored_markdown
     assert "issue_number: 301" in restored_markdown
+    # Prose should be preserved
+    assert "Original human rationale prose." in restored_markdown
+
+
+def test_embed_and_parse_yaml_with_embedded_code_fence():
+    # Review finding #2: Subtask description containing code fences
+    plan_dict = {
+        "title": "Plan with code snippet",
+        "parent_issue_number": 400,
+        "subtasks": [
+            {
+                "id": "code-task",
+                "description": "Run ```python\nprint('hello')\n``` to test.",
+                "issue_number": 401,
+            }
+        ],
+    }
+    body = embed_decomposition_plan_in_parent_body(
+        f"Parent Body\n\n{PARENT_MARKER}", plan_dict
+    )
+    extracted = decomposition_plan_from_parent_body(body)
+    assert extracted is not None
+    assert extracted["title"] == "Plan with code snippet"
+    assert "print('hello')" in extracted["subtasks"][0]["description"]
+
+
+def test_restore_plan_file_from_parent_helper(tmp_path: Path):
+    # Review finding #6: CLI helper for restoring plan file
+    from orchestune.provisioning import restore_plan_file_from_parent
+
+    forge = FakeForge()
+    plan_dict = {
+        "title": "CLI Restored Rock",
+        "parent_issue_number": 500,
+        "subtasks": [{"id": "sub-1", "issue_number": 501}],
+    }
+    body = embed_decomposition_plan_in_parent_body(
+        f"# CLI Restored Rock\n\nSome overview\n\n{PARENT_MARKER}", plan_dict
+    )
+    parent_num = forge.create_issue("[EPIC] CLI Restored Rock", body)
+
+    out_file = tmp_path / "restored_plan.md"
+    result_path = restore_plan_file_from_parent(forge, parent_num, output_path=out_file)
+    assert result_path == out_file
+    assert out_file.exists()
+    content = out_file.read_text(encoding="utf-8")
+    assert "title: CLI Restored Rock" in content
+    assert "parent_issue_number: 500" in content
+    assert "Some overview" in content
 
 
 def test_provision_persists_plan_into_parent_issue_body(tmp_path: Path):
@@ -239,3 +289,72 @@ def test_provision_with_explicit_parent_persists_plan(tmp_path: Path):
     assert extracted["parent_issue_number"] == parent_num
     assert extracted["subtasks"][0]["id"] == "sub-1"
     assert extracted["subtasks"][0]["issue_number"] == res.created["sub-1"]
+
+
+def test_incremental_parent_sync_on_partial_failure(tmp_path: Path):
+    # Review finding #1: Incremental sync during subtask creation loop
+    plan_file = tmp_path / "decomposition_plan.md"
+    template_file = tmp_path / "issue_template.md"
+    template_file.write_text(
+        "### Task {{subtask_id}}\n\n"
+        "```yaml\n"
+        "subtask_id: {{subtask_id_yaml}}\n"
+        "depends_on: {{depends_on}}\n"
+        "parent_issue_number: {{parent_issue_number}}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    plan_file.write_text(
+        "---\n"
+        "title: Incremental Test\n"
+        "parent_issue_number: null\n"
+        "subtasks:\n"
+        "  - id: step-1\n"
+        "    description: Step 1\n"
+        "    footprint: []\n"
+        "    symbols: []\n"
+        "    depends_on: []\n"
+        "    issue_number: null\n"
+        "  - id: step-2\n"
+        "    description: Step 2\n"
+        "    footprint: []\n"
+        "    symbols: []\n"
+        "    depends_on: [step-1]\n"
+        "    issue_number: null\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    class FailingOnSecondIssueForge(FakeForge):
+        def __init__(self):
+            super().__init__()
+            self._call_count = 0
+
+        def create_issue(self, title: str, body: str, labels=()):
+            # First call is parent, second is step-1, third is step-2
+            self._call_count += 1
+            if self._call_count == 3:
+                raise RuntimeError("Simulated crash on step-2 creation")
+            return super().create_issue(title, body, labels)
+
+    forge = FailingOnSecondIssueForge()
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Simulated crash on step-2 creation"):
+        provision_issues(
+            plan_path=plan_file,
+            forge=forge,
+            template_path=template_file,
+            repo_root=tmp_path,
+        )
+
+    # Parent issue should already exist and contain step-1's issue number
+    parent_issue = forge.issues[100]
+    extracted = decomposition_plan_from_parent_body(parent_issue["body"])
+    assert extracted is not None
+    step_1 = next(s for s in extracted["subtasks"] if s["id"] == "step-1")
+    step_2 = next(s for s in extracted["subtasks"] if s["id"] == "step-2")
+    assert step_1["issue_number"] == 101
+    assert step_2["issue_number"] is None

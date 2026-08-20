@@ -46,6 +46,7 @@ from orchestune.issue_parsing import (
     find_children_by_parent,
     is_epic_issue,
     parent_issue_number_from_body,
+    restore_plan_markdown_from_parent_body,
 )
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
@@ -163,6 +164,27 @@ def _parent_body(
     if plan_data is not None:
         body = embed_decomposition_plan_in_parent_body(body, plan_data)
     return body
+
+
+def restore_plan_file_from_parent(
+    forge: IssueForge,
+    parent_issue_number: int,
+    output_path: str | Path = "decomposition_plan.md",
+) -> Path:
+    """#532: 親Issue本文の`<!-- orchestune:decomposition-plan -->`から計画Markdownを復元してファイルへ書き出す。"""
+    parent_issue = forge.get_issue(parent_issue_number)
+    if parent_issue is None:
+        raise ValueError(
+            f"Parent issue #{parent_issue_number} was not found on the forge."
+        )
+    restored_markdown = restore_plan_markdown_from_parent_body(parent_issue.body)
+    if not restored_markdown:
+        raise ValueError(
+            f"Parent issue #{parent_issue_number} does not contain a valid decomposition plan block."
+        )
+    out_file = Path(output_path)
+    out_file.write_text(restored_markdown, encoding="utf-8")
+    return out_file
 
 
 def _sync_parent_decomposition_plan(
@@ -870,8 +892,7 @@ def provision_issues(
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
-
-    _sync_parent_decomposition_plan(resolved_forge, parent_issue_number, plan_path)
+        _sync_parent_decomposition_plan(resolved_forge, parent_issue_number, plan_path)
 
     return ProvisionResult(
         parent_issue_number=parent_issue_number,
@@ -947,6 +968,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "plan-derived title the persisted-parent auto-recovery relies on."
         ),
     )
+    parser.add_argument(
+        "--restore-plan",
+        type=int,
+        metavar="PARENT_ISSUE",
+        default=None,
+        help=(
+            "Restore the decomposition_plan.md file from the given parent EPIC issue's body "
+            "and exit without provisioning."
+        ),
+    )
     return parser
 
 
@@ -954,6 +985,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
 
     try:
+        if args.restore_plan is not None:
+            forge = GitHubForge()
+            out = restore_plan_file_from_parent(
+                forge, args.restore_plan, output_path=args.plan
+            )
+            print(
+                f"Successfully restored decomposition plan from #{args.restore_plan} to {out}"
+            )
+            raise SystemExit(0)
+
         # footprintおよびorchestune.toml/[tool.orchestune]はリポジトリルート
         # からの相対パスとして定義されているため、呼び出し元のcwdではなく
         # --planファイル自身の位置を基点にする（dag_cli.pyと同じ規約。#404）。
@@ -977,6 +1018,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         # exit 1 for other failures (missing plan file, DagCycleError, etc.).
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
+    except SystemExit:
+        raise
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error

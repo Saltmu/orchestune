@@ -45,7 +45,7 @@ LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
 # 親Issue本文から計画全体と各サブタスクのissue_number等のメタデータを復元できるようにする。
 DECOMPOSITION_PLAN_MARKER = "<!-- orchestune:decomposition-plan -->"
 DECOMPOSITION_PLAN_BLOCK_PATTERN = re.compile(
-    re.escape(DECOMPOSITION_PLAN_MARKER) + r"\n```yaml\s*\n(.*?)```\n?",
+    re.escape(DECOMPOSITION_PLAN_MARKER) + r"\n```yaml[^\n]*\n(.*?)\n```[ \t]*(?:\n|$)",
     re.DOTALL,
 )
 
@@ -90,7 +90,9 @@ def embed_decomposition_plan_in_parent_body(body: str, plan_data: dict | str) ->
     return f"{body}{separator}\n{new_block}"
 
 
-def restore_plan_dict_to_markdown(plan_dict: dict) -> str:
+def restore_plan_dict_to_markdown(
+    plan_dict: dict, prose_body: str | None = None
+) -> str:
     """#532: 分解計画dictを`decomposition_plan.md`形式のテキスト文字列へ変換する。"""
     frontmatter_yaml = yaml.dump(
         plan_dict,
@@ -98,20 +100,29 @@ def restore_plan_dict_to_markdown(plan_dict: dict) -> str:
         default_flow_style=False,
         sort_keys=False,
     )
-    title = plan_dict.get("title", "Restored Decomposition Plan")
-    description = plan_dict.get("description", "")
-    body_prose = f"# {title}\n"
-    if description:
-        body_prose += f"\n{description}\n"
-    return f"---\n{frontmatter_yaml}---\n\n{body_prose}"
+    if prose_body is not None and prose_body.strip():
+        body_content = prose_body.strip() + "\n"
+    else:
+        title = plan_dict.get("title", "Restored Decomposition Plan")
+        description = plan_dict.get("description", "")
+        body_content = f"# {title}\n"
+        if description:
+            body_content += f"\n{description}\n"
+    return f"---\n{frontmatter_yaml}---\n\n{body_content}"
 
 
 def restore_plan_markdown_from_parent_body(body: str) -> str | None:
-    """#532: 親Issue本文から分解計画dictを抽出し、`decomposition_plan.md`形式のMarkdown文書として復元する。"""
+    """#532: 親Issue本文から分解計画dictを抽出し、`decomposition_plan.md`形式のMarkdown文書として復元する。
+
+    親Issue本文のマーカー前にあるProse本文も引き継いで完全なMarkdownを復元する。
+    """
     plan_dict = decomposition_plan_from_parent_body(body)
     if not plan_dict:
         return None
-    return restore_plan_dict_to_markdown(plan_dict)
+    # Extract prose before the first marker if present
+    prose_match = re.split(r"<!-- orchestune:.*-->", body, maxsplit=1)
+    prose_body = prose_match[0].strip() if prose_match else None
+    return restore_plan_dict_to_markdown(plan_dict, prose_body=prose_body)
 
 
 def _parse_footprint_block(body: str) -> dict | None:

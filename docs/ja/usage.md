@@ -85,10 +85,10 @@ subtasks:
 `decomposition_plan.md` は、計画作成・DAG検証・ユーザー承認（Stage 1〜3）の段階ではローカル（または作業worktree）上のドラフトファイルとして扱われます。
 `orchestune provision`（Stage 4）を実行すると、親Issue（EPIC）の作成・採用とともに、親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへ最新の計画内容（Frontmatter YAML）が自動的に埋め込まれ、同期・永続化されます。
 
-- **親Issueが永続化の真実源（Source of Truth）**: AIエージェントの使い捨てworktreeが削除されてローカルの `decomposition_plan.md` が消失しても、親Issue本文に計画全体（各サブタスクの定義や起票された `issue_number`）が完全な形で記録として残ります。
-- **計画ファイルを失った状態からの安全な再実行**:
-  1. 親Issue本文の `<!-- orchestune:decomposition-plan -->` の下のYAMLブロックから内容を取り出すことで、いつでも `decomposition_plan.md` を復元できます。
-  2. ローカルファイルを失った状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--no-apply` でプレビューして既存の子Issueが正しく再利用されることを確認してください。
+- **親Issueが永続化の真実源（Source of Truth）**: AIエージェントの使い捨てworktreeが削除されてローカルの `decomposition_plan.md` が消失しても、親Issue本文に計画全体（各サブタスクの定義や起票された `issue_number`、説明文）が完全な形で記録として残ります。
+- **計画ファイルを失った状態からの安全な復元と再実行**:
+  1. `orchestune provision --restore-plan <親Issue番号>`（必要に応じて `--plan <出力先>`）を実行すると、親Issue本文から `decomposition_plan.md`（Frontmatter および元の説明文）が直接ファイルへ復元されます。
+  2. 復元した状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--no-apply` でプレビューして既存の子Issueが正しく再利用されることを確認してください。
 - **複数 big rock（計画）の並行運用**:
   複数の大きな石を並行して進める場合は、`orchestune provision --plan plans/rock-a.md` のように `--plan` オプションで個別パスを指定するか、別々のworktreeで作成してください。いずれの場合も `provision` 実行時に各big rockの親Issue本文へ個別に計画が永続化されるため、衝突することなく安全に分離・管理されます。
 - **`orchestune-dispatch` は計画ファイルを参照しない**:
