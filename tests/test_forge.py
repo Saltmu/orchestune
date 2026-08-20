@@ -421,6 +421,24 @@ class TestGitHubForgeRun:
         assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
         assert mock_run.call_args.kwargs.get("errors") == "replace"
 
+    def test_run_normalizes_crlf_in_input_text_to_prevent_cr_accumulation(self):
+        # Issue #558: Windows上ではtext=Trueでのsubprocess stdin書き込み時に
+        # \nが\r\nへ変換される。既にCRLFを含む本文(GitHubから再取得した既存
+        # Issue本文など)をそのまま渡すと、書き込みのたびに\rが積み上がる。
+        # _run()側で事前にCRLF/CRをLFへ正規化することで、この蓄積を防ぐ。
+        with patch("orchestune.forge.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="ok", stderr=""
+            )
+            GitHubForge()._run(
+                ["gh", "issue", "edit", "1", "--body-file", "-"],
+                input_text="line1\r\nline2\rline3\n",
+            )
+
+        sent_input = mock_run.call_args.kwargs.get("input")
+        assert sent_input == "line1\nline2\nline3\n"
+        assert "\r" not in sent_input
+
     def test_run_handles_invalid_utf8_bytes_via_replace_errors(self, monkeypatch):
         # 実際にsubprocess.runを実行した際に、不正バイト列が含まれていても
         # errors="replace"により\ufffdに置換されて正常にstrが返ること
