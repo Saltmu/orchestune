@@ -22,6 +22,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = PROJECT_ROOT / ".orchestune" / "baseline.json"
+DEFAULT_BASE_BRANCH = "origin/main"
 DEFAULT_CI_COMMAND = "./scripts/local-ci.sh"
 EXIT_BASE_BRANCH_RED = 2
 EXIT_STATE_ERROR = 70
@@ -44,8 +45,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("command", choices=("record", "check"))
     parser.add_argument(
         "--base-branch",
-        default="main",
-        help="branch used to calculate git merge-base (default: main)",
+        default=DEFAULT_BASE_BRANCH,
+        help=(
+            "branch used to calculate git merge-base "
+            f"(default: {DEFAULT_BASE_BRANCH})"
+        ),
     )
     parser.add_argument(
         "--ci-command",
@@ -172,12 +176,16 @@ def _baseline_payload(
     }
 
 
-def _update_failure_counts(state: dict[str, object], failures: list[str]) -> None:
+def _update_failure_counts(
+    state: dict[str, object], failures: list[str]
+) -> dict[str, int]:
     previous = state.get("failure_counts")
     previous_counts = previous if isinstance(previous, dict) else {}
-    state["failure_counts"] = {
+    failure_counts = {
         failure: int(previous_counts.get(failure, 0)) + 1 for failure in failures
     }
+    state["failure_counts"] = failure_counts
+    return failure_counts
 
 
 def _record(base_sha: str, ci_command: str) -> int:
@@ -199,8 +207,12 @@ def _check(base_sha: str, ci_command: str) -> int:
         )
         return _record(base_sha, ci_command)
 
+    if state.get("ci_command") != ci_command:
+        print("[ci-baseline] CI command changed; re-recording baseline.")
+        return _record(base_sha, ci_command)
+
     result = _run_ci(ci_command)
-    _update_failure_counts(state, result.failures)
+    failure_counts = _update_failure_counts(state, result.failures)
     _write_state(state)
 
     if result.exit_code == 0:
@@ -224,7 +236,7 @@ def _check(base_sha: str, ci_command: str) -> int:
     if existing_failures:
         print("[ci-baseline] base-branch-red: only baseline CI failures remain.")
         for failure in existing_failures:
-            count = state["failure_counts"].get(failure, 0)  # type: ignore[index]
+            count = failure_counts.get(failure, 0)
             print(f"[ci-baseline] Failure Analyst count {count}: {failure}")
         return EXIT_BASE_BRANCH_RED
 
