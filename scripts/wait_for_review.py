@@ -15,6 +15,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+GH_COMMAND_TIMEOUT_SECONDS = 30
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -23,14 +25,20 @@ if hasattr(sys.stderr, "reconfigure"):
 
 def _run_gh(args: list[str]) -> str:
     cmd = ["gh", *args]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=GH_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"gh command timed out after {GH_COMMAND_TIMEOUT_SECONDS}s"
+        ) from e
     if result.returncode != 0:
         raise RuntimeError(f"gh command failed: {result.stderr.strip()}")
     return result.stdout
@@ -163,6 +171,46 @@ def _get_item_timestamp(item: dict[str, Any]) -> str:
     )
 
 
+def _latest_bot_summary_item(
+    data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> dict[str, Any] | None:
+    candidate_items = [
+        *_filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids),
+        *_filter_bot_items(data.get("reviews", []), bot_name, exclude_ids),
+    ]
+    if not candidate_items:
+        return None
+    return max(candidate_items, key=_get_item_timestamp)
+
+
+def _latest_review_trigger_timestamp(
+    data: dict[str, list[dict[str, Any]]], bot_name: str
+) -> str:
+    trigger_line = f"@{bot_name.lower()} review"
+    trigger_timestamps = [
+        item.get("created_at") or ""
+        for item in data.get("issue_comments", [])
+        if any(
+            line.strip().lower() == trigger_line
+            for line in (item.get("body") or "").splitlines()
+        )
+    ]
+    return max(trigger_timestamps, default="")
+
+
+def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
+    body = (item.get("body") or "").lower()
+    markers = (
+        "is working…",
+        "is working...",
+        "review in progress",
+        "re-review in progress",
+    )
+    return any(marker in body for marker in markers)
+
+
 def _build_snapshot(
     data: dict[str, list[dict[str, Any]]],
     bot_name: str,
@@ -195,19 +243,9 @@ def _extract_review_result(
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
-    # Collect all matching bot comments / reviews
-    candidate_items = [
-        *_filter_bot_items(
-            current_data.get("issue_comments", []), bot_name, exclude_ids
-        ),
-        *_filter_bot_items(current_data.get("reviews", []), bot_name, exclude_ids),
-    ]
-
-    if not candidate_items:
+    latest_item = _latest_bot_summary_item(current_data, bot_name, exclude_ids)
+    if latest_item is None:
         return None
-
-    candidate_items.sort(key=_get_item_timestamp)
-    latest_item = candidate_items[-1]
     latest_body = latest_item.get("body") or ""
 
     # Collect bot inline comments
@@ -280,6 +318,21 @@ def wait_for_review(
                 )
             print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
 
+        if not post_trigger:
+            latest_trigger_time = _latest_review_trigger_timestamp(
+                initial_data, bot_name
+            )
+            latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
+            if (
+                latest_bot_item is not None
+                and latest_trigger_time
+                and _get_item_timestamp(latest_bot_item) > latest_trigger_time
+                and not _is_explicitly_in_progress(latest_bot_item)
+            ):
+                result = _extract_review_result(initial_data, bot_name)
+                if result is not None:
+                    return result
+
         print(
             f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
         )
@@ -299,11 +352,20 @@ def wait_for_review(
                 )
 
                 if has_changes:
-                    result = _extract_review_result(
+                    latest_bot_item = _latest_bot_summary_item(
                         current_data, bot_name, exclude_ids=excluded_ids
                     )
-                    if result is not None:
-                        return result
+                    if latest_bot_item is not None and _is_explicitly_in_progress(
+                        latest_bot_item
+                    ):
+                        initial_snapshot = current_snapshot
+                        print(f"@{bot_name} is still working; continuing to wait...")
+                    else:
+                        result = _extract_review_result(
+                            current_data, bot_name, exclude_ids=excluded_ids
+                        )
+                        if result is not None:
+                            return result
 
             except Exception as e:
                 print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)

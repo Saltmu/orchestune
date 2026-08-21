@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,8 @@ from scripts.wait_for_review import (
     _filter_bot_items,
     _get_item_timestamp,
     _is_bot_user,
+    _is_explicitly_in_progress,
+    _run_gh,
     post_review_trigger,
     wait_for_review,
 )
@@ -60,6 +63,17 @@ def test_is_bot_user():
     assert _is_bot_user("chatgpt-codex-connector[bot]", "codex") is True
     assert _is_bot_user("codex", "codex") is True
     assert _is_bot_user("human_dev", "claude") is False
+
+
+def test_is_explicitly_in_progress_uses_only_strong_transient_markers():
+    assert _is_explicitly_in_progress({"body": "Claude is working…"}) is True
+    assert _is_explicitly_in_progress({"body": "### Review in progress"}) is True
+    assert (
+        _is_explicitly_in_progress(
+            {"body": "### Review complete\n- [ ] Optional follow-up"}
+        )
+        is False
+    )
 
 
 def test_get_item_timestamp():
@@ -243,6 +257,17 @@ def test_run_gh_api_single_dict():
         assert result == [{"id": 42}]
 
 
+def test_run_gh_converts_subprocess_timeout_to_bounded_error():
+    with patch(
+        "scripts.wait_for_review.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+    ) as mock_run:
+        with pytest.raises(RuntimeError, match="timed out after 30s"):
+            _run_gh(["api", "dummy"])
+
+    assert mock_run.call_args.kwargs["timeout"] == 30
+
+
 @patch("scripts.wait_for_review._get_pr_data")
 @patch("scripts.wait_for_review.post_review_trigger")
 def test_wait_for_review_detects_new_comment(mock_post, mock_get_data):
@@ -313,6 +338,120 @@ def test_wait_for_review_detects_updated_comment_inplace(mock_get_data):
     )
     assert "### Review complete" in result["review_body"]
     assert result["timestamp"] == "2026-08-20T07:48:00Z"
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review.post_review_trigger")
+def test_wait_for_review_keeps_waiting_past_in_progress_activity(
+    mock_post, mock_get_data
+):
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review",
+    }
+    in_progress = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:45:00Z",
+        "updated_at": "2026-08-20T07:45:00Z",
+        "body": "Claude is working… <img src='spinner.gif' />",
+    }
+    completed = {
+        **in_progress,
+        "updated_at": "2026-08-20T07:48:00Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [completed], "reviews": [], "inline_comments": []},
+    ]
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+    )
+
+    assert "### Review complete" in result["review_body"]
+    assert result["timestamp"] == "2026-08-20T07:48:00Z"
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_returns_completed_reply_after_latest_trigger(
+    mock_get_data,
+):
+    completed_data = {
+        "issue_comments": [
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "updated_at": "2026-08-20T07:44:44Z",
+                "body": "## Review response\n@claude review",
+            },
+            {
+                "id": 101,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:45:00Z",
+                "updated_at": "2026-08-20T07:48:00Z",
+                "body": "### Review complete\nAll checks passed.",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = completed_data
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=0,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+
+    assert "### Review complete" in result["review_body"]
+    assert result["timestamp"] == "2026-08-20T07:48:00Z"
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_does_not_return_reply_older_than_latest_trigger(
+    mock_get_data,
+):
+    stale_data = {
+        "issue_comments": [
+            {
+                "id": 99,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:40:00Z",
+                "updated_at": "2026-08-20T07:40:00Z",
+                "body": "### Previous review complete\nAll checks passed.",
+            },
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "updated_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = stale_data
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=540,
+            timeout=0,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
 
 
 @patch("scripts.wait_for_review._get_pr_data")
