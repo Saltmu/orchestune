@@ -199,7 +199,7 @@ def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
     return (
         body.startswith(f"**{bot_name.lower()} finished")
         and "view job" in body
-        and "### summary" not in body
+        and "\n---" not in body
     )
 
 
@@ -266,8 +266,22 @@ def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
         "claude is reviewing this pr",
         "codex is reviewing this pr",
     )
-    is_task_progress = "tasks" in status_lines and "- [ ]" in body
+    is_task_progress = _has_unfinished_task_list(body)
     return is_task_progress or any(line in markers for line in status_lines)
+
+
+def _has_unfinished_task_list(body: str) -> bool:
+    in_tasks_section = False
+    for line in body.splitlines():
+        stripped_line = line.strip()
+        if stripped_line.startswith("#"):
+            heading = stripped_line.lstrip("#").strip().lower()
+            if in_tasks_section:
+                return False
+            in_tasks_section = heading == "tasks"
+        elif in_tasks_section and stripped_line.startswith("- [ ]"):
+            return True
+    return False
 
 
 def _build_snapshot(

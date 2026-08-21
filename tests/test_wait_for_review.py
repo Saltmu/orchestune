@@ -99,6 +99,17 @@ def test_is_explicitly_in_progress_ignores_marker_text_outside_headline():
     assert _is_explicitly_in_progress(completed_review) is False
 
 
+def test_is_explicitly_in_progress_ignores_unchecked_item_outside_tasks_section():
+    completed_review = {
+        "body": (
+            "### Tasks\n- [x] Review complete\n\n### Summary\n"
+            "The source contains `- [ ] Optional follow-up`."
+        )
+    }
+
+    assert _is_explicitly_in_progress(completed_review) is False
+
+
 def test_is_explicitly_in_progress_does_not_match_completed_review_prefix():
     completed_review = {
         "body": "### Codex is reviewing this PR as part of maintenance\n\nFindings: none."
@@ -197,6 +208,33 @@ def test_latest_bot_summary_item_ignores_finished_tracker_without_summary():
             {"issue_comments": [tracker], "reviews": [review]}, "claude"
         )
         == review
+    )
+
+
+def test_latest_bot_summary_item_keeps_tracker_with_non_summary_review_content():
+    tracker_with_review = {
+        "id": 1,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T10:00:00Z",
+        "updated_at": "2026-08-20T10:03:00Z",
+        "body": (
+            "**Claude finished task** — [View job](https://example.test)\n\n"
+            "---\n### Findings\nNo blocking issues."
+        ),
+    }
+    older_review = {
+        "id": 2,
+        "user": {"login": "claude[bot]"},
+        "submitted_at": "2026-08-20T10:02:00Z",
+        "body": "### Review complete\nOlder review.",
+    }
+
+    assert (
+        _latest_bot_summary_item(
+            {"issue_comments": [tracker_with_review], "reviews": [older_review]},
+            "claude",
+        )
+        == tracker_with_review
     )
 
 
