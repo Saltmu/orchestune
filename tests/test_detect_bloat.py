@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "detect_bloat.py"
 
