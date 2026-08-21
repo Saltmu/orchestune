@@ -13,6 +13,8 @@ from scripts.wait_for_review import (
     _get_item_timestamp,
     _is_bot_user,
     _is_explicitly_in_progress,
+    _latest_bot_summary_item,
+    _latest_review_trigger_timestamp,
     _run_gh,
     post_review_trigger,
     wait_for_review,
@@ -68,12 +70,21 @@ def test_is_bot_user():
 def test_is_explicitly_in_progress_uses_only_strong_transient_markers():
     assert _is_explicitly_in_progress({"body": "Claude is working…"}) is True
     assert _is_explicitly_in_progress({"body": "### Review in progress"}) is True
+    assert _is_explicitly_in_progress({"body": "### Claude is reviewing this PR"})
     assert (
         _is_explicitly_in_progress(
             {"body": "### Review complete\n- [ ] Optional follow-up"}
         )
         is False
     )
+
+
+def test_is_explicitly_in_progress_ignores_marker_text_outside_headline():
+    completed_review = {
+        "body": "### Review complete\n\nThis replaces the old review in progress flow."
+    }
+
+    assert _is_explicitly_in_progress(completed_review) is False
 
 
 def test_get_item_timestamp():
@@ -90,6 +101,41 @@ def test_get_item_timestamp():
         == "2026-08-20T08:00:00Z"
     )
     assert _get_item_timestamp({}) == ""
+
+
+def test_latest_review_trigger_timestamp_supports_machine_marker():
+    data = {
+        "issue_comments": [
+            {
+                "created_at": "2026-08-20T10:00:00Z",
+                "body": "Please check this\n\n<!-- orchestune:review-trigger bot=claude -->",
+            }
+        ]
+    }
+
+    assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
+
+
+def test_latest_bot_summary_item_preserves_review_tiebreak_order():
+    issue_comment = {
+        "id": 1,
+        "user": {"login": "claude[bot]"},
+        "updated_at": "2026-08-20T10:00:00Z",
+        "body": "Issue comment",
+    }
+    review = {
+        "id": 2,
+        "user": {"login": "claude[bot]"},
+        "submitted_at": "2026-08-20T10:00:00Z",
+        "body": "Review",
+    }
+
+    assert (
+        _latest_bot_summary_item(
+            {"issue_comments": [issue_comment], "reviews": [review]}, "claude"
+        )
+        == review
+    )
 
 
 def test_build_snapshot():
@@ -148,7 +194,19 @@ def test_post_review_trigger_default(mock_run):
     mock_run.assert_called_once()
     cmd = mock_run.call_args[0][0]
     assert "gh" in cmd[0]
-    assert "body=@claude review" in cmd
+    assert cmd[-1].startswith("body=@claude review")
+    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
+
+
+@patch("scripts.wait_for_review.subprocess.run")
+def test_post_review_trigger_marks_custom_bodies_for_no_post_detection(mock_run):
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = json.dumps({"id": 12347})
+
+    post_review_trigger(pr_number=540, bot_name="claude", body="Please check this")
+
+    cmd = mock_run.call_args[0][0]
+    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
 
 
 @patch("scripts.wait_for_review.subprocess.run")
@@ -166,7 +224,8 @@ def test_post_review_trigger_custom_body(mock_run):
     result = post_review_trigger(pr_number=540, bot_name="claude", body=body_text)
     assert result["id"] == 12346
     cmd = mock_run.call_args[0][0]
-    assert f"body={body_text}" in cmd
+    assert cmd[-1].startswith(f"body={body_text}")
+    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
 
 
 def test_post_review_trigger_with_body_file(tmp_path):
@@ -184,7 +243,8 @@ def test_post_review_trigger_with_body_file(tmp_path):
         )
         assert result["id"] == 999
         cmd = mock_run.call_args[0][0]
-        assert "body=## Reply content\n@claude review" in cmd
+        assert cmd[-1].startswith("body=## Reply content\n@claude review")
+        assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
 
 
 def test_post_review_trigger_failure():
@@ -436,6 +496,41 @@ def test_wait_for_review_no_post_does_not_return_reply_older_than_latest_trigger
                 "user": {"login": "human"},
                 "created_at": "2026-08-20T07:44:44Z",
                 "updated_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = stale_data
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=540,
+            timeout=0,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_does_not_use_late_edit_of_old_reply(
+    mock_get_data,
+):
+    stale_data = {
+        "issue_comments": [
+            {
+                "id": 99,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:40:00Z",
+                "updated_at": "2026-08-20T07:50:00Z",
+                "body": "### Previous review complete\nAll checks passed.",
+            },
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
                 "body": "@claude review",
             },
         ],
