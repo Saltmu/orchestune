@@ -16,10 +16,9 @@ import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = PROJECT_ROOT / ".orchestune" / "baseline.json"
@@ -66,7 +65,9 @@ def _merge_base(base_branch: str) -> str:
     )
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(f"could not calculate merge-base with {base_branch}: {detail}")
+        raise RuntimeError(
+            f"could not calculate merge-base with {base_branch}: {detail}"
+        )
 
     base_sha = result.stdout.strip()
     if not base_sha:
@@ -95,7 +96,9 @@ def _failure_identifiers(output: str, exit_code: int) -> list[str]:
     # Other Local CI steps often report a stable error line.  Preserve every
     # distinct line rather than treating unrelated formatter/type failures as
     # one baseline failure.
-    error_lines = re.findall(r"^(?:error:|ERROR:|Error: )\s*(.+)$", output, re.MULTILINE)
+    error_lines = re.findall(
+        r"^(?:error:|ERROR:|Error: )\s*(.+)$", output, re.MULTILINE
+    )
     if error_lines:
         return sorted({f"error:{line.strip()}" for line in error_lines if line.strip()})
 
@@ -152,7 +155,9 @@ def _write_state(state: dict[str, object], path: Path | None = None) -> None:
     temporary_path.replace(path)
 
 
-def _baseline_payload(base_sha: str, ci_command: str, result: CiResult) -> dict[str, object]:
+def _baseline_payload(
+    base_sha: str, ci_command: str, result: CiResult
+) -> dict[str, object]:
     return {
         "version": STATE_VERSION,
         "base_sha": base_sha,
@@ -189,7 +194,9 @@ def _check(base_sha: str, ci_command: str) -> int:
         return _run_ci(ci_command).exit_code
 
     if state.get("base_sha") != base_sha:
-        print("[ci-baseline] Baseline is stale after base branch advancement; re-recording.")
+        print(
+            "[ci-baseline] Baseline is stale after base branch advancement; re-recording."
+        )
         return _record(base_sha, ci_command)
 
     result = _run_ci(ci_command)
@@ -209,7 +216,9 @@ def _check(base_sha: str, ci_command: str) -> int:
     existing_failures = sorted(current_failures & baseline_failures)
 
     if new_failures:
-        print("[ci-baseline] New CI failures: " + ", ".join(new_failures), file=sys.stderr)
+        print(
+            "[ci-baseline] New CI failures: " + ", ".join(new_failures), file=sys.stderr
+        )
         return result.exit_code
 
     if existing_failures:
