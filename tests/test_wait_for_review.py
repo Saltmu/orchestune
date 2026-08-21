@@ -85,9 +85,25 @@ def test_is_explicitly_in_progress_uses_only_strong_transient_markers():
     )
 
 
+def test_is_explicitly_in_progress_scans_status_after_a_preamble():
+    assert _is_explicitly_in_progress(
+        {
+            "body": "<!-- transient -->\n\n### Claude is reviewing this PR <img src='spinner' />"
+        }
+    )
+
+
 def test_is_explicitly_in_progress_ignores_marker_text_outside_headline():
     completed_review = {
         "body": "### Review complete\n\nThis replaces the old review in progress flow."
+    }
+
+    assert _is_explicitly_in_progress(completed_review) is False
+
+
+def test_is_explicitly_in_progress_does_not_match_completed_review_prefix():
+    completed_review = {
+        "body": "### Codex is reviewing this PR as part of maintenance\n\nFindings: none."
     }
 
     assert _is_explicitly_in_progress(completed_review) is False
@@ -122,6 +138,25 @@ def test_latest_review_trigger_timestamp_supports_machine_marker():
     assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
 
 
+def test_latest_review_trigger_timestamp_ignores_the_review_bot_echo():
+    data = {
+        "issue_comments": [
+            {
+                "created_at": "2026-08-20T10:00:00Z",
+                "user": {"login": "human"},
+                "body": "@claude review",
+            },
+            {
+                "created_at": "2026-08-20T10:01:00Z",
+                "user": {"login": "claude[bot]"},
+                "body": "@claude review",
+            },
+        ]
+    }
+
+    assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
+
+
 def test_latest_bot_summary_item_preserves_review_tiebreak_order():
     issue_comment = {
         "id": 1,
@@ -139,6 +174,29 @@ def test_latest_bot_summary_item_preserves_review_tiebreak_order():
     assert (
         _latest_bot_summary_item(
             {"issue_comments": [issue_comment], "reviews": [review]}, "claude"
+        )
+        == review
+    )
+
+
+def test_latest_bot_summary_item_ignores_finished_tracker_without_summary():
+    tracker = {
+        "id": 1,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T10:00:00Z",
+        "updated_at": "2026-08-20T10:03:00Z",
+        "body": "**Claude finished task** — [View job](https://example.test)",
+    }
+    review = {
+        "id": 2,
+        "user": {"login": "claude[bot]"},
+        "submitted_at": "2026-08-20T10:02:00Z",
+        "body": "### Review complete\nFindings posted inline.",
+    }
+
+    assert (
+        _latest_bot_summary_item(
+            {"issue_comments": [tracker], "reviews": [review]}, "claude"
         )
         == review
     )
@@ -485,6 +543,39 @@ def test_wait_for_review_no_post_returns_completed_reply_after_latest_trigger(
 
 
 @patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_returns_reply_created_in_trigger_second(mock_get_data):
+    completed_data = {
+        "issue_comments": [
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+            {
+                "id": 101,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "### Review complete\nAll checks passed.",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = completed_data
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=0,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+
+    assert "### Review complete" in result["review_body"]
+
+
+@patch("scripts.wait_for_review._get_pr_data")
 def test_wait_for_review_no_post_does_not_return_reply_older_than_latest_trigger(
     mock_get_data,
 ):
@@ -644,7 +735,7 @@ def test_wait_for_review_polling_catches_exception_and_continues():
         assert "LGTM!" in result["review_body"]
 
 
-def test_get_pr_data_endpoint_fallbacks():
+def test_get_pr_data_does_not_return_partial_data_when_an_endpoint_fails():
     from scripts.wait_for_review import _get_pr_data
 
     with patch("scripts.wait_for_review._run_gh_api") as mock_api:
@@ -655,10 +746,8 @@ def test_get_pr_data_endpoint_fallbacks():
             raise RuntimeError("API disabled")
 
         mock_api.side_effect = side_effect
-        data = _get_pr_data(540)
-        assert len(data["issue_comments"]) == 1
-        assert data["reviews"] == []
-        assert data["inline_comments"] == []
+        with pytest.raises(RuntimeError, match="API disabled"):
+            _get_pr_data(540)
 
 
 def test_main_cli_success():

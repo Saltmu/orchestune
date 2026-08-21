@@ -135,11 +135,7 @@ def _get_pr_data(
     pr_number: int, executor: ThreadPoolExecutor | None = None
 ) -> dict[str, list[dict[str, Any]]]:
     def fetch_endpoint(endpoint: str) -> list[dict[str, Any]]:
-        try:
-            return _run_gh_api(endpoint)
-        except Exception as e:
-            print(f"Warning: Failed to fetch {endpoint}: {e}", file=sys.stderr)
-            return []
+        return _run_gh_api(endpoint)
 
     endpoints = [
         f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments",
@@ -187,18 +183,51 @@ def _get_item_created_timestamp(item: dict[str, Any]) -> str:
     return item.get("submitted_at") or item.get("created_at") or ""
 
 
+def _bot_candidate_items(
+    data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        *_filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids),
+        *_filter_bot_items(data.get("reviews", []), bot_name, exclude_ids),
+    ]
+
+
+def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
+    body = (item.get("body") or "").lower()
+    return (
+        body.startswith(f"**{bot_name.lower()} finished")
+        and "view job" in body
+        and "### summary" not in body
+    )
+
+
+def _latest_bot_activity_item(
+    data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> dict[str, Any] | None:
+    candidate_items = _bot_candidate_items(data, bot_name, exclude_ids)
+    if not candidate_items:
+        return None
+    return sorted(candidate_items, key=_get_item_timestamp)[-1]
+
+
 def _latest_bot_summary_item(
     data: dict[str, list[dict[str, Any]]],
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
-    candidate_items = [
-        *_filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids),
-        *_filter_bot_items(data.get("reviews", []), bot_name, exclude_ids),
-    ]
+    candidate_items = _bot_candidate_items(data, bot_name, exclude_ids)
     if not candidate_items:
         return None
-    return sorted(candidate_items, key=_get_item_timestamp)[-1]
+    summary_candidates = [
+        item
+        for item in candidate_items
+        if not _is_finished_progress_tracker(item, bot_name)
+    ]
+    return sorted(summary_candidates or candidate_items, key=_get_item_timestamp)[-1]
 
 
 def _latest_review_trigger_timestamp(
@@ -209,35 +238,38 @@ def _latest_review_trigger_timestamp(
     trigger_timestamps = [
         item.get("created_at") or ""
         for item in data.get("issue_comments", [])
-        if marker in (body := (item.get("body") or "")).lower()
-        or any(line.strip().lower() == trigger_line for line in body.splitlines())
+        if not _is_bot_user((item.get("user") or {}).get("login", ""), bot_name)
+        and (
+            marker in (body := (item.get("body") or "")).lower()
+            or any(line.strip().lower() == trigger_line for line in body.splitlines())
+        )
     ]
     return max(trigger_timestamps, default="")
 
 
 def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
     body = item.get("body") or ""
-    headline = next(
-        (
-            line.lstrip("#").strip().lower()
-            for line in body.splitlines()
-            if line.strip()
-        ),
-        "",
-    )
+    status_lines = [
+        line.lstrip("#").strip().lower().split("<", maxsplit=1)[0].strip()
+        for line in body.splitlines()
+        if line.strip()
+    ]
     markers = (
-        "claude is working",
-        "claude code is working",
-        "codex is working",
+        "claude is working…",
+        "claude is working...",
+        "claude code is working…",
+        "claude code is working...",
+        "codex is working…",
+        "codex is working...",
         "review in progress",
         "re-review in progress",
-        "claude is reviewing",
-        "codex is reviewing",
+        "claude is reviewing this pr",
+        "codex is reviewing this pr",
     )
     is_task_progress = (
-        headline == "tasks" and "- [ ]" in body and "view job run" in body.lower()
+        "tasks" in status_lines and "- [ ]" in body and "view job run" in body.lower()
     )
-    return is_task_progress or any(headline.startswith(marker) for marker in markers)
+    return is_task_progress or any(line in markers for line in status_lines)
 
 
 def _build_snapshot(
@@ -353,12 +385,16 @@ def wait_for_review(
             latest_trigger_time = _latest_review_trigger_timestamp(
                 initial_data, bot_name
             )
+            latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
             latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
             if (
                 latest_bot_item is not None
                 and latest_trigger_time
-                and _get_item_created_timestamp(latest_bot_item) > latest_trigger_time
-                and not _is_explicitly_in_progress(latest_bot_item)
+                and _get_item_created_timestamp(latest_bot_item) >= latest_trigger_time
+                and not (
+                    latest_bot_activity is not None
+                    and _is_explicitly_in_progress(latest_bot_activity)
+                )
             ):
                 result = _extract_review_result(
                     initial_data, bot_name, latest_item=latest_bot_item
@@ -385,15 +421,18 @@ def wait_for_review(
                 )
 
                 if has_changes:
-                    latest_bot_item = _latest_bot_summary_item(
+                    latest_bot_activity = _latest_bot_activity_item(
                         current_data, bot_name, exclude_ids=excluded_ids
                     )
-                    if latest_bot_item is not None and _is_explicitly_in_progress(
-                        latest_bot_item
+                    if latest_bot_activity is not None and _is_explicitly_in_progress(
+                        latest_bot_activity
                     ):
                         initial_snapshot = current_snapshot
                         print(f"@{bot_name} is still working; continuing to wait...")
                     else:
+                        latest_bot_item = _latest_bot_summary_item(
+                            current_data, bot_name, exclude_ids=excluded_ids
+                        )
                         result = _extract_review_result(
                             current_data,
                             bot_name,
