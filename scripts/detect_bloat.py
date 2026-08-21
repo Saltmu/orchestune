@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_SECTION = "detect-bloat"
 
@@ -77,8 +76,10 @@ def _read_required_int(config: dict[str, Any], name: str) -> int:
 
 def _read_paths(config: dict[str, Any], name: str) -> tuple[Path, ...]:
     value = config.get(name)
-    if not isinstance(value, list) or not value or not all(
-        isinstance(item, str) and item for item in value
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item for item in value)
     ):
         raise ValueError(
             f"tool.{CONFIG_SECTION}.{name} must be a non-empty string list"
@@ -182,9 +183,7 @@ def scan_project(
             lines = sum(_line_count(path) for path in skill_dir.rglob("*.md"))
             if lines > config.skill_directory_lines:
                 reports.append(
-                    BloatReport(
-                        "skill", skill_dir, lines, config.skill_directory_lines
-                    )
+                    BloatReport("skill", skill_dir, lines, config.skill_directory_lines)
                 )
 
     return reports
