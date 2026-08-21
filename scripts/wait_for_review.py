@@ -266,9 +266,7 @@ def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
         "claude is reviewing this pr",
         "codex is reviewing this pr",
     )
-    is_task_progress = (
-        "tasks" in status_lines and "- [ ]" in body and "view job run" in body.lower()
-    )
+    is_task_progress = "tasks" in status_lines and "- [ ]" in body
     return is_task_progress or any(line in markers for line in status_lines)
 
 
