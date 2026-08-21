@@ -298,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         base_sha = _merge_base(args.base_branch)
         if args.command == "record":
+            # Recording observes the existing worktree and must not mutate it;
+            # formatting is deliberately an agent-preflight for ``check`` only.
             return _record(base_sha, args.ci_command)
         formatting_exit_code = _apply_formatting(no_format=args.no_format)
         if formatting_exit_code != 0:
