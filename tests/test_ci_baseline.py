@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "ci_baseline.py"
 
@@ -23,7 +22,9 @@ def ci_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(module, "BASELINE_PATH", tmp_path / ".orchestune" / "baseline.json")
+    monkeypatch.setattr(
+        module, "BASELINE_PATH", tmp_path / ".orchestune" / "baseline.json"
+    )
     monkeypatch.setattr(module, "_merge_base", lambda _base_branch: "base-sha")
     return module
 
@@ -35,7 +36,9 @@ def _ci_result(exit_code: int, output: str) -> subprocess.CompletedProcess[str]:
 def test_check_without_baseline_uses_absolute_ci_exit_code(
     ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n"))
+    monkeypatch.setattr(
+        ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n")
+    )
 
     assert ci_baseline.main(["check"]) == 1
     assert not ci_baseline.BASELINE_PATH.exists()
@@ -52,13 +55,18 @@ def test_check_rerecords_a_stale_baseline(
             "failure_counts": {"old": 2},
         }
     )
-    monkeypatch.setattr(ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n"))
+    monkeypatch.setattr(
+        ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n")
+    )
 
     assert ci_baseline.main(["check"]) == 1
     state = ci_baseline._read_state()
     assert state is not None
     assert state["base_sha"] == "base-sha"
-    assert state["baseline"] == {"exit_code": 1, "failures": ["ci-output:cdd6c109503d4e19"]}
+    assert state["baseline"] == {
+        "exit_code": 1,
+        "failures": ["ci-output:cdd6c109503d4e19"],
+    }
     assert state["failure_counts"] == {}
 
 
@@ -76,7 +84,9 @@ def test_check_classifies_only_baseline_failures_as_base_branch_red(
     monkeypatch.setattr(
         ci_baseline.subprocess,
         "run",
-        lambda *args, **kwargs: _ci_result(1, "FAILED tests/test_old.py::test_old - broken\n"),
+        lambda *args, **kwargs: _ci_result(
+            1, "FAILED tests/test_old.py::test_old - broken\n"
+        ),
     )
 
     assert ci_baseline.main(["check"]) == ci_baseline.EXIT_BASE_BRANCH_RED
@@ -99,7 +109,9 @@ def test_check_preserves_failure_counts_between_resumed_runs(
     monkeypatch.setattr(
         ci_baseline.subprocess,
         "run",
-        lambda *args, **kwargs: _ci_result(1, "FAILED tests/test_old.py::test_old - broken\n"),
+        lambda *args, **kwargs: _ci_result(
+            1, "FAILED tests/test_old.py::test_old - broken\n"
+        ),
     )
 
     assert ci_baseline.main(["check"]) == ci_baseline.EXIT_BASE_BRANCH_RED
@@ -122,7 +134,9 @@ def test_check_returns_original_exit_code_for_a_new_failure(
     monkeypatch.setattr(
         ci_baseline.subprocess,
         "run",
-        lambda *args, **kwargs: _ci_result(5, "FAILED tests/test_new.py::test_new - broken\n"),
+        lambda *args, **kwargs: _ci_result(
+            5, "FAILED tests/test_new.py::test_new - broken\n"
+        ),
     )
 
     assert ci_baseline.main(["check"]) == 5
