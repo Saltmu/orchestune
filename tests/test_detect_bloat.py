@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "detect_bloat.py"
 
@@ -97,3 +99,56 @@ def test_warn_only_returns_zero_when_bloat_is_detected(tmp_path: Path) -> None:
 
     assert detect_bloat.main(["--root", str(tmp_path), "--warn-only"]) == 0
     assert detect_bloat.main(["--root", str(tmp_path)]) == 1
+
+
+def test_warn_only_tolerates_non_utf8_files(tmp_path: Path) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    source_dir.joinpath("invalid.py").write_bytes(b"\xff")
+
+    assert detect_bloat.main(["--root", str(tmp_path), "--warn-only"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("config", "error"),
+    [
+        ("[tool]\n", "missing [tool.detect-bloat]"),
+        (
+            """
+[tool.detect-bloat]
+code_paths = []
+test_paths = ["tests"]
+skills_path = "skills"
+code_file_lines = 100
+test_file_lines = 100
+skill_directory_lines = 50
+function_lines = 10
+""",
+            "code_paths must be a non-empty string list",
+        ),
+        (
+            """
+[tool.detect-bloat]
+code_paths = ["orchestune"]
+test_paths = ["tests"]
+skills_path = "skills"
+code_file_lines = 0
+test_file_lines = 100
+skill_directory_lines = 50
+function_lines = 10
+""",
+            "code_file_lines must be a positive integer",
+        ),
+    ],
+)
+def test_load_config_rejects_invalid_values(
+    tmp_path: Path, config: str, error: str
+) -> None:
+    detect_bloat = _load_script()
+    tmp_path.joinpath("pyproject.toml").write_text(config.lstrip(), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        detect_bloat.load_config(tmp_path)
+    assert error in str(exc_info.value)
