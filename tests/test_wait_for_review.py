@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import patch
 
 import pytest
 
 from scripts.wait_for_review import (
+    GH_SUBPROCESS_TIMEOUT_SECONDS,
     _build_snapshot,
     _extract_review_result,
     _filter_bot_items,
+    _find_latest_trigger_comment,
     _get_item_timestamp,
     _is_bot_user,
+    _is_in_progress_body,
+    _latest_post_trigger_bot_item,
     post_review_trigger,
     wait_for_review,
 )
@@ -492,3 +497,169 @@ def test_wait_for_review_does_not_self_trigger_if_poster_is_bot(
     # Must pick the real review (id: 101), not the trigger comment (id: 100)
     assert "### Review complete" in result["review_body"]
     assert result["timestamp"] == "2026-08-20T07:46:00Z"
+
+
+def test_is_in_progress_body():
+    assert _is_in_progress_body("### Review in progress\n- [ ] Working...") is True
+    assert _is_in_progress_body("- [ ] still open item") is True
+    assert (
+        _is_in_progress_body(
+            '<img src="https://.../5ac382c7-e004-429b-8e35-7feb3e8f9c6f" />'
+        )
+        is True
+    )
+    assert _is_in_progress_body("進行中の対応です") is True
+    assert _is_in_progress_body("### Review complete\nAll checks passed.") is False
+    assert _is_in_progress_body("") is False
+
+
+def test_find_latest_trigger_comment():
+    items = [
+        {"id": 1, "created_at": "2026-08-20T07:00:00Z", "body": "unrelated comment"},
+        {"id": 2, "created_at": "2026-08-20T07:10:00Z", "body": "@claude review"},
+        {"id": 3, "created_at": "2026-08-20T07:20:00Z", "body": "## reply\n@claude review"},
+    ]
+    result = _find_latest_trigger_comment(items, "claude")
+    assert result is not None
+    assert result["id"] == 3
+    assert _find_latest_trigger_comment(items, "codex") is None
+    assert _find_latest_trigger_comment([], "claude") is None
+
+
+def test_latest_post_trigger_bot_item():
+    data = {
+        "issue_comments": [
+            {
+                "id": 1,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:00:00Z",
+                "body": "before trigger",
+            },
+            {
+                "id": 2,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:20:00Z",
+                "body": "after trigger",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    result = _latest_post_trigger_bot_item(
+        data, "claude", trigger_time="2026-08-20T07:10:00Z"
+    )
+    assert result is not None
+    assert result["id"] == 2
+    assert (
+        _latest_post_trigger_bot_item(
+            data, "claude", trigger_time="2026-08-20T09:00:00Z"
+        )
+        is None
+    )
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_returns_lost_update_completed_response(
+    mock_get_data,
+):
+    """Regression test for Issue #564: a bot response that finished
+    between a previous invocation and this --no-post resume must be
+    detected immediately instead of waiting for a further change."""
+    trigger_comment = {
+        "id": 500,
+        "user": {"login": "human_dev"},
+        "created_at": "2026-08-21T12:40:00Z",
+        "body": "@claude review",
+    }
+    completed_comment = {
+        "id": 501,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-21T12:49:08Z",
+        "updated_at": "2026-08-21T12:52:26Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.return_value = {
+        "issue_comments": [trigger_comment, completed_comment],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    result = wait_for_review(
+        pr_number=562,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+    assert "### Review complete" in result["review_body"]
+    # Must return on the very first fetch, without polling further.
+    assert mock_get_data.call_count == 1
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_waits_for_explicit_in_progress_response(
+    mock_get_data,
+):
+    trigger_comment = {
+        "id": 500,
+        "user": {"login": "human_dev"},
+        "created_at": "2026-08-21T12:40:00Z",
+        "body": "@claude review",
+    }
+    in_progress_comment = {
+        "id": 501,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-21T12:41:00Z",
+        "updated_at": "2026-08-21T12:41:00Z",
+        "body": "### Review in progress\n- [ ] Working...",
+    }
+    completed_comment = {
+        **in_progress_comment,
+        "updated_at": "2026-08-21T12:52:26Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+
+    mock_get_data.side_effect = [
+        {
+            "issue_comments": [trigger_comment, in_progress_comment],
+            "reviews": [],
+            "inline_comments": [],
+        },
+        {
+            "issue_comments": [trigger_comment, completed_comment],
+            "reviews": [],
+            "inline_comments": [],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=562,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+    assert "### Review complete" in result["review_body"]
+    assert mock_get_data.call_count == 2
+
+
+@patch("scripts.wait_for_review.subprocess.run")
+def test_run_gh_passes_subprocess_timeout(mock_run):
+    from scripts.wait_for_review import _run_gh_api
+
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = json.dumps({"id": 1})
+
+    _run_gh_api("dummy")
+    assert mock_run.call_args.kwargs["timeout"] == GH_SUBPROCESS_TIMEOUT_SECONDS
+
+
+def test_run_gh_subprocess_hang_raises_runtime_error():
+    from scripts.wait_for_review import _run_gh_api
+
+    with patch("scripts.wait_for_review.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["gh", "api", "dummy"], timeout=GH_SUBPROCESS_TIMEOUT_SECONDS
+        )
+        with pytest.raises(RuntimeError, match="gh command timed out"):
+            _run_gh_api("dummy")

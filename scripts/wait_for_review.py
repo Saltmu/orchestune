@@ -20,17 +20,33 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+# Hard ceiling on a single `gh` invocation so a hung subprocess can't block the
+# outer --timeout from ever being evaluated (see Issue #564).
+GH_SUBPROCESS_TIMEOUT_SECONDS = 60
+
+# Markers that identify a bot response as still in progress (e.g. the
+# claude-code-action spinner image and unresolved todo checkboxes), used to
+# decide whether an already-posted response can be returned immediately.
+_IN_PROGRESS_SPINNER_MARKER = "5ac382c7-e004-429b-8e35-7feb3e8f9c6f"
+_IN_PROGRESS_TEXT_MARKERS = ("in progress", "進行中", "作業中")
+
 
 def _run_gh(args: list[str]) -> str:
     cmd = ["gh", *args]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=GH_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"gh command timed out after {GH_SUBPROCESS_TIMEOUT_SECONDS}s: {' '.join(cmd)}"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(f"gh command failed: {result.stderr.strip()}")
     return result.stdout
@@ -171,6 +187,51 @@ def _build_snapshot(
     return snapshot
 
 
+def _is_in_progress_body(body: str) -> bool:
+    """Heuristically detect whether a bot response body is still work-in-progress.
+
+    Mirrors the conventions this repo's bots actually use (see
+    skills/local-ci-developer/SKILL.md ③): the claude-code-action spinner
+    image, unresolved todo checkboxes, or explicit "in progress" wording.
+    """
+    if not body:
+        return False
+    if _IN_PROGRESS_SPINNER_MARKER in body or "- [ ]" in body:
+        return True
+    lowered = body.lower()
+    return any(marker in lowered for marker in _IN_PROGRESS_TEXT_MARKERS)
+
+
+def _find_latest_trigger_comment(
+    items: list[dict[str, Any]], bot_name: str
+) -> dict[str, Any] | None:
+    """Find the most recent comment containing the '@{bot_name} review' trigger phrase."""
+    phrase = f"@{bot_name.lower()} review"
+    candidates = [c for c in items if phrase in (c.get("body") or "").lower()]
+    if not candidates:
+        return None
+    candidates.sort(key=_get_item_timestamp)
+    return candidates[-1]
+
+
+def _latest_post_trigger_bot_item(
+    data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    trigger_time: str,
+    exclude_ids: set[int | str] | None = None,
+) -> dict[str, Any] | None:
+    """Find the most recent bot comment/review posted or updated after trigger_time."""
+    candidates = [
+        *_filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids),
+        *_filter_bot_items(data.get("reviews", []), bot_name, exclude_ids),
+    ]
+    candidates = [c for c in candidates if _get_item_timestamp(c) > trigger_time]
+    if not candidates:
+        return None
+    candidates.sort(key=_get_item_timestamp)
+    return candidates[-1]
+
+
 def _extract_review_result(
     current_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
@@ -240,8 +301,8 @@ def wait_for_review(
     with ThreadPoolExecutor(max_workers=3) as executor:
         # Capture initial state before triggering/waiting
         initial_data = _get_pr_data(pr_number, executor=executor)
-        initial_snapshot = _build_snapshot(initial_data, bot_name)
         excluded_ids: set[int | str] = set()
+        trigger_time = ""
 
         if post_trigger:
             print(
@@ -252,14 +313,41 @@ def wait_for_review(
             )
             trigger_id = trigger_info.get("id")
             trigger_time = trigger_info.get("created_at", "")
-            trigger_body = trigger_info.get("body") or ""
             if trigger_id is not None:
                 excluded_ids.add(trigger_id)
-                # Seed into initial snapshot to prevent self-detection if posted under bot identity
-                initial_snapshot[f"comment_{trigger_id}"] = (
-                    f"{trigger_time}:{len(trigger_body)}"
-                )
             print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
+        else:
+            # No fresh trigger is posted in this process (e.g. --no-post resume
+            # after a previous invocation already returned). Re-derive the
+            # boundary from the most recent existing trigger comment so that a
+            # bot response completed between invocations isn't lost (Issue #564).
+            trigger_comment = _find_latest_trigger_comment(
+                initial_data.get("issue_comments", []), bot_name
+            )
+            if trigger_comment is not None:
+                trigger_time = _get_item_timestamp(trigger_comment)
+                trigger_comment_id = trigger_comment.get("id")
+                if trigger_comment_id is not None:
+                    excluded_ids.add(trigger_comment_id)
+
+        initial_snapshot = _build_snapshot(
+            initial_data, bot_name, exclude_ids=excluded_ids
+        )
+
+        # If a bot response newer than the trigger already exists and looks
+        # complete, return it immediately instead of waiting for a further
+        # change that may never come.
+        latest_post_trigger_item = _latest_post_trigger_bot_item(
+            initial_data, bot_name, trigger_time, exclude_ids=excluded_ids
+        )
+        if latest_post_trigger_item is not None and not _is_in_progress_body(
+            latest_post_trigger_item.get("body") or ""
+        ):
+            result = _extract_review_result(
+                initial_data, bot_name, exclude_ids=excluded_ids
+            )
+            if result is not None:
+                return result
 
         print(
             f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
