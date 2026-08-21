@@ -37,16 +37,35 @@ def _run_gh(args: list[str]) -> str:
 
 
 def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
-    stdout = _run_gh(["api", "--paginate", "--slurp", endpoint, *extra_args])
-    pages = json.loads(stdout)
-    if isinstance(pages, list) and pages and isinstance(pages[0], list):
-        flattened: list[dict[str, Any]] = []
-        for page in pages:
-            flattened.extend(page)
-        return flattened
-    if isinstance(pages, list):
-        return pages
-    return [pages]
+    stdout = _run_gh(["api", "--paginate", endpoint, *extra_args])
+    if not stdout.strip():
+        return []
+    try:
+        pages = json.loads(stdout)
+        if isinstance(pages, list) and pages and isinstance(pages[0], list):
+            flattened: list[dict[str, Any]] = []
+            for page in pages:
+                flattened.extend(page)
+            return flattened
+        if isinstance(pages, list):
+            return pages
+        return [pages]
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        pos = 0
+        items: list[dict[str, Any]] = []
+        while pos < len(stdout):
+            while pos < len(stdout) and stdout[pos].isspace():
+                pos += 1
+            if pos >= len(stdout):
+                break
+            obj, next_pos = decoder.raw_decode(stdout, pos)
+            pos = next_pos
+            if isinstance(obj, list):
+                items.extend(obj)
+            elif isinstance(obj, dict):
+                items.append(obj)
+        return items
 
 
 def post_review_trigger(

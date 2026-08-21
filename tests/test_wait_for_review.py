@@ -196,6 +196,31 @@ def test_run_gh_api_handles_paginated_slurp_response(mock_run):
     assert [c["id"] for c in result] == [1, 2, 3, 4]
 
 
+@patch("scripts.wait_for_review.subprocess.run")
+def test_run_gh_api_handles_concatenated_paginated_response(mock_run):
+    from scripts.wait_for_review import _run_gh_api
+
+    page1 = [{"id": 1}, {"id": 2}]
+    page2 = [{"id": 3}, {"id": 4}]
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = json.dumps(page1) + "\n" + json.dumps(page2)
+
+    result = _run_gh_api("dummy/endpoint")
+    assert len(result) == 4
+    assert [c["id"] for c in result] == [1, 2, 3, 4]
+
+
+@patch("scripts.wait_for_review.subprocess.run")
+def test_run_gh_api_handles_empty_stdout(mock_run):
+    from scripts.wait_for_review import _run_gh_api
+
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = "   \n"
+
+    result = _run_gh_api("dummy/endpoint")
+    assert result == []
+
+
 def test_run_gh_api_failure():
     from scripts.wait_for_review import _run_gh_api
 
