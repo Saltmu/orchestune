@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -24,6 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = PROJECT_ROOT / ".orchestune" / "baseline.json"
 DEFAULT_BASE_BRANCH = "origin/main"
 DEFAULT_CI_COMMAND = "./scripts/local-ci.sh"
+RUFF_FORMAT_COMMANDS = (
+    ("poetry", "run", "ruff", "format"),
+    ("poetry", "run", "ruff", "check", "--fix"),
+)
 EXIT_BASE_BRANCH_RED = 2
 EXIT_STATE_ERROR = 70
 STATE_VERSION = 1
@@ -40,7 +45,10 @@ class CiResult:
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Record and compare an agent-local Local CI baseline."
+        description=(
+            "Record and compare an agent-local Local CI baseline. "
+            "check applies safe Ruff formatting before Local CI by default."
+        )
     )
     parser.add_argument("command", choices=("record", "check"))
     parser.add_argument(
@@ -55,6 +63,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--ci-command",
         default=DEFAULT_CI_COMMAND,
         help=f"Local CI command to execute (default: {DEFAULT_CI_COMMAND})",
+    )
+    parser.add_argument(
+        "--no-format",
+        action="store_true",
+        help="do not apply Ruff formatting before check",
     )
     return parser.parse_args(argv)
 
@@ -130,6 +143,40 @@ def _run_ci(command: str) -> CiResult:
         failures=_failure_identifiers(output, result.returncode),
         output=output,
     )
+
+
+def _apply_formatting(*, no_format: bool) -> int:
+    """Apply safe Ruff fixes before an agent runs Local CI.
+
+    This intentionally belongs to the agent-only wrapper rather than
+    ``local-ci.sh`` so the absolute CI gate never mutates a working tree.
+    """
+
+    if no_format:
+        print("[ci-baseline] Formatting disabled by --no-format.")
+        return 0
+    if os.environ.get("CI"):
+        print("[ci-baseline] Formatting skipped because CI is set.")
+        return 0
+
+    for command in RUFF_FORMAT_COMMANDS:
+        result = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = f"{result.stdout}{result.stderr}"
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n")
+        if result.returncode != 0:
+            print(
+                f"[ci-baseline] Formatting command failed: {' '.join(command)}",
+                file=sys.stderr,
+            )
+            return result.returncode
+    return 0
 
 
 def _read_state(path: Path | None = None) -> dict[str, object] | None:
@@ -252,6 +299,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         base_sha = _merge_base(args.base_branch)
         if args.command == "record":
             return _record(base_sha, args.ci_command)
+        formatting_exit_code = _apply_formatting(no_format=args.no_format)
+        if formatting_exit_code != 0:
+            return formatting_exit_code
         return _check(base_sha, args.ci_command)
     except (OSError, RuntimeError) as exc:
         print(f"[ci-baseline] {exc}", file=sys.stderr)
