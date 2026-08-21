@@ -45,7 +45,11 @@ Write-Host "[4/5] Running tests with coverage (pytest)..."
 poetry run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[5/5] Scanning for secrets and local paths (gitleaks)..."
+Write-Host "[5/6] Detecting code and skill bloat (warn only)..."
+poetry run python scripts/detect_bloat.py --warn-only
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "[6/6] Scanning for secrets and local paths (gitleaks)..."
 $GitleaksInstallDir = if ($env:GITLEAKS_INSTALL_DIR) { $env:GITLEAKS_INSTALL_DIR } else { Join-Path $HOME ".local\bin" }
 $env:PATH = "$GitleaksInstallDir;$env:PATH"
 
