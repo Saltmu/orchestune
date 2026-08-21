@@ -123,7 +123,7 @@ def _line_count(path: Path) -> int:
     try:
         with path.open(encoding="utf-8") as source_file:
             return sum(1 for _ in source_file)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         print(f"[detect-bloat] Cannot read {path}: {exc}", file=sys.stderr)
         return 0
 
@@ -145,7 +145,7 @@ def _iter_python_files(
 def _function_reports(path: Path, limit: int) -> list[BloatReport]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError) as exc:
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
         print(f"[detect-bloat] Cannot parse {path}: {exc}", file=sys.stderr)
         return []
 
@@ -179,6 +179,7 @@ def scan_project(
 
     skills_dir = root_dir / config.skills_path
     if skills_dir.is_dir():
+        # Stable report ordering keeps CLI output and tests deterministic.
         for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir()):
             lines = sum(_line_count(path) for path in skill_dir.rglob("*.md"))
             if lines > config.skill_directory_lines:
