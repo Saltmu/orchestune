@@ -1,0 +1,157 @@
+"""#548: `orchestune:outcome`完了宣言レコードのrender/parse往復変換テスト。"""
+
+from __future__ import annotations
+
+from orchestune.outcome_record import (
+    OUTCOME_MARKER,
+    OutcomeRecord,
+    ReviewSummary,
+    parse_from_comments,
+)
+
+
+class TestRenderParseRoundTrip:
+    def test_minimal_done_record_round_trips(self):
+        record = OutcomeRecord(result="done", issue=548, pr=560)
+        body = record.render()
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        assert parse_from_comments(comments) == record
+
+    def test_not_needed_record_round_trips(self):
+        record = OutcomeRecord(result="not-needed", issue=548, pr=None)
+        body = record.render()
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        assert parse_from_comments(comments) == record
+
+    def test_blocked_record_with_reason_round_trips(self):
+        record = OutcomeRecord(
+            result="blocked",
+            issue=548,
+            pr=None,
+            reason="base-branch-red",
+            base_sha="abc1234",
+            attempt=2,
+        )
+        body = record.render()
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        assert parse_from_comments(comments) == record
+
+    def test_full_record_with_review_and_regressions_round_trips(self):
+        record = OutcomeRecord(
+            result="done",
+            issue=548,
+            pr=560,
+            review=ReviewSummary(bot="claude", rounds=2, verdict="lgtm"),
+            ci="passing",
+            baseline_regressions=("tests/test_flaky.py::test_x",),
+        )
+        body = record.render()
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        assert parse_from_comments(comments) == record
+
+    def test_rendered_body_contains_marker(self):
+        record = OutcomeRecord(result="done", issue=1, pr=2)
+        assert OUTCOME_MARKER in record.render()
+
+
+class TestParseFromCommentsLatestWins:
+    def test_picks_comment_with_max_created_at(self):
+        older = OutcomeRecord(result="blocked", issue=1, reason="base-branch-red")
+        newer = OutcomeRecord(result="done", issue=1, pr=2)
+        comments = [
+            {"body": older.render(), "created_at": "2026-08-20T00:00:00Z"},
+            {"body": newer.render(), "created_at": "2026-08-21T00:00:00Z"},
+        ]
+        assert parse_from_comments(comments) == newer
+
+    def test_order_in_list_does_not_matter(self):
+        older = OutcomeRecord(result="blocked", issue=1, reason="base-branch-red")
+        newer = OutcomeRecord(result="done", issue=1, pr=2)
+        comments = [
+            {"body": newer.render(), "created_at": "2026-08-21T00:00:00Z"},
+            {"body": older.render(), "created_at": "2026-08-20T00:00:00Z"},
+        ]
+        assert parse_from_comments(comments) == newer
+
+
+class TestParseFromCommentsFailClosed:
+    def test_no_comments_returns_none(self):
+        assert parse_from_comments([]) is None
+
+    def test_no_marker_returns_none(self):
+        comments = [{"body": "just a regular comment", "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_marker_without_fence_returns_none(self):
+        comments = [{"body": f"{OUTCOME_MARKER}\nno json here", "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_malformed_json_returns_none(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done",\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_unclosed_fence_returns_none(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": 1}}\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_json_array_instead_of_object_returns_none(self):
+        body = f"{OUTCOME_MARKER}\n```json\n[1, 2, 3]\n```\n"
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_invalid_result_value_returns_none(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "maybe", "issue": 1}}\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_missing_issue_returns_none(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done"}}\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_blocked_without_reason_returns_none(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "blocked", "issue": 1}}\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_blocked_with_unknown_reason_returns_none(self):
+        body = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            '{"result": "blocked", "issue": 1, "reason": "flaky-network"}\n```\n'
+        )
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_bool_issue_value_rejected(self):
+        """`bool`はPythonでは`int`のサブクラスであり、issue=Trueがissue=1として
+        誤って受理されるのを防ぐ。"""
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": true}}\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_non_string_comment_body_is_skipped_not_raised(self):
+        comments = [{"body": None, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_comment_missing_body_key_is_skipped_not_raised(self):
+        comments = [{"created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_duplicate_marker_in_single_comment_does_not_raise(self):
+        record = OutcomeRecord(result="done", issue=1, pr=2)
+        body = record.render() + "\n" + record.render()
+        comments = [{"body": body, "created_at": "x"}]
+        # 例外を送出しないことが主な要件。マーカー重複時にどちらのレコードが
+        # 採用されるかは規定しない。
+        result = parse_from_comments(comments)
+        assert result is None or result == record
+
+    def test_invalid_comment_among_valid_ones_is_ignored(self):
+        valid = OutcomeRecord(result="done", issue=1, pr=2)
+        comments = [
+            {"body": "no marker here", "created_at": "2026-08-21T00:00:00Z"},
+            {"body": valid.render(), "created_at": "2026-08-20T00:00:00Z"},
+        ]
+        assert parse_from_comments(comments) == valid
