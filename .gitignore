@@ -20,6 +20,9 @@ worktrees/
 logs/
 decomposition_plan.md
 
+# Agent-local CI baseline state (never commit)
+.orchestune/baseline.json
+
 # OS / IDE
 .DS_Store
 .vscode/
