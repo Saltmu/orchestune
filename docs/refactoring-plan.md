@@ -605,3 +605,13 @@ Footprint YAML の `depends_on` と冒頭の Issue 番号参照に記録され�
 `__init__.py` の追加により不要になりましたが、`tests/` が名前空間パッケージの
 ままで `tests/conftest.py` が二重解決されるため、`mypy orchestune tests` を
 通すには引き続き必要です（同ファイルにコメントで理由を記載）。
+
+---
+
+## 8. スキル改善 Epic #545 における先行調査（Spike: #549）
+
+Epic #545（開発ワークフロースキルの構造的課題の抜本改善）において、
+自動レビュー待機（`wait_for_review.py` / #554）の exit code 契約を確定するため、
+レビュアーボット（Claude / Codex）がトリガーコメントで指示された構造化 verdict マーカーに
+従うかの実測調査（#549）を実施中。
+
