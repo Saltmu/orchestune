@@ -65,6 +65,15 @@ markers = [
     "integration: shells out to a real git binary via subprocess instead of mocking it, so it's slower than the unit-test default",
 ]
 
+[tool.detect-bloat]
+code_paths = ["orchestune"]
+test_paths = ["tests"]
+skills_path = "skills"
+code_file_lines = 1000
+test_file_lines = 1000
+skill_directory_lines = 500
+function_lines = 50
+
 [tool.coverage.run]
 branch = true
 source = ["orchestune"]
