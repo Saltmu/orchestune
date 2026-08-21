@@ -69,8 +69,14 @@ def test_is_bot_user():
 
 def test_is_explicitly_in_progress_uses_only_strong_transient_markers():
     assert _is_explicitly_in_progress({"body": "Claude is working…"}) is True
+    assert _is_explicitly_in_progress({"body": "Claude Code is working…"}) is True
     assert _is_explicitly_in_progress({"body": "### Review in progress"}) is True
     assert _is_explicitly_in_progress({"body": "### Claude is reviewing this PR"})
+    assert _is_explicitly_in_progress(
+        {
+            "body": "### Tasks\n\n- [ ] Run code review\n\n[View job run](https://example.test)"
+        }
+    )
     assert (
         _is_explicitly_in_progress(
             {"body": "### Review complete\n- [ ] Optional follow-up"}

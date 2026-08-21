@@ -227,13 +227,17 @@ def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
     )
     markers = (
         "claude is working",
+        "claude code is working",
         "codex is working",
         "review in progress",
         "re-review in progress",
         "claude is reviewing",
         "codex is reviewing",
     )
-    return any(headline.startswith(marker) for marker in markers)
+    is_task_progress = (
+        headline == "tasks" and "- [ ]" in body and "view job run" in body.lower()
+    )
+    return is_task_progress or any(headline.startswith(marker) for marker in markers)
 
 
 def _build_snapshot(
