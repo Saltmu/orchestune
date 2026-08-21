@@ -23,7 +23,10 @@ poetry run mypy orchestune tests
 echo "[4/5] Running tests with coverage (pytest)..."
 poetry run pytest -n auto --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 
-echo "[5/5] Scanning for secrets and local paths (gitleaks)..."
+echo "[5/6] Detecting code and skill bloat (warn only)..."
+poetry run python scripts/detect_bloat.py --warn-only
+
+echo "[6/6] Scanning for secrets and local paths (gitleaks)..."
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
 export PATH="${GITLEAKS_INSTALL_DIR}:${PATH}"
 
