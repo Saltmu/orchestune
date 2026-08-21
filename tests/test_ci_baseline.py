@@ -26,6 +26,9 @@ def ci_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         module, "BASELINE_PATH", tmp_path / ".orchestune" / "baseline.json"
     )
     monkeypatch.setattr(module, "_merge_base", lambda _base_branch: "base-sha")
+    # The default tests model an agent's local invocation. GitHub Actions sets
+    # CI globally, which is separately covered by the CI-skip test below.
+    monkeypatch.delenv("CI", raising=False)
     return module
 
 
