@@ -6,7 +6,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -16,7 +16,7 @@ SCRIPT_PATH = PROJECT_ROOT / "scripts" / "ci_baseline.py"
 
 
 @pytest.fixture
-def ci_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> ModuleType:
+def ci_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     spec = importlib.util.spec_from_file_location("ci_baseline_under_test", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -33,7 +33,7 @@ def _ci_result(exit_code: int, output: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_check_without_baseline_uses_absolute_ci_exit_code(
-    ci_baseline: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n"))
 
@@ -42,7 +42,7 @@ def test_check_without_baseline_uses_absolute_ci_exit_code(
 
 
 def test_check_rerecords_a_stale_baseline(
-    ci_baseline: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ci_baseline._write_state(
         {
@@ -63,7 +63,7 @@ def test_check_rerecords_a_stale_baseline(
 
 
 def test_check_classifies_only_baseline_failures_as_base_branch_red(
-    ci_baseline: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ci_baseline._write_state(
         {
@@ -86,7 +86,7 @@ def test_check_classifies_only_baseline_failures_as_base_branch_red(
 
 
 def test_check_preserves_failure_counts_between_resumed_runs(
-    ci_baseline: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ci_baseline._write_state(
         {
@@ -109,7 +109,7 @@ def test_check_preserves_failure_counts_between_resumed_runs(
 
 
 def test_check_returns_original_exit_code_for_a_new_failure(
-    ci_baseline: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ci_baseline._write_state(
         {
