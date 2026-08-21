@@ -33,6 +33,10 @@ def _ci_result(exit_code: int, output: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(["./scripts/local-ci.sh"], exit_code, output, "")
 
 
+def test_default_base_branch_is_origin_main(ci_baseline: Any) -> None:
+    assert ci_baseline._parse_args(["check"]).base_branch == "origin/main"
+
+
 def test_check_without_baseline_uses_absolute_ci_exit_code(
     ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -51,6 +55,7 @@ def test_check_rerecords_a_stale_baseline(
         {
             "version": ci_baseline.STATE_VERSION,
             "base_sha": "old-base-sha",
+            "ci_command": ci_baseline.DEFAULT_CI_COMMAND,
             "baseline": {"exit_code": 0, "failures": []},
             "failure_counts": {"old": 2},
         }
@@ -77,6 +82,7 @@ def test_check_classifies_only_baseline_failures_as_base_branch_red(
         {
             "version": ci_baseline.STATE_VERSION,
             "base_sha": "base-sha",
+            "ci_command": ci_baseline.DEFAULT_CI_COMMAND,
             "baseline": {"exit_code": 1, "failures": ["tests/test_old.py::test_old"]},
             "failure_counts": {},
         }
@@ -102,6 +108,7 @@ def test_check_preserves_failure_counts_between_resumed_runs(
         {
             "version": ci_baseline.STATE_VERSION,
             "base_sha": "base-sha",
+            "ci_command": ci_baseline.DEFAULT_CI_COMMAND,
             "baseline": {"exit_code": 1, "failures": ["tests/test_old.py::test_old"]},
             "failure_counts": {"tests/test_old.py::test_old": 1},
         }
@@ -127,6 +134,7 @@ def test_check_returns_original_exit_code_for_a_new_failure(
         {
             "version": ci_baseline.STATE_VERSION,
             "base_sha": "base-sha",
+            "ci_command": ci_baseline.DEFAULT_CI_COMMAND,
             "baseline": {"exit_code": 1, "failures": ["tests/test_old.py::test_old"]},
             "failure_counts": {},
         }
@@ -140,3 +148,26 @@ def test_check_returns_original_exit_code_for_a_new_failure(
     )
 
     assert ci_baseline.main(["check"]) == 5
+
+
+def test_check_rerecords_when_ci_command_changes(
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ci_baseline._write_state(
+        {
+            "version": ci_baseline.STATE_VERSION,
+            "base_sha": "base-sha",
+            "ci_command": "old-ci-command",
+            "baseline": {"exit_code": 0, "failures": []},
+            "failure_counts": {"old": 2},
+        }
+    )
+    monkeypatch.setattr(
+        ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n")
+    )
+
+    assert ci_baseline.main(["check", "--ci-command", "new-ci-command"]) == 1
+    state = ci_baseline._read_state()
+    assert state is not None
+    assert state["ci_command"] == "new-ci-command"
+    assert state["failure_counts"] == {}
