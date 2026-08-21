@@ -35,6 +35,7 @@ def _ci_result(exit_code: int, output: str) -> subprocess.CompletedProcess[str]:
 
 def test_default_base_branch_is_origin_main(ci_baseline: Any) -> None:
     assert ci_baseline._parse_args(["check"]).base_branch == "origin/main"
+    assert ci_baseline._parse_args(["check"]).no_format is False
 
 
 def test_check_without_baseline_uses_absolute_ci_exit_code(
@@ -44,7 +45,7 @@ def test_check_without_baseline_uses_absolute_ci_exit_code(
         ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n")
     )
 
-    assert ci_baseline.main(["check"]) == 1
+    assert ci_baseline.main(["check", "--no-format"]) == 1
     assert not ci_baseline.BASELINE_PATH.exists()
 
 
@@ -64,7 +65,7 @@ def test_check_rerecords_a_stale_baseline(
         ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n")
     )
 
-    assert ci_baseline.main(["check"]) == 1
+    assert ci_baseline.main(["check", "--no-format"]) == 1
     state = ci_baseline._read_state()
     assert state is not None
     assert state["base_sha"] == "base-sha"
@@ -95,7 +96,9 @@ def test_check_classifies_only_baseline_failures_as_base_branch_red(
         ),
     )
 
-    assert ci_baseline.main(["check"]) == ci_baseline.EXIT_BASE_BRANCH_RED
+    assert (
+        ci_baseline.main(["check", "--no-format"]) == ci_baseline.EXIT_BASE_BRANCH_RED
+    )
     state = ci_baseline._read_state()
     assert state is not None
     assert state["failure_counts"] == {"tests/test_old.py::test_old": 1}
@@ -121,7 +124,9 @@ def test_check_preserves_failure_counts_between_resumed_runs(
         ),
     )
 
-    assert ci_baseline.main(["check"]) == ci_baseline.EXIT_BASE_BRANCH_RED
+    assert (
+        ci_baseline.main(["check", "--no-format"]) == ci_baseline.EXIT_BASE_BRANCH_RED
+    )
     state = ci_baseline._read_state()
     assert state is not None
     assert state["failure_counts"] == {"tests/test_old.py::test_old": 2}
@@ -147,7 +152,7 @@ def test_check_returns_original_exit_code_for_a_new_failure(
         ),
     )
 
-    assert ci_baseline.main(["check"]) == 5
+    assert ci_baseline.main(["check", "--no-format"]) == 5
 
 
 def test_check_rerecords_when_ci_command_changes(
@@ -166,8 +171,67 @@ def test_check_rerecords_when_ci_command_changes(
         ci_baseline.subprocess, "run", lambda *args, **kwargs: _ci_result(1, "broken\n")
     )
 
-    assert ci_baseline.main(["check", "--ci-command", "new-ci-command"]) == 1
+    assert (
+        ci_baseline.main(["check", "--ci-command", "new-ci-command", "--no-format"])
+        == 1
+    )
     state = ci_baseline._read_state()
     assert state is not None
     assert state["ci_command"] == "new-ci-command"
     assert state["failure_counts"] == {}
+
+
+def test_check_formats_before_running_local_ci(
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def run(
+        command: Any, *args: Any, **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        commands.append(command_tuple)
+        exit_code = 1 if command_tuple == ("run-ci",) else 0
+        return subprocess.CompletedProcess(command_tuple, exit_code, "", "")
+
+    monkeypatch.setattr(ci_baseline.subprocess, "run", run)
+
+    assert ci_baseline.main(["check", "--ci-command", "run-ci"]) == 1
+    assert commands == [*ci_baseline.RUFF_FORMAT_COMMANDS, ("run-ci",)]
+
+
+def test_check_skips_formatting_when_ci_is_set(
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def run(
+        command: Any, *args: Any, **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        commands.append(command_tuple)
+        return subprocess.CompletedProcess(command_tuple, 1, "", "")
+
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(ci_baseline.subprocess, "run", run)
+
+    assert ci_baseline.main(["check", "--ci-command", "run-ci"]) == 1
+    assert commands == [("run-ci",)]
+
+
+def test_check_stops_when_formatting_fails(
+    ci_baseline: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def run(
+        command: Any, *args: Any, **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        commands.append(command_tuple)
+        return subprocess.CompletedProcess(command_tuple, 23, "", "")
+
+    monkeypatch.setattr(ci_baseline.subprocess, "run", run)
+
+    assert ci_baseline.main(["check", "--ci-command", "run-ci"]) == 23
+    assert commands == [ci_baseline.RUFF_FORMAT_COMMANDS[0]]
