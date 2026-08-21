@@ -92,6 +92,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch_result",
             "json_state",
             "models",
+            "outcome_record",
             "plan_writer",
             "process_utils",
             "setup_skills",

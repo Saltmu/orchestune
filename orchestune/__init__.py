@@ -32,6 +32,15 @@ from orchestune.forge import (
     RepoAdminForge,
 )
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.outcome_record import (
+    OUTCOME_MARKER,
+    RESULT_BLOCKED,
+    RESULT_DONE,
+    RESULT_NOT_NEEDED,
+    OutcomeRecord,
+    ReviewSummary,
+    parse_from_comments,
+)
 from orchestune.version import get_version
 
 __version__ = get_version()
@@ -45,10 +54,17 @@ __all__ = [
     "IssueForge",
     "IssueRecord",
     "LabelSpec",
+    "OUTCOME_MARKER",
+    "OutcomeRecord",
     "PrRecord",
     "PullRequestForge",
     "REQUIRED_LABELS",
+    "RESULT_BLOCKED",
+    "RESULT_DONE",
+    "RESULT_NOT_NEEDED",
     "RepoAdminForge",
+    "ReviewSummary",
     "Task",
     "__version__",
+    "parse_from_comments",
 ]
