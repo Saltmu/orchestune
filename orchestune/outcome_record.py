@@ -67,6 +67,40 @@ def _is_plain_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+_INVALID = object()
+
+
+def _review_from_value(value: Any) -> ReviewSummary | object:
+    """`value`が`None`（キー欠如相当）ならデフォルトの`ReviewSummary`を、有効な
+    マッピングなら検証済みの`ReviewSummary`を返す。それ以外は`_INVALID`を返す
+    （falsyだが存在する不正値をキー欠如と誤認しないよう、`or {}`は使わない）。"""
+    if value is None:
+        value = {}
+    elif not isinstance(value, Mapping):
+        return _INVALID
+    bot = value.get("bot")
+    if bot is not None and not isinstance(bot, str):
+        return _INVALID
+    rounds = value.get("rounds")
+    if rounds is not None and not _is_plain_int(rounds):
+        return _INVALID
+    verdict = value.get("verdict")
+    if verdict is not None and not isinstance(verdict, str):
+        return _INVALID
+    return ReviewSummary(bot=bot, rounds=rounds, verdict=verdict)
+
+
+def _baseline_regressions_from_value(value: Any) -> tuple[str, ...] | object:
+    """`value`が`None`（キー欠如相当）なら空タプルを、有効な文字列リストなら
+    タプル化したものを返す。それ以外は`_INVALID`を返す（`_review_from_value`と
+    同じくfalsy-but-present値を誤って許容しないため）。"""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return _INVALID
+    return tuple(value)
+
+
 def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     result = data.get("result")
     if result not in VALID_RESULTS:
@@ -95,27 +129,18 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if attempt is not None and not _is_plain_int(attempt):
         return None
 
-    review_data = data.get("review") or {}
-    if not isinstance(review_data, Mapping):
-        return None
-    review_bot = review_data.get("bot")
-    if review_bot is not None and not isinstance(review_bot, str):
-        return None
-    review_rounds = review_data.get("rounds")
-    if review_rounds is not None and not _is_plain_int(review_rounds):
-        return None
-    review_verdict = review_data.get("verdict")
-    if review_verdict is not None and not isinstance(review_verdict, str):
+    review = _review_from_value(data.get("review"))
+    if review is _INVALID:
         return None
 
     ci = data.get("ci")
     if ci is not None and not isinstance(ci, str):
         return None
 
-    baseline_regressions = data.get("baseline_regressions") or []
-    if not isinstance(baseline_regressions, list) or not all(
-        isinstance(item, str) for item in baseline_regressions
-    ):
+    baseline_regressions = _baseline_regressions_from_value(
+        data.get("baseline_regressions")
+    )
+    if baseline_regressions is _INVALID:
         return None
 
     return OutcomeRecord(
@@ -125,11 +150,9 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
         reason=reason,
         base_sha=base_sha,
         attempt=attempt,
-        review=ReviewSummary(
-            bot=review_bot, rounds=review_rounds, verdict=review_verdict
-        ),
+        review=cast(ReviewSummary, review),
         ci=ci,
-        baseline_regressions=tuple(baseline_regressions),
+        baseline_regressions=cast("tuple[str, ...]", baseline_regressions),
     )
 
 

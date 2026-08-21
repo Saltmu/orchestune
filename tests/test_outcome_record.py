@@ -148,6 +148,24 @@ class TestParseFromCommentsFailClosed:
         result = parse_from_comments(comments)
         assert result is None or result == record
 
+    def test_falsy_review_value_is_rejected_not_treated_as_missing(self):
+        """`data.get('review') or {}`のような書き方は、`review: false`のような
+        falsyだが存在する不正値を「キー欠如」と誤認してしまう。それを防ぐ回帰
+        テスト。"""
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": 1, "review": false}}\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
+    def test_falsy_baseline_regressions_value_is_rejected_not_treated_as_missing(
+        self,
+    ):
+        body = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            '{"result": "done", "issue": 1, "baseline_regressions": 0}\n```\n'
+        )
+        comments = [{"body": body, "created_at": "x"}]
+        assert parse_from_comments(comments) is None
+
     def test_invalid_comment_among_valid_ones_is_ignored(self):
         valid = OutcomeRecord(result="done", issue=1, pr=2)
         comments = [
