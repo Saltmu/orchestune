@@ -3,8 +3,9 @@
 detect-bloat・baseline-aware CI・quarantine 機構のIssue群と同じ形の腐敗
 （文書やコメントが存在しない機構を前提に判断を委ねる状態）の再発を止める
 ため、SKILL.md のフェンス付きコードブロック内で `poetry run` / `./scripts/`
-形式で参照されているコマンドが、実際に pyproject.toml のスクリプト定義
-またはリポジトリ内の実ファイルに対応していることを機械的に検証する。
+形式で参照されているコマンドが、実際に pyproject.toml のスクリプト定義・
+Poetry依存パッケージ、またはリポジトリ内の実ファイルに対応していることを
+機械的に検証する。
 """
 
 from __future__ import annotations
@@ -20,17 +21,29 @@ SKILLS_ROOT = REPO_ROOT / "skills"
 
 _FENCED_CODE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 _POETRY_RUN = re.compile(r"^poetry run (\S+)(?:\s+(\S+))?")
-_SCRIPT_PATH = re.compile(r"^(\./scripts/\S+)")
+_SCRIPT_PATH = re.compile(r"^(\.[\\/]scripts[\\/]\S+)")
 
 
-def _poetry_script_names() -> set[str]:
+def _known_poetry_commands() -> set[str]:
+    """`poetry run <name>` で実行できる名前の集合を返す。
+
+    `[tool.poetry.scripts]` のエントリポイントに加え、`poetry run ruff` /
+    `poetry run pytest` のように依存パッケージが提供するコマンドも正当な
+    参照として扱うため、通常/devの依存パッケージ名も含める。
+    """
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return set(data["tool"]["poetry"]["scripts"])
+    poetry = data["tool"]["poetry"]
+    names = set(poetry.get("scripts", {}))
+    names.update(poetry.get("dependencies", {}))
+    for group in poetry.get("group", {}).values():
+        names.update(group.get("dependencies", {}))
+    names.discard("python")
+    return names
 
 
 def _iter_command_targets(markdown_text: str) -> list[tuple[str, str]]:
-    """フェンス付きコードブロックから `poetry run` / `./scripts/` 形式の
-    コマンドを抽出する。
+    """フェンス付きコードブロックから `poetry run` / `./scripts/` /
+    `.\\scripts\\` 形式のコマンドを抽出する。
 
     戻り値は (表示用の生コマンド行, 検証対象のスクリプト名/パス) のタプル
     のリスト。workflow-template のプレースホルダ（`<CI_ENTRYPOINT>` 等）を
@@ -60,10 +73,11 @@ def _iter_command_targets(markdown_text: str) -> list[tuple[str, str]]:
     return results
 
 
-def _command_exists(target: str, poetry_scripts: set[str]) -> bool:
-    if target.startswith("./") or target.startswith("scripts/"):
-        return (REPO_ROOT / target).is_file()
-    return target in poetry_scripts
+def _command_exists(target: str, known_commands: set[str]) -> bool:
+    normalized = target.replace("\\", "/")
+    if normalized.startswith("./") or normalized.startswith("scripts/"):
+        return (REPO_ROOT / normalized).is_file()
+    return target in known_commands
 
 
 def _collect_all_command_references() -> list[tuple[str, str, str]]:
@@ -81,8 +95,8 @@ def _collect_all_command_references() -> list[tuple[str, str, str]]:
     ids=[f"{r[0]}::{r[2]}" for r in _collect_all_command_references()],
 )
 def test_skill_command_reference_exists(skill_path, line, target):
-    poetry_scripts = _poetry_script_names()
-    assert _command_exists(target, poetry_scripts), (
+    known_commands = _known_poetry_commands()
+    assert _command_exists(target, known_commands), (
         f"{skill_path} references a command that does not exist: {line!r} "
         f"(resolved target: {target!r})"
     )
@@ -96,7 +110,7 @@ def test_missing_poetry_script_command_is_detected():
     assert targets == [
         ("poetry run this-script-does-not-exist", "this-script-does-not-exist")
     ]
-    assert not _command_exists(targets[0][1], _poetry_script_names())
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
 
 
 def test_missing_script_file_is_detected():
@@ -105,7 +119,24 @@ def test_missing_script_file_is_detected():
     targets = _iter_command_targets(text)
 
     assert targets == [("./scripts/does-not-exist.sh", "./scripts/does-not-exist.sh")]
-    assert not _command_exists(targets[0][1], _poetry_script_names())
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_powershell_script_path_is_recognized():
+    text = "```powershell\n.\\scripts\\local-ci.ps1\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets == [(".\\scripts\\local-ci.ps1", ".\\scripts\\local-ci.ps1")]
+    assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_missing_powershell_script_is_detected():
+    text = "```powershell\n.\\scripts\\does-not-exist.ps1\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
 
 
 def test_workflow_template_placeholder_is_excluded():
@@ -128,4 +159,15 @@ def test_python_script_target_resolves_to_script_path():
     targets = _iter_command_targets(text)
 
     assert targets[0][1] == "scripts/wait_for_review.py"
-    assert _command_exists(targets[0][1], _poetry_script_names())
+    assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_poetry_dependency_command_is_accepted():
+    """`ruff`/`pytest`/`mypy` のような、依存パッケージが提供するコマンドは
+    `[tool.poetry.scripts]` になくても正当な参照として扱う。"""
+    text = "```bash\npoetry run ruff format\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets[0][1] == "ruff"
+    assert _command_exists(targets[0][1], _known_poetry_commands())
