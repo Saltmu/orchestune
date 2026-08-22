@@ -39,13 +39,13 @@ stateDiagram-v2
     queued --> blocked_human_review: Duplicate launch detected\n(_apply_duplicate_skip)
     blocked --> blocked_human_review: Duplicate launch detected\n(_apply_duplicate_skip)
 
-    in_progress --> done: Process exited with new commits\n(_finalize_completed_worktree)
-    in_progress --> blocked_human_review: Process exited with no new commits\n(_finalize_completed_worktree)
+    in_progress --> done: Process exited with new commits + outcome(done)\n(_finalize_completed_worktree)
+    in_progress --> blocked_human_review: Missing outcome or no new commits\n(_finalize_completed_worktree)
     in_progress --> blocked_human_review: Upstream PR got CHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: Automatic rebase failed\n(_apply_auto_rebase)
     in_progress --> queued: Zombie/timeout reclaimed by GC\n(_collect_zombies_and_timeouts)
     in_progress --> blocked_human_review: GC reclaim limit exceeded\n(_apply_zombie_or_timeout_reclaim)
-    in_progress --> not_needed: status:not-needed label detected\n(closed, or pending review)
+    in_progress --> not_needed: outcome(not-needed) or status:not-needed detected\n(closed, or pending review)
     in_progress --> blocked: Stale bookkeeping entry discarded\n(_apply_stale_active_entry_discard;\nthe label itself was already changed externally)
 
     done --> queued: Rolled back after Integrator's provisional-merge CI failed\n(handle_merge_failure)
@@ -82,14 +82,17 @@ independently of the lifecycle above (see "External lock" below).
 ### 4. `status:in-progress` → `status:done` (completion)
 - Source: `_finalize_completed_worktree` in `orchestune/dispatch_gc.py`
 - Condition: the agent process exited, the worktree has no uncommitted
-  changes, and there is at least one real commit ahead of `base_branch`.
+  changes, there is at least one real commit ahead of `base_branch`, and
+  a valid outcome record (`orchestune:outcome` with `result: done`) was
+  confirmed on the PR or Issue comments.
 
-### 5. `status:in-progress` → `status:blocked-human-review` (empty-commit completion)
+### 5. `status:in-progress` → `status:blocked-human-review` (empty-commit completion or missing outcome)
 - Source: `_finalize_completed_worktree` in `orchestune/dispatch_gc.py`
-- Condition: the process exited and the worktree is clean, but there are zero
-  new commits against `base_branch` (likely nothing was actually implemented,
-  e.g. due to a permission denial), so automatic completion and dependent
-  promotion are withheld.
+- Condition: the process exited and the worktree is clean, but either there are zero
+  new commits against `base_branch` (empty-commit completion, likely nothing was actually implemented,
+  e.g. due to a permission denial), or new commits exist but no valid outcome record
+  (`orchestune:outcome`) was found (missing outcome completion, review cycle incomplete or exited prematurely).
+  In either case, automatic completion and dependent promotion are withheld, and the task fail-closes to `status:blocked-human-review`.
 
 ### 6. `status:in-progress` → `status:blocked-human-review` (duplicate launch detected)
 - Source: `_apply_duplicate_skip` in `orchestune/dispatch_launch.py`
@@ -155,12 +158,13 @@ independently of the lifecycle above (see "External lock" below).
   the uncommitted work, and its path is named in the comment.
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
-- Source: `_finalize_not_needed_worktree` in `orchestune/dispatch_gc.py`
-- Condition: the session applied the `status:not-needed` label. If a cloud
+- Source: `_finalize_not_needed_worktree` / `_rule_not_needed` in `orchestune/dispatch_gc.py`
+- Condition: the session produced an outcome record (`orchestune:outcome` with `result: not-needed`) or applied the `status:not-needed` label. If a cloud
   routine is available, the Issue is not closed immediately; an independent
   verification review is dispatched (`orchestune/integration_coordinator.py`)
   and the Issue is closed in a later cycle based on the review outcome.
   In local environments it is closed immediately as before.
+
 
 ### 11. `status:done` → `status:queued` (rollback on provisional-merge CI failure)
 - Source: `handle_merge_failure` in `orchestune/integrator_pr.py`

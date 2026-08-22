@@ -21,6 +21,7 @@ from orchestune.dispatch_state import (
     RunState,
     save_run_state,
 )
+from orchestune.outcome_record import OutcomeRecord
 from tests.conftest import make_issue
 
 
@@ -142,6 +143,7 @@ class TestRunDispatchCycleCompletion:
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
+        outcome = OutcomeRecord(result="done", issue=1)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
@@ -149,6 +151,12 @@ class TestRunDispatchCycleCompletion:
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
@@ -208,12 +216,20 @@ class TestRunDispatchCycleCompletion:
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
+        outcome = OutcomeRecord(result="done", issue=1)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             patch(
@@ -300,8 +316,6 @@ class TestRunDispatchCycleCompletion:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            # Completion now also consults the all-state PR list to rule out an
-            # abandoned (closed-unmerged) PR before finalizing.
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -339,15 +353,20 @@ class TestRunDispatchCycleCompletion:
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
+        outcome = OutcomeRecord(result="done", issue=1)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            # Completion now also consults the all-state PR list to rule out an
-            # abandoned (closed-unmerged) PR before finalizing as "completed".
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
@@ -400,8 +419,6 @@ class TestRunDispatchCycleCompletion:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            # Completion now also consults the all-state PR list to rule out an
-            # abandoned (closed-unmerged) PR before finalizing.
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
@@ -431,7 +448,6 @@ class TestRunDispatchCycleCompletion:
         mock_remove_label.assert_any_call(1, "status:in-progress")
         mock_add_label.assert_any_call(1, "status:blocked-human-review")
         mock_add_comment.assert_called_once()
-        # #74の核心: 依存先(#2)は誤って昇格させない
         assert report.promotion_events == []
         assert all(
             call.args != (2, "status:queued") for call in mock_add_label.call_args_list
@@ -451,6 +467,7 @@ class TestRunDispatchCycleCompletion:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         queued_issue = _full_issue(2, footprint=("src/bar.py",), subtask_id="task-b")
+        outcome = OutcomeRecord(result="done", issue=1)
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
@@ -459,6 +476,12 @@ class TestRunDispatchCycleCompletion:
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label"),
             _patch_gc_process_alive(return_value=False),

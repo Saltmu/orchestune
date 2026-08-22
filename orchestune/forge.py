@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil as shutil  # compatibility patch surface
 import subprocess
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from orchestune.forge_admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
 from orchestune.forge_admin import (
@@ -66,6 +66,8 @@ class IssueForge(Protocol):
     ) -> None: ...
 
     def add_comment(self, issue_number: int | str, body: str) -> None: ...
+
+    def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]: ...
 
     def get_issue_state(self, issue_number: int | str) -> str: ...
 

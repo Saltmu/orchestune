@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -195,6 +196,9 @@ class FakeForge:
         raise NotImplementedError
 
     def add_comment(self, issue_number: int | str, body: str) -> None:
+        raise NotImplementedError
+
+    def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def get_issue_state(self, issue_number: int | str) -> str:

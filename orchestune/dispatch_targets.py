@@ -27,6 +27,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from orchestune.forge import Forge, GitHubForge
 from orchestune.git_cli import run_git
 from orchestune.models import Usage
+from orchestune.outcome_record import (
+    RESULT_DONE,
+    RESULT_NOT_NEEDED,
+    parse_from_comments,
+)
 from orchestune.process_utils import is_process_alive
 
 if TYPE_CHECKING:
@@ -186,11 +191,19 @@ def _task_pr_completion_status(
     handle: DispatchHandle,
     forge: Forge | None = None,
 ) -> Literal["pending", "completed", "abandoned"]:
-    """Classify matching cloud-task PRs without treating rejected PRs as done."""
+    """Classify matching cloud-task PRs without treating rejected PRs as done.
+
+    #552: PRがOPENの場合でも、完了宣言レコード（orchestune:outcome）が
+    確認できるまでcompletedとは判定せずpendingとする。
+    forge例外発生時も安全にpendingへ倒す（fail-closed）。
+    """
     if handle.branch_name is None and handle.issue_number is None:
         return "pending"
     forge = forge or GitHubForge()
-    prs = forge.list_prs(state="all")
+    try:
+        prs = forge.list_prs(state="all")
+    except Exception:
+        return "pending"
     matching_prs = [
         pr
         for pr in prs
@@ -203,8 +216,29 @@ def _task_pr_completion_status(
         )
         and not _is_stale_pr_for_handle(pr, handle)
     ]
-    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
+    if any(pr.state == "MERGED" for pr in matching_prs):
         return "completed"
+
+    open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
+    if open_prs:
+        try:
+            all_comments: list[Mapping[str, Any]] = []
+            for pr in open_prs:
+                all_comments.extend(forge.list_comments(pr.number))
+            if handle.issue_number is not None:
+                pr_numbers = {pr.number for pr in open_prs}
+                if handle.issue_number not in pr_numbers:
+                    all_comments.extend(forge.list_comments(handle.issue_number))
+            outcome = parse_from_comments(all_comments)
+            if outcome is not None and outcome.result in (
+                RESULT_DONE,
+                RESULT_NOT_NEEDED,
+            ):
+                return "completed"
+        except Exception:
+            return "pending"
+        return "pending"
+
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 from orchestune.models import IssueRecord
 from orchestune.validation import (
@@ -163,6 +163,24 @@ class GitHubIssueMixin:
             ["gh", "issue", "comment", str(number), "--body-file", "-"],
             input_text=body,
         )
+
+    def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
+        """#552: Issue/PRのコメント一覧を取得する。"""
+        number = validate_issue_number(issue_number)
+        stdout = self._run(["gh", "issue", "view", str(number), "--json", "comments"])
+        raw = json.loads(stdout)
+        comments = raw.get("comments", [])
+        return [
+            {
+                "body": c.get("body", ""),
+                "created_at": c.get("createdAt") or c.get("created_at") or "",
+                "author": c.get("author", {}).get("login", "")
+                if isinstance(c.get("author"), dict)
+                else (c.get("author") or ""),
+            }
+            for c in comments
+            if isinstance(c, dict)
+        ]
 
     def get_issue_state(self, issue_number: int | str) -> str:
         number = validate_issue_number(issue_number)

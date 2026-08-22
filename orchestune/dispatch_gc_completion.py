@@ -27,8 +27,14 @@ from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )
+from orchestune.forge import Forge
 from orchestune.git_cli import run_git
 from orchestune.models import PrRecord, Usage
+from orchestune.outcome_record import (
+    RESULT_DONE,
+    RESULT_NOT_NEEDED,
+    parse_from_comments,
+)
 from orchestune.process_utils import is_process_alive
 
 
@@ -43,6 +49,7 @@ def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: Task | None,
     repository_root: str | Path | None = None,
+    forge: Forge | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
     if worktree_has_uncommitted_changes(active.worktree_path):
@@ -62,8 +69,54 @@ def _decide_completed_worktree_outcome(
         return CompletedWorktreeDecision(
             action="completed_no_commits", subtask_id=subtask_id
         )
+
+    # #552: 完了判定をoutcomeレコード基準へ統一
+    if forge is not None:
+        try:
+            comments = list(forge.list_comments(active.issue_number))
+            try:
+                prs = forge.list_prs(state="all")
+                matching_prs = [
+                    pr
+                    for pr in prs
+                    if (
+                        (active.branch is not None and pr.head_ref == active.branch)
+                        or active.issue_number in pr.closes_issue_numbers
+                    )
+                ]
+                for pr in matching_prs:
+                    if pr.number != active.issue_number:
+                        comments.extend(forge.list_comments(pr.number))
+            except Exception:
+                pass
+            outcome = parse_from_comments(comments)
+        except Exception:
+            return CompletedWorktreeDecision(
+                action="completion_skipped_forge_error", subtask_id=subtask_id
+            )
+    else:
+        outcome = None
+
+    if outcome is None:
+        return CompletedWorktreeDecision(
+            action="completed_without_outcome",
+            subtask_id=subtask_id,
+            commit_sha=commit_sha,
+        )
+    if outcome.result == RESULT_NOT_NEEDED:
+        return CompletedWorktreeDecision(
+            action="not_needed",
+            subtask_id=subtask_id,
+            commit_sha=commit_sha,
+        )
+    if outcome.result == RESULT_DONE:
+        return CompletedWorktreeDecision(
+            action="completed", subtask_id=subtask_id, commit_sha=commit_sha
+        )
     return CompletedWorktreeDecision(
-        action="completed", subtask_id=subtask_id, commit_sha=commit_sha
+        action="completed_without_outcome",
+        subtask_id=subtask_id,
+        commit_sha=commit_sha,
     )
 
 
@@ -72,6 +125,7 @@ def _apply_completed_worktree_outcome(
     decision: CompletedWorktreeDecision,
     config: DispatcherConfig,
     active_task: Task | None = None,
+    dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
 ) -> dict:
     handle = _active_dispatch_handle(active)
     usage = (
@@ -85,7 +139,10 @@ def _apply_completed_worktree_outcome(
     }
     if usage_dict is not None:
         event["usage"] = usage_dict
-    if decision.action == "completion_skipped_dirty_worktree":
+    if decision.action in (
+        "completion_skipped_dirty_worktree",
+        "completion_skipped_forge_error",
+    ):
         return event
     if decision.action == "completed_no_commits":
         if config.apply:
@@ -103,6 +160,26 @@ def _apply_completed_worktree_outcome(
         event["subtask_id"] = decision.subtask_id
         event["commit_sha"] = None
         return event
+    if decision.action == "completed_without_outcome":
+        if config.apply:
+            remove_worktree(active.worktree_path)
+            apply_human_review_escalation(
+                active.issue_number,
+                ("status:in-progress",),
+                "エージェントプロセスの終了とコミットを検知しましたが、"
+                "完了宣言レコード（orchestune:outcome）が検出できませんでした。"
+                "レビューサイクルが未完了または作業途中で終了した可能性があるため、"
+                "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
+                "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
+                forge=config.resolved_forge,
+            )
+        event["subtask_id"] = decision.subtask_id
+        event["commit_sha"] = decision.commit_sha
+        return event
+    if decision.action == "not_needed":
+        return _finalize_not_needed_worktree(
+            active, active_task, config, dispatch_not_needed_review
+        )
     if (
         config.max_tokens_per_task is not None
         and isinstance(usage, Usage)
@@ -166,12 +243,20 @@ def _apply_completed_worktree_outcome(
 
 
 def _finalize_completed_worktree(
-    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+    dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
 ) -> dict:
     decision = _decide_completed_worktree_outcome(
-        active, active_task, config.worktree_root.parent
+        active,
+        active_task,
+        config.worktree_root.parent if config.worktree_root else None,
+        forge=config.resolved_forge,
     )
-    return _apply_completed_worktree_outcome(active, decision, config, active_task)
+    return _apply_completed_worktree_outcome(
+        active, decision, config, active_task, dispatch_not_needed_review
+    )
 
 
 def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
@@ -263,8 +348,29 @@ def _local_pr_completion_status(
         )
         and not _is_stale_closed_pr_for_active(pr, active)
     ]
-    if any(pr.state in {"OPEN", "MERGED"} for pr in matching_prs):
+    if any(pr.state == "MERGED" for pr in matching_prs):
         return "completed"
+    open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
+    if open_prs:
+        try:
+            all_comments: list[dict] = []
+            for pr in open_prs:
+                all_comments.extend(config.resolved_forge.list_comments(pr.number))
+            if handle.issue_number is not None:
+                pr_numbers = {pr.number for pr in open_prs}
+                if handle.issue_number not in pr_numbers:
+                    all_comments.extend(
+                        config.resolved_forge.list_comments(handle.issue_number)
+                    )
+            outcome = parse_from_comments(all_comments)
+            if outcome is not None and outcome.result in (
+                RESULT_DONE,
+                RESULT_NOT_NEEDED,
+            ):
+                return "completed"
+        except Exception:
+            return "unknown"
+        return "pending"
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"

@@ -737,6 +737,19 @@ class TestBranchStacking:
                     )
                 ],
             ),
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=10,
+                        head_ref="claude/issue-1-task-1",
+                        changed_files=(),
+                        review_decision="APPROVED",
+                        is_ci_passing=True,
+                    )
+                ],
+            ),
+            patch("orchestune.forge.GitHubForge.list_comments", return_value=[]),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]

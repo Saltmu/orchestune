@@ -32,6 +32,7 @@ from orchestune.dispatch_state import (
     save_run_state,
 )
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.outcome_record import OutcomeRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -229,10 +230,17 @@ class TestRecoveredActiveTask:
             closes_issue_numbers=(1,),
         )
 
+        outcome = OutcomeRecord(result="done", issue=1, pr=101)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[pr]),
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[pr]),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),

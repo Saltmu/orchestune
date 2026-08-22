@@ -23,6 +23,7 @@ from orchestune.dispatch_targets import (
     resolve_default_dispatch_target_name,
 )
 from orchestune.models import PrRecord, Task
+from orchestune.outcome_record import OutcomeRecord
 
 
 class _IsCompleteOnlyTarget(DispatchTarget):
@@ -436,11 +437,22 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
 
     def test_is_complete_true_when_pr_open_for_branch(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
-            return_value=[
-                PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
-            ],
+        outcome = OutcomeRecord(result="done", issue=1, pr=1)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1, head_ref="claude/issue-1-task-a", changed_files=()
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
         ):
             handle = DispatchHandle(
                 external_id="session_1", branch_name="claude/issue-1-task-a"
@@ -513,17 +525,26 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         比較はGitHubの精度に合わせて秒単位に揃え、同じ秒に作成されたPRは
         staleとしない。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
-            return_value=[
-                PrRecord(
-                    number=1,
-                    head_ref="claude/issue-1-task-a",
-                    changed_files=(),
-                    created_at="2026-01-01T00:00:00Z",
-                    state="OPEN",
-                )
-            ],
+        outcome = OutcomeRecord(result="done", issue=1, pr=1)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        created_at="2026-01-01T00:00:00Z",
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
         ):
             handle = DispatchHandle(
                 external_id="session_1",
@@ -676,16 +697,26 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         """#239: AIセッションがブランチ名指示に従わなかった場合でも、
         PRのclosingIssuesReferences経由で完了を検知できる。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
-            return_value=[
-                PrRecord(
-                    number=1,
-                    head_ref="claude/elegant-noether-5rli7u",
-                    changed_files=(),
-                    closes_issue_numbers=(218,),
-                )
-            ],
+        outcome = OutcomeRecord(result="done", issue=218, pr=1)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/elegant-noether-5rli7u",
+                        changed_files=(),
+                        closes_issue_numbers=(218,),
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
         ):
             handle = DispatchHandle(
                 external_id="session_1",
@@ -736,6 +767,121 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             assert target.is_complete(handle) is False
         assert mock_list_prs.call_count == 2
         mock_list_prs.assert_called_with(state="all")
+
+    def test_open_pr_without_outcome_is_pending(self):
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        created_at="2026-01-01T00:00:00Z",
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch("orchestune.forge.GitHubForge.list_comments", return_value=[]),
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                issue_number=1,
+            )
+            assert target.completion_status(handle) == "pending"
+            assert target.is_complete(handle) is False
+
+    def test_open_pr_with_outcome_done_is_completed(self):
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        outcome = OutcomeRecord(result="done", issue=1, pr=1)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        created_at="2026-01-01T00:00:00Z",
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T01:00:00Z"}
+                ],
+            ),
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                issue_number=1,
+            )
+            assert target.completion_status(handle) == "completed"
+            assert target.is_complete(handle) is True
+
+    def test_open_pr_with_outcome_not_needed_is_completed(self):
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        outcome = OutcomeRecord(result="not-needed", issue=1, pr=1)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        created_at="2026-01-01T00:00:00Z",
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T01:00:00Z"}
+                ],
+            ),
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                issue_number=1,
+            )
+            assert target.completion_status(handle) == "completed"
+            assert target.is_complete(handle) is True
+
+    def test_open_pr_with_forge_error_is_pending(self):
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        created_at="2026-01-01T00:00:00Z",
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                side_effect=RuntimeError("forge connection timeout"),
+            ),
+        ):
+            handle = DispatchHandle(
+                external_id="session_1",
+                branch_name="claude/issue-1-task-a",
+                issue_number=1,
+            )
+            assert target.completion_status(handle) == "pending"
+            assert target.is_complete(handle) is False
 
 
 class TestCodexCloudDispatchTarget:
@@ -818,11 +964,22 @@ class TestCodexCloudDispatchTarget:
 
     def test_is_complete_when_pr_is_open_for_task_branch(self):
         target = CodexCloudDispatchTarget("env_123")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
-            return_value=[
-                PrRecord(number=1, head_ref="claude/issue-1-task-a", changed_files=())
-            ],
+        outcome = OutcomeRecord(result="done", issue=1, pr=1)
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1, head_ref="claude/issue-1-task-a", changed_files=()
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
         ):
             assert (
                 target.is_complete(DispatchHandle(branch_name="claude/issue-1-task-a"))

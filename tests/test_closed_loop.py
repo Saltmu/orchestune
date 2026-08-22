@@ -16,6 +16,7 @@ from orchestune.dispatch_targets import DispatchHandle, DispatchTarget
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.outcome_record import OutcomeRecord
 from tests.conftest import get_clean_git_env
 
 pytestmark = pytest.mark.integration
@@ -226,6 +227,13 @@ class DummyGitHub:
         num = int(issue_number)
         self.comments.setdefault(num, []).append(body)
 
+    def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
+        num = int(issue_number)
+        return [
+            {"body": body, "created_at": "2026-01-01T00:00:00Z", "author": "bot"}
+            for body in self.comments.get(num, [])
+        ]
+
     def list_open_prs(
         self, limit: int = 1000, paginate_files: bool = False
     ) -> list[PrRecord]:
@@ -349,6 +357,10 @@ def make_agent_scenario(dummy_github: DummyGitHub):
                 review_decision="",
                 is_ci_passing=False,  # CI failing initially
             )
+            dummy_github.add_comment(
+                task.issue_number,
+                OutcomeRecord(result="done", issue=task.issue_number, pr=101).render(),
+            )
         else:
             # 2nd attempt: correct code
             content = "def main():\n    print('Hello World')\n"
@@ -380,6 +392,10 @@ def make_agent_scenario(dummy_github: DummyGitHub):
                 closes_issue_numbers=(task.issue_number,),
                 review_decision="",
                 is_ci_passing=True,  # Now CI passes
+            )
+            dummy_github.add_comment(
+                task.issue_number,
+                OutcomeRecord(result="done", issue=task.issue_number, pr=101).render(),
             )
 
     return scenario
@@ -435,6 +451,7 @@ def test_closed_loop_flow():
         patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
+        patch("orchestune.forge.GitHubForge.list_comments", dummy_github.list_comments),
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
         patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
@@ -655,6 +672,12 @@ def test_closed_loop_dag_recomputation_serialization():
                 review_decision="",
                 is_ci_passing=True,
             )
+            dummy_github.add_comment(
+                task.issue_number,
+                OutcomeRecord(
+                    result="done", issue=task.issue_number, pr=100 + task.issue_number
+                ).render(),
+            )
 
         return scenario
 
@@ -706,6 +729,7 @@ def test_closed_loop_dag_recomputation_serialization():
         patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
         patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
         patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
+        patch("orchestune.forge.GitHubForge.list_comments", dummy_github.list_comments),
         patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
         patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(

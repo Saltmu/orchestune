@@ -28,6 +28,7 @@ from orchestune.dispatch_state import (
     save_run_state,
 )
 from orchestune.models import IssueRecord
+from orchestune.outcome_record import OutcomeRecord
 from tests.conftest import make_issue
 
 
@@ -831,15 +832,20 @@ class TestRunDispatchCycleBlockedPromotion:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        outcome = OutcomeRecord(result="done", issue=1)
         with (
             patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            # Completion now also consults the all-state PR list to rule out an
-            # abandoned (closed-unmerged) PR before finalizing as "completed".
             patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                return_value=[
+                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+                ],
+            ),
             patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
             patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
