@@ -525,5 +525,5 @@ def test_skills_require_locale_aware_user_responses():
         assert (
             "user-facing" in text
             or "response language" in text
-            or "user's language" in text
+            or "preferred language" in text
         ), f"{skill_md.relative_to(REPO_ROOT)} must contain explicit directive for user-facing response language"
