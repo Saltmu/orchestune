@@ -555,6 +555,10 @@ def test_setup_skills_with_workflow_skill_falls_back_to_packaged_source(
     (pkg_skills_dir / "workflow-template" / "SKILL.md").write_text(
         "template contents", encoding="utf-8"
     )
+    (pkg_skills_dir / "workflow-template" / "references").mkdir()
+    (pkg_skills_dir / "workflow-template" / "references" / "tdd.md").write_text(
+        "fallback tdd", encoding="utf-8"
+    )
 
     with (
         patch("pathlib.Path.home", return_value=mock_home),
@@ -568,6 +572,9 @@ def test_setup_skills_with_workflow_skill_falls_back_to_packaged_source(
     target = mock_cwd / ".claude" / "skills" / "workflow-template"
     assert target.is_dir()
     assert (target / "SKILL.md").read_text(encoding="utf-8") == "template contents"
+    assert (target / "references" / "tdd.md").read_text(
+        encoding="utf-8"
+    ) == "fallback tdd"
 
 
 def test_setup_skills_with_workflow_skill_missing_source_fails_even_with_no_assistants(
@@ -904,3 +911,80 @@ def test_setup_skills_links_all_distributable_skills_including_provision(tmp_pat
         target = claude_skills / skill_name
         assert target.is_dir()
         assert (target / "SKILL.md").is_file()
+
+
+def test_setup_skills_with_workflow_skill_copies_references_directory(tmp_path):
+    """`--with-workflow-skill` 指定時、workflow-template の references/ サブディレクトリ
+    およびその中の Markdown ファイル群も含めて完全に実体コピーされることを検証する。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+
+    wf_dir = skills_dir / "workflow-template"
+    wf_dir.mkdir()
+    (wf_dir / "SKILL.md").write_text("router contents", encoding="utf-8")
+    ref_dir = wf_dir / "references"
+    ref_dir.mkdir()
+    (ref_dir / "tdd.md").write_text("tdd contents", encoding="utf-8")
+    (ref_dir / "pr.md").write_text("pr contents", encoding="utf-8")
+    (ref_dir / "review-loop.md").write_text("review contents", encoding="utf-8")
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    assert exit_code == 0
+    target_skill = mock_source / ".claude" / "skills" / "workflow-template"
+    assert target_skill.is_dir()
+    assert not target_skill.is_symlink()
+    assert (target_skill / "SKILL.md").read_text(encoding="utf-8") == "router contents"
+
+    target_refs = target_skill / "references"
+    assert target_refs.is_dir()
+    assert (target_refs / "tdd.md").read_text(encoding="utf-8") == "tdd contents"
+    assert (target_refs / "pr.md").read_text(encoding="utf-8") == "pr contents"
+    assert (target_refs / "review-loop.md").read_text(
+        encoding="utf-8"
+    ) == "review contents"
+
+
+def test_create_skill_link_copies_subdirectories_on_windows_privilege_error(tmp_path):
+    """Windows で symlink 権限不足により copytree にフォールバックした際、
+    references/ 等のサブディレクトリ構造が保持されてコピーされることを検証する。"""
+    from orchestune.setup_skills import _create_skill_link
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_text("skill contents", encoding="utf-8")
+    ref_dir = source / "references"
+    ref_dir.mkdir()
+    (ref_dir / "tdd.md").write_text("tdd ref contents", encoding="utf-8")
+
+    destination = tmp_path / "destination"
+
+    privilege_error = OSError("symlink privilege is not available")
+    privilege_error.winerror = 1314
+
+    with (
+        patch("orchestune.setup_skills.sys.platform", "win32"),
+        patch("pathlib.Path.symlink_to", side_effect=privilege_error),
+    ):
+        result = _create_skill_link(source, destination)
+
+    assert result == "copied"
+    assert not destination.is_symlink()
+    assert (destination / "SKILL.md").read_text(encoding="utf-8") == "skill contents"
+    assert (destination / "references" / "tdd.md").read_text(
+        encoding="utf-8"
+    ) == "tdd ref contents"

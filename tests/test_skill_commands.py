@@ -467,3 +467,34 @@ def test_local_ci_developer_structure():
     assert (
         total_lines <= 500
     ), f"local-ci-developer total markdown lines must be <= 500, got {total_lines}"
+
+
+def test_workflow_template_structure():
+    """workflow-template スキルの references 分割と薄いルータ構造を検証する。"""
+    skill_dir = SKILLS_ROOT / "workflow-template"
+    skill_md = skill_dir / "SKILL.md"
+    assert skill_md.is_file()
+
+    skill_lines = len(skill_md.read_text(encoding="utf-8").splitlines())
+    assert skill_lines < 100, f"SKILL.md must be under 100 lines, got {skill_lines}"
+
+    assert (skill_dir / "references" / "tdd.md").is_file()
+    assert (skill_dir / "references" / "pr.md").is_file()
+    assert (skill_dir / "references" / "review-loop.md").is_file()
+
+    skill_content = skill_md.read_text(encoding="utf-8")
+    for forbidden_label in (
+        "status:in-progress",
+        "status:not-needed",
+        "status:blocked-human-review",
+    ):
+        assert (
+            forbidden_label not in skill_content
+        ), f"SKILL.md must not contain direct label string {forbidden_label}"
+
+    total_lines = sum(
+        len(p.read_text(encoding="utf-8").splitlines()) for p in skill_dir.rglob("*.md")
+    )
+    assert (
+        total_lines <= 500
+    ), f"workflow-template total markdown lines must be <= 500, got {total_lines}"
