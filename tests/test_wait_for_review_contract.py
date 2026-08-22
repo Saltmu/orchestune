@@ -385,3 +385,96 @@ def test_evaluate_verdict_generic_bot():
         evaluate_review_verdict(body_inlines, inlines, "custom-bot")
         == EXIT_FINDINGS_PRESENT
     )
+
+
+def test_get_latest_review_round_and_idempotency_when_poster_is_bot():
+    data = {
+        "issue_comments": [
+            {
+                "id": 50,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-22T04:46:33Z",
+                "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+            }
+        ]
+    }
+    assert _get_latest_review_round(data, "claude") == 1
+    found = _find_existing_trigger_comment(data, "claude", 1)
+    assert found is not None
+    assert found["id"] == 50
+
+
+def test_evaluate_verdict_layer2_claude_no_major_blocking_issues():
+    body1 = "No major blocking issues found. Looks great overall."
+    assert evaluate_review_verdict(body1, [], "claude") == EXIT_NO_FINDINGS
+
+    body2 = "There are no other blocking bugs in this patch."
+    assert evaluate_review_verdict(body2, [], "claude") == EXIT_NO_FINDINGS
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_round_number_immediate_no_post(mock_get_data):
+    trigger = {
+        "id": 100,
+        "user": {"login": "dev"},
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+    }
+    review = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:45:00Z",
+        "body": "### Review complete\nLooks good!",
+    }
+    mock_get_data.return_value = {
+        "issue_comments": [trigger, review],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+    assert result["round"] == 1
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_max_retries_exceeded_polling(mock_get_data):
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        RuntimeError("Transient API fail 1"),
+        RuntimeError("Transient API fail 2"),
+    ]
+    with pytest.raises(RuntimeError, match="Exceeded maximum retries"):
+        wait_for_review(
+            pr_number=540,
+            timeout=10,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+            max_retries=1,
+        )
+
+
+def test_get_initial_pr_data_max_retries_exceeded():
+    from concurrent.futures import ThreadPoolExecutor
+
+    from scripts.wait_for_review import _get_initial_pr_data
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with patch(
+            "scripts.wait_for_review._get_pr_data",
+            side_effect=RuntimeError("API down"),
+        ):
+            with pytest.raises(TimeoutError, match="retry attempts"):
+                _get_initial_pr_data(
+                    pr_number=540,
+                    executor=executor,
+                    timeout=10,
+                    interval=0,
+                    max_retries=2,
+                )

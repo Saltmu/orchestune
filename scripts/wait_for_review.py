@@ -110,18 +110,21 @@ def _get_latest_review_round(
     data: dict[str, list[dict[str, Any]]], bot_name: str | None = None
 ) -> int:
     rounds: list[int] = []
+    trigger_marker = _review_trigger_marker(bot_name) if bot_name else None
+    trigger_line = f"@{bot_name.lower()} review" if bot_name else None
     for item in data.get("issue_comments", []):
-        user = (item.get("user") or {}).get("login", "")
-        if bot_name and _is_bot_user(user, bot_name):
-            continue
         body = item.get("body") or ""
-        if bot_name:
-            marker = _review_trigger_marker(bot_name)
-            if (
-                marker not in body.lower()
-                and f"@{bot_name.lower()} review" not in body.lower()
-            ):
-                continue
+        if (
+            trigger_marker
+            and trigger_marker.lower() not in body.lower()
+            and (
+                not trigger_line
+                or not any(
+                    line.strip().lower() == trigger_line for line in body.splitlines()
+                )
+            )
+        ):
+            continue
         round_num = _parse_review_round_marker(body)
         if round_num is not None:
             rounds.append(round_num)
@@ -134,9 +137,6 @@ def _find_existing_trigger_comment(
     marker = _review_trigger_marker(bot_name)
     trigger_line = f"@{bot_name.lower()} review"
     for item in data.get("issue_comments", []):
-        user = (item.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            continue
         body = item.get("body") or ""
         if (
             marker in body.lower()
@@ -436,20 +436,23 @@ def _get_initial_pr_data(
     executor: ThreadPoolExecutor,
     timeout: int,
     interval: int,
+    max_retries: int = 1,
 ) -> dict[str, list[dict[str, Any]]]:
     initial_fetch_start = time.time()
+    retries = 0
     while True:
         try:
             return _get_pr_data(pr_number, executor=executor)
         except Exception as e:
+            retries += 1
             print(
                 f"Warning: Error capturing initial PR review data: {e}",
                 file=sys.stderr,
             )
-            if time.time() - initial_fetch_start >= timeout:
+            if retries > max_retries or (time.time() - initial_fetch_start >= timeout):
                 raise TimeoutError(
                     f"Timed out capturing initial PR review data for PR #{pr_number} "
-                    f"after {timeout}s."
+                    f"after {timeout}s ({retries} retry attempts)."
                 ) from e
             time.sleep(interval)
 
@@ -502,27 +505,34 @@ def _evaluate_claude_signals(
     if len(inlines) > 0:
         return EXIT_FINDINGS_PRESENT
 
-    has_clean_pass = any(
-        pass_sig in body_lower
-        for pass_sig in (
-            "no blocking issues found",
-            "no blocking issues",
-            "no blocking bugs found",
-            "no blocking bugs",
-            "all checks passed",
-            "looks good",
-            "lgtm",
-        )
+    clean_pass_patterns = (
+        r"\b(?:no|without)\b(?:\s+\w+){0,3}\s+blocking\s+(?:issues?|bugs?|problems?)",
+        r"\ball\s+checks\s+passed\b",
+        r"\blooks\s+good\b",
+        r"\blgtm\b",
     )
+    has_clean_pass = any(re.search(pat, body_lower) for pat in clean_pass_patterns)
 
-    blocking_patterns = (
-        r"(?<!no\s)(?<!no\sother\s)\bblocking\s+(?:bugs?|issues?)\b",
+    blocking_matches = list(
+        re.finditer(r"\bblocking\s+(?:bugs?|issues?)\b", body_lower)
+    )
+    has_blocking_keyword = False
+    for m in blocking_matches:
+        start = max(0, m.start() - 30)
+        prefix = body_lower[start : m.start()]
+        if not re.search(r"\b(?:no|without)\b(?:\s+\w+){0,3}\s*$", prefix):
+            has_blocking_keyword = True
+            break
+
+    blocking_other_patterns = (
         r"marking\s+this\s+\*\*fail\*\*",
         r"marking\s+this\s+fail\b",
         r"verdict:\s*fail\b",
         r"should\s+not\s+be\s+merged\b",
     )
-    has_blocking = any(re.search(pat, body_lower) for pat in blocking_patterns)
+    has_blocking = has_blocking_keyword or any(
+        re.search(pat, body_lower) for pat in blocking_other_patterns
+    )
 
     if "### findings" in body_lower:
         findings_part = body_lower.split("### findings", 1)[1]
@@ -675,15 +685,24 @@ def wait_for_review(
     round_num: int | None = None,
 ) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=3) as executor:
-        initial_data = _get_initial_pr_data(pr_number, executor, timeout, interval)
+        initial_data = _get_initial_pr_data(
+            pr_number,
+            executor,
+            timeout,
+            interval,
+            max_retries=max_retries,
+        )
         initial_snapshot = _build_snapshot(initial_data, bot_name)
         excluded_ids: set[int | str] = set()
 
-        current_round = (
-            round_num
-            if round_num is not None
-            else _get_latest_review_round(initial_data, bot_name) + 1
-        )
+        latest_existing_round = _get_latest_review_round(initial_data, bot_name)
+        if round_num is not None:
+            current_round = round_num
+        elif post_trigger:
+            current_round = latest_existing_round + 1
+        else:
+            current_round = max(1, latest_existing_round)
+
         if current_round > max_rounds:
             raise MaxRoundsExceededError(
                 f"Maximum review rounds ({max_rounds}) exceeded (attempted round {current_round})."
@@ -715,10 +734,12 @@ def wait_for_review(
             f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
         )
         start_time = time.time()
+        consecutive_errors = 0
 
         while True:
             try:
                 current_data = _get_pr_data(pr_number, executor=executor)
+                consecutive_errors = 0
                 current_snapshot = _build_snapshot(
                     current_data, bot_name, exclude_ids=excluded_ids
                 )
@@ -768,7 +789,12 @@ def wait_for_review(
                             )
 
             except Exception as e:
+                consecutive_errors += 1
                 print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
+                if consecutive_errors > max_retries:
+                    raise RuntimeError(
+                        f"Exceeded maximum retries ({max_retries}) during review polling: {e}"
+                    ) from e
 
             if time.time() - start_time >= timeout:
                 break
