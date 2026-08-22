@@ -15,23 +15,20 @@ Loop (最大5ラウンド):
   1. レビュー待機コマンドを実行
      - 初回: poetry run python scripts/wait_for_review.py --pr <PR番号> --bot-name <bot>
      - 2周目以降: --body-file /tmp/review_reply.md を付与して再レビュー依頼
-  2. 終了コード (exit code) に応じた分岐:
-     - exit 0 (指摘なし / LGTM):
-         -> ループ終了。ステップ12（完了宣言）へ進む。
-     - exit 10 (修正すべき指摘あり):
-         -> 指摘内容を精査しコード修正・テスト追加を実施。
-         -> ローカルCIで検証後、コミット＆プッシュ。
-         -> /tmp/review_reply.md を作成し、ループ先頭（1）へ戻る（後退辺）。
-     - exit 11 (ボットがレビュー進行中):
-         -> poetry run python scripts/wait_for_review.py --pr <PR番号> --bot-name <bot> --no-post で待機継続。
-         -> ループ先頭（1）へ戻る（後退辺）。
-     - exit 12 (ラウンド上限到達 / max-rounds):
-         -> 自動反復を停止。理由を記録した outcome レコード (result: blocked) を投稿してエスカレーション。
-     - exit 20 (タイムアウト):
+  2. 出力結果の確認と文脈判定:
+     - タイムアウト (exit 1) の場合:
          -> --no-post --timeout 300 で1回のみ再試行。解消しなければエスカレーション。
-     - exit 30 (判定不能 / 手動判定フォールバック):
-         -> 出力本文をLLMが精読。修正が必要なら対応してループ先頭へ戻る。問題なければステップ12へ進む。
-     - exit 2 (内部エラー):
+     - レビュー結果取得 (exit 0) の場合:
+         -> 最新本文およびインライン指摘をLLMが精読。
+         -> (a) 修正すべき指摘がある場合:
+             指摘内容に合わせてコード修正・テスト追加を実施。
+             ローカルCI（./scripts/local-ci.sh / .\\scripts\\local-ci.ps1）で検証後、コミット＆プッシュ。
+             /tmp/review_reply.md を作成し、ループ先頭（1）へ戻る（後退辺）。
+         -> (b) 指摘なし（LGTM / All checks passed / No blocking issues）の場合:
+             ループ終了。ステップ12（完了宣言）へ進む。
+     - ラウンド上限（5ラウンド）到達時:
+         -> 自動反復を停止。論点と対応状況をPRコメントに整理してエスカレーション。
+     - 内部エラー (exit 2) の場合:
          -> 異常終了。エラー内容を記録して停止。
 ```
 

@@ -9,9 +9,13 @@
 - **新規機能の場合**: 本ステップをスキップし、ステップ4へ進みます。
 
 ## 4. ベースライン取得 (Baseline Record)
-- 変更前のコード状態でベースラインを記録します。
+- 変更前のコード状態でベースラインを記録します（OSに応じてコマンドを選択）：
 ```bash
+# Linux / macOS
 poetry run python scripts/ci_baseline.py record
+
+# Windows PowerShell
+poetry run python scripts/ci_baseline.py record --ci-command ".\\scripts\\local-ci.ps1"
 ```
 - この記録は、ステップ9で新規リグレッションとベースブランチ由来の既存失敗を自動判別するために使用されます。
 
@@ -59,4 +63,4 @@ poetry run python scripts/ci_baseline.py check
    ```bash
    poetry run python scripts/detect_bloat.py --warn-only
    ```
-   - ファイルサイズ（コード: 1000行、スキル計: 500行）や関数長（50行）の超過警告を検知した場合は、リファクタリング計画を検討してください。
+   - ファイルサイズ（コード: 1000行、スキル計: 500行）や関数長（50行）の超過警告を検知した場合は、**そのままコード修正を進めずに作業を一時停止**し、まずユーザーにモジュールやプロンプトの分割リファクタリング計画を提示して承認を得てください。
