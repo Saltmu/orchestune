@@ -190,12 +190,13 @@ class IntegrationMerger:
             stderr = (e.stderr or b"").decode(errors="replace")
             return False, f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
 
-    def run_ci_with_flaky_check(self) -> tuple[bool, str]:
-        # #208: 丸ごとの再実行はしない。既知のflakyテストは呼び出し先の
-        # pytest-rerunfailures（quarantineリストに基づく個別リトライ）が
-        # 内部で吸収するため、ここで通しの再実行を重ねる必要はない。
-        # quarantine対象外のテストが不安定な場合は、そのままCI失敗として
-        # 正しく検知させ、人間がquarantineリストへの追加を判断する。
+    def run_ci_in_worktree(self) -> tuple[bool, str]:
+        """Prepare the worktree CI environment and run the configured command.
+
+        Dependency installation and virtualenv resolution complete before the
+        CI command runs. The integration gate deliberately does not retry the
+        command; the caller rolls back when it fails (#208).
+        """
         env, error = self._prepare_ci_environment()
         if error is not None:
             return False, error
@@ -316,7 +317,7 @@ class IntegrationMerger:
 
         Returns `(success, failure_reason, ci_output)`.
         """
-        ci_success, ci_output = self.run_ci_with_flaky_check()
+        ci_success, ci_output = self.run_ci_in_worktree()
         if ci_success:
             return True, "", None
 

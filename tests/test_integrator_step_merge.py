@@ -141,8 +141,8 @@ class TestCiFailure:
     def test_ci_runs_only_once_without_whole_script_retry(
         self, integrator_env: IntegratorEnv
     ):
-        # #208: quarantine対象外のflakyテストによる失敗は、丸ごとリトライで
-        # 隠さず、1回の実行結果どおりに正しくCI失敗として扱う。
+        # #208: 統合ゲートではCIを意図的に再試行しない。1回の実行結果どおりに
+        # CI失敗として扱う。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci)
 
@@ -548,7 +548,7 @@ class TestCiEnvironment:
             return _ok(args)
 
         with patch("subprocess.run", side_effect=mock_run_impl) as mock_run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         calls = mock_run.call_args_list
@@ -580,7 +580,7 @@ class TestCiEnvironment:
         )
 
         with patch("subprocess.run", side_effect=FileNotFoundError("poetry")):
-            ok, output = merger.run_ci_with_flaky_check()
+            ok, output = merger.run_ci_in_worktree()
 
         assert ok is False
         assert "poetry" in output
