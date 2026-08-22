@@ -199,6 +199,18 @@ class TestDecideBlockedPromotions:
         promotable = _decide_blocked_promotions([issue], [], {"task-x"}, {1: task})
         assert promotable == [task]
 
+    def test_ci_base_branch_red_not_promoted_by_dependency_resolution(self):
+        task = _task(depends_on=("task-x",))
+        issue = IssueRecord(
+            number=1,
+            title="t",
+            body="",
+            labels=("status:blocked", "ci:base-branch-red"),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        promotable = _decide_blocked_promotions([issue], [], {"task-x"}, {1: task})
+        assert promotable == []
+
 
 class TestSelfHealRunState:
     """#156: run_state.jsonは複数の親Issue（big rock）にまたがって共有されうる
@@ -981,3 +993,94 @@ class TestRunDispatchCycleBlockedPromotion:
             mock_remove_label.assert_any_call(1, "status:queued")
             mock_add_label.assert_any_call(1, "status:blocked")
             mock_add_comment.assert_called_once_with(1, ANY)
+
+
+class TestBaseBranchRedCycleReconciliation:
+    def test_base_branch_red_requeued_when_base_sha_advances(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        issue = _full_issue(
+            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=None
+        )
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            reason="base-branch-red",
+            base_sha="1111111111111111111111111111111111111111",
+            attempt=1,
+        )
+        comments = [{"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}]
+
+        with (
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_comments", return_value=comments),
+            patch(
+                "orchestune.dispatch_reconciliation._get_branch_commit_sha",
+                return_value="2222222222222222222222222222222222222222",
+            ),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue] if label == "status:blocked" else []
+            )
+            report = run_dispatch_cycle(config)
+
+            assert report.promotion_events == [
+                {"issue_number": 1, "subtask_id": "task-a"}
+            ]
+            mock_remove_label.assert_any_call(1, "ci:base-branch-red")
+            mock_remove_label.assert_any_call(1, "status:blocked")
+            mock_add_label.assert_any_call(1, "status:queued")
+            mock_add_comment.assert_called_once()
+
+    def test_base_branch_red_escalated_when_3_attempts_reached(self, tmp_path):
+        config = DispatcherConfig(
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+        issue = _full_issue(
+            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=None
+        )
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            reason="base-branch-red",
+            base_sha="1111111111111111111111111111111111111111",
+            attempt=3,
+        )
+        comments = [{"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}]
+
+        with (
+            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+            ),
+            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("orchestune.forge.GitHubForge.list_comments", return_value=comments),
+            patch(
+                "orchestune.dispatch_reconciliation._get_branch_commit_sha",
+                return_value="2222222222222222222222222222222222222222",
+            ),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue] if label == "status:blocked" else []
+            )
+            report = run_dispatch_cycle(config)
+
+            assert report.promotion_events == []
+            mock_remove_label.assert_any_call(1, "ci:base-branch-red")
+            mock_add_label.assert_any_call(1, "status:blocked-human-review")
+            mock_add_comment.assert_called_once()

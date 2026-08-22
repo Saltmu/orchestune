@@ -7,6 +7,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
@@ -32,8 +33,11 @@ from orchestune.forge import Forge
 from orchestune.git_cli import run_git
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import (
+    REASON_BASE_BRANCH_RED,
+    RESULT_BLOCKED,
     RESULT_DONE,
     RESULT_NOT_NEEDED,
+    OutcomeRecord,
     parse_from_comments,
 )
 from orchestune.process_utils import is_process_alive
@@ -44,6 +48,55 @@ class CompletedWorktreeDecision:
     action: str
     subtask_id: str = ""
     commit_sha: str | None = None
+    outcome: OutcomeRecord | None = None
+
+
+def _fetch_outcome_for_active(
+    active: ActiveWorktree, forge: Forge
+) -> OutcomeRecord | None | Literal["error"]:
+    try:
+        comments = list(forge.list_comments(active.issue_number))
+    except Exception:
+        return "error"
+    try:
+        prs = forge.list_prs(state="all")
+        matching_prs = [
+            pr
+            for pr in prs
+            if (
+                (active.branch is not None and pr.head_ref == active.branch)
+                or active.issue_number in pr.closes_issue_numbers
+            )
+            and not _is_stale_pr_for_active(pr, active)
+        ]
+        for pr in matching_prs:
+            if pr.number != active.issue_number:
+                try:
+                    comments.extend(forge.list_comments(pr.number))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return parse_from_comments(comments, since=active.started_at)
+
+
+def _decide_action_from_outcome(
+    outcome: OutcomeRecord | None, has_new_commits: bool
+) -> str:
+    if outcome is None:
+        return (
+            "completed_without_outcome" if has_new_commits else "completed_no_commits"
+        )
+    if outcome.result == RESULT_NOT_NEEDED:
+        return "not_needed"
+    if outcome.result == RESULT_BLOCKED and outcome.reason == REASON_BASE_BRANCH_RED:
+        attempt = outcome.attempt if outcome.attempt is not None else 1
+        return (
+            "escalated_base_branch_red" if attempt >= 3 else "blocked_base_branch_red"
+        )
+    if outcome.result == RESULT_DONE:
+        return "completed" if has_new_commits else "completed_no_commits"
+    return "completed_without_outcome"
 
 
 def _decide_completed_worktree_outcome(
@@ -66,63 +119,99 @@ def _decide_completed_worktree_outcome(
             active.worktree_path, active.base_branch
         )
         commit_sha = None
-    if not has_new_commits:
-        return CompletedWorktreeDecision(
-            action="completed_no_commits", subtask_id=subtask_id
-        )
 
-    # #552: 完了判定をoutcomeレコード基準へ統一
     if forge is not None:
-        try:
-            comments = list(forge.list_comments(active.issue_number))
-        except Exception:
+        outcome_or_err = _fetch_outcome_for_active(active, forge)
+        if outcome_or_err == "error":
             return CompletedWorktreeDecision(
                 action="completion_skipped_forge_error", subtask_id=subtask_id
             )
-        try:
-            prs = forge.list_prs(state="all")
-            matching_prs = [
-                pr
-                for pr in prs
-                if (
-                    (active.branch is not None and pr.head_ref == active.branch)
-                    or active.issue_number in pr.closes_issue_numbers
-                )
-                and not _is_stale_pr_for_active(pr, active)
-            ]
-            for pr in matching_prs:
-                if pr.number != active.issue_number:
-                    try:
-                        comments.extend(forge.list_comments(pr.number))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        outcome = parse_from_comments(comments, since=active.started_at)
+        outcome = outcome_or_err
     else:
         outcome = None
 
-    if outcome is None:
-        return CompletedWorktreeDecision(
-            action="completed_without_outcome",
-            subtask_id=subtask_id,
-            commit_sha=commit_sha,
-        )
-    if outcome.result == RESULT_NOT_NEEDED:
-        return CompletedWorktreeDecision(
-            action="not_needed",
-            subtask_id=subtask_id,
-            commit_sha=commit_sha,
-        )
-    if outcome.result == RESULT_DONE:
-        return CompletedWorktreeDecision(
-            action="completed", subtask_id=subtask_id, commit_sha=commit_sha
-        )
+    action = _decide_action_from_outcome(outcome, has_new_commits)
     return CompletedWorktreeDecision(
-        action="completed_without_outcome",
+        action=action,
         subtask_id=subtask_id,
-        commit_sha=commit_sha,
+        commit_sha=commit_sha if action != "completed_no_commits" else None,
+        outcome=outcome,
     )
+
+
+def _apply_blocked_base_branch_red(
+    active: ActiveWorktree,
+    decision: CompletedWorktreeDecision,
+    config: DispatcherConfig,
+    active_task: Task | None,
+) -> None:
+    if not config.apply:
+        return
+    remove_worktree(active.worktree_path)
+    stale_labels = (
+        tuple(
+            label
+            for label in PRIMARY_STATUS_LABELS
+            if label in active_task.status_labels
+        )
+        if active_task is not None
+        else ("status:in-progress",)
+    )
+    transition_status_label(
+        config.resolved_forge,
+        active.issue_number,
+        "status:blocked",
+        stale_labels,
+    )
+    config.resolved_forge.add_label(active.issue_number, "ci:base-branch-red")
+    attempt_str = (
+        f"（試行回数: {decision.outcome.attempt}/3）"
+        if decision.outcome and decision.outcome.attempt is not None
+        else ""
+    )
+    config.resolved_forge.add_comment(
+        active.issue_number,
+        f"ベースブランチ（`{active.base_branch}`）由来のCI失敗を検知したため、"
+        f"`ci:base-branch-red`マーカーを付与して`status:blocked`で保留しました{attempt_str}。"
+        "ベースブランチの前進（新コミット）時に自動で再キューイングされます。",
+    )
+
+
+def _apply_escalated_base_branch_red(
+    active: ActiveWorktree,
+    decision: CompletedWorktreeDecision,
+    config: DispatcherConfig,
+    active_task: Task | None,
+) -> None:
+    if not config.apply:
+        return
+    remove_worktree(active.worktree_path)
+    stale_labels = (
+        tuple(
+            label
+            for label in PRIMARY_STATUS_LABELS
+            if label in active_task.status_labels
+        )
+        if active_task is not None
+        else ("status:in-progress",)
+    )
+    attempt = (
+        decision.outcome.attempt
+        if decision.outcome and decision.outcome.attempt is not None
+        else 3
+    )
+    apply_human_review_escalation(
+        active.issue_number,
+        stale_labels,
+        f"ベースブランチ由来のCI失敗（base-branch-red）が{attempt}回連続で発生したため、"
+        "自動再キューイングを停止し`status:blocked-human-review`へエスカレーションしました。"
+        "ベースブランチの修正およびCI状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        forge=config.resolved_forge,
+    )
+    try:
+        config.resolved_forge.remove_label(active.issue_number, "ci:base-branch-red")
+    except Exception:
+        pass
 
 
 def _apply_completed_worktree_outcome(
@@ -178,6 +267,16 @@ def _apply_completed_worktree_outcome(
                 "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
                 forge=config.resolved_forge,
             )
+        event["subtask_id"] = decision.subtask_id
+        event["commit_sha"] = decision.commit_sha
+        return event
+    if decision.action == "blocked_base_branch_red":
+        _apply_blocked_base_branch_red(active, decision, config, active_task)
+        event["subtask_id"] = decision.subtask_id
+        event["commit_sha"] = decision.commit_sha
+        return event
+    if decision.action == "escalated_base_branch_red":
+        _apply_escalated_base_branch_red(active, decision, config, active_task)
         event["subtask_id"] = decision.subtask_id
         event["commit_sha"] = decision.commit_sha
         return event
@@ -387,6 +486,7 @@ def _local_pr_completion_status(
         if outcome is not None and outcome.result in (
             RESULT_DONE,
             RESULT_NOT_NEEDED,
+            RESULT_BLOCKED,
         ):
             return "completed"
         if had_error and outcome is None:

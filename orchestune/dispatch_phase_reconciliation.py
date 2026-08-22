@@ -23,6 +23,7 @@ from orchestune.dispatch_rebase import (
     _rule_footprint_deviation,
 )
 from orchestune.dispatch_reconciliation import (
+    _handle_base_branch_red_recovery,
     _handle_blocked_recompute_recovery,
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
@@ -174,6 +175,12 @@ def run_blocked_promotion_phase(
         issues, run_state, ctx, completed_subtask_ids, config
     )
     promotion_events.extend(recompute_resolved_promoted_events)
+
+    # #555: ci:base-branch-red の自動復帰（base_sha前進による再キュー）
+    base_branch_red_promoted_events = _handle_base_branch_red_recovery(
+        issues, ctx, completed_subtask_ids, config
+    )
+    promotion_events.extend(base_branch_red_promoted_events)
 
     return promotion_events
 

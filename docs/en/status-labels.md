@@ -46,6 +46,9 @@ stateDiagram-v2
     in_progress --> queued: Zombie/timeout reclaimed by GC\n(_collect_zombies_and_timeouts)
     in_progress --> blocked_human_review: GC reclaim limit exceeded\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: outcome(not-needed) or status:not-needed detected\n(closed, or pending review)
+    in_progress --> blocked: base branch red detected (outcome.reason=base-branch-red)\n(_finalize_completed_worktree, ci:base-branch-red added)
+    blocked --> queued: Requeued on base_sha advance\n(_handle_base_branch_red_recovery, ci:base-branch-red removed)
+    in_progress --> blocked_human_review: base-branch-red 3 consecutive failures\n(_finalize_completed_worktree)
     in_progress --> blocked: Stale bookkeeping entry discarded\n(_apply_stale_active_entry_discard;\nthe label itself was already changed externally)
 
     done --> queued: Rolled back after Integrator's provisional-merge CI failed\n(handle_merge_failure)
@@ -165,6 +168,14 @@ independently of the lifecycle above (see "External lock" below).
   and the Issue is closed in a later cycle based on the review outcome.
   In local environments it is closed immediately as before.
 
+### 10-b. `status:in-progress` → `status:blocked` + `ci:base-branch-red` (CI failed due to base branch) / Requeued on base_sha advance (#555)
+- Source: `_finalize_completed_worktree` in `orchestune/dispatch_gc.py` (holding), `_handle_base_branch_red_recovery` in `orchestune/dispatch_reconciliation.py` (requeue)
+- Condition:
+  - **Hold**: When an agent session completes with an outcome record declaring `result: blocked` and `reason: base-branch-red`, the task transitions to `status:blocked` and receives the marker label `ci:base-branch-red` to be held without being promoted by normal dependency resolution (`_decide_blocked_promotions`).
+  - **Requeue**: When the base branch commit (`base_sha`) advances, the `ci:base-branch-red` marker is removed, and if dependencies are satisfied, the task is moved back to `status:queued`.
+  - **Escalation**: If `base-branch-red` occurs 3 consecutive times on the same task (`attempt >= 3`), automatic requeuing stops and the task escalates to `status:blocked-human-review` via `apply_human_review_escalation`.
+
+
 
 ### 11. `status:done` → `status:queued` (rollback on provisional-merge CI failure)
 - Source: `handle_merge_failure` in `orchestune/integrator_pr.py`
@@ -242,6 +253,12 @@ dispatcher having been run with `--parent-issue <N>` (see
   label is still set (i.e. two cycles in a row), that's treated as a likely
   configuration/operational anomaly: the affected child Issues are escalated
   to `status:blocked-human-review` and the label is cleared.
+- `ci:base-branch-red`: marker label attached when a task encounters a CI failure
+  caused by the base branch (`outcome.result=blocked` / `reason=base-branch-red`) (#555).
+  Prevents erroneous dependency promotion (livelocks) while holding the task in
+  `status:blocked`, and automatically unmarks and requeues (`status:queued`) the task
+  once the base branch commit (`base_sha`) advances. If 3 consecutive failures occur,
+  the task escalates to `status:blocked-human-review`.
 - `priority:high` / `priority:medium` / `priority:low`: used for launch
   ordering, but do not participate in lifecycle transitions.
 - `risk:flagged` / `progress:partial`: visualization-only labels; they do not

@@ -45,6 +45,9 @@ stateDiagram-v2
     in_progress --> queued: ゾンビ/タイムアウト検知によるGC\n(_collect_zombies_and_timeouts)
     in_progress --> blocked_human_review: GC回収回数が上限超過\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: outcome(not-needed)またはstatus:not-needed検知\n(クローズ or 検証レビュー)
+    in_progress --> blocked: base branch red検知 (outcome.reason=base-branch-red)\n(_finalize_completed_worktree、ci:base-branch-red付与)
+    blocked --> queued: base_sha前進による再キュー\n(_handle_base_branch_red_recovery、ci:base-branch-red解除)
+    in_progress --> blocked_human_review: base-branch-red 3回連続発生\n(_finalize_completed_worktree)
     in_progress --> blocked: staleな帳簿エントリの破棄\n(_apply_stale_active_entry_discard、\nラベル自体は外部で既に変更済み)
 
     done --> queued: Integrator仮マージCI失敗による差し戻し\n(handle_merge_failure)
@@ -166,6 +169,14 @@ stateDiagram-v2
   （`orchestune/integration_coordinator.py`）、レビュー結果に応じて後続
   サイクルでクローズする。ローカル環境では従来通り即座にクローズする。
 
+### 10-b. `status:in-progress` → `status:blocked` + `ci:base-branch-red`（ベースブランチ由来のCI失敗） / base_sha前進による再キュー（#555）
+- 発生元: `orchestune/dispatch_gc.py`の`_finalize_completed_worktree`（保留）、`orchestune/dispatch_reconciliation.py`の`_handle_base_branch_red_recovery`（再キュー）
+- 条件:
+  - **保留**: エージェントが完了宣言レコード（`orchestune:outcome`、`result: blocked` / `reason: base-branch-red`）を残して終了した場合、`status:blocked`へ遷移させ、マーカーラベル`ci:base-branch-red`を付与して保留する。通常の依存解決による昇格（`_decide_blocked_promotions`）からは除外される。
+  - **再キュー**: 対象ブランチのベースコミット（`base_sha`）の前進を検知した時点で`ci:base-branch-red`マーカーを除去し、依存関係が解決済みであれば`status:queued`へ戻す。
+  - **エスカレーション**: 同一タスクで`base-branch-red`が3回連続（`attempt >= 3`）発生した場合は、自動再キューを打ち切り`apply_human_review_escalation`により`status:blocked-human-review`へエスカレーションする。
+
+
 
 ### 11. `status:done` → `status:queued`（仮マージCI失敗によるロールバック）
 - 発生元: `orchestune/integrator_pr.py`の`handle_merge_failure`
@@ -250,6 +261,8 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   既に本ラベルが付いた状態でさらに陳腐化を検知した場合（＝2サイクル連続）は、
   設定または運用構成の異常の可能性が高いとみなし、対象の子Issueを
   `status:blocked-human-review`へエスカレーションしたうえで本ラベルを除去する。
+- `ci:base-branch-red`:
+  ベースブランチ由来のCI失敗（`outcome.result=blocked` / `reason=base-branch-red`）を検知した際に付与されるマーカーラベル（#555）。通常の依存関係解決による誤昇格（livelock）を防ぎ、ベースブランチのコミット（`base_sha`）が前進した時点でマーカーが解除され`status:queued`へ自動再キューされる。3回連続で失敗した場合は`status:blocked-human-review`へエスカレーションされる。
 - `priority:high` / `priority:medium` / `priority:low`:
   起動順序の優先度付けに使われるが、ライフサイクル遷移には関与しない。
 - `risk:flagged` / `progress:partial`:
