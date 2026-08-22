@@ -1,1020 +1,62 @@
-"""Codifies `decomposition_plan.md` -> GitHub Issue provisioning.
-
-Turns the prose procedure in `skills/orchestune-provision/SKILL.md` into a
-deterministic, idempotent, resumable transformation: an approved plan's
-`SubTask` fields carry everything `.github/issue_template.md` needs, so
-filing is pure code rather than an agent re-interpreting instructions each
-run.
-"""
+"""CLI facade for decomposition-plan Issue provisioning."""
 
 from __future__ import annotations
 
 import argparse
-import dataclasses
-import re
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
-from pathlib import Path
 
-import yaml
+from orchestune.dag_models import ConfigError, resolve_repo_root
+from orchestune.forge import GitHubForge
+from orchestune.provisioning_flow import (
+    IssuePreview,
+    ProvisionResult,
+    _build_provisioning_dag,
+)
+from orchestune.provisioning_flow import provision_issues as _provision_issues
+from orchestune.provisioning_parent import _resolve_parent_issue
+from orchestune.provisioning_plan import (
+    PlanMetadata,
+    _load_plan,
+    _parent_body,
+    restore_plan_file_from_parent,
+)
+from orchestune.provisioning_rendering import (
+    _build_subtask_issue_body,
+    _derive_labels,
+    _render_issue_body,
+    _subtask_id_from_body,
+    _validate_template_identity_marker,
+)
+from orchestune.provisioning_subtasks import (
+    _link_subtask_relationships,
+    _provision_subtask,
+)
 
-from orchestune.dag_graph import build_dag
-from orchestune.dag_models import (
-    ConfigError,
-    DagResult,
-    SubTask,
-    compile_extra_ignore_patterns,
-    extract_dag_ignore_patterns,
-    extract_dag_similarity_threshold,
-    load_orchestune_config,
-    resolve_repo_root,
-)
-from orchestune.dag_parsing import (
-    extract_frontmatter_and_body,
-    parse_decomposition_plan,
-)
-from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
-from orchestune.issue_parsing import (
-    FOOTPRINT_BLOCK_PATTERN,
-    PARENT_MARKER,
-    backfill_parent_issue_number,
-    effective_parent_number,
-    embed_decomposition_plan_in_parent_body,
-    ensure_parent_marker,
-    find_children_by_parent,
-    is_epic_issue,
-    parent_issue_number_from_body,
-    restore_plan_markdown_from_parent_body,
-)
-from orchestune.models import IssueRecord
-from orchestune.plan_writer import write_issue_numbers
-from orchestune.symbol_verification import find_missing_symbols
-from orchestune.validation import validate_issue_number
-
-_PLACEHOLDERS = (
-    "subtask_id",
-    "subtask_id_yaml",
-    "description",
-    "overview",
-    "proposed_changes",
-    "acceptance_criteria",
-    "verification_plan",
-    "footprint",
-    "symbols",
-    "depends_on",
-    "parent_issue_number",
-)
-_PLACEHOLDER_PATTERN = re.compile(
-    "{{(" + "|".join(re.escape(name) for name in _PLACEHOLDERS) + ")}}"
+__all__ = (
+    "IssuePreview",
+    "PlanMetadata",
+    "ProvisionResult",
+    "_build_provisioning_dag",
+    "_build_subtask_issue_body",
+    "_derive_labels",
+    "_link_subtask_relationships",
+    "_load_plan",
+    "_parent_body",
+    "_print_result",
+    "_provision_subtask",
+    "_render_issue_body",
+    "_resolve_parent_issue",
+    "_subtask_id_from_body",
+    "_validate_template_identity_marker",
+    "main",
+    "provision_issues",
 )
 
 
-VALID_PARENT_ISSUE_SOURCES = frozenset(("adopted", "derived"))
-
-
-@dataclass(frozen=True)
-class PlanMetadata:
-    title: str
-    parent_issue_number: int | None
-    parent_issue_source: str | None = None
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        if self.parent_issue_source is not None:
-            if self.parent_issue_source not in VALID_PARENT_ISSUE_SOURCES:
-                raise ValueError(
-                    f"decomposition_plan.md の 'parent_issue_source' は 'adopted' または 'derived' である必要があります: {self.parent_issue_source!r}"
-                )
-            if (
-                self.parent_issue_source == "adopted"
-                and self.parent_issue_number is None
-            ):
-                raise ValueError(
-                    "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-                    "'parent_issue_number' が設定されていません"
-                )
-
-
-@dataclass(frozen=True)
-class IssuePreview:
-    subtask_id: str
-    title: str
-    body: str
-    labels: tuple[str, ...]
-    already_has_issue: bool
-
-
-@dataclass(frozen=True)
-class ProvisionResult:
-    parent_issue_number: int | None
-    applied: bool
-    created: dict[str, int]
-    reused: dict[str, int]
-    previews: tuple[IssuePreview, ...] = ()
-    # #485: ネイティブSub-issue/blocked_by関係のリンクに失敗し、本文metadata
-    # フォールバックのみで縮退したsubtask_idの一覧（起動時/完了時に報告する）。
-    degraded_subtask_ids: tuple[str, ...] = ()
-    # #532: 親Issue本文への分解計画同期が成功したかどうか（同期失敗時はFalse）
-    plan_synced: bool = True
-
-
-def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
-    subtasks = parse_decomposition_plan(path)
-    text = Path(path).read_text(encoding="utf-8")
-    raw, description = extract_frontmatter_and_body(text)
-
-    issue_numbers: dict[str, int] = {}
-    for entry in raw.get("subtasks") or []:
-        if isinstance(entry, dict) and entry.get("issue_number") not in (None, ""):
-            # `dag_parsing._parse_subtask_id` strips the id before it becomes
-            # `SubTask.id`, which is what `issue_numbers.get(subtask.id)`
-            # below looks up by; mirror that here or a raw id with padding
-            # whitespace would never match its own subtask.
-            issue_numbers[str(entry["id"]).strip()] = validate_issue_number(
-                entry["issue_number"]
-            )
-
-    enriched = [
-        dataclasses.replace(subtask, issue_number=issue_numbers.get(subtask.id))
-        for subtask in subtasks
-    ]
-    raw_parent = raw.get("parent_issue_number")
-    parent_issue_number = (
-        None
-        if raw_parent is None or raw_parent == ""
-        else validate_issue_number(raw_parent)
-    )
-
-    raw_parent_source = raw.get("parent_issue_source")
-    if raw_parent_source is not None and raw_parent_source != "":
-        parent_issue_source_str = str(raw_parent_source).strip()
-        if parent_issue_source_str not in VALID_PARENT_ISSUE_SOURCES:
-            raise ValueError(
-                f"decomposition_plan.md の 'parent_issue_source' は 'adopted' または 'derived' である必要があります: {raw_parent_source!r}"
-            )
-        parent_issue_source: str | None = parent_issue_source_str
-    else:
-        parent_issue_source = None
-
-    if parent_issue_source == "adopted" and parent_issue_number is None:
-        raise ValueError(
-            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-            "'parent_issue_number' が設定されていません"
-        )
-
-    metadata = PlanMetadata(
-        title=str(raw.get("title") or "").strip(),
-        parent_issue_number=parent_issue_number,
-        parent_issue_source=parent_issue_source,
-        description=description,
-    )
-    return enriched, metadata
-
-
-def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, ...]:
-    """Pure label derivation: status/priority/risk from the subtask's own fields."""
-    labels = [
-        "status:blocked"
-        if subtask.depends_on and not dependencies_done
-        else "status:queued"
-    ]
-    labels.append(f"priority:{subtask.priority}")
-    if subtask.risk:
-        labels.append("risk:flagged")
-    return tuple(labels)
-
-
-def _issue_title(subtask: SubTask) -> str:
-    return f"[FEAT] {subtask.id}: {subtask.description}"
-
-
-def _parent_body(
-    title: str, description: str = "", plan_data: dict | str | None = None
-) -> str:
-    body = f"{title}"
-    if description:
-        body += f"\n\n{description}"
-    body += (
-        f"\n\n配下のサブタスクはこのIssueのSub-issueとして紐付けられます。"
-        f"\n\n{PARENT_MARKER}"
-    )
-    if plan_data is not None:
-        body = embed_decomposition_plan_in_parent_body(body, plan_data)
-    return body
-
-
-def restore_plan_file_from_parent(
-    forge: IssueForge,
-    parent_issue_number: int,
-    output_path: str | Path = "decomposition_plan.md",
-) -> Path:
-    """#532: 親Issue本文の`<!-- orchestune:decomposition-plan -->`から計画Markdownを復元してファイルへ書き出す。"""
-    parent_issue = forge.get_issue(parent_issue_number)
-    if parent_issue is None:
-        raise ValueError(
-            f"Parent issue #{parent_issue_number} was not found on the forge."
-        )
-    restored_markdown = restore_plan_markdown_from_parent_body(parent_issue.body)
-    if not restored_markdown:
-        raise ValueError(
-            f"Parent issue #{parent_issue_number} does not contain a valid decomposition plan block."
-        )
-    out_file = Path(output_path)
-    out_file.write_text(restored_markdown, encoding="utf-8")
-    return out_file
-
-
-def _sync_parent_decomposition_plan(
-    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
-) -> bool:
-    """#532: 親Issue本文へ最新の分解計画（Frontmatter YAML）を埋め込み・同期する。
-
-    同期に成功した場合（または差分なしでスキップした場合）はTrue、失敗した場合はFalseを返す。
-    """
-    try:
-        parent_issue = forge.get_issue(parent_issue_number)
-        if parent_issue is None:
-            print(
-                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: parent issue not found",
-                file=sys.stderr,
-            )
-            return False
-        text = Path(plan_path).read_text(encoding="utf-8")
-        raw_frontmatter, _ = extract_frontmatter_and_body(text)
-        if not raw_frontmatter:
-            print(
-                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: no frontmatter in {plan_path}",
-                file=sys.stderr,
-            )
-            return False
-        updated_body = embed_decomposition_plan_in_parent_body(
-            parent_issue.body, raw_frontmatter
-        )
-        if updated_body != parent_issue.body:
-            forge.update_issue_body(parent_issue_number, updated_body)
-        return True
-    except Exception as e:
-        print(
-            f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: {e}",
-            file=sys.stderr,
-        )
-        return False
-
-
-def _yaml_inline_list(items: Sequence[str]) -> str:
-    return yaml.dump(list(items), default_flow_style=True, allow_unicode=True).strip()
-
-
-def _yaml_scalar(value: str) -> str:
-    """Render `value` as a safe YAML scalar (quoting it if it contains `:`, `#`, etc.).
-
-    `yaml.dump(value)` on a bare scalar emits a trailing `...` document-end
-    marker, which breaks the surrounding Footprint block (the fields after
-    it become an unexpected second YAML document). Dumping a throwaway
-    single-key mapping instead avoids the marker, since a mapping root isn't
-    ambiguous the way a bare scalar root is; the fixed `k: ` prefix is then
-    stripped back off.
-    """
-    dumped = yaml.dump({"k": value}, allow_unicode=True, default_flow_style=False)
-    return dumped.removeprefix("k: ").rstrip("\n")
-
-
-def _bullet_list(items: Sequence[str]) -> str:
-    return "\n".join(f"- {item}" for item in items) if items else "特になし"
-
-
-def _render_issue_body(
-    subtask: SubTask, template: str, parent_issue_number: int | None = None
-) -> str:
-    values = {
-        "subtask_id": subtask.id,
-        "subtask_id_yaml": _yaml_scalar(subtask.id),
-        "description": subtask.description,
-        "overview": subtask.overview or "特になし",
-        "proposed_changes": _bullet_list(subtask.proposed_changes),
-        "acceptance_criteria": _bullet_list(subtask.acceptance_criteria),
-        "verification_plan": _bullet_list(subtask.verification_plan),
-        "footprint": _yaml_inline_list(subtask.footprint),
-        "symbols": _yaml_inline_list(subtask.symbols),
-        "depends_on": _yaml_inline_list(subtask.depends_on),
-        # #485: ネイティブSub-issue関係が使えない環境でも`--parent-issue`
-        # モードが子Issueを発見できるよう、親番号を本文metadataにも
-        # 永続化する（`add_sub_issue`が成功したかどうかに関わらず常に書く）。
-        "parent_issue_number": (
-            "null" if parent_issue_number is None else str(parent_issue_number)
-        ),
-    }
-    # A single-pass substitution (not one `.replace()` call per placeholder):
-    # a field's own value could otherwise contain a literal `{{token}}` (a
-    # `description` that mentions the template, say) and get corrupted by a
-    # later replacement reprocessing text that isn't part of the template.
-    return _PLACEHOLDER_PATTERN.sub(lambda match: values[match.group(1)], template)
-
-
-def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
-    """#359: `subtask.symbols`のうち現在のコードベースに見つからないものが
-    あれば、Issue本文末尾に注記を追加する。
-
-    未検出は「陳腐化している（リファクタで改名・移動された）」と「まだ
-    存在しない（このsubtaskで新規追加する）」のどちらもありうるため
-    （`find_missing_symbols`のdocstring参照）、注記は断定せず中立な
-    確認依頼として書く。
-    """
-    missing = find_missing_symbols(subtask, repo_root)
-    if not missing:
-        return body
-
-    bullet_list = "\n".join(f"- `{symbol}`" for symbol in missing)
-    warning = (
-        "\n\n---\n\n"
-        "⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
-        "見つかりませんでした。このsubtaskで新規追加する予定であれば問題ありません"
-        "が、リファクタによる改名・移動で古い名称が残っている可能性もあるため、"
-        f"着手前にコードを確認してください。\n{bullet_list}"
-    )
-    return body + warning
-
-
-def _subtask_id_from_body(body: str) -> str | None:
-    """Extract `subtask_id` from a Footprint YAML fence the same way
-    `issue_parsing.parse_task_from_issue` does, so IDs containing `:`/`#`
-    (rendered as quoted YAML scalars) are matched correctly."""
-    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
-    if not match:
-        return None
-    try:
-        data = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    subtask_id = data.get("subtask_id")
-    return str(subtask_id) if subtask_id else None
-
-
-def _depends_on_from_body(body: str) -> tuple[str, ...]:
-    """Extract `depends_on` from a Footprint YAML fence, mirroring
-    `_subtask_id_from_body` (#485 review round 8, P1 template probe)."""
-    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
-    if not match:
-        return ()
-    try:
-        data = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return ()
-    if not isinstance(data, dict):
-        return ()
-    return tuple(str(d) for d in (data.get("depends_on") or []))
-
-
-def _validate_template_identity_marker(
-    template: str, template_path: str | Path
-) -> None:
-    """Render a throwaway probe subtask through `template` and confirm
-    `_subtask_id_from_body` can extract its id back out.
-
-    Checking for the raw `{{subtask_id_yaml}}` token's presence isn't
-    enough: it could sit outside any Footprint YAML fence (a heading, or a
-    second unrelated fence) and still "be present" in the template text
-    while never producing an extractable `subtask_id:` key, silently
-    breaking idempotency in exactly the same way an entirely missing
-    placeholder would.
-
-    The probe id is deliberately one that forces `_yaml_scalar` to quote it
-    (it contains `:` and `#`), not a plain word: a plain-scalar probe would
-    round-trip fine even through a *buggy* custom template that wraps
-    `{{subtask_id_yaml}}` in its own literal quotes (already-quoted output
-    quoted a second time), silently corrupting any real id that actually
-    needs quoting while this validation reports success.
-    """
-    probe_id = "orchestune-template-probe: needs-quoting #1"
-    probe_depends_on = ("orchestune-template-probe-dep",)
-    probe = SubTask(
-        id=probe_id,
-        description="",
-        footprint=(),
-        symbols=(),
-        depends_on=probe_depends_on,
-        risk=False,
-        risk_reasons=(),
-    )
-    rendered = _render_issue_body(probe, template)
-    if _subtask_id_from_body(rendered) != probe_id:
-        raise ValueError(
-            f"{template_path} から subtask_id を再照合できません"
-            "（'{{subtask_id_yaml}}' がFootprint YAMLフェンス内の"
-            "'subtask_id:' として描画されていません）。冪等性が壊れます"
-        )
-
-    # #485 review round 8 (P1): a custom `--template` missing
-    # `{{depends_on}}` would silently render bodies with no dependency
-    # list at all. Degraded `set_blocked_by` linking relies entirely on
-    # this body field (`_body_depends_on`/`_resolve_depends_on`): if it's
-    # never rendered, a blocked task looks permanently unblockable (no
-    # dependency ever "completes"), or — if only some native links
-    # succeeded — it can be promoted after only that partial subset
-    # finishes, since the body has nothing to fill the gap with.
-    if _depends_on_from_body(rendered) != probe_depends_on:
-        raise ValueError(
-            f"{template_path} から depends_on を再照合できません"
-            "（'{{depends_on}}' がFootprint YAMLフェンス内の"
-            "'depends_on:' として描画されていません）。ネイティブ"
-            "blocked_by関係が使えない環境で依存関係の解決が壊れます"
-        )
-
-    # #485 review (P1): a custom `--template` missing `{{parent_issue_number}}`
-    # would silently render bodies without it. Provisioning would then report
-    # success (possibly even "full", not degraded) while the parent-metadata
-    # fallback — the only way to discover the issue when native sub-issue
-    # linking is unavailable — has nothing to find. Probe with a concrete
-    # number (not None/null) so a template that drops the placeholder text
-    # entirely, or one that only ever emits the `parent_issue_number: null`
-    # literal, both fail this check instead of only the latter.
-    probe_parent_number = 999999
-    probe_rendered = _render_issue_body(probe, template, probe_parent_number)
-    if parent_issue_number_from_body(probe_rendered) != probe_parent_number:
-        raise ValueError(
-            f"{template_path} から parent_issue_number を再照合できません"
-            "（'{{parent_issue_number}}' がFootprint YAMLフェンス内の"
-            "'parent_issue_number:' として描画されていません）。ネイティブ"
-            "Sub-issue関係が使えない環境でDispatcherが子Issueを発見できなく"
-            "なります"
-        )
-
-
-def _index_sub_issues_by_subtask_id(
-    forge: IssueForge, parent_issue_number: int
-) -> tuple[dict[str, IssueRecord], bool]:
-    """Returns `(index, metadata_search_supported)`. `index` maps
-    `subtask_id` to the full `IssueRecord` (not just the number) so a
-    reuse can inspect/backfill its body without an extra `get_issue`
-    round trip. `metadata_search_supported` is threaded through to
-    `provision_issues` (#485 review round 7, P2): a newly created issue's
-    body always carries correct `parent_issue_number` metadata, but that's
-    worthless for discovery if this forge can never search for it — a
-    body-metadata "fallback" that nothing can find isn't actually one.
-    """
-    index: dict[str, IssueRecord] = {}
-    # #485: ネイティブSub-issue関係を作れなかった過去実行のIssueも本文
-    # metadataのparent_issue_numberから見つけて再利用対象に含める。
-    result = find_children_by_parent(forge, parent_issue_number)
-    for record in result.issues:
-        subtask_id = _subtask_id_from_body(record.body)
-        if subtask_id:
-            index.setdefault(subtask_id, record)
-    return index, result.metadata_search_supported
-
-
-def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResult:
-    orchestune_config = load_orchestune_config(repo_root)
-    ignore_patterns = compile_extra_ignore_patterns(
-        extract_dag_ignore_patterns(orchestune_config)
-    )
-    # #407: `orchestune-dag --threshold`で永続化された`dag_similarity_threshold`を
-    # 尊重する。そうしないと、`orchestune-dag`が意図的に消したエッジが既定閾値で
-    # 再計算されて復活し、Issue作成順（topological_order）が検証済みのプランと
-    # 食い違う、あるいは明示的な依存関係と組み合わさって偽のDagCycleErrorを
-    # 誘発しうる。
-    config_threshold = extract_dag_similarity_threshold(orchestune_config)
-    threshold = (
-        config_threshold
-        if config_threshold is not None
-        else DEFAULT_SIMILARITY_THRESHOLD
-    )
-    return build_dag(subtasks, ignore_patterns=ignore_patterns, threshold=threshold)
-
-
-def _build_subtask_issue_body(
-    subtask: SubTask,
-    template: str,
-    repo_root: Path,
-    parent_issue_number: int | None = None,
-) -> str:
-    return _append_symbol_warning(
-        _render_issue_body(subtask, template, parent_issue_number), subtask, repo_root
-    )
-
-
-def _resolve_explicit_parent_issue(
-    forge: IssueForge,
-    parent_issue_number: int,
-    plan_path: str | Path,
-    metadata: PlanMetadata | None = None,
-) -> tuple[int, bool]:
-    """既存Issueを親（EPIC）として採用・正規化する。
-
-    `_resolve_parent_issue`の通常（derived）経路と異なり、`metadata.title`との
-    タイトル一致は要求しない（人間が事前に起票したEPICのタイトルは、plan由来の
-    タイトルとは一般に一致しないため）。まだ`is_epic_issue`の形（`[EPIC] `
-    プレフィックス + `PARENT_MARKER`）を満たしていなければ、既存の内容は
-    保持したままその場で正規化する。
-    #533: 採用後はフロントマターへ `parent_issue_source: adopted` として
-    永続化されるため、次回以降の実行では `--parent-issue` の再指定なしに
-    同じ親が再利用される。
-    """
-    issue = forge.get_issue(parent_issue_number)
-    if issue is None:
-        raise RuntimeError(
-            f"Adopted parent issue #{parent_issue_number} does not exist; "
-            "refusing to provision subtasks under it."
-        )
-    if issue.state.upper() == "CLOSED":
-        raise RuntimeError(
-            f"Adopted parent issue #{parent_issue_number} is closed; "
-            "refusing to adopt a closed issue as EPIC parent."
-        )
-    if not is_epic_issue(issue):
-        new_title = (
-            issue.title
-            if issue.title.startswith("[EPIC] ")
-            else f"[EPIC] {issue.title}"
-        )
-        if new_title != issue.title:
-            forge.update_issue_title(parent_issue_number, new_title)
-        if PARENT_MARKER not in issue.body:
-            forge.update_issue_body(
-                parent_issue_number, ensure_parent_marker(issue.body)
-            )
-    if (
-        metadata is None
-        or metadata.parent_issue_number != parent_issue_number
-        or metadata.parent_issue_source != "adopted"
-    ):
-        write_issue_numbers(
-            plan_path,
-            parent_issue_number=parent_issue_number,
-            parent_issue_source="adopted",
-        )
-    sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
-    return parent_issue_number, sync_ok
-
-
-def _resolve_parent_issue(
-    forge: IssueForge,
-    metadata: PlanMetadata,
-    plan_path: str | Path,
-    *,
-    explicit_parent_issue: int | None = None,
-) -> tuple[int, bool]:
-    if explicit_parent_issue is not None:
-        return _resolve_explicit_parent_issue(
-            forge, explicit_parent_issue, plan_path, metadata
-        )
-
-    # #533: 採用済み(adopted)の親Issueはタイトル一致検証をスキップして再利用する。
-    # ただし、別リポジトリへのコピーやタイポで無関係な未確認オープンIssueを勝手に改変
-    # してしまう事故を防ぐため、自動再利用時はすでに対象IssueがOrchestune EPICとして
-    # 正規化済み（is_epic_issue）であることを検証する。
-    if metadata.parent_issue_source == "adopted":
-        if metadata.parent_issue_number is None:
-            raise ValueError(
-                "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-                "'parent_issue_number' が設定されていません"
-            )
-        candidate = forge.get_issue(metadata.parent_issue_number)
-        if candidate is None:
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} does not exist; "
-                "refusing to provision subtasks under it."
-            )
-        if candidate.state.upper() == "CLOSED":
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} is closed; "
-                "refusing to adopt a closed issue as EPIC parent."
-            )
-        if not is_epic_issue(candidate):
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
-                "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
-                f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
-            )
-        return _resolve_explicit_parent_issue(
-            forge, metadata.parent_issue_number, plan_path, metadata
-        )
-
-    parent_issue_number = metadata.parent_issue_number
-    parent_title = f"[EPIC] {metadata.title}"
-    if parent_issue_number is not None:
-        # A persisted parent number is verified the same way a persisted
-        # subtask number is below: it could be stale (e.g. the plan was
-        # copied to another repo and that number now belongs to an
-        # unrelated issue there), so it's trusted only after confirming it.
-        # `PARENT_MARKER` alone isn't enough proof: it's a single constant
-        # shared by every EPIC this module ever creates, so it can't tell
-        # this plan's own parent apart from an unrelated EPIC created for a
-        # *different* plan (e.g. a colliding issue number in another
-        # Orchestune-managed repo) — the title must match too, the same
-        # requirement the orphan-recovery search below already applies.
-        candidate = forge.get_issue(parent_issue_number)
-        if (
-            candidate is None
-            or candidate.title != parent_title
-            or PARENT_MARKER not in candidate.body
-        ):
-            parent_issue_number = None
-    if parent_issue_number is None:
-        # Recover an orphan from a prior run that created the parent issue
-        # but crashed (or failed to write) before persisting its number,
-        # rather than unconditionally creating a duplicate EPIC. An exact
-        # title match alone isn't enough proof of provenance (an unrelated
-        # issue could coincidentally share the title), so also require our
-        # own marker in the body before adopting it — and check every
-        # exact-title match, not just the first, in case an unrelated
-        # same-titled issue and our own orphaned parent both exist.
-        candidates = forge.find_open_issues_by_exact_title(parent_title)
-        marked_candidate = next(
-            (c for c in candidates if PARENT_MARKER in c.body), None
-        )
-        if marked_candidate is not None:
-            parent_issue_number = marked_candidate.number
-        else:
-            text = Path(plan_path).read_text(encoding="utf-8")
-            raw_frontmatter, _ = extract_frontmatter_and_body(text)
-            parent_issue_number = forge.create_issue(
-                parent_title,
-                _parent_body(
-                    metadata.title, metadata.description, plan_data=raw_frontmatter
-                ),
-            )
-        write_issue_numbers(
-            plan_path,
-            parent_issue_number=parent_issue_number,
-            parent_issue_source="derived",
-        )
-        sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
-    else:
-        sync_ok = _sync_parent_decomposition_plan(forge, parent_issue_number, plan_path)
-    return parent_issue_number, sync_ok
-
-
-def _ensure_reused_issue_is_discoverable(
-    forge: IssueForge, candidate: IssueRecord, parent_issue_number: int
-) -> bool:
-    """#485 review (P2 x2): a reused Issue can predate `parent_issue_number`
-    (created by an older template, or by a run before this field existed).
-    Left unpatched, that Issue has neither a native parent (if
-    `add_sub_issue` is now unavailable) nor a metadata fallback the
-    parent-scoped Dispatcher can find it by.
-
-    Before attempting any write, check whether `candidate` is *already*
-    discoverable via `effective_parent_number` — most importantly, an
-    already-established native `parent` from a prior run. Skipping
-    straight to a body backfill attempt (and failing it) would otherwise
-    wrongly report "no discovery mechanism" for an issue that's already a
-    real native child; the current forge merely being unable to *re-write*
-    a relationship that already exists on GitHub doesn't mean it's gone
-    (#485 review round 5, P2).
-
-    Returns whether the issue is (now) discoverable at all: already
-    correct, successfully backfilled, or `False` if it wasn't already
-    correct and the backfill write failed — the caller
-    (`provision_issues`) must then confirm native `add_sub_issue` linking
-    actually succeeds this run, or this subtask has no discovery mechanism
-    left (#485 review round 4, P2).
-    """
-    if effective_parent_number(candidate) == parent_issue_number:
-        return True
-
-    if candidate.parent and candidate.parent.get("number") is not None:
-        # #485 review round 6 (P2): a *present* native parent always wins
-        # over body metadata in `effective_parent_number`/
-        # `find_children_by_parent` — that's the whole point of treating
-        # native as authoritative (review round 2). So if it disagrees
-        # with `parent_issue_number` here, backfilling the body would be
-        # pointless for discovery purposes: it can never override the
-        # native value. Only a successful native re-link (attempted next,
-        # in `_link_subtask_relationships`) can actually fix this, so
-        # report "not yet discoverable" rather than write a body field
-        # that would be silently ignored.
-        return False
-
-    new_body = backfill_parent_issue_number(candidate.body, parent_issue_number)
-    if new_body is None:
-        # `effective_parent_number` above already ruled out "already
-        # correct" for this candidate, so a `None` here means the
-        # Footprint fence itself couldn't be re-parsed — which can't
-        # actually happen given `candidate` only reaches this call after
-        # `_subtask_id_from_body` already parsed the same fence
-        # successfully. Kept purely as a defensive fallback.
-        return True
-    try:
-        forge.update_issue_body(candidate.number, new_body)
-        return True
-    except (RelationshipUnavailableError, AttributeError, NotImplementedError) as e:
-        print(
-            f"Warning: could not backfill parent_issue_number into "
-            f"#{candidate.number}'s body: {e}",
-            file=sys.stderr,
-        )
-        return False
-
-
-def _provision_subtask(
-    forge: IssueForge,
-    subtask: SubTask,
-    template: str,
-    repo_root: Path,
-    plan_path: str | Path,
-    existing_by_subtask_id: dict[str, IssueRecord],
-    dependencies_done: dict[str, bool],
-    parent_issue_number: int,
-) -> tuple[int, bool, bool, bool]:
-    """Resolve an existing issue or create a new one for a subtask.
-
-    Returns a tuple of `(issue_number, is_reused, is_done,
-    has_parent_metadata)`. `has_parent_metadata` is `True` for a newly
-    created issue (the body is always rendered with it) and for a reused
-    issue whose body already carries or was successfully backfilled with
-    it; `False` only for a reused issue where it's missing/stale *and* the
-    backfill write failed — the caller must then verify native
-    `add_sub_issue` linking succeeds, since neither discovery mechanism is
-    otherwise available for this subtask.
-    """
-    # A persisted issue_number could be stale (e.g. the plan was copied
-    # to another repo and that number now belongs to an unrelated
-    # issue), so it isn't trusted outright: fetch it and check its body
-    # actually carries this subtask's marker before reusing it — the
-    # same test used for the subtask_id-search fallback below. This
-    # check works even if the issue hasn't been linked to the parent
-    # yet (a crash between create_issue and add_sub_issue), since the
-    # marker is written at creation time regardless of linkage.
-    number = None
-    candidate: IssueRecord | None = None
-    if subtask.issue_number is not None:
-        fetched = forge.get_issue(subtask.issue_number)
-        if fetched is not None and _subtask_id_from_body(fetched.body) == subtask.id:
-            number = subtask.issue_number
-            candidate = fetched
-    if number is None:
-        existing = existing_by_subtask_id.get(subtask.id)
-        if existing is not None:
-            number = existing.number
-            candidate = existing
-
-    if number is not None:
-        labels = forge.get_issue_labels(number)
-        has_parent_metadata = True
-        if candidate is not None:
-            has_parent_metadata = _ensure_reused_issue_is_discoverable(
-                forge, candidate, parent_issue_number
-            )
-        return number, True, "status:done" in labels, has_parent_metadata
-
-    all_deps_done = all(dependencies_done.get(dep, False) for dep in subtask.depends_on)
-    labels = _derive_labels(subtask, dependencies_done=all_deps_done)
-    body = _build_subtask_issue_body(subtask, template, repo_root, parent_issue_number)
-    number = forge.create_issue(_issue_title(subtask), body, labels=labels)
-    # Persist before the fallible relationship calls below: if
-    # add_sub_issue/set_blocked_by then fails, a retry must find this
-    # issue via `subtask.issue_number` rather than orphan-create a
-    # duplicate (it isn't linked as a sub-issue yet, so the
-    # subtask_id search over the parent's children can't find it).
-    write_issue_numbers(plan_path, {subtask.id: number})
-    return number, False, False, True
-
-
-@dataclass(frozen=True)
-class RelationshipLinkResult:
-    parent_linked: bool
-    unresolved_dependencies: tuple[str, ...]
-
-    @property
-    def degraded(self) -> bool:
-        return not self.parent_linked or bool(self.unresolved_dependencies)
-
-
-def _link_subtask_relationships(
-    forge: IssueForge,
-    parent_issue_number: int,
-    issue_number: int,
-    depends_on: Sequence[str],
-    resolved_numbers: dict[str, int],
-) -> RelationshipLinkResult:
-    """Reconcile parent/blocked-by relationships unconditionally, not just
-    on creation: a prior run may have created this issue (or an earlier
-    dependency's set_blocked_by call) and then failed before finishing
-    all of them, in which case a reused issue can still be missing some.
-    Both operations are idempotent (`--set-parent` / `--add-blocked-by`).
-
-    #485: `forge`がネイティブ関係操作を構造的にサポートしない場合
-    （`RelationshipUnavailableError`、またはそもそもメソッドを実装して
-    いない）は、provisioning全体を中断せず、既に本文metadataへ永続化済み
-    (`_render_issue_body`)のparent_issue_number/depends_onへフォールバック
-    したまま処理を続行する。それ以外の失敗（ネットワーク瞬断・権限不足・
-    レート制限などの一時的なgh/API呼び出しエラー）は、今まで通り呼び出し
-    元に伝播させ、再実行時の再試行に委ねる（このモジュールの冪等性は
-    その前提の上に成り立っている。#323参照）。
-    """
-    unavailable_errors = (
-        RelationshipUnavailableError,
-        AttributeError,
-        NotImplementedError,
-    )
-
-    parent_linked = True
-    try:
-        forge.add_sub_issue(parent_issue_number, issue_number)
-    except unavailable_errors as e:
-        parent_linked = False
-        print(
-            f"Warning: this forge does not support native sub-issue linking; "
-            f"#{issue_number} relies on body metadata for parent #{parent_issue_number} "
-            f"instead: {e}",
-            file=sys.stderr,
-        )
-
-    unresolved: list[str] = []
-    for dependency_id in depends_on:
-        try:
-            forge.set_blocked_by(issue_number, resolved_numbers[dependency_id])
-        except unavailable_errors as e:
-            unresolved.append(dependency_id)
-            print(
-                f"Warning: this forge does not support native blocked_by linking; "
-                f"#{issue_number} relies on body depends_on for {dependency_id} "
-                f"(#{resolved_numbers[dependency_id]}) instead: {e}",
-                file=sys.stderr,
-            )
-    return RelationshipLinkResult(
-        parent_linked=parent_linked, unresolved_dependencies=tuple(unresolved)
-    )
-
-
-def _preview_only(
-    subtasks: list[SubTask],
-    dag_order: list[str],
-    template: str,
-    repo_root: Path,
-    parent_issue_number: int | None = None,
-) -> ProvisionResult:
-    by_id = {subtask.id: subtask for subtask in subtasks}
-    previews = tuple(
-        IssuePreview(
-            subtask_id=subtask_id,
-            title=_issue_title(by_id[subtask_id]),
-            body=_build_subtask_issue_body(
-                by_id[subtask_id], template, repo_root, parent_issue_number
-            ),
-            labels=_derive_labels(by_id[subtask_id], dependencies_done=False),
-            already_has_issue=by_id[subtask_id].issue_number is not None,
-        )
-        for subtask_id in dag_order
-    )
-    return ProvisionResult(
-        parent_issue_number=parent_issue_number,
-        applied=False,
-        created={},
-        reused={},
-        previews=previews,
-    )
-
-
-def provision_issues(
-    plan_path: str | Path,
-    forge: IssueForge | None = None,
-    apply: bool = True,
-    template_path: str | Path = ".github/issue_template.md",
-    repo_root: str | Path | None = None,
-    parent_issue: int | None = None,
-) -> ProvisionResult:
-    """Provision GitHub Issues for every subtask in an approved decomposition plan.
-
-    Idempotent and resumable: each subtask's `issue_number` (or a matching
-    `subtask_id` found in an existing sub-issue's body) short-circuits
-    re-creation, and every resolved number is written back to `plan_path`
-    immediately, before moving on to the next subtask.
-
-    `repo_root` (default: cwd) is where each subtask's `footprint` paths are
-    resolved from when checking whether its `symbols` still exist in the
-    codebase (#359); a mismatch appends a warning to the rendered Issue body
-    rather than blocking provisioning, since the check can't tell a stale
-    `symbols` list apart from a footprint file that legitimately doesn't
-    exist yet. It's also where `orchestune.toml`/`pyproject.toml`'s
-    `dag_ignore_patterns` is read from (#398/#404): without it, a
-    similarity edge the setting was meant to suppress could still form
-    here, changing the Issue-creation order (`dag.topological_order`) from
-    what `orchestune-dag --plan ...` validated, or — if that edge only
-    closes a cycle together with an explicit dependency — raise an
-    unresolvable `DagCycleError` that validation didn't predict.
-
-    `parent_issue` (default: None) attaches subtasks to a pre-existing Issue
-    as their EPIC parent instead of creating/reusing one derived from
-    `metadata.title`, normalizing it in place if needed. See
-    `_resolve_explicit_parent_issue`.
-    """
-    resolved_repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
-    subtasks, metadata = _load_plan(plan_path)
-    if not metadata.title:
-        raise ValueError(
-            "decomposition_plan.md に必須の 'title' フィールドがありません"
-        )
-    # codex review (PR #506): validate `parent_issue` up front, before the
-    # `--no-apply` early return, so an invalid value (e.g. 0 or negative)
-    # can't produce a successful dry-run preview for an invocation that the
-    # corresponding `--apply` run would deterministically reject via
-    # `_resolve_explicit_parent_issue` -> `forge.get_issue` ->
-    # `validate_issue_number`.
-    if parent_issue is not None:
-        parent_issue = validate_issue_number(parent_issue)
-
-    dag = _build_provisioning_dag(subtasks, resolved_repo_root)
-    template = Path(template_path).read_text(encoding="utf-8")
-    _validate_template_identity_marker(template, template_path)
-
-    if not apply:
-        # codex review (PR #506): an explicit `--parent-issue` must be
-        # reflected in the preview too, or a `--no-apply --parent-issue N`
-        # run shows child bodies with the old/absent parent number even
-        # though the subsequent `--apply` run would use N.
-        preview_parent_issue_number = (
-            parent_issue if parent_issue is not None else metadata.parent_issue_number
-        )
-        return _preview_only(
-            subtasks,
-            dag.topological_order,
-            template,
-            resolved_repo_root,
-            preview_parent_issue_number,
-        )
-
-    resolved_forge = forge or GitHubForge()
-    parent_issue_number, plan_synced = _resolve_parent_issue(
-        resolved_forge, metadata, plan_path, explicit_parent_issue=parent_issue
-    )
-    existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
-        resolved_forge, parent_issue_number
-    )
-
-    resolved_numbers: dict[str, int] = {}
-    dependencies_done: dict[str, bool] = {}
-    created: dict[str, int] = {}
-    reused: dict[str, int] = {}
-    degraded_subtask_ids: list[str] = []
-
-    for subtask_id in dag.topological_order:
-        subtask = dag.subtasks[subtask_id]
-        number, is_reused, is_done, has_parent_metadata = _provision_subtask(
-            resolved_forge,
-            subtask,
-            template,
-            resolved_repo_root,
-            plan_path,
-            existing_by_subtask_id,
-            dependencies_done,
-            parent_issue_number,
-        )
-        if is_reused:
-            reused[subtask_id] = number
-        else:
-            created[subtask_id] = number
-        dependencies_done[subtask_id] = is_done
-
-        link_result = _link_subtask_relationships(
-            resolved_forge,
-            parent_issue_number,
-            number,
-            subtask.depends_on,
-            resolved_numbers,
-        )
-        metadata_actually_discoverable = (
-            has_parent_metadata and metadata_search_supported
-        )
-        if not metadata_actually_discoverable and not link_result.parent_linked:
-            # #485 review round 4 (P2) + round 7 (P2): a subtask with no
-            # native parent link has no discovery mechanism left at all
-            # unless the body-metadata fallback is BOTH correctly written
-            # (`has_parent_metadata`) AND actually searchable on this
-            # forge (`metadata_search_supported`) — a newly created
-            # issue's body always has the field, but that's worthless if
-            # nothing can ever search for it. Reporting this as merely
-            # "degraded" would be misleading (that implies the fallback
-            # works). Fail loudly instead of letting `--parent-issue`
-            # Dispatcher and `process_parent_completion` silently never
-            # see this subtask.
-            raise RelationshipUnavailableError(
-                f"#{number} ({subtask_id}) has neither a native parent link "
-                f"nor discoverable parent_issue_number body metadata; "
-                "this forge cannot reliably link it to its parent Issue"
-            )
-        if link_result.degraded:
-            degraded_subtask_ids.append(subtask_id)
-        resolved_numbers[subtask_id] = number
-        write_issue_numbers(plan_path, {subtask_id: number})
-        if not _sync_parent_decomposition_plan(
-            resolved_forge, parent_issue_number, plan_path
-        ):
-            plan_synced = False
-
-    return ProvisionResult(
-        parent_issue_number=parent_issue_number,
-        applied=True,
-        created=created,
-        reused=reused,
-        degraded_subtask_ids=tuple(degraded_subtask_ids),
-        plan_synced=plan_synced,
-    )
+def provision_issues(*args: object, **kwargs: object) -> ProvisionResult:
+    """Compatibility entry point for callers of ``orchestune.provisioning``."""
+    return _provision_issues(*args, **kwargs)  # type: ignore[arg-type]
 
 
 def _print_result(result: ProvisionResult) -> None:
@@ -1029,7 +71,6 @@ def _print_result(result: ProvisionResult) -> None:
             print(f"Labels: {', '.join(preview.labels)}")
             print(preview.body)
         return
-
     print(f"Parent issue: #{result.parent_issue_number}")
     print(f"Created: {len(result.created)}")
     for subtask_id, number in result.created.items():
@@ -1037,14 +78,9 @@ def _print_result(result: ProvisionResult) -> None:
     print(f"Reused: {len(result.reused)}")
     for subtask_id, number in result.reused.items():
         print(f"  = {subtask_id} -> #{number}")
-
     if result.degraded_subtask_ids:
         print(
-            f"\nOperating mode: degraded/parent-metadata for "
-            f"{len(result.degraded_subtask_ids)} subtask(s) "
-            "(native sub-issue/blocked_by relationship writes failed; "
-            "parent_issue_number/depends_on body metadata is authoritative "
-            "for these instead):"
+            f"\nOperating mode: degraded/parent-metadata for {len(result.degraded_subtask_ids)} subtask(s)"
         )
         for subtask_id in result.degraded_subtask_ids:
             print(f"  ! {subtask_id}")
@@ -1052,11 +88,12 @@ def _print_result(result: ProvisionResult) -> None:
         print(
             "\nOperating mode: full (native sub-issue/blocked_by relationships linked)"
         )
-
     if not result.plan_synced:
         print(
             f"\nWarning: could not sync decomposition plan into #{result.parent_issue_number}'s body."
-            f"\nThe local plan file was updated, but the parent Issue body does not reflect the latest state."
+        )
+        print(
+            "The local plan file was updated, but the parent Issue body does not reflect the latest state."
         )
 
 
@@ -1064,83 +101,41 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="orchestune provision: decomposition_plan.mdからIssueを起票する"
     )
-    parser.add_argument(
-        "--plan",
-        default="decomposition_plan.md",
-        help="Path to the decomposition plan markdown file (default: decomposition_plan.md)",
-    )
-    parser.add_argument(
-        "--template",
-        default=".github/issue_template.md",
-        help="Path to the issue body template (default: .github/issue_template.md)",
-    )
+    parser.add_argument("--plan", default="decomposition_plan.md")
+    parser.add_argument("--template", default=".github/issue_template.md")
     parser.add_argument("--apply", dest="apply", action="store_true", default=True)
     parser.add_argument("--no-apply", dest="apply", action="store_false")
+    parser.add_argument("--parent-issue", type=int, default=None)
     parser.add_argument(
-        "--parent-issue",
-        type=int,
-        default=None,
-        help=(
-            "Attach subtasks to this existing Issue as their EPIC parent "
-            "instead of creating/reusing one derived from the plan's title. "
-            "The Issue is normalized in place ('[EPIC] ' title prefix and "
-            "parent marker added if missing) if it isn't already EPIC-shaped, "
-            "and parent_issue_source: adopted is persisted into the plan."
-        ),
-    )
-    parser.add_argument(
-        "--restore-plan",
-        type=int,
-        metavar="PARENT_ISSUE",
-        default=None,
-        help=(
-            "Restore the decomposition_plan.md file from the given parent EPIC issue's body "
-            "and exit without provisioning."
-        ),
+        "--restore-plan", type=int, metavar="PARENT_ISSUE", default=None
     )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
-
     try:
         if args.restore_plan is not None:
-            forge = GitHubForge()
             out = restore_plan_file_from_parent(
-                forge, args.restore_plan, output_path=args.plan
+                GitHubForge(), args.restore_plan, args.plan
             )
             print(
                 f"Successfully restored decomposition plan from #{args.restore_plan} to {out}"
             )
             raise SystemExit(0)
-
-        # footprintおよびorchestune.toml/[tool.orchestune]はリポジトリルート
-        # からの相対パスとして定義されているため、呼び出し元のcwdではなく
-        # --planファイル自身の位置を基点にする（dag_cli.pyと同じ規約。#404）。
-        # --planがリポジトリルートより下のネストしたパスを指す場合でも、
-        # dag_cli.pyと同じく.gitを上位探索して真のリポジトリルートを特定する
-        # （#410, #418）。これにより、`orchestune-dag --plan ...`が検証した
-        # 設定（dag_ignore_patterns等）と同じファイルを`orchestune provision`
-        # も一貫して読む。
-        repo_root = resolve_repo_root(args.plan)
-        result = provision_issues(
+        result = _provision_issues(
             args.plan,
+            forge=GitHubForge(),
             apply=args.apply,
             template_path=args.template,
-            repo_root=repo_root,
+            repo_root=resolve_repo_root(args.plan),
             parent_issue=args.parent_issue,
         )
     except ConfigError as error:
-        # #428: config-derived errors (orchestune.toml / pyproject.toml
-        # values) exit 2, matching orchestune-dispatch's `_config_error`
-        # convention and orchestune-dag's own exit-2 mapping, distinct from
-        # exit 1 for other failures (missing plan file, DagCycleError, etc.).
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error
-
     _print_result(result)
     raise SystemExit(0)
