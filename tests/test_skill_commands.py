@@ -24,7 +24,8 @@ SKILLS_ROOT = REPO_ROOT / "skills"
 
 _FENCED_CODE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 _INLINE_CODE_SPAN = re.compile(r"`([^`\n]+)`")
-_POETRY_RUN = re.compile(r"^poetry run (\S+)(?:\s+(\S+))?")
+_SHELL_PROMPT_PREFIX = re.compile(r"^(?:\$\s+|PS[^>\n]*>\s*)")
+_POETRY_RUN = re.compile(r"^poetry run (.+)$")
 _SCRIPT_PATH = re.compile(r"^(\.[\\/]scripts[\\/]\S+)")
 _EXECUTABLE_SUFFIXES = frozenset({".exe", ".cmd", ".bat"})
 
@@ -57,22 +58,43 @@ def _known_poetry_commands() -> set[str]:
     return names
 
 
+def _python_script_target(argv: list[str]) -> str | None:
+    """`poetry run python <argv...>` のうち、検証すべきスクリプトパスを
+    返す。`-m <module>`（モジュール実行）や `--version` のような、実ファイル
+    に対応しないインタプリタオプションのみの呼び出しは検証対象外として
+    None を返す。"""
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == "-m":
+            return None
+        if token.startswith("-"):
+            i += 1
+            continue
+        return token
+    return None
+
+
 def _extract_target(candidate: str) -> str | None:
     """1行分のコマンド候補文字列から検証対象のスクリプト名/パスを抽出する。
 
     `poetry run` / `./scripts/` / `.\\scripts\\` のいずれの形式にも
     一致しない場合や、workflow-template のプレースホルダ
-    （`<CI_ENTRYPOINT>` 等）を含む場合は None を返す。
+    （`<CI_ENTRYPOINT>` 等）を含む場合は None を返す。`$ ` や `PS>` の
+    ようなシェルプロンプトの接頭辞は、コマンド本体の前に取り除く。
     """
-    candidate = candidate.strip()
+    candidate = _SHELL_PROMPT_PREFIX.sub("", candidate.strip(), count=1).strip()
     if not candidate or candidate.startswith("#"):
         return None
 
     target: str | None = None
     poetry_match = _POETRY_RUN.match(candidate)
     if poetry_match:
-        first, second = poetry_match.group(1), poetry_match.group(2)
-        target = second if first == "python" and second else first
+        tokens = poetry_match.group(1).split()
+        if tokens and tokens[0] == "python":
+            target = _python_script_target(tokens[1:])
+        elif tokens:
+            target = tokens[0]
     else:
         script_match = _SCRIPT_PATH.match(candidate)
         if script_match:
@@ -219,6 +241,52 @@ def test_poetry_dependency_command_is_accepted():
 
     assert targets[0][1] == "ruff"
     assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_shell_prompt_prefix_is_stripped_before_matching():
+    """`$ poetry run <cmd>` のようなシェルプロンプト表記でも、
+    プロンプト記号に阻まれず本体のコマンドを抽出・検証できることを
+    確認する。"""
+    text = "```bash\n$ poetry run this-script-does-not-exist\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets == [
+        ("$ poetry run this-script-does-not-exist", "this-script-does-not-exist")
+    ]
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_powershell_prompt_prefix_is_stripped_before_matching():
+    text = "```powershell\nPS> .\\scripts\\does-not-exist.ps1\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets[0][1] == ".\\scripts\\does-not-exist.ps1"
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_python_module_invocation_is_not_validated_as_file():
+    """`poetry run python -m pytest` のようなモジュール実行は、`-m` の
+    引数がファイルパスではないため検証対象から除外する（誤検知防止）。"""
+    text = "```bash\npoetry run python -m pytest\n```\n"
+
+    assert _iter_command_targets(text) == []
+
+
+def test_python_interpreter_option_before_script_path_is_skipped():
+    text = "```bash\npoetry run python -u scripts/wait_for_review.py --pr 1\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets[0][1] == "scripts/wait_for_review.py"
+    assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_python_version_flag_alone_yields_no_target():
+    text = "```bash\npoetry run python --version\n```\n"
+
+    assert _iter_command_targets(text) == []
 
 
 def test_dependency_without_executable_is_rejected():
