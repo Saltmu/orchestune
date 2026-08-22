@@ -39,6 +39,12 @@ def _index_sub_issues_by_subtask_id(
 def _ensure_reused_issue_is_discoverable(
     forge: IssueForge, candidate: IssueRecord, parent_issue_number: int
 ) -> bool:
+    """Ensure a reused Issue remains findable by its provisioning parent.
+
+    A native parent is authoritative over body metadata. When it names a
+    different parent, backfilling the body cannot repair discovery, so only a
+    later native re-link may correct that state.
+    """
     if effective_parent_number(candidate) == parent_issue_number:
         return True
     if candidate.parent and candidate.parent.get("number") is not None:
@@ -97,6 +103,8 @@ def _provision_subtask(
         _build_subtask_issue_body(subtask, template, repo_root, parent_issue_number),
         labels=_derive_labels(subtask, dependencies_done=all_deps_done),
     )
+    # Persist before relationship writes: a failed link must be retryable by
+    # this stable issue number rather than creating an orphaned duplicate.
     write_issue_numbers(plan_path, {subtask.id: number})
     return number, False, False, True
 

@@ -96,6 +96,12 @@ def provision_issues(
     repo_root: str | Path | None = None,
     parent_issue: int | None = None,
 ) -> ProvisionResult:
+    """Provision plan subtasks idempotently, optionally under an adopted EPIC.
+
+    ``repo_root`` resolves footprints and configuration independently of the
+    caller's working directory. ``parent_issue`` adopts and normalizes an
+    existing Issue instead of deriving a new parent from the plan title.
+    """
     resolved_repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
     subtasks, metadata = _load_plan(plan_path)
     if not metadata.title:

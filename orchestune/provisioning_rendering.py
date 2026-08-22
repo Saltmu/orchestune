@@ -54,6 +54,12 @@ def _yaml_inline_list(items: Sequence[str]) -> str:
 
 
 def _yaml_scalar(value: str) -> str:
+    """Render a safe scalar without YAML's bare-document ``...`` marker.
+
+    Dumping a throwaway mapping keeps a scalar containing ``:`` or ``#``
+    correctly quoted while avoiding a document-end marker inside the enclosing
+    Footprint YAML fence.
+    """
     return (
         yaml.dump({"k": value}, allow_unicode=True, default_flow_style=False)
         .removeprefix("k: ")
