@@ -362,7 +362,8 @@ class TestSkillDocumentsExistenceVerificationTriage:
         assert match, "SKILL.mdに'### Stage 2: Validate DAG'節が見つかりません"
         return match.group(0)
 
-    def test_stage2_quotes_the_actual_warning_wording(self):
+    def test_stage2_describes_existence_verification_warning(self):
+        """SKILL.md Stage 2 documents existence-verification warning triage for footprint and symbols."""
         section = self._stage2_section()
         assert "Existence-verification warning" in section
         assert "footprint" in section
