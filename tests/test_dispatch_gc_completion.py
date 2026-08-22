@@ -579,6 +579,30 @@ class TestDecideCompletedWorktreeOutcome:
         assert decision.action == "completed_no_commits"
         assert decision.subtask_id == "task-a"
 
+    def test_no_new_commits_with_forge_error_falls_back_to_completed_no_commits(
+        self,
+    ):
+        active = _active()
+        task = _task()
+        fake_forge = MagicMock()
+        fake_forge.list_comments.side_effect = RuntimeError("network error")
+        fake_forge.list_prs.side_effect = RuntimeError("network error")
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(
+                active, task, forge=fake_forge
+            )
+        assert decision.action == "completed_no_commits"
+        assert decision.subtask_id == "task-a"
+
     def test_clean_with_new_commits_without_outcome_is_completed_without_outcome(self):
         active = _active()
         task = _task()
@@ -903,3 +927,134 @@ class TestLocalPrCompletionStatusWithFakeForge:
         status = _local_pr_completion_status(active, config)
 
         assert status == "unknown"
+
+    def test_open_pr_with_blocked_outcome_is_completed(self, tmp_path):
+        fake_forge = MagicMock()
+        fake_forge.list_prs.return_value = [
+            PrRecord(
+                number=1,
+                head_ref="claude/issue-1-task-1",
+                changed_files=(),
+                state="OPEN",
+            )
+        ]
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            reason="base-branch-red",
+            base_sha="abc1234",
+            attempt=1,
+        )
+        fake_forge.list_comments.return_value = [
+            {
+                "body": outcome.render(),
+                "created_at": "2026-01-01T00:00:10Z",
+            }
+        ]
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-1",
+            worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
+            pid=123,
+            started_at=1700000000.0,
+            declared_footprint=(),
+        )
+
+        status = _local_pr_completion_status(active, config)
+
+        assert status == "completed"
+
+
+class TestFinalizeBaseBranchRedWorktree:
+    def test_base_branch_red_attempt_1_blocks_and_adds_marker(self, tmp_path):
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=280,
+            reason="base-branch-red",
+            base_sha="abc1234",
+            attempt=1,
+        )
+        fake_forge = MagicMock()
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}
+        ]
+        fake_forge.list_prs.return_value = []
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=fake_forge,
+        )
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+        ):
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] == "blocked_base_branch_red"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        fake_forge.add_label.assert_any_call(280, "status:blocked")
+        fake_forge.add_label.assert_any_call(280, "ci:base-branch-red")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_comment.assert_called_once()
+
+    def test_base_branch_red_attempt_3_escalates_to_human_review(self, tmp_path):
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=280,
+            reason="base-branch-red",
+            base_sha="abc1234",
+            attempt=3,
+        )
+        fake_forge = MagicMock()
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}
+        ]
+        fake_forge.list_prs.return_value = []
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=fake_forge,
+        )
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+        ):
+            event = _finalize_completed_worktree(active, task, config)
+
+        assert event["action"] == "escalated_base_branch_red"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
+        fake_forge.remove_label.assert_any_call(280, "status:in-progress")
+        fake_forge.add_comment.assert_called_once()

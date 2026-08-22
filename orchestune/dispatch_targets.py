@@ -28,6 +28,7 @@ from orchestune.forge import Forge, GitHubForge
 from orchestune.git_cli import run_git
 from orchestune.models import Usage
 from orchestune.outcome_record import (
+    RESULT_BLOCKED,
     RESULT_DONE,
     RESULT_NOT_NEEDED,
     parse_from_comments,
@@ -238,6 +239,7 @@ def _task_pr_completion_status(
         if outcome is not None and outcome.result in (
             RESULT_DONE,
             RESULT_NOT_NEEDED,
+            RESULT_BLOCKED,
         ):
             return "completed"
         return "pending"

@@ -289,6 +289,7 @@ class TestRequiredLabels:
         "not-needed-review:failed",
         "integration:included",
         "integration:parent-branch-stale",
+        "ci:base-branch-red",
     }
 
     def test_required_labels_contains_all_canonical_labels(self):

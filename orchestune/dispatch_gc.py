@@ -434,6 +434,8 @@ def _rule_completed(
         "completed_without_outcome",
         "not_needed",
         "not_needed_review_dispatched",
+        "blocked_base_branch_red",
+        "escalated_base_branch_red",
     ):
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]

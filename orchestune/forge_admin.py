@@ -170,4 +170,9 @@ REQUIRED_LABELS: tuple[LabelSpec, ...] = (
         "B60205",
         "Parent branch push was rejected (CAS) in the previous integration cycle",
     ),
+    LabelSpec(
+        "ci:base-branch-red",
+        "B60205",
+        "CI failed due to base branch failure; blocked until base_sha advances",
+    ),
 )
