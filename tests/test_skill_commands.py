@@ -500,6 +500,30 @@ def test_workflow_template_structure():
     ), f"workflow-template total markdown lines must be <= 500, got {total_lines}"
 
 
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
+    """変更作業はリポジトリ直下の隔離 worktree で完結させる。"""
+    skill_dir = SKILLS_ROOT / skill_name
+    skill_content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    worktree_reference = skill_dir / "references" / "worktree.md"
+
+    assert worktree_reference.is_file()
+    assert "references/worktree.md" in skill_content
+
+    worktree_content = worktree_reference.read_text(encoding="utf-8")
+    assert "git worktree add" in worktree_content
+    assert "worktree/<BRANCH_SLUG>" in worktree_content
+    assert "git worktree remove" in worktree_content
+
+    for reference_name in ("tdd.md", "pr.md", "review-loop.md"):
+        reference = (skill_dir / "references" / reference_name).read_text(
+            encoding="utf-8"
+        )
+        assert (
+            "worktree" in reference.lower()
+        ), f"{skill_name}/references/{reference_name} must direct worktree use"
+
+
 def test_all_skills_english_only():
     """All skill instructions and references must contain English prose only (no Japanese characters)."""
     jp_pattern = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")

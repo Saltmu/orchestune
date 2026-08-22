@@ -2,6 +2,9 @@
 
 This document provides detailed procedures for automated LLM PR reviews and feedback resolution cycles.
 
+Keep the review loop in the same worktree used to create the PR. Apply feedback,
+run CI, commit, and push only from that worktree.
+
 ---
 
 ## 11. Automated LLM PR Review Loop (Review Cycle)
