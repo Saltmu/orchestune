@@ -4,13 +4,15 @@ detect-bloat・baseline-aware CI・quarantine 機構のIssue群と同じ形の�
 （文書やコメントが存在しない機構を前提に判断を委ねる状態）の再発を止める
 ため、SKILL.md のフェンス付きコードブロック内で `poetry run` / `./scripts/`
 形式で参照されているコマンドが、実際に pyproject.toml のスクリプト定義・
-Poetry依存パッケージ、またはリポジトリ内の実ファイルに対応していることを
-機械的に検証する。
+Poetry仮想環境にインストールされた実行可能ファイル、またはリポジトリ内の
+実ファイルに対応していることを機械的に検証する。
 """
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 import tomllib
 from pathlib import Path
 
@@ -22,6 +24,7 @@ SKILLS_ROOT = REPO_ROOT / "skills"
 _FENCED_CODE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 _POETRY_RUN = re.compile(r"^poetry run (\S+)(?:\s+(\S+))?")
 _SCRIPT_PATH = re.compile(r"^(\.[\\/]scripts[\\/]\S+)")
+_EXECUTABLE_SUFFIXES = frozenset({".exe", ".cmd", ".bat"})
 
 
 def _known_poetry_commands() -> set[str]:
@@ -29,15 +32,26 @@ def _known_poetry_commands() -> set[str]:
 
     `[tool.poetry.scripts]` のエントリポイントに加え、`poetry run ruff` /
     `poetry run pytest` のように依存パッケージが提供するコマンドも正当な
-    参照として扱うため、通常/devの依存パッケージ名も含める。
+    参照として扱う必要があるが、依存パッケージ名（例: `pyyaml`,
+    `pytest-cov`）がそのまま実行可能コマンド名になるとは限らない
+    （実行ファイルを一切インストールしない依存も多い）。そのため、実際に
+    このテストを実行しているPoetry仮想環境の `bin/`（Windowsでは
+    `Scripts/`）ディレクトリを走査し、そこに存在する実行可能ファイルの
+    名前を正とする。
     """
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    poetry = data["tool"]["poetry"]
-    names = set(poetry.get("scripts", {}))
-    names.update(poetry.get("dependencies", {}))
-    for group in poetry.get("group", {}).values():
-        names.update(group.get("dependencies", {}))
-    names.discard("python")
+    names = set(data["tool"]["poetry"].get("scripts", {}))
+
+    venv_bin = Path(sys.executable).parent
+    for candidate in venv_bin.iterdir():
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        name = (
+            candidate.stem
+            if candidate.suffix.lower() in _EXECUTABLE_SUFFIXES
+            else candidate.name
+        )
+        names.add(name)
     return names
 
 
@@ -171,3 +185,14 @@ def test_poetry_dependency_command_is_accepted():
 
     assert targets[0][1] == "ruff"
     assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_dependency_without_executable_is_rejected():
+    """`pyyaml`/`pytest-cov`/`types-pyyaml` のように、依存パッケージ名では
+    あっても実行可能ファイルを一切インストールしない名前は、依存表に
+    載っているというだけで正当なコマンドとして誤って通過させてはならない
+    （`poetry run pyyaml` はCommand not foundになる）。"""
+    known_commands = _known_poetry_commands()
+
+    for non_executable_dependency in ("pyyaml", "pytest-cov", "types-pyyaml"):
+        assert not _command_exists(non_executable_dependency, known_commands)
