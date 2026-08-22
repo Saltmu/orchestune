@@ -541,6 +541,61 @@ def test_wait_for_review_keeps_waiting_past_in_progress_activity(
 
 
 @patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review.post_review_trigger")
+def test_wait_for_review_does_not_return_old_summary_after_new_inline_activity(
+    mock_post, mock_get_data
+):
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review",
+    }
+    old_summary = {
+        "id": 99,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:40:00Z",
+        "updated_at": "2026-08-20T07:40:00Z",
+        "body": "### Previous review complete",
+    }
+    new_summary = {
+        "id": 102,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:46:00Z",
+        "body": "### Review complete\nCurrent round result.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [old_summary], "reviews": [], "inline_comments": []},
+        {
+            "issue_comments": [old_summary],
+            "reviews": [],
+            "inline_comments": [
+                {
+                    "id": 101,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:45:00Z",
+                    "body": "New inline finding",
+                }
+            ],
+        },
+        {
+            "issue_comments": [old_summary, new_summary],
+            "reviews": [],
+            "inline_comments": [],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+    )
+
+    assert result["review_body"] == "### Review complete\nCurrent round result."
+
+
+@patch("scripts.wait_for_review._get_pr_data")
 def test_wait_for_review_no_post_returns_completed_reply_after_latest_trigger(
     mock_get_data,
 ):
@@ -769,6 +824,40 @@ def test_wait_for_review_polling_catches_exception_and_continues():
             post_trigger=False,
         )
         assert "LGTM!" in result["review_body"]
+
+
+def test_wait_for_review_retries_initial_fetch_failure():
+    completed_data = {
+        "issue_comments": [
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+            {
+                "id": 101,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:45:00Z",
+                "body": "### Review complete\nLGTM!",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    with patch("scripts.wait_for_review._get_pr_data") as mock_get_data:
+        mock_get_data.side_effect = [RuntimeError("Network hiccup"), completed_data]
+
+        result = wait_for_review(
+            pr_number=540,
+            timeout=10,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
+
+    assert "LGTM!" in result["review_body"]
 
 
 def test_get_pr_data_does_not_return_partial_data_when_an_endpoint_fails():

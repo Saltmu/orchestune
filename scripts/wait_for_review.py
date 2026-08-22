@@ -359,6 +359,29 @@ def _extract_review_result(
     }
 
 
+def _get_initial_pr_data(
+    pr_number: int,
+    executor: ThreadPoolExecutor,
+    timeout: int,
+    interval: int,
+) -> dict[str, list[dict[str, Any]]]:
+    initial_fetch_start = time.time()
+    while True:
+        try:
+            return _get_pr_data(pr_number, executor=executor)
+        except Exception as e:
+            print(
+                f"Warning: Error capturing initial PR review data: {e}",
+                file=sys.stderr,
+            )
+            if time.time() - initial_fetch_start >= timeout:
+                raise TimeoutError(
+                    f"Timed out capturing initial PR review data for PR #{pr_number} "
+                    f"after {timeout}s."
+                ) from e
+            time.sleep(interval)
+
+
 def wait_for_review(
     pr_number: int,
     *,
@@ -371,9 +394,10 @@ def wait_for_review(
 ) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=3) as executor:
         # Capture initial state before triggering/waiting
-        initial_data = _get_pr_data(pr_number, executor=executor)
+        initial_data = _get_initial_pr_data(pr_number, executor, timeout, interval)
         initial_snapshot = _build_snapshot(initial_data, bot_name)
         excluded_ids: set[int | str] = set()
+        latest_trigger_time = ""
 
         if post_trigger:
             print(
@@ -384,6 +408,7 @@ def wait_for_review(
             )
             trigger_id = trigger_info.get("id")
             trigger_time = trigger_info.get("created_at", "")
+            latest_trigger_time = trigger_time
             trigger_body = trigger_info.get("body") or ""
             if trigger_id is not None:
                 excluded_ids.add(trigger_id)
@@ -445,14 +470,25 @@ def wait_for_review(
                         latest_bot_item = _latest_bot_summary_item(
                             current_data, bot_name, exclude_ids=excluded_ids
                         )
-                        result = _extract_review_result(
-                            current_data,
-                            bot_name,
-                            exclude_ids=excluded_ids,
-                            latest_item=latest_bot_item,
-                        )
-                        if result is not None:
-                            return result
+                        if latest_bot_item is not None and (
+                            not latest_trigger_time
+                            or _get_item_created_timestamp(latest_bot_item)
+                            >= latest_trigger_time
+                        ):
+                            result = _extract_review_result(
+                                current_data,
+                                bot_name,
+                                exclude_ids=excluded_ids,
+                                latest_item=latest_bot_item,
+                            )
+                            if result is not None:
+                                return result
+                        else:
+                            initial_snapshot = current_snapshot
+                            print(
+                                f"@{bot_name} activity predates the latest trigger; "
+                                "continuing to wait..."
+                            )
 
             except Exception as e:
                 print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
