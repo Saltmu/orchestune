@@ -333,17 +333,23 @@ def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
         "codex is reviewing this pr",
         "レビュー進行中",
         "再レビュー進行中",
-        "round 1 レビュー進行中",
-        "round 2 レビュー進行中",
-        "round 3 レビュー進行中",
-        "round 4 レビュー進行中",
-        "round 5 レビュー進行中",
     )
     is_task_progress = _has_unfinished_task_list(body)
-    return is_task_progress or any(line in markers for line in status_lines)
+    has_marker = any(
+        line in markers or bool(re.match(r"^round\s+\d+\s+レビュー進行中$", line))
+        for line in status_lines
+    )
+    return is_task_progress or has_marker
 
 
 def _has_unfinished_task_list(body: str) -> bool:
+    in_completed_summary = "### review complete" in body.lower()
+    if in_completed_summary:
+        return False
+    if "view job run" in body.lower() and any(
+        line.strip().startswith("- [ ]") for line in body.splitlines()
+    ):
+        return True
     in_tasks_section = False
     for line in body.splitlines():
         stripped_line = line.strip()

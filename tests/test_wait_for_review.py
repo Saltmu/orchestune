@@ -91,6 +91,15 @@ def test_is_explicitly_in_progress_scans_status_after_a_preamble():
     )
 
 
+def test_is_explicitly_in_progress_supports_japanese_and_round_markers():
+    assert (
+        _is_explicitly_in_progress({"body": "### レビュー進行中 <img src='spinner' />"})
+        is True
+    )
+    assert _is_explicitly_in_progress({"body": "### Round 10 レビュー進行中"}) is True
+    assert _is_explicitly_in_progress({"body": "### 再レビュー進行中"}) is True
+
+
 def test_is_explicitly_in_progress_ignores_marker_text_outside_headline():
     completed_review = {
         "body": "### Review complete\n\nThis replaces the old review in progress flow."
