@@ -28,6 +28,23 @@ _SHELL_PROMPT_PREFIX = re.compile(r"^(?:\$\s+|PS[^>\n]*>\s*)")
 _POETRY_RUN = re.compile(r"^poetry run (.+)$")
 _SCRIPT_PATH = re.compile(r"^(\.[\\/]scripts[\\/]\S+)")
 _EXECUTABLE_SUFFIXES = frozenset({".exe", ".cmd", ".bat"})
+# Pythonインタプリタのオプションのうち、次のトークンを自身のオペランドとして
+# 消費するもの（そのオペランドはスクリプトパスではない）。
+_PYTHON_OPTIONS_WITH_OPERAND = frozenset({"-W", "-X", "--check-hash-based-pycs"})
+# それ単独でスクリプトパスを取らない（＝以降を検証対象としない）オプション。
+_PYTHON_OPTIONS_WITHOUT_SCRIPT_TARGET = frozenset({"-m", "-c"})
+
+
+def _poetry_script_names() -> frozenset[str]:
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return frozenset(data["tool"]["poetry"].get("scripts", {}))
+
+
+# `orchestune-dispatch --parent-issue ...` や `orchestune provision ...` の
+# ように、`poetry run` を付けずプロジェクトのエントリポイントを直接呼び出す
+# 形式で書かれているSKILL.mdもあるため、既知のスクリプト名は素の先頭語も
+# コマンド参照として認識する。
+_POETRY_SCRIPT_NAMES = _poetry_script_names()
 
 
 def _known_poetry_commands() -> set[str]:
@@ -42,8 +59,7 @@ def _known_poetry_commands() -> set[str]:
     `Scripts/`）ディレクトリを走査し、そこに存在する実行可能ファイルの
     名前を正とする。
     """
-    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    names = set(data["tool"]["poetry"].get("scripts", {}))
+    names = set(_POETRY_SCRIPT_NAMES)
 
     venv_bin = Path(sys.executable).parent
     for candidate in venv_bin.iterdir():
@@ -60,14 +76,19 @@ def _known_poetry_commands() -> set[str]:
 
 def _python_script_target(argv: list[str]) -> str | None:
     """`poetry run python <argv...>` のうち、検証すべきスクリプトパスを
-    返す。`-m <module>`（モジュール実行）や `--version` のような、実ファイル
-    に対応しないインタプリタオプションのみの呼び出しは検証対象外として
-    None を返す。"""
+    返す。`-m <module>` / `-c <code>`（モジュール実行・コード直接実行）や
+    `--version` のような、実ファイルに対応しないインタプリタオプションのみ
+    の呼び出しは検証対象外として None を返す。`-W`/`-X` のように自身の
+    オペランドを取るオプションは、そのオペランドをスクリプトパス候補と
+    誤認しないよう合わせて読み飛ばす。"""
     i = 0
     while i < len(argv):
         token = argv[i]
-        if token == "-m":
+        if token in _PYTHON_OPTIONS_WITHOUT_SCRIPT_TARGET:
             return None
+        if token in _PYTHON_OPTIONS_WITH_OPERAND:
+            i += 2
+            continue
         if token.startswith("-"):
             i += 1
             continue
@@ -99,6 +120,10 @@ def _extract_target(candidate: str) -> str | None:
         script_match = _SCRIPT_PATH.match(candidate)
         if script_match:
             target = script_match.group(1)
+        else:
+            bare_token = candidate.split(maxsplit=1)[0] if candidate else ""
+            if bare_token in _POETRY_SCRIPT_NAMES:
+                target = bare_token
 
     if target is None or "<" in target or ">" in target:
         return None
@@ -107,7 +132,8 @@ def _extract_target(candidate: str) -> str | None:
 
 def _iter_command_targets(markdown_text: str) -> list[tuple[str, str]]:
     """フェンス付きコードブロックおよびインラインコードスパンから
-    `poetry run` / `./scripts/` / `.\\scripts\\` 形式のコマンドを抽出する。
+    `poetry run` / `./scripts/` / `.\\scripts\\` / 既知のプロジェクト
+    エントリポイントを素で呼び出す形式のコマンドを抽出する。
 
     戻り値は (表示用の生コマンド行, 検証対象のスクリプト名/パス) のタプル
     のリスト。
@@ -240,6 +266,53 @@ def test_poetry_dependency_command_is_accepted():
     targets = _iter_command_targets(text)
 
     assert targets[0][1] == "ruff"
+    assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_bare_project_entry_point_is_extracted():
+    """`orchestune-dispatch --parent-issue ...` のように `poetry run` を
+    付けず直接プロジェクトのエントリポイントを呼び出す形式
+    （skills/orchestune-dispatch/SKILL.md, skills/orchestune-provision/
+    SKILL.md の実際の記法）も抽出・検証対象に含める。"""
+    text = "```bash\norchestune-dispatch --parent-issue 42\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets == [("orchestune-dispatch --parent-issue 42", "orchestune-dispatch")]
+    assert _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_bare_unknown_word_is_not_extracted():
+    """既知のプロジェクトエントリポイント名と一致しない先頭語（例:
+    `orchestune.toml` のような設定ファイル名）を誤ってコマンド参照として
+    抽出しない。"""
+    text = "```text\norchestune.toml\n```\n"
+
+    assert _iter_command_targets(text) == []
+
+
+def test_missing_bare_entry_point_is_detected():
+    text = "```bash\norchestune-not-a-real-entrypoint --help\n```\n"
+
+    assert _iter_command_targets(text) == []
+
+
+def test_python_dash_c_invocation_is_not_validated_as_file():
+    """`poetry run python -c "print(1)"` のようなコード直接実行は、
+    コード文字列をファイルパスとして誤検証しない。"""
+    text = '```bash\npoetry run python -c "print(1)"\n```\n'
+
+    assert _iter_command_targets(text) == []
+
+
+def test_python_option_with_operand_before_script_path_is_skipped():
+    """`-W`/`-X` のように自身のオペランドを取るオプションの引数を
+    スクリプトパスと誤認しない。"""
+    text = "```bash\npoetry run python -W ignore scripts/wait_for_review.py\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets[0][1] == "scripts/wait_for_review.py"
     assert _command_exists(targets[0][1], _known_poetry_commands())
 
 
