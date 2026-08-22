@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,10 @@ from scripts.wait_for_review import (
     _filter_bot_items,
     _get_item_timestamp,
     _is_bot_user,
+    _is_explicitly_in_progress,
+    _latest_bot_summary_item,
+    _latest_review_trigger_timestamp,
+    _run_gh,
     post_review_trigger,
     wait_for_review,
 )
@@ -62,6 +67,57 @@ def test_is_bot_user():
     assert _is_bot_user("human_dev", "claude") is False
 
 
+def test_is_explicitly_in_progress_uses_only_strong_transient_markers():
+    assert _is_explicitly_in_progress({"body": "Claude is working…"}) is True
+    assert _is_explicitly_in_progress({"body": "Claude Code is working…"}) is True
+    assert _is_explicitly_in_progress({"body": "### Review in progress"}) is True
+    assert _is_explicitly_in_progress({"body": "### Claude is reviewing this PR"})
+    assert _is_explicitly_in_progress(
+        {"body": "### Tasks\n\n- [ ] Run code review\n\n<img src='spinner' />"}
+    )
+    assert (
+        _is_explicitly_in_progress(
+            {"body": "### Review complete\n- [ ] Optional follow-up"}
+        )
+        is False
+    )
+
+
+def test_is_explicitly_in_progress_scans_status_after_a_preamble():
+    assert _is_explicitly_in_progress(
+        {
+            "body": "<!-- transient -->\n\n### Claude is reviewing this PR <img src='spinner' />"
+        }
+    )
+
+
+def test_is_explicitly_in_progress_ignores_marker_text_outside_headline():
+    completed_review = {
+        "body": "### Review complete\n\nThis replaces the old review in progress flow."
+    }
+
+    assert _is_explicitly_in_progress(completed_review) is False
+
+
+def test_is_explicitly_in_progress_ignores_unchecked_item_outside_tasks_section():
+    completed_review = {
+        "body": (
+            "### Tasks\n- [x] Review complete\n\n### Summary\n"
+            "The source contains `- [ ] Optional follow-up`."
+        )
+    }
+
+    assert _is_explicitly_in_progress(completed_review) is False
+
+
+def test_is_explicitly_in_progress_does_not_match_completed_review_prefix():
+    completed_review = {
+        "body": "### Codex is reviewing this PR as part of maintenance\n\nFindings: none."
+    }
+
+    assert _is_explicitly_in_progress(completed_review) is False
+
+
 def test_get_item_timestamp():
     assert (
         _get_item_timestamp({"updated_at": "2026-08-20T10:00:00Z"})
@@ -76,6 +132,110 @@ def test_get_item_timestamp():
         == "2026-08-20T08:00:00Z"
     )
     assert _get_item_timestamp({}) == ""
+
+
+def test_latest_review_trigger_timestamp_supports_machine_marker():
+    data = {
+        "issue_comments": [
+            {
+                "created_at": "2026-08-20T10:00:00Z",
+                "body": "Please check this\n\n<!-- orchestune:review-trigger bot=claude -->",
+            }
+        ]
+    }
+
+    assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
+
+
+def test_latest_review_trigger_timestamp_ignores_the_review_bot_echo():
+    data = {
+        "issue_comments": [
+            {
+                "created_at": "2026-08-20T10:00:00Z",
+                "user": {"login": "human"},
+                "body": "@claude review",
+            },
+            {
+                "created_at": "2026-08-20T10:01:00Z",
+                "user": {"login": "claude[bot]"},
+                "body": "@claude review",
+            },
+        ]
+    }
+
+    assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
+
+
+def test_latest_bot_summary_item_preserves_review_tiebreak_order():
+    issue_comment = {
+        "id": 1,
+        "user": {"login": "claude[bot]"},
+        "updated_at": "2026-08-20T10:00:00Z",
+        "body": "Issue comment",
+    }
+    review = {
+        "id": 2,
+        "user": {"login": "claude[bot]"},
+        "submitted_at": "2026-08-20T10:00:00Z",
+        "body": "Review",
+    }
+
+    assert (
+        _latest_bot_summary_item(
+            {"issue_comments": [issue_comment], "reviews": [review]}, "claude"
+        )
+        == review
+    )
+
+
+def test_latest_bot_summary_item_ignores_finished_tracker_without_summary():
+    tracker = {
+        "id": 1,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T10:00:00Z",
+        "updated_at": "2026-08-20T10:03:00Z",
+        "body": "**Claude finished task** — [View job](https://example.test)",
+    }
+    review = {
+        "id": 2,
+        "user": {"login": "claude[bot]"},
+        "submitted_at": "2026-08-20T10:02:00Z",
+        "body": "### Review complete\nFindings posted inline.",
+    }
+
+    assert (
+        _latest_bot_summary_item(
+            {"issue_comments": [tracker], "reviews": [review]}, "claude"
+        )
+        == review
+    )
+
+
+def test_latest_bot_summary_item_keeps_tracker_with_non_summary_review_content():
+    tracker_with_review = {
+        "id": 1,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T10:00:00Z",
+        "updated_at": "2026-08-20T10:03:00Z",
+        "body": (
+            "**Claude finished task** — [View job](https://example.test)\n\n"
+            "---\n### Findings\nNo blocking issues."
+        ),
+    }
+    older_review = {
+        "id": 2,
+        "user": {"login": "claude[bot]"},
+        "submitted_at": "2026-08-20T10:02:00Z",
+        "body": "### Review complete\nOlder review.",
+    }
+
+    assert (
+        _latest_bot_summary_item(
+            {"issue_comments": [tracker_with_review], "reviews": [older_review]},
+            "claude",
+        )
+        == tracker_with_review
+    )
 
 
 def test_build_snapshot():
@@ -134,7 +294,19 @@ def test_post_review_trigger_default(mock_run):
     mock_run.assert_called_once()
     cmd = mock_run.call_args[0][0]
     assert "gh" in cmd[0]
-    assert "body=@claude review" in cmd
+    assert cmd[-1].startswith("body=@claude review")
+    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
+
+
+@patch("scripts.wait_for_review.subprocess.run")
+def test_post_review_trigger_marks_custom_bodies_for_no_post_detection(mock_run):
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = json.dumps({"id": 12347})
+
+    post_review_trigger(pr_number=540, bot_name="claude", body="Please check this")
+
+    cmd = mock_run.call_args[0][0]
+    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
 
 
 @patch("scripts.wait_for_review.subprocess.run")
@@ -152,7 +324,8 @@ def test_post_review_trigger_custom_body(mock_run):
     result = post_review_trigger(pr_number=540, bot_name="claude", body=body_text)
     assert result["id"] == 12346
     cmd = mock_run.call_args[0][0]
-    assert f"body={body_text}" in cmd
+    assert cmd[-1].startswith(f"body={body_text}")
+    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
 
 
 def test_post_review_trigger_with_body_file(tmp_path):
@@ -170,7 +343,8 @@ def test_post_review_trigger_with_body_file(tmp_path):
         )
         assert result["id"] == 999
         cmd = mock_run.call_args[0][0]
-        assert "body=## Reply content\n@claude review" in cmd
+        assert cmd[-1].startswith("body=## Reply content\n@claude review")
+        assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
 
 
 def test_post_review_trigger_failure():
@@ -243,6 +417,17 @@ def test_run_gh_api_single_dict():
         assert result == [{"id": 42}]
 
 
+def test_run_gh_converts_subprocess_timeout_to_bounded_error():
+    with patch(
+        "scripts.wait_for_review.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+    ) as mock_run:
+        with pytest.raises(RuntimeError, match="timed out after 30s"):
+            _run_gh(["api", "dummy"])
+
+    assert mock_run.call_args.kwargs["timeout"] == 30
+
+
 @patch("scripts.wait_for_review._get_pr_data")
 @patch("scripts.wait_for_review.post_review_trigger")
 def test_wait_for_review_detects_new_comment(mock_post, mock_get_data):
@@ -313,6 +498,243 @@ def test_wait_for_review_detects_updated_comment_inplace(mock_get_data):
     )
     assert "### Review complete" in result["review_body"]
     assert result["timestamp"] == "2026-08-20T07:48:00Z"
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review.post_review_trigger")
+def test_wait_for_review_keeps_waiting_past_in_progress_activity(
+    mock_post, mock_get_data
+):
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review",
+    }
+    in_progress = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:45:00Z",
+        "updated_at": "2026-08-20T07:45:00Z",
+        "body": "Claude is working… <img src='spinner.gif' />",
+    }
+    completed = {
+        **in_progress,
+        "updated_at": "2026-08-20T07:48:00Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [completed], "reviews": [], "inline_comments": []},
+    ]
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+    )
+
+    assert "### Review complete" in result["review_body"]
+    assert result["timestamp"] == "2026-08-20T07:48:00Z"
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review.post_review_trigger")
+def test_wait_for_review_does_not_return_old_summary_after_new_inline_activity(
+    mock_post, mock_get_data
+):
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review",
+    }
+    old_summary = {
+        "id": 99,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:40:00Z",
+        "updated_at": "2026-08-20T07:40:00Z",
+        "body": "### Previous review complete",
+    }
+    new_summary = {
+        "id": 102,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:46:00Z",
+        "body": "### Review complete\nCurrent round result.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [old_summary], "reviews": [], "inline_comments": []},
+        {
+            "issue_comments": [old_summary],
+            "reviews": [],
+            "inline_comments": [
+                {
+                    "id": 101,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:45:00Z",
+                    "body": "New inline finding",
+                }
+            ],
+        },
+        {
+            "issue_comments": [old_summary, new_summary],
+            "reviews": [],
+            "inline_comments": [],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+    )
+
+    assert result["review_body"] == "### Review complete\nCurrent round result."
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_returns_completed_reply_after_latest_trigger(
+    mock_get_data,
+):
+    completed_data = {
+        "issue_comments": [
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "updated_at": "2026-08-20T07:44:44Z",
+                "body": "## Review response\n@claude review",
+            },
+            {
+                "id": 101,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:45:00Z",
+                "updated_at": "2026-08-20T07:48:00Z",
+                "body": "### Review complete\nAll checks passed.",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = completed_data
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=0,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+
+    assert "### Review complete" in result["review_body"]
+    assert result["timestamp"] == "2026-08-20T07:48:00Z"
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_returns_reply_created_in_trigger_second(mock_get_data):
+    completed_data = {
+        "issue_comments": [
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+            {
+                "id": 101,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "### Review complete\nAll checks passed.",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = completed_data
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=0,
+        interval=0,
+        bot_name="claude",
+        post_trigger=False,
+    )
+
+    assert "### Review complete" in result["review_body"]
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_does_not_return_reply_older_than_latest_trigger(
+    mock_get_data,
+):
+    stale_data = {
+        "issue_comments": [
+            {
+                "id": 99,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:40:00Z",
+                "updated_at": "2026-08-20T07:40:00Z",
+                "body": "### Previous review complete\nAll checks passed.",
+            },
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "updated_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = stale_data
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=540,
+            timeout=0,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+def test_wait_for_review_no_post_does_not_use_late_edit_of_old_reply(
+    mock_get_data,
+):
+    stale_data = {
+        "issue_comments": [
+            {
+                "id": 99,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:40:00Z",
+                "updated_at": "2026-08-20T07:50:00Z",
+                "body": "### Previous review complete\nAll checks passed.",
+            },
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+    mock_get_data.return_value = stale_data
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=540,
+            timeout=0,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
 
 
 @patch("scripts.wait_for_review._get_pr_data")
@@ -404,7 +826,41 @@ def test_wait_for_review_polling_catches_exception_and_continues():
         assert "LGTM!" in result["review_body"]
 
 
-def test_get_pr_data_endpoint_fallbacks():
+def test_wait_for_review_retries_initial_fetch_failure():
+    completed_data = {
+        "issue_comments": [
+            {
+                "id": 100,
+                "user": {"login": "human"},
+                "created_at": "2026-08-20T07:44:44Z",
+                "body": "@claude review",
+            },
+            {
+                "id": 101,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T07:45:00Z",
+                "body": "### Review complete\nLGTM!",
+            },
+        ],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    with patch("scripts.wait_for_review._get_pr_data") as mock_get_data:
+        mock_get_data.side_effect = [RuntimeError("Network hiccup"), completed_data]
+
+        result = wait_for_review(
+            pr_number=540,
+            timeout=10,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
+
+    assert "LGTM!" in result["review_body"]
+
+
+def test_get_pr_data_does_not_return_partial_data_when_an_endpoint_fails():
     from scripts.wait_for_review import _get_pr_data
 
     with patch("scripts.wait_for_review._run_gh_api") as mock_api:
@@ -415,10 +871,8 @@ def test_get_pr_data_endpoint_fallbacks():
             raise RuntimeError("API disabled")
 
         mock_api.side_effect = side_effect
-        data = _get_pr_data(540)
-        assert len(data["issue_comments"]) == 1
-        assert data["reviews"] == []
-        assert data["inline_comments"] == []
+        with pytest.raises(RuntimeError, match="API disabled"):
+            _get_pr_data(540)
 
 
 def test_main_cli_success():
