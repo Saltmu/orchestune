@@ -106,26 +106,32 @@ def _parse_review_round_marker(body: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _is_trigger_comment(
+    item: dict[str, Any], bot_name: str, round_num: int | None = None
+) -> bool:
+    body = item.get("body") or ""
+    body_lower = body.lower()
+    marker = _review_trigger_marker(bot_name).lower()
+    trigger_line = f"@{bot_name.lower()} review"
+
+    is_trigger = marker in body_lower or any(
+        line.strip().lower() == trigger_line for line in body.splitlines()
+    )
+    if not is_trigger:
+        return False
+    if round_num is not None:
+        return _parse_review_round_marker(body) == round_num
+    return True
+
+
 def _get_latest_review_round(
     data: dict[str, list[dict[str, Any]]], bot_name: str | None = None
 ) -> int:
     rounds: list[int] = []
-    trigger_marker = _review_trigger_marker(bot_name) if bot_name else None
-    trigger_line = f"@{bot_name.lower()} review" if bot_name else None
     for item in data.get("issue_comments", []):
-        body = item.get("body") or ""
-        if (
-            trigger_marker
-            and trigger_marker.lower() not in body.lower()
-            and (
-                not trigger_line
-                or not any(
-                    line.strip().lower() == trigger_line for line in body.splitlines()
-                )
-            )
-        ):
+        if bot_name and not _is_trigger_comment(item, bot_name):
             continue
-        round_num = _parse_review_round_marker(body)
+        round_num = _parse_review_round_marker(item.get("body") or "")
         if round_num is not None:
             rounds.append(round_num)
     return max(rounds, default=0)
@@ -134,14 +140,8 @@ def _get_latest_review_round(
 def _find_existing_trigger_comment(
     data: dict[str, list[dict[str, Any]]], bot_name: str, round_num: int
 ) -> dict[str, Any] | None:
-    marker = _review_trigger_marker(bot_name)
-    trigger_line = f"@{bot_name.lower()} review"
     for item in data.get("issue_comments", []):
-        body = item.get("body") or ""
-        if (
-            marker in body.lower()
-            or any(line.strip().lower() == trigger_line for line in body.splitlines())
-        ) and _parse_review_round_marker(body) == round_num:
+        if _is_trigger_comment(item, bot_name, round_num=round_num):
             return item
     return None
 
@@ -305,16 +305,10 @@ def _latest_bot_summary_item(
 def _latest_review_trigger_timestamp(
     data: dict[str, list[dict[str, Any]]], bot_name: str
 ) -> str:
-    trigger_line = f"@{bot_name.lower()} review"
-    marker = _review_trigger_marker(bot_name)
     trigger_timestamps = [
         item.get("created_at") or ""
         for item in data.get("issue_comments", [])
-        if not _is_bot_user((item.get("user") or {}).get("login", ""), bot_name)
-        and (
-            marker in (body := (item.get("body") or "")).lower()
-            or any(line.strip().lower() == trigger_line for line in body.splitlines())
-        )
+        if _is_trigger_comment(item, bot_name)
     ]
     return max(trigger_timestamps, default="")
 
@@ -337,6 +331,13 @@ def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
         "re-review in progress",
         "claude is reviewing this pr",
         "codex is reviewing this pr",
+        "レビュー進行中",
+        "再レビュー進行中",
+        "round 1 レビュー進行中",
+        "round 2 レビュー進行中",
+        "round 3 レビュー進行中",
+        "round 4 レビュー進行中",
+        "round 5 レビュー進行中",
     )
     is_task_progress = _has_unfinished_task_list(body)
     return is_task_progress or any(line in markers for line in status_lines)
@@ -350,7 +351,9 @@ def _has_unfinished_task_list(body: str) -> bool:
             heading = stripped_line.lstrip("#").strip().lower()
             if in_tasks_section:
                 return False
-            in_tasks_section = heading == "tasks"
+            in_tasks_section = (
+                heading == "tasks" or "進行中" in heading or "in progress" in heading
+            )
         elif in_tasks_section and stripped_line.startswith("- [ ]"):
             return True
     return False

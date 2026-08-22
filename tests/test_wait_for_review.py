@@ -147,18 +147,18 @@ def test_latest_review_trigger_timestamp_supports_machine_marker():
     assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
 
 
-def test_latest_review_trigger_timestamp_ignores_the_review_bot_echo():
+def test_latest_review_trigger_timestamp_when_posted_by_bot():
     data = {
         "issue_comments": [
             {
                 "created_at": "2026-08-20T10:00:00Z",
-                "user": {"login": "human"},
-                "body": "@claude review",
+                "user": {"login": "claude[bot]"},
+                "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
             },
             {
                 "created_at": "2026-08-20T10:01:00Z",
                 "user": {"login": "claude[bot]"},
-                "body": "@claude review",
+                "body": "### Review complete\nLooks good!",
             },
         ]
     }

@@ -478,3 +478,61 @@ def test_get_initial_pr_data_max_retries_exceeded():
                     interval=0,
                     max_retries=2,
                 )
+
+
+@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review.post_review_trigger")
+def test_wait_for_review_does_not_self_trigger_if_poster_is_bot(
+    mock_post, mock_get_data
+):
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+        "user": {"login": "claude[bot]"},
+    }
+
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {
+            "issue_comments": [
+                {
+                    "id": 100,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:44:44Z",
+                    "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+                }
+            ],
+            "reviews": [],
+            "inline_comments": [],
+        },
+        {
+            "issue_comments": [
+                {
+                    "id": 100,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:44:44Z",
+                    "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+                },
+                {
+                    "id": 101,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T07:46:00Z",
+                    "body": "### Review complete\nAll clear!",
+                },
+            ],
+            "reviews": [],
+            "inline_comments": [],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=540,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+    )
+    assert "### Review complete" in result["review_body"]
+    assert result["timestamp"] == "2026-08-20T07:46:00Z"
+    assert result["round"] == 1
