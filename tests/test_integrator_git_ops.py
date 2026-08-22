@@ -8,7 +8,7 @@
 - `create_temp_branch`のcheckout失敗時のfail-closed
 - `ensure_full_history`のrev-parse/fetch失敗時のfail-open（無視して継続）
 - merge試行前のHEAD SHA取得（`current_head_sha`）失敗時のタスク失敗扱い
-- `run_ci_with_flaky_check`のvirtualenv自動検出における各フォールバック分岐
+- `run_ci_in_worktree`のvirtualenv自動検出における各フォールバック分岐
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ class TestPreMergeShaCaptureFailure:
 
 
 class TestRunCiVenvDetection:
-    """`run_ci_with_flaky_check`のvirtualenv自動検出フォールバック分岐。"""
+    """`run_ci_in_worktree`のvirtualenv自動検出フォールバック分岐。"""
 
     def _merger(self, repo_root: Path, orig_root: Path) -> IntegrationMerger:
         return IntegrationMerger(
@@ -142,7 +142,7 @@ class TestRunCiVenvDetection:
         merger = self._merger(repo_root, orig_root)
 
         with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -167,7 +167,7 @@ class TestRunCiVenvDetection:
         merger = self._merger(repo_root, orig_root)
 
         with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -193,7 +193,7 @@ class TestRunCiVenvDetection:
         merger = self._merger(repo_root, orig_root)
 
         with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -216,7 +216,7 @@ class TestRunCiVenvDetection:
         merger = self._merger(repo_root, orig_root)
 
         with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -235,7 +235,7 @@ class TestRunCiVenvDetection:
         merger = self._merger(repo_root, orig_root)
 
         with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -260,7 +260,7 @@ class TestRunCiVenvDetection:
         merger = self._merger(repo_root, orig_root)
 
         with patch("subprocess.run", side_effect=lambda args, **kw: _ok(args)) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -284,7 +284,7 @@ class TestRunCiVenvDetection:
             return _ok(args)
 
         with patch("subprocess.run", side_effect=mock_run_impl) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -311,7 +311,7 @@ class TestRunCiVenvDetection:
             return _ok(args)
 
         with patch("subprocess.run", side_effect=mock_run_impl) as run:
-            passed, _ = merger.run_ci_with_flaky_check()
+            passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         ci_calls = [
@@ -490,7 +490,7 @@ class TestMergeTaskBranch:
 class TestVerifyCiAndRollback:
     def test_ci_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch.object(merger, "run_ci_with_flaky_check", return_value=(True, "")):
+        with patch.object(merger, "run_ci_in_worktree", return_value=(True, "")):
             success, reason, out = merger._verify_ci_and_rollback("sha123")
         assert success is True
         assert reason == ""
@@ -500,7 +500,7 @@ class TestVerifyCiAndRollback:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with (
             patch.object(
-                merger, "run_ci_with_flaky_check", return_value=(False, "ci failed")
+                merger, "run_ci_in_worktree", return_value=(False, "ci failed")
             ),
             patch.object(merger, "rollback_to", return_value=True) as mock_rollback,
         ):
