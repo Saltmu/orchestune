@@ -15,13 +15,15 @@ the worktree path stays flat and filesystem-safe.
 git fetch origin main
 git worktree add -b <BRANCH> worktree/<BRANCH_SLUG> origin/main
 cd worktree/<BRANCH_SLUG>
-poetry install
+<INSTALL_COMMAND>
 ```
 
-Write `implementation_plan.md`, implement, test, run local CI, commit, push,
-create the PR, and handle review feedback from this directory. If the worktree
-cannot be created because the target or branch already exists, inspect it with
-`git worktree list` and choose a new slug; do not overwrite an existing task.
+Replace `<INSTALL_COMMAND>` with the project's dependency/bootstrap command
+(for example, `poetry install`). Then write `implementation_plan.md`, implement,
+test, run local CI, commit, push, create the PR, and handle review feedback from
+this directory. If the worktree cannot be created because the target or branch
+already exists, inspect it with `git worktree list` and choose a new slug; do not
+overwrite an existing task.
 
 ## Cleanup
 

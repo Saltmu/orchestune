@@ -26,9 +26,10 @@ cannot be created because the target or branch already exists, inspect it with
 ## Auto-Dispatch exception
 
 When Orchestune Auto-Dispatch has already launched the task in a
-dispatcher-provisioned worktree, skip this step. Use that assigned branch and
-worktree for all remaining work; do not create a nested worktree or a different
-PR branch.
+dispatcher-provisioned worktree, skip this step and the cleanup section. Use
+that assigned branch and worktree for all remaining work; do not create a
+nested worktree, a different PR branch, or remove/prune the dispatcher-owned
+worktree.
 
 ## Cleanup
 

@@ -17,6 +17,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 | :--- | :--- | :--- |
 | **Plan Approval (Step 1)** | Present to user and wait for approval | Proceed immediately to implementation after writing `implementation_plan.md` |
 | **Issue Creation (Step 2)** | Create manually or via CLI if needed | Use issue number provided in prompt (skip creation) |
+| **Worktree (Step 2.5)** | Create and clean up a task worktree | Use the dispatcher-provisioned worktree; skip setup and cleanup |
 | **Reviewer Selection (Step 11)** | Ask user to select reviewer (Claude/Codex) | Automatically select a cross-model distinct from the author |
 | **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
 
