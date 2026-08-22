@@ -1,15 +1,15 @@
 # TDD & Local CI Reference (Steps 3–9)
 
-本ドキュメントは、テスト駆動開発（TDD）による実装とローカルCI検証の具体手順を定めたリファレンスです。
+This document provides detailed procedures for Test-Driven Development (TDD) and local CI verification.
 
 ---
 
-## 3. 再現手順の確立 (Reproducer)
-- **バグ修正の場合**: 実装前に不具合を再現する最小限のテスト（`tests/`配下）を作成し、失敗（Red）することを確認します。
-- **新規機能の場合**: 本ステップをスキップし、ステップ4へ進みます。
+## 3. Reproducer Step
+- **For bug fixes**: Before implementing any fix, create a minimal test under `tests/` that reproduces the reported defect and verify that it fails (Red).
+- **For new features**: Skip this step and proceed to Step 4.
 
-## 4. ベースライン取得 (Baseline Record)
-- 変更前のコード状態でベースラインを記録します（OSに応じてコマンドを選択）：
+## 4. Baseline Recording (Baseline Record)
+- Record the baseline status on unmodified code (select command based on your OS):
 ```bash
 # Linux / macOS
 poetry run python scripts/ci_baseline.py record
@@ -17,31 +17,31 @@ poetry run python scripts/ci_baseline.py record
 # Windows PowerShell
 poetry run python scripts/ci_baseline.py record --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
 ```
-- この記録は、ステップ9で新規リグレッションとベースブランチ由来の既存失敗を自動判別するために使用されます。
+- This record enables Step 9 to automatically distinguish between new regressions and pre-existing failures on the base branch.
 
-## 5. 実装前のテスト作成 (テストファースト)
-- 新規機能や改修仕様（正常系・主要シナリオ）を満たすテストを `tests/` 配下に記述します。
-- `poetry run pytest` を実行し、追加したテストが期待通り失敗（Red）することを確認します。
+## 5. Pre-Implementation Test Creation (Test-First)
+- Write tests under `tests/` covering new features or revised specifications (happy path and major scenarios).
+- Run `poetry run pytest` and verify that newly added tests fail as expected (Red).
 
-## 6. 機能の実装とテスト通過
-- テストをパスさせる最小限のコードを実装します。
-- `poetry run pytest` を実行し、すべてのテストがパス（Green）することを確認します。
+## 6. Feature Implementation & Test Passing
+- Implement the minimal code necessary to make the tests pass.
+- Run `poetry run pytest` and verify that all tests pass (Green).
 
-## 7. Failure Analyst (連続失敗時の根本原因分析)
-- 同一のテスト失敗が2回以上連続した場合、闇雲な再修正を止め、以下を分析します：
-  1. 失敗の直接原因（スタックトレース・diff該当箇所）
-  2. 想定修正で解消しなかった理由の仮説
-  3. 次に試す具体的な修正方針
-- `scripts/ci_baseline.py` が連続失敗カウントを自動追跡します。3回分析しても解消しない場合は作業を中断し、エスカレーションします。
+## 7. Failure Analyst (Root Cause Analysis on Repeated Failures)
+- When the same test failure persists across 2 or more consecutive attempts, stop making uninformed changes and analyze:
+  1. Direct cause of failure (stack trace, diff location)
+  2. Hypothesis on why the expected fix did not resolve it
+  3. Specific alternative approach for the next attempt
+- `scripts/ci_baseline.py` automatically tracks consecutive failure counts. If not resolved after 3 analysis attempts, pause work and escalate.
 
-## 8. エッジケースと異常系のカバレッジ補強
-- 境界値・異常系・エラーハンドリングのテストを追加し、カバレッジを向上させます。
+## 8. Edge Case & Error Handling Coverage
+- Strengthen test coverage by adding tests for boundary values, error conditions, and exception handling:
 ```bash
 poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
-## 9. ローカルCIの一括実行とエラー解消
-- ベースライン対応のCI検証を実行します（OSに応じてコマンドを選択）：
+## 9. Comprehensive Local CI Verification & Error Resolution
+- Execute baseline-aware CI verification (select command based on your OS):
 ```bash
 # Linux / macOS
 poetry run python scripts/ci_baseline.py check
@@ -49,22 +49,22 @@ poetry run python scripts/ci_baseline.py check
 # Windows PowerShell
 poetry run python scripts/ci_baseline.py check --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
 ```
-- またはOS標準のCIスクリプトを実行します（Linux/macOS: `./scripts/local-ci.sh`、Windows: `.\\scripts\\local-ci.ps1`）。
+- Alternatively, run standard OS CI scripts (Linux/macOS: `./scripts/local-ci.sh`, Windows: `.\\scripts\\local-ci.ps1`).
 
-### 各種エラーの解消手順
+### Error Resolution Procedures
 1. **Ruff Format/Lint**:
    ```bash
    poetry run ruff format
    poetry run ruff check --fix
    ```
-2. **Mypy 型チェック**:
+2. **Mypy Type Checking**:
    ```bash
    poetry run mypy orchestune tests
    ```
-3. **Pytest テスト失敗**:
-   - `scripts/ci_baseline.py check` が新規失敗とベースライン由来失敗を自動分類します。
-4. **Detect Bloat 警告**:
+3. **Pytest Test Failures**:
+   - `scripts/ci_baseline.py check` automatically categorizes new failures vs. baseline failures.
+4. **Detect Bloat Warnings**:
    ```bash
    poetry run python scripts/detect_bloat.py --warn-only
    ```
-   - ファイルサイズ（コード: 1000行、スキル計: 500行）や関数長（50行）の超過警告を検知した場合は、**そのままコード修正を進めずに作業を一時停止**し、まずユーザーにモジュールやプロンプトの分割リファクタリング計画を提示して承認を得てください。
+   - If warnings for file size (code: 1000 lines, skill total: 500 lines) or function length (50 lines) are detected, **pause code modification** and present a modular/prompt split refactoring plan to the user for approval.

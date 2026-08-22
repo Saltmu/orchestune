@@ -1,49 +1,49 @@
 # TDD & Local CI Reference (Steps 3–9)
 
-本ドキュメントは、テスト駆動開発（TDD）による実装とローカルCI検証の具体手順を定めたリファレンスです。導入先プロジェクトのコマンドに合わせてプレースホルダー（`<...>`）を置き換えて使用してください。
+This document provides detailed procedures for Test-Driven Development (TDD) and local CI verification. Replace placeholders (`<...>`) with the appropriate commands for your project.
 
 ---
 
-## 3. 再現手順の確立 (Reproducer)
-- **バグ修正の場合**: 実装前に不具合を再現する最小限のテストまたはスクリプトを作成し、`<TEST_COMMAND>` を実行して失敗（Red）することを確認します。
-- **新規機能の場合**: 本ステップをスキップし、ステップ4へ進みます。
+## 3. Reproducer Step
+- **For bug fixes**: Before implementing any fix, create a minimal test or script reproducing the reported defect, and run `<TEST_COMMAND>` to verify that it fails (Red).
+- **For new features**: Skip this step and proceed to Step 4.
 
-## 4. ベースライン取得 (Baseline Record)
-- 変更前のコード状態でベースラインを記録します。
-- **Orchestune / 専用スクリプト環境の場合**:
+## 4. Baseline Recording (Baseline Record)
+- Record the baseline status on unmodified code.
+- **When using Orchestune / dedicated baseline scripts**:
   ```bash
   poetry run python scripts/ci_baseline.py record
   ```
-- **縮退手順（専用スクリプトが無い場合）**:
-  変更前のコード状態で `<TEST_COMMAND>` を実行し、既存の失敗テスト（今回の変更とは無関係な failure や flaky test）の一覧を作業メモ等へ控えておきます。この記録をステップ9で新規リグレッション判別の基準とします。
+- **Fallback procedure (when no baseline script exists)**:
+  Run `<TEST_COMMAND>` on unmodified code and note existing test failures (failures or flaky tests unrelated to this issue) in a temporary note. Use this record in Step 9 to distinguish new regressions.
 
-## 5. 実装前のテスト作成 (テストファースト)
-- 新規機能や改修仕様（正常系・主要シナリオ）を満たすテストを記述します。
-- `<TEST_COMMAND>` を実行し、追加したテストが期待通り失敗（Red）することを確認します。
+## 5. Pre-Implementation Test Creation (Test-First)
+- Write tests covering new features or revised specifications (happy path and major scenarios).
+- Run `<TEST_COMMAND>` and verify that newly added tests fail as expected (Red).
 
-## 6. 機能の実装とテスト通過
-- テストをパスさせる最小限のコードを実装します。
-- `<TEST_COMMAND>` を実行し、すべてのテストがパス（Green）することを確認します。
+## 6. Feature Implementation & Test Passing
+- Implement the minimal code necessary to make the tests pass.
+- Run `<TEST_COMMAND>` and verify that all tests pass (Green).
 
-## 7. Failure Analyst (連続失敗時の根本原因分析)
-- 同一のテスト失敗が2回以上連続した場合、闇雲な再修正を止め、以下を分析します：
-  1. 失敗の直接原因（スタックトレース・diff該当箇所）
-  2. 想定修正で解消しなかった理由の仮説
-  3. 次に試す具体的な修正方針
-- 3回分析しても解消しない場合は作業を中断し、エスカレーション（非対話時は outcome `blocked`、対話時はユーザー相談）します。
+## 7. Failure Analyst (Root Cause Analysis on Repeated Failures)
+- When the same test failure persists across 2 or more consecutive attempts, stop making uninformed changes and analyze:
+  1. Direct cause of failure (stack trace, diff location)
+  2. Hypothesis on why the expected fix did not resolve it
+  3. Specific alternative approach for the next attempt
+- If not resolved after 3 analysis attempts, pause work and escalate (outcome `blocked` in non-interactive mode, or ask the user in interactive mode).
 
-## 8. エッジケースと異常系のカバレッジ補強
-- 境界値・異常系・エラーハンドリングのテストを追加し、プロジェクトのカバレッジ目標に向けて補強します。
+## 8. Edge Case & Error Handling Coverage
+- Strengthen test coverage by adding tests for boundary values, error conditions, and exception handling according to your project's coverage targets.
 
-## 9. ローカルCIの一括実行とエラー解消
-- プロジェクトの統合CIコマンドを実行します：
+## 9. Comprehensive Local CI Verification & Error Resolution
+- Execute the project's integrated local CI command:
   ```bash
   <CI_ENTRYPOINT>
   ```
-- スクリプト対応環境では `poetry run python scripts/ci_baseline.py check` 等で既存失敗を除外した判定を行います。
+- In script-supported environments, run `poetry run python scripts/ci_baseline.py check` to evaluate results against the recorded baseline.
 
-### 各種エラーの解消手順
-1. **フォーマット/Lint**: `<FORMAT_LINT_COMMAND>` を実行し、未解決のエラーを修正します。
-2. **型チェック**: `<TYPE_CHECK_COMMAND>` を実行し、型の不整合を修正します。
-3. **テスト失敗**: `<TEST_COMMAND>` の失敗を特定して修正します。合格基準は Baseline-aware（ベースライン由来の既存失敗を除き、新規失敗がゼロであること）です。
-4. **肥大化検知警告**: ファイルやスキルのサイズ超過警告を検知した場合は作業を一時停止し、分割リファクタリング計画を提示します。
+### Error Resolution Procedures
+1. **Format/Lint**: Run `<FORMAT_LINT_COMMAND>` and fix any unresolved errors.
+2. **Type Checking**: Run `<TYPE_CHECK_COMMAND>` and resolve type mismatches.
+3. **Test Failures**: Identify and fix `<TEST_COMMAND>` failures. Qualification is Baseline-aware (zero new failures introduced beyond baseline failures).
+4. **Bloat Warnings**: If file size or complexity warnings are detected, pause work and present a modular refactoring plan.

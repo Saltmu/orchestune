@@ -13,32 +13,36 @@ output_schema:
 
 # Orchestune Dispatch Skill
 
-本スキルは、GitHub上に起票済みのIssue（または`orchestune-provision`で起票されたIssue群）を受け取り、`orchestune-dispatch` CLIによるディスパッチ設定・ワークツリー管理・エージェントプロセス起動および実行監視を行います。
+This skill accepts filed GitHub Issues (or Issues filed by `orchestune-provision`) and handles dispatch configuration, worktree management, agent process invocation, and execution monitoring via the `orchestune-dispatch` CLI.
 
-## トリガー条件
+> [!NOTE]
+> **User-Facing Response Language**:
+> While this skill instruction is written in English, all user-facing explanations, plans, questions, and responses must use the user's preferred language (e.g., Japanese if the user interacts in Japanese or matches the user's environment). The language of this instruction document must not determine the output language.
 
-**通常はユーザーが直接呼び出すスキルではありません。** [orchestune スキル](../orchestune/SKILL.md)が分解・起票完了後に内部で引き継ぐ形でロードします。
+## Trigger Conditions
 
-例外的に、Issue起票済みのサブタスクに対してディスパッチだけを再実行・再開したい場合（例: 状態ファイル消失後の手動再開、cron再実行の確認）は、人間が直接このスキルを指定してロードしてよい。
+**This is not normally a skill users invoke directly.** The [orchestune skill](../orchestune/SKILL.md) loads it internally as a handoff once decomposition and Issue provisioning are complete.
 
-## 前提
+As an exception, a human may load this skill directly if they only want to re-run or resume dispatch for existing subtask issues (e.g. manual resumption after a lost state file, verifying a cron rerun).
 
-* システムに `orchestune` CLIツール（`orchestune-dispatch`, `orchestune-dag`）がインストールされていること。
-* GitHub CLI (`gh` command) がインストール・認証済み（`gh auth status`）であること。
-* ディスパッチャーの書き込み系操作（ラベル更新・`git worktree`作成・エージェント起動）は、既定で実行されます（`--apply`）。テスト確認したい場合は `--no-apply` を明示指定してください。
-* エージェントの起動先（`--dispatch-target`）は、未指定時は実行環境に応じて自動選択されます：ローカル/対話実行時は`auto`（PATH上にインストールされているローカルCLIを`claude`優先・`agy`次点・`codex`次々点で自動検出しsubprocess起動、いずれも未検出なら警告してダミー起動にフォールバック）、GitHub Actions実行時（`GITHUB_ACTIONS=true`）は`cloud-routine`（Claude Code Cloud Routine）です。明示的に`local`を指定した場合のみ、後方互換のダミー起動（`true`のno-op、テスト・dry-run用途）になります。クラウド実行先は、Claude Code Cloud Routine（`cloud-routine`、`ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要）と Codex Cloud（`codex-cloud`、`ORCHESTUNE_CODEX_CLOUD_ENV` または `--codex-cloud-env` が必要）をサポートします。`codex-cloud` はタスクブランチを `origin` にpushしてから `codex cloud exec` を起動し、対象ブランチのopen PRを完了シグナルとして扱います。セットアップは[セットアップガイド](../../docs/ja/setup.md#4-codex-cloud-のセットアップ手順)を参照してください。
+## Prerequisites
 
-## ワークフロー: ディスパッチャーのスケジュール実行
+* The `orchestune` CLI tools (`orchestune-dispatch`, `orchestune-dag`) must be installed on the system.
+* The GitHub CLI (`gh` command) must be installed and authenticated (`gh auth status`).
+* Mutating dispatcher operations (label updates, `git worktree` creation, agent process launches) are executed by default (`--apply`). To perform a dry run without side effects, specify `--no-apply` explicitly.
+* The dispatch target (`--dispatch-target`) is automatically selected when unspecified based on runtime environment: `auto` for local/interactive runs (auto-detects local CLIs on PATH with `claude` preferred, `agy` second, `codex` third, and falls back with a warning to a dummy launch if none are found); `cloud-routine` (Claude Code Cloud Routine) when running in GitHub Actions (`GITHUB_ACTIONS=true`). Explicitly passing `local` triggers backward-compatible dummy launches (`true` no-op, for tests and dry-run purposes). Cloud targets support Claude Code Cloud Routine (`cloud-routine`, requiring `ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN`) and Codex Cloud (`codex-cloud`, requiring `ORCHESTUNE_CODEX_CLOUD_ENV` or `--codex-cloud-env`). `codex-cloud` pushes the task branch to `origin` before running `codex cloud exec`, and treats an open PR on the target branch as the completion signal. See the [Setup Guide](../../docs/en/setup.md#4-setting-up-codex-cloud) for details.
 
-1. ディスパッチャーを実行し、タスクをエージェントに割り振ります。対象タスクの親Issue番号（`decomposition_plan.md` の `parent_issue_number`、または再開対象の親Issue番号）を、必ず `--parent-issue` に渡してください。これにより、子Issueのブランチが親ブランチ（`parent/issue-{番号}`）から分岐し、完了した子ブランチはIntegratorが人間の確認を待たずに親ブランチへ自動マージ・自動クローズするようになります（`parent/issue-{番号}` → `main` への最終マージのみ、引き続き人間が行います）。このフラグを渡さないと、親ブランチによる二層マージモデルが有効化されず、フラットモード（`main`への直接統合、常に人間によるマージ待ち）で動作してしまいます。
+## Workflow: Scheduled Dispatch Execution
+
+1. Run the dispatcher to schedule and assign tasks to agents. Always pass the parent Issue number (`parent_issue_number` from `decomposition_plan.md`, or the parent Issue being resumed) to `--parent-issue`. This ensures child task branches diverge from the parent branch (`parent/issue-{number}`), enabling the Integrator to automatically merge completed child branches into the parent branch and close issues without waiting for human intervention (only the final merge from `parent/issue-{number}` to `main` requires human review). If this flag is omitted, the dispatcher operates in flat mode (direct integration into `main`, always waiting for manual merge).
 
    ```bash
-   # ドライラン（影響を出さずにプレビューのみ）
-   orchestune-dispatch --no-apply --parent-issue <decomposition_plan.mdのparent_issue_number>
+   # Dry-run (preview changes without applying)
+   orchestune-dispatch --no-apply --parent-issue <parent_issue_number>
 
-   # 実際に適用して並列ワークスペースを起動
-   orchestune-dispatch --parent-issue <decomposition_plan.mdのparent_issue_number>
+   # Apply and launch parallel workspaces
+   orchestune-dispatch --parent-issue <parent_issue_number>
    ```
 
-2. 状態ファイル `run_state.json` が消失した場合（GitHub Actionsのキャッシュ切れなど）でも、ディスパッチャーは `status:in-progress` になっている GitHub Issue の情報とオープンな PR のヘッドブランチを元に、自動的に実行状態を修復・再構築（自己修復）してディスパッチを継続します。
-3. ディスパッチ結果（起動したタスク、worktreeパス、ログ）を[orchestune スキル](../orchestune/SKILL.md)に返し、ユーザーへの最終報告に用いさせます。
+2. If the state file `run_state.json` is lost (such as after GitHub Actions cache eviction), the dispatcher self-heals by reconstructing its execution state from `status:in-progress` GitHub Issues and open PR head branches, allowing dispatch to continue safely.
+3. Return dispatch outcomes (launched tasks, worktree paths, logs) to the [orchestune skill](../orchestune/SKILL.md) for final reporting to the user.

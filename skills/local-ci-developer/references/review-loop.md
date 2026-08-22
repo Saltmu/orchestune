@@ -1,47 +1,47 @@
 # Review Loop Reference (Step 11)
 
-本ドキュメントは、LLM自動PRレビューと指摘対応サイクルの詳細手順を定めたリファレンスです。
+This document provides detailed procedures for automated LLM PR reviews and feedback resolution cycles.
 
 ---
 
-## 11. LLM自動PRレビューループ (Review Cycle)
+## 11. Automated LLM PR Review Loop (Review Cycle)
 
-`scripts/wait_for_review.py` を同期実行し、レビュアーボット（Claude / Codex）へのレビュー依頼、完了待機、指摘解析を行います。二重送信防止はスクリプトの待機制御により行われます。累積ラウンド数は PR コメント履歴の `@<bot> review` 投稿や `Round X/5` 表記から算出し、セッション中断後も引き継ぎます。
+Execute `scripts/wait_for_review.py` synchronously to request a review from a reviewer bot (Claude / Codex), wait for completion, and analyze feedback. Double-posting is prevented by the script's internal wait controls. The cumulative round count is tracked via `@<bot> review` comments and `Round X/5` notations, preserving count across session interruptions.
 
-### レビューループの制御構造（擬似コード）
+### Review Loop Control Flow (Pseudocode)
 
 ```text
-Loop (最大5ラウンド):
-  1. レビュー待機コマンドを実行
-     - 初回: poetry run python scripts/wait_for_review.py --pr <PR番号> --bot-name <bot>
-     - 2周目以降: --body-file /tmp/review_reply.md を付与して再レビュー依頼
-  2. 出力結果の確認と文脈判定:
-     - タイムアウト (exit 1) の場合:
-         -> --no-post --timeout 300 で1回のみ再試行。解消しなければエスカレーション。
-     - レビュー結果取得 (exit 0) の場合:
-         -> 最新本文およびインライン指摘をLLMが精読。
-         -> (a) 修正すべき指摘がある場合:
-             指摘内容に合わせてコード修正・テスト追加を実施。
-             ローカルCI（./scripts/local-ci.sh / .\\scripts\\local-ci.ps1）で検証後、コミット＆プッシュ。
-             /tmp/review_reply.md（Round X/5 表記付き）を作成し、ループ先頭（1）へ戻る（後退辺）。
-         -> (b) 指摘なし（LGTM / All checks passed / No blocking issues）の場合:
-             ループ終了。ステップ12（完了宣言）へ進む。
-     - ラウンド上限（5ラウンド）到達時:
-         -> 自動反復を停止。論点と対応状況をPRコメントに整理してエスカレーション。
-     - 内部エラー (exit 2) の場合:
-         -> 異常終了。エラー内容を記録して停止。
+Loop (up to 5 rounds):
+  1. Execute wait command:
+     - Initial round: poetry run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
+     - Subsequent rounds: attach --body-file /tmp/review_reply.md to request re-review
+  2. Evaluate output and context:
+     - On timeout (exit 1):
+         -> Retry once with --no-post --timeout 300. If still unresolved, escalate.
+     - On review result obtained (exit 0):
+         -> LLM carefully reads latest summary and inline comments.
+         -> (a) Actionable findings exist:
+             Fix code and add tests according to feedback.
+             Verify with local CI (./scripts/local-ci.sh / .\\scripts\\local-ci.ps1), then commit & push.
+             Create /tmp/review_reply.md (with Round X/5 header) and return to start of loop (1).
+         -> (b) No actionable findings (LGTM / All checks passed / No blocking issues):
+             Terminate loop. Proceed to Step 12 (Outcome).
+     - On reaching round limit (Round 5):
+         -> Stop automated iteration. Summarize discussion and escalate on PR.
+     - On internal error (exit 2):
+         -> Terminate with error. Record error output and stop.
 ```
 
-### レビュー返信ファイル (`/tmp/review_reply.md`) の作成
-指摘に対応した後は、修正内容をまとめた返信ファイルを作成します：
+### Creating Review Reply File (`/tmp/review_reply.md`)
+After addressing feedback, write a summary reply file:
 ```markdown
-## レビュー指摘への対応 (Round 2/5)
+## Addressing Review Feedback (Round 2/5)
 
-### 対応内容
-- [対応] 指摘事項Aのバグを修正し、テストを追加しました（コミット: abc1234）
-- [見送り] 指摘事項Bは仕様に基づく設計のため現状維持とします（理由: ...）
+### Changes
+- [Addressed] Fixed bug in Finding A and added regression tests (commit: abc1234)
+- [Declined] Preserved Finding B behavior as it conforms to intended specification (reason: ...)
 
 @claude review
 ```
 
-返信ファイル作成後、`wait_for_review.py` を `--body-file /tmp/review_reply.md` 付きで実行して再レビューをトリガーします。
+After writing the reply file, run `wait_for_review.py` with `--body-file /tmp/review_reply.md` to trigger and wait for re-review.

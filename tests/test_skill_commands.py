@@ -498,3 +498,30 @@ def test_workflow_template_structure():
     assert (
         total_lines <= 500
     ), f"workflow-template total markdown lines must be <= 500, got {total_lines}"
+
+
+def test_all_skills_english_only():
+    """All skill instructions and references must contain English prose only (no Japanese characters)."""
+    jp_pattern = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
+    for skill_md in sorted(SKILLS_ROOT.glob("**/*.md")):
+        text = skill_md.read_text(encoding="utf-8")
+        matches = jp_pattern.findall(text)
+        assert not matches, f"{skill_md.relative_to(REPO_ROOT)} contains {len(matches)} Japanese characters: {''.join(matches[:20])}..."
+
+
+def test_skills_require_locale_aware_user_responses():
+    """Each in-scope skill must explicitly separate English skill instructions from locale-aware user-facing responses."""
+    for skill_name in [
+        "orchestune",
+        "orchestune-dispatch",
+        "local-ci-developer",
+        "workflow-template",
+    ]:
+        skill_dir = SKILLS_ROOT / skill_name
+        skill_md = skill_dir / "SKILL.md"
+        text = skill_md.read_text(encoding="utf-8").lower()
+        assert (
+            "user-facing" in text
+            or "response language" in text
+            or "user's language" in text
+        ), f"{skill_md.relative_to(REPO_ROOT)} must contain explicit directive for user-facing response language"
