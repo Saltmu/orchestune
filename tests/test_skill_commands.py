@@ -102,13 +102,24 @@ def _python_script_target(argv: list[str]) -> str | None:
     return None
 
 
-def _extract_target(candidate: str) -> str | None:
+def _extract_target(
+    candidate: str, *, standalone_bare_command_allowed: bool
+) -> str | None:
     """1行分のコマンド候補文字列から検証対象のスクリプト名/パスを抽出する。
 
     `poetry run` / `./scripts/` / `.\\scripts\\` のいずれの形式にも
     一致しない場合や、workflow-template のプレースホルダ
     （`<CI_ENTRYPOINT>` 等）を含む場合は None を返す。`$ ` や `PS>` の
     ようなシェルプロンプトの接頭辞は、コマンド本体の前に取り除く。
+
+    `standalone_bare_command_allowed` は、引数を伴わない素の
+    `orchestune`系コマンド単独行（例: フェンス付きコードブロック内の
+    `orchestune-dag` のみの1行）を「実行文脈が明確なので引数なしでも
+    コマンド呼び出しとみなしてよいか」を制御する。フェンス付きコード
+    ブロックはTrue、地の文中のインラインコードスパンはFalseを渡す
+    ——インラインでは「`orchestune-provision`が起票する」のような、
+    コマンド名ではなくスキル/コンポーネント名としての言及と区別が
+    つかないため、引数を伴う場合のみコマンド呼び出しとみなす。
     """
     candidate = _SHELL_PROMPT_PREFIX.sub("", candidate.strip(), count=1).strip()
     if not candidate or candidate.startswith("#"):
@@ -127,14 +138,10 @@ def _extract_target(candidate: str) -> str | None:
         if script_match:
             target = script_match.group(1)
         else:
-            # 引数を伴わない素の単語（例: 文中で「`orchestune-provision`が
-            # 起票する」のように、コマンド名ではなくスキル/コンポーネント名
-            # として言及しているだけのケース）は誤検知を避けるため対象外と
-            # する。「呼び出し」とみなすのは、後続に何らかの引数がある場合
-            # に限る。
             parts = candidate.split(maxsplit=1)
-            if len(parts) == 2 and _BARE_ENTRY_POINT_PATTERN.match(parts[0]):
-                target = parts[0]
+            if parts and _BARE_ENTRY_POINT_PATTERN.match(parts[0]):
+                if len(parts) == 2 or standalone_bare_command_allowed:
+                    target = parts[0]
 
     if target is None or "<" in target or ">" in target:
         return None
@@ -153,14 +160,14 @@ def _iter_command_targets(markdown_text: str) -> list[tuple[str, str]]:
 
     for block_match in _FENCED_CODE_BLOCK.finditer(markdown_text):
         for raw_line in block_match.group(1).splitlines():
-            target = _extract_target(raw_line)
+            target = _extract_target(raw_line, standalone_bare_command_allowed=True)
             if target is not None:
                 results.append((raw_line.strip(), target))
 
     prose_only = _FENCED_CODE_BLOCK.sub("", markdown_text)
     for span_match in _INLINE_CODE_SPAN.finditer(prose_only):
         span = span_match.group(1)
-        target = _extract_target(span)
+        target = _extract_target(span, standalone_bare_command_allowed=False)
         if target is not None:
             results.append((span.strip(), target))
 
@@ -299,10 +306,36 @@ def test_standalone_bare_mention_without_args_is_not_extracted():
     として誤抽出しない（`orchestune-provision` は実在しない
     `[tool.poetry.scripts]` エントリだが、これはコマンドではなく
     `skills/orchestune-provision/SKILL.md` を指すスキル名としての言及
-    であり、壊れたコマンド参照ではない）。"""
+    であり、壊れたコマンド参照ではない）。この「引数必須」の扱いは
+    地の文中のインラインコードスパンに限る（下のフェンス付きコード
+    ブロックのテストと対になる）。"""
     text = "起票は `orchestune-provision` が担当します。\n"
 
     assert _iter_command_targets(text) == []
+
+
+def test_standalone_bare_command_in_fenced_block_is_validated():
+    """インラインコードスパンとは異なり、フェンス付きコードブロック内に
+    単独で書かれた `orchestune`系コマンドは実行文脈が明確なので、
+    引数がなくても検証対象に含める（リネーム/削除されたエントリポイントが
+    引数なしの単独行で書かれた場合の検出漏れを防ぐ）。"""
+    text = "```bash\norchestune-not-a-real-entrypoint\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets == [
+        ("orchestune-not-a-real-entrypoint", "orchestune-not-a-real-entrypoint")
+    ]
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_standalone_real_command_in_fenced_block_is_accepted():
+    text = "```bash\norchestune-dag\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets == [("orchestune-dag", "orchestune-dag")]
+    assert _command_exists(targets[0][1], _known_poetry_commands())
 
 
 def test_bare_unknown_word_is_not_extracted():
