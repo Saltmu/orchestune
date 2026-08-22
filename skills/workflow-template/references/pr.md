@@ -1,26 +1,26 @@
 # Pull Request Reference (Step 10)
 
-本ドキュメントは、ローカルCI通過後のPull Request（PR）作成手順を定めたリファレンスです。
+This document provides detailed procedures for finalizing and creating Pull Requests (PRs) after passing local CI.
 
 ---
 
-## 10. PR作成手順 (Pull Request Finalization)
+## 10. PR Creation Procedure (Pull Request Finalization)
 
-### ① PR本文ファイルの準備
-プロジェクトのPRテンプレート（例: `.github/pull_request_template.md`）を作業用ファイル（例: `/tmp/pr_body.md`）へコピーし、全項目を記入します。
-- **Walkthrough**: 実施した設計変更・モジュール修正の概要。
-- **再現手順と修正確認**: ステップ3のReproducerの検証結果（新規機能や軽微変更は「該当なし」と記載）。
-- **ベースライン差分**: ステップ4で取得したベースラインとの比較結果（新規リグレッションなし、ベースブランチ由来の failure 有無）。
-- **検証結果**: ローカルCI（`<CI_ENTRYPOINT>`）の合格エビデンス。
+### 1. Preparing the PR Description File
+Copy the project's PR template (e.g. `.github/pull_request_template.md`) to a temporary working file (e.g. `/tmp/pr_body.md`) and complete all sections:
+- **Walkthrough**: Summary of architectural changes and module edits performed.
+- **Reproducer & Fix Confirmation**: Verification results of the Reproducer from Step 3 (state "N/A" for new features or minor changes).
+- **Baseline Diff**: Comparison against the baseline recorded in Step 4 (no new regressions, note any base-branch pre-existing failures).
+- **Verification Evidence**: Evidence that local CI (`<CI_ENTRYPOINT>`) passed.
 
 > [!NOTE]
-> 軽微変更（typoやドキュメント修正のみ）の場合は、Reproducerおよびテスト項目欄に「軽微変更のため該当なし」と明記してスキップします。
+> For minor changes (typo or documentation fixes only), explicitly state "N/A due to minor change" in the Reproducer and test result sections.
 
-### ② PRの送信
-`gh` CLI を使用してPRを作成します。
+### 2. Submitting the PR
+Create the PR using the `gh` CLI:
 ```bash
-gh pr create --title "PRのタイトル" --body-file /tmp/pr_body.md
+gh pr create --title "PR Title" --body-file /tmp/pr_body.md
 ```
-*(注: `gh` CLI が利用できない環境では、GitHub MCP または Web UI から同内容で作成してください。)*
+*(Note: If `gh` CLI is unavailable, submit the same content via GitHub MCP or the Web UI.)*
 
-PR作成が完了したら、発行されたPR番号を記録し、ステップ11（レビューループ）へ進みます。
+Once the PR is created, record the issued PR number and proceed to Step 11 (Review Loop).
