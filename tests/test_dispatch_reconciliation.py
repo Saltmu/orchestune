@@ -27,6 +27,7 @@ from orchestune.dispatch_reconciliation import (
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
     _reconcile_recovery_counters,
+    _resolve_base_branch_for_task,
     _restore_launch_history,
     _self_heal_launch_history,
     _self_heal_run_state,
@@ -1492,3 +1493,76 @@ class TestBaseBranchRedRecovery:
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
         fake_forge.add_label.assert_called_once_with(1, "status:queued")
+
+
+class TestResolveBaseBranchForTask:
+    def test_when_sole_dependency_is_done_returns_origin_main(self, tmp_path):
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=None,
+        )
+        subtask_branch_map = {"task-a": "claude/issue-1-task-a"}
+        done_subtask_ids = {"task-a"}
+
+        base_branch = _resolve_base_branch_for_task(
+            task, config, subtask_branch_map, done_subtask_ids
+        )
+        assert base_branch == "origin/main"
+
+    def test_when_sole_dependency_is_done_with_parent_returns_parent_branch(
+        self, tmp_path
+    ):
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        subtask_branch_map = {"task-a": "claude/issue-1-task-a"}
+        done_subtask_ids = {"task-a"}
+
+        base_branch = _resolve_base_branch_for_task(
+            task, config, subtask_branch_map, done_subtask_ids
+        )
+        assert base_branch == "parent/issue-100"
+
+    def test_when_single_dependency_unresolved_returns_dep_branch(self, tmp_path):
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        subtask_branch_map = {"task-a": "claude/issue-1-task-a"}
+        done_subtask_ids = set()
+
+        base_branch = _resolve_base_branch_for_task(
+            task, config, subtask_branch_map, done_subtask_ids
+        )
+        assert base_branch == "claude/issue-1-task-a"
+
+    def test_when_multiple_dependencies_unresolved_returns_parent_or_main(
+        self, tmp_path
+    ):
+        task = _task(
+            issue_number=3,
+            subtask_id="task-c",
+            depends_on=("task-a", "task-b"),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        subtask_branch_map = {
+            "task-a": "claude/issue-1-task-a",
+            "task-b": "claude/issue-2-task-b",
+        }
+        done_subtask_ids = set()
+
+        base_branch = _resolve_base_branch_for_task(
+            task, config, subtask_branch_map, done_subtask_ids
+        )
+        assert base_branch == "parent/issue-100"

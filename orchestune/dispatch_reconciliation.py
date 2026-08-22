@@ -419,9 +419,14 @@ def _resolve_base_branch_for_task(
     task: Task,
     config: DispatcherConfig,
     subtask_branch_map: dict[str, str] | None = None,
+    done_subtask_ids: set[str] | None = None,
 ) -> str:
-    if task.depends_on and subtask_branch_map:
-        for dep in task.depends_on:
+    if task.depends_on and subtask_branch_map and done_subtask_ids is not None:
+        unresolved_deps = [
+            dep for dep in task.depends_on if dep not in done_subtask_ids
+        ]
+        if len(unresolved_deps) == 1:
+            dep = unresolved_deps[0]
             if dep in subtask_branch_map:
                 return subtask_branch_map[dep]
     if config.parent_issue_number is not None:
@@ -558,6 +563,7 @@ def _handle_base_branch_red_recovery(
     outcomes_by_issue: dict[int, OutcomeRecord | None] = {}
     current_base_shas: dict[int, str | None] = {}
     repo_root = config.worktree_root.parent if config.worktree_root else None
+    done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
 
     for issue in base_branch_red_issues:
         try:
@@ -570,13 +576,12 @@ def _handle_base_branch_red_recovery(
         task = ctx.tasks_by_issue.get(issue.number)
         if task is not None:
             base_branch = _resolve_base_branch_for_task(
-                task, config, ctx.subtask_branch_map
+                task, config, ctx.subtask_branch_map, done_subtask_ids
             )
             current_base_shas[issue.number] = _get_branch_commit_sha(
                 base_branch, repo_root
             )
 
-    done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
     decisions = _decide_base_branch_red_recovery(
         base_branch_red_issues,
         ctx.tasks_by_issue,
