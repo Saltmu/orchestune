@@ -44,8 +44,7 @@ def _extract_frontmatter(content: str) -> dict:
             break
     if end_index == -1:
         return {}
-    frontmatter_yaml = "
-".join(lines[1:end_index])
+    frontmatter_yaml = "\n".join(lines[1:end_index])
     return yaml.safe_load(frontmatter_yaml) or {}
 
 
