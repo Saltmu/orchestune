@@ -173,3 +173,33 @@ class TestParseFromCommentsFailClosed:
             {"body": valid.render(), "created_at": "2026-08-20T00:00:00Z"},
         ]
         assert parse_from_comments(comments) == valid
+
+
+class TestParseFromCommentsSinceFilter:
+    def test_ignores_comments_before_since_timestamp(self):
+        # 2026-08-20T00:00:00Z is timestamp 1787184000.0
+        # 2026-08-21T00:00:00Z is timestamp 1787270400.0
+        # 2026-08-22T00:00:00Z is timestamp 1787356800.0
+        stale_record = OutcomeRecord(result="not-needed", issue=1)
+        fresh_record = OutcomeRecord(result="done", issue=1, pr=2)
+        comments = [
+            {"body": stale_record.render(), "created_at": "2026-08-20T00:00:00Z"},
+            {"body": fresh_record.render(), "created_at": "2026-08-22T00:00:00Z"},
+        ]
+        # since = 2026-08-21T00:00:00Z -> excludes stale_record
+        since_ts = 1787270400.0
+        assert parse_from_comments(comments, since=since_ts) == fresh_record
+
+    def test_returns_none_if_all_comments_are_stale(self):
+        stale_record = OutcomeRecord(result="done", issue=1, pr=2)
+        comments = [
+            {"body": stale_record.render(), "created_at": "2026-08-20T00:00:00Z"}
+        ]
+        since_ts = 1787270400.0  # 2026-08-21T00:00:00Z
+        assert parse_from_comments(comments, since=since_ts) is None
+
+    def test_unparseable_timestamp_is_not_filtered(self):
+        record = OutcomeRecord(result="done", issue=1, pr=2)
+        comments = [{"body": record.render(), "created_at": "invalid-timestamp"}]
+        since_ts = 1787270400.0
+        assert parse_from_comments(comments, since=since_ts) == record

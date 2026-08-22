@@ -12,9 +12,11 @@ from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_gc import (
     _apply_stale_active_entry_discard,
     _decide_stale_active_entry,
+    _rule_not_needed,
     _rule_stale_entry,
 )
 from orchestune.dispatch_state import RunState
+from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
 
 
@@ -179,3 +181,41 @@ class TestRuleStaleEntry:
 
         assert outcome is None
         assert run_state.active_worktrees == {"280": active}
+
+
+class TestRuleNotNeededOutcomeStaleness:
+    def test_ignores_stale_not_needed_outcome_comment(self):
+        active = _active(started_at=1787270400.0)  # 2026-08-21T00:00:00Z
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.resolved_forge.list_comments = lambda issue_num: [  # type: ignore[method-assign]
+            {
+                "body": OutcomeRecord(result="not-needed", issue=280).render(),
+                "created_at": "2026-08-20T00:00:00Z",  # Before started_at
+            }
+        ]
+
+        outcome = _rule_not_needed(ctx, "280", active, task)
+
+        # Stale not-needed comment is ignored, so _rule_not_needed returns None
+        assert outcome is None
+
+    def test_accepts_fresh_not_needed_outcome_comment(self):
+        active = _active(started_at=1787270400.0)  # 2026-08-21T00:00:00Z
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx()
+        ctx.config.resolved_forge.list_comments = lambda issue_num: [  # type: ignore[method-assign]
+            {
+                "body": OutcomeRecord(result="not-needed", issue=280).render(),
+                "created_at": "2026-08-22T00:00:00Z",  # After started_at
+            }
+        ]
+
+        with patch(
+            "orchestune.dispatch_gc._finalize_not_needed_worktree",
+            return_value={"action": "not_needed", "issue_number": 280},
+        ):
+            outcome = _rule_not_needed(ctx, "280", active, task)
+
+        assert outcome is not None
+        assert outcome.completion_event["action"] == "not_needed"

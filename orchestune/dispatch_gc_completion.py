@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -87,7 +88,7 @@ def _decide_completed_worktree_outcome(
                     (active.branch is not None and pr.head_ref == active.branch)
                     or active.issue_number in pr.closes_issue_numbers
                 )
-                and not _is_stale_closed_pr_for_active(pr, active)
+                and not _is_stale_pr_for_active(pr, active)
             ]
             for pr in matching_prs:
                 if pr.number != active.issue_number:
@@ -97,7 +98,7 @@ def _decide_completed_worktree_outcome(
                         pass
         except Exception:
             pass
-        outcome = parse_from_comments(comments)
+        outcome = parse_from_comments(comments, since=active.started_at)
     else:
         outcome = None
 
@@ -325,11 +326,21 @@ def _parse_github_timestamp(value: str) -> float | None:
         return None
 
 
-def _is_stale_closed_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
-    if pr.state != "CLOSED" or active.started_at is None:
+def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
+    if active.started_at is None:
         return False
-    closed_at = _parse_github_timestamp(pr.closed_at)
-    return closed_at is not None and closed_at < active.started_at
+    started_sec = math.floor(active.started_at)
+    if pr.state == "CLOSED":
+        if pr.closed_at:
+            closed_at = _parse_github_timestamp(pr.closed_at)
+            if closed_at is not None and closed_at < started_sec:
+                return True
+        return False
+    if pr.created_at:
+        created_at = _parse_github_timestamp(pr.created_at)
+        if created_at is not None and created_at < started_sec:
+            return True
+    return False
 
 
 def _local_pr_completion_status(
@@ -350,7 +361,7 @@ def _local_pr_completion_status(
                 and handle.issue_number in pr.closes_issue_numbers
             )
         )
-        and not _is_stale_closed_pr_for_active(pr, active)
+        and not _is_stale_pr_for_active(pr, active)
     ]
     if any(pr.state == "MERGED" for pr in matching_prs):
         return "completed"
@@ -372,7 +383,7 @@ def _local_pr_completion_status(
                     all_comments.extend(config.resolved_forge.list_comments(pr_num))
                 except Exception:
                     had_error = True
-        outcome = parse_from_comments(all_comments)
+        outcome = parse_from_comments(all_comments, since=active.started_at)
         if outcome is not None and outcome.result in (
             RESULT_DONE,
             RESULT_NOT_NEEDED,

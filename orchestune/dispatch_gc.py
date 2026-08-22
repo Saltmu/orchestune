@@ -23,7 +23,7 @@ from orchestune.dispatch_gc_completion import (
     _finalize_abandoned_cloud_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
-    _is_stale_closed_pr_for_active,
+    _is_stale_pr_for_active,
     _is_worktree_complete,
     _local_pr_completion_status,
     _parse_github_timestamp,
@@ -71,7 +71,7 @@ __all__ = [
     "_finalize_abandoned_cloud_worktree",
     "_finalize_completed_worktree",
     "_finalize_not_needed_worktree",
-    "_is_stale_closed_pr_for_active",
+    "_is_stale_pr_for_active",
     "_is_worktree_complete",
     "_local_pr_completion_status",
     "_parse_github_timestamp",
@@ -101,12 +101,13 @@ def _rule_not_needed(
     if not has_not_needed_label:
         try:
             comments = ctx.config.resolved_forge.list_comments(active.issue_number)
-            outcome = parse_from_comments(comments)
+            outcome = parse_from_comments(comments, since=active.started_at)
             has_not_needed_outcome = (
                 outcome is not None and outcome.result == RESULT_NOT_NEEDED
             )
         except Exception:
             pass
+
     if not has_not_needed_label and not has_not_needed_outcome:
         return None
     completion_event = _finalize_not_needed_worktree(

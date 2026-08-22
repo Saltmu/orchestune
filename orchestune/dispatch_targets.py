@@ -234,7 +234,7 @@ def _task_pr_completion_status(
                     all_comments.extend(forge.list_comments(pr_num))
                 except Exception:
                     pass
-        outcome = parse_from_comments(all_comments)
+        outcome = parse_from_comments(all_comments, since=handle.started_at)
         if outcome is not None and outcome.result in (
             RESULT_DONE,
             RESULT_NOT_NEEDED,

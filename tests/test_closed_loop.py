@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -140,7 +141,7 @@ class DummyGitHub:
         self.issues: dict[int, IssueRecord] = {}
         self.issue_states: dict[int, str] = {}  # "open" or "closed"
         self.prs: dict[str, PrRecord] = {}  # head_ref -> PrRecord
-        self.comments: dict[int, list[str]] = {}
+        self.comments: dict[int, list[tuple[str, str]]] = {}
 
     def add_issue(self, issue: IssueRecord):
         self.issues[issue.number] = issue
@@ -225,13 +226,14 @@ class DummyGitHub:
 
     def add_comment(self, issue_number: int | str, body: str) -> None:
         num = int(issue_number)
-        self.comments.setdefault(num, []).append(body)
+        now_str = datetime.now(UTC).isoformat()
+        self.comments.setdefault(num, []).append((body, now_str))
 
     def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
         num = int(issue_number)
         return [
-            {"body": body, "created_at": "2026-01-01T00:00:00Z", "author": "bot"}
-            for body in self.comments.get(num, [])
+            {"body": body, "created_at": ts, "author": "bot"}
+            for body, ts in self.comments.get(num, [])
         ]
 
     def list_open_prs(
@@ -518,7 +520,7 @@ def test_closed_loop_flow():
         assert "status:queued" in dummy_github.issues[1].labels
         assert "status:done" not in dummy_github.issues[1].labels
         assert len(dummy_github.comments.get(1, [])) > 0
-        assert "仮マージCIでエラーが検出されたため" in dummy_github.comments[1][-1]
+        assert "仮マージCIでエラーが検出されたため" in dummy_github.comments[1][-1][0]
 
         # ---- Cycle 3: Dispatch Reverted Task (Fix Attempt) ----
         report3 = run_dispatch_cycle(config)
