@@ -42,9 +42,15 @@ def _poetry_script_names() -> frozenset[str]:
 
 # `orchestune-dispatch --parent-issue ...` や `orchestune provision ...` の
 # ように、`poetry run` を付けずプロジェクトのエントリポイントを直接呼び出す
-# 形式で書かれているSKILL.mdもあるため、既知のスクリプト名は素の先頭語も
-# コマンド参照として認識する。
+# 形式で書かれているSKILL.mdもある。この「素の先頭語」を認識する条件を
+# `[tool.poetry.scripts]` の現行内容そのものにしてしまうと、エントリ
+# ポイントが誤字や削除でズレたときに「既知の名前ではない＝コマンド参照とは
+# 認識しない」扱いになり、検証がすり抜けてしまう（レビュー指摘: リネーム/
+# 削除されたエントリポイントが検出されない）。そのため認識自体は
+# `pyproject.toml` の現状に依存しない命名規約（`orchestune` または
+# `orchestune-<name>`）で行い、実在確認は `_command_exists` に委ねる。
 _POETRY_SCRIPT_NAMES = _poetry_script_names()
+_BARE_ENTRY_POINT_PATTERN = re.compile(r"^orchestune(-[a-z0-9]+)*$")
 
 
 def _known_poetry_commands() -> set[str]:
@@ -121,9 +127,14 @@ def _extract_target(candidate: str) -> str | None:
         if script_match:
             target = script_match.group(1)
         else:
-            bare_token = candidate.split(maxsplit=1)[0] if candidate else ""
-            if bare_token in _POETRY_SCRIPT_NAMES:
-                target = bare_token
+            # 引数を伴わない素の単語（例: 文中で「`orchestune-provision`が
+            # 起票する」のように、コマンド名ではなくスキル/コンポーネント名
+            # として言及しているだけのケース）は誤検知を避けるため対象外と
+            # する。「呼び出し」とみなすのは、後続に何らかの引数がある場合
+            # に限る。
+            parts = candidate.split(maxsplit=1)
+            if len(parts) == 2 and _BARE_ENTRY_POINT_PATTERN.match(parts[0]):
+                target = parts[0]
 
     if target is None or "<" in target or ">" in target:
         return None
@@ -282,6 +293,18 @@ def test_bare_project_entry_point_is_extracted():
     assert _command_exists(targets[0][1], _known_poetry_commands())
 
 
+def test_standalone_bare_mention_without_args_is_not_extracted():
+    """`` `orchestune-provision` `` のように、引数を伴わず文中で
+    スキル/コンポーネント名として言及しているだけの単語は、コマンド呼び出し
+    として誤抽出しない（`orchestune-provision` は実在しない
+    `[tool.poetry.scripts]` エントリだが、これはコマンドではなく
+    `skills/orchestune-provision/SKILL.md` を指すスキル名としての言及
+    であり、壊れたコマンド参照ではない）。"""
+    text = "起票は `orchestune-provision` が担当します。\n"
+
+    assert _iter_command_targets(text) == []
+
+
 def test_bare_unknown_word_is_not_extracted():
     """既知のプロジェクトエントリポイント名と一致しない先頭語（例:
     `orchestune.toml` のような設定ファイル名）を誤ってコマンド参照として
@@ -292,9 +315,18 @@ def test_bare_unknown_word_is_not_extracted():
 
 
 def test_missing_bare_entry_point_is_detected():
+    """`orchestune-<name>` 命名規約に合致する素のコマンドは、
+    `[tool.poetry.scripts]` に現在存在するかどうかに関わらず抽出対象と
+    なり、実在しない名前であれば `_command_exists` で検出される
+    （リネーム/削除されたエントリポイントの検出漏れ防止）。"""
     text = "```bash\norchestune-not-a-real-entrypoint --help\n```\n"
 
-    assert _iter_command_targets(text) == []
+    targets = _iter_command_targets(text)
+
+    assert targets == [
+        ("orchestune-not-a-real-entrypoint --help", "orchestune-not-a-real-entrypoint")
+    ]
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
 
 
 def test_python_dash_c_invocation_is_not_validated_as_file():
