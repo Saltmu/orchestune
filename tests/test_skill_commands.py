@@ -514,6 +514,12 @@ def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
     assert "git worktree add" in worktree_content
     assert "worktree/<BRANCH_SLUG>" in worktree_content
     assert "git worktree remove" in worktree_content
+    assert "poetry install" in worktree_content
+    assert "replace('/', '-')" in worktree_content
+
+    if skill_name == "local-ci-developer":
+        assert "Auto-Dispatch" in worktree_content
+        assert "skip this step" in worktree_content.lower()
 
     for reference_name in ("tdd.md", "pr.md", "review-loop.md"):
         reference = (skill_dir / "references" / reference_name).read_text(

@@ -8,12 +8,14 @@ never reuse their branch for the task.
 ## Create and enter the worktree
 
 From the repository root, fetch the current base and create a task-specific
-branch. Replace the placeholders with a safe, unique branch slug.
+branch. Derive `<BRANCH_SLUG>` by applying `replace('/', '-')` to `<BRANCH>` so
+the worktree path stays flat and filesystem-safe.
 
 ```bash
 git fetch origin main
 git worktree add -b <BRANCH> worktree/<BRANCH_SLUG> origin/main
 cd worktree/<BRANCH_SLUG>
+poetry install
 ```
 
 Write `implementation_plan.md`, implement, test, run local CI, commit, push,
