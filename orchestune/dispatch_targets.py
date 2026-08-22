@@ -221,22 +221,25 @@ def _task_pr_completion_status(
 
     open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
     if open_prs:
-        try:
-            all_comments: list[Mapping[str, Any]] = []
-            for pr in open_prs:
-                all_comments.extend(forge.list_comments(pr.number))
-            if handle.issue_number is not None:
-                pr_numbers = {pr.number for pr in open_prs}
-                if handle.issue_number not in pr_numbers:
-                    all_comments.extend(forge.list_comments(handle.issue_number))
-            outcome = parse_from_comments(all_comments)
-            if outcome is not None and outcome.result in (
-                RESULT_DONE,
-                RESULT_NOT_NEEDED,
-            ):
-                return "completed"
-        except Exception:
-            return "pending"
+        all_comments: list[Mapping[str, Any]] = []
+        if handle.issue_number is not None:
+            try:
+                all_comments.extend(forge.list_comments(handle.issue_number))
+            except Exception:
+                pass
+        pr_numbers = {pr.number for pr in open_prs}
+        for pr_num in pr_numbers:
+            if handle.issue_number is None or pr_num != handle.issue_number:
+                try:
+                    all_comments.extend(forge.list_comments(pr_num))
+                except Exception:
+                    pass
+        outcome = parse_from_comments(all_comments)
+        if outcome is not None and outcome.result in (
+            RESULT_DONE,
+            RESULT_NOT_NEEDED,
+        ):
+            return "completed"
         return "pending"
 
     if any(pr.state == "CLOSED" for pr in matching_prs):

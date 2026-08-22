@@ -646,6 +646,45 @@ class TestDecideCompletedWorktreeOutcome:
         assert decision.action == "not_needed"
         assert decision.subtask_id == "task-a"
 
+    def test_ignores_stale_closed_pr_outcome(self):
+        active = _active(started_at=1700000100.0)
+        task = _task()
+        fake_forge = MagicMock()
+        fake_forge.list_comments.side_effect = lambda num: (
+            []
+            if num == 280
+            else [
+                {
+                    "body": OutcomeRecord(result="done", issue=280).render(),
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+        )
+        stale_closed_pr = PrRecord(
+            number=999,
+            head_ref="claude/issue-280-task-a",
+            changed_files=(),
+            state="CLOSED",
+            closed_at="2023-11-14T22:14:00Z",  # Before started_at (1700000100.0 is Nov 14 2023 22:15:00 UTC)
+        )
+        fake_forge.list_prs.return_value = [stale_closed_pr]
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(
+                active, task, forge=fake_forge
+            )
+        # Since the stale PR is ignored and Issue #280 has no comments, it is completed_without_outcome
+        assert decision.action == "completed_without_outcome"
+        assert decision.subtask_id == "task-a"
+
 
 class TestDecideNotNeededDirtyWorktree:
     def test_true_when_dirty(self):

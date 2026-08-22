@@ -167,7 +167,12 @@ class GitHubIssueMixin:
     def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
         """#552: Issue/PRのコメント一覧を取得する。"""
         number = validate_issue_number(issue_number)
-        stdout = self._run(["gh", "issue", "view", str(number), "--json", "comments"])
+        try:
+            stdout = self._run(
+                ["gh", "issue", "view", str(number), "--json", "comments"]
+            )
+        except subprocess.CalledProcessError:
+            stdout = self._run(["gh", "pr", "view", str(number), "--json", "comments"])
         raw = json.loads(stdout)
         comments = raw.get("comments", [])
         return [

@@ -74,26 +74,30 @@ def _decide_completed_worktree_outcome(
     if forge is not None:
         try:
             comments = list(forge.list_comments(active.issue_number))
-            try:
-                prs = forge.list_prs(state="all")
-                matching_prs = [
-                    pr
-                    for pr in prs
-                    if (
-                        (active.branch is not None and pr.head_ref == active.branch)
-                        or active.issue_number in pr.closes_issue_numbers
-                    )
-                ]
-                for pr in matching_prs:
-                    if pr.number != active.issue_number:
-                        comments.extend(forge.list_comments(pr.number))
-            except Exception:
-                pass
-            outcome = parse_from_comments(comments)
         except Exception:
             return CompletedWorktreeDecision(
                 action="completion_skipped_forge_error", subtask_id=subtask_id
             )
+        try:
+            prs = forge.list_prs(state="all")
+            matching_prs = [
+                pr
+                for pr in prs
+                if (
+                    (active.branch is not None and pr.head_ref == active.branch)
+                    or active.issue_number in pr.closes_issue_numbers
+                )
+                and not _is_stale_closed_pr_for_active(pr, active)
+            ]
+            for pr in matching_prs:
+                if pr.number != active.issue_number:
+                    try:
+                        comments.extend(forge.list_comments(pr.number))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        outcome = parse_from_comments(comments)
     else:
         outcome = None
 
@@ -352,25 +356,32 @@ def _local_pr_completion_status(
         return "completed"
     open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
     if open_prs:
-        try:
-            all_comments: list[dict] = []
-            for pr in open_prs:
-                all_comments.extend(config.resolved_forge.list_comments(pr.number))
-            if handle.issue_number is not None:
-                pr_numbers = {pr.number for pr in open_prs}
-                if handle.issue_number not in pr_numbers:
-                    all_comments.extend(
-                        config.resolved_forge.list_comments(handle.issue_number)
-                    )
-            outcome = parse_from_comments(all_comments)
-            if outcome is not None and outcome.result in (
-                RESULT_DONE,
-                RESULT_NOT_NEEDED,
-            ):
-                return "completed"
-        except Exception:
+        all_comments: list[dict] = []
+        had_error = False
+        if handle.issue_number is not None:
+            try:
+                all_comments.extend(
+                    config.resolved_forge.list_comments(handle.issue_number)
+                )
+            except Exception:
+                had_error = True
+        pr_numbers = {pr.number for pr in open_prs}
+        for pr_num in pr_numbers:
+            if handle.issue_number is None or pr_num != handle.issue_number:
+                try:
+                    all_comments.extend(config.resolved_forge.list_comments(pr_num))
+                except Exception:
+                    had_error = True
+        outcome = parse_from_comments(all_comments)
+        if outcome is not None and outcome.result in (
+            RESULT_DONE,
+            RESULT_NOT_NEEDED,
+        ):
+            return "completed"
+        if had_error and outcome is None:
             return "unknown"
         return "pending"
+
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"
