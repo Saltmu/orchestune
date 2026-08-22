@@ -14,6 +14,16 @@ def test_codex_entrypoint_loads_canonical_agent_rules():
     assert "read" in instructions.lower()
 
 
+def test_claude_entrypoint_loads_canonical_agent_rules():
+    entrypoint = REPOSITORY_ROOT / "CLAUDE.md"
+
+    assert entrypoint.is_file()
+    assert not entrypoint.is_symlink()
+    instructions = entrypoint.read_text(encoding="utf-8")
+    assert ".agents/AGENTS.md" in instructions
+    assert "read" in instructions.lower()
+
+
 def test_local_ci_skill_reference_resolves_from_agent_rules():
     agent_rules = REPOSITORY_ROOT / ".agents" / "AGENTS.md"
     instructions = agent_rules.read_text(encoding="utf-8")
@@ -34,7 +44,8 @@ def _extract_frontmatter(content: str) -> dict:
             break
     if end_index == -1:
         return {}
-    frontmatter_yaml = "\n".join(lines[1:end_index])
+    frontmatter_yaml = "
+".join(lines[1:end_index])
     return yaml.safe_load(frontmatter_yaml) or {}
 
 
