@@ -15,7 +15,7 @@
 poetry run python scripts/ci_baseline.py record
 
 # Windows PowerShell
-poetry run python scripts/ci_baseline.py record --ci-command ".\\scripts\\local-ci.ps1"
+poetry run python scripts/ci_baseline.py record --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
 ```
 - この記録は、ステップ9で新規リグレッションとベースブランチ由来の既存失敗を自動判別するために使用されます。
 
@@ -41,9 +41,13 @@ poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
 ## 9. ローカルCIの一括実行とエラー解消
-- ベースライン対応のCI検証を実行します。
+- ベースライン対応のCI検証を実行します（OSに応じてコマンドを選択）：
 ```bash
+# Linux / macOS
 poetry run python scripts/ci_baseline.py check
+
+# Windows PowerShell
+poetry run python scripts/ci_baseline.py check --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
 ```
 - またはOS標準のCIスクリプトを実行します（Linux/macOS: `./scripts/local-ci.sh`、Windows: `.\\scripts\\local-ci.ps1`）。
 
