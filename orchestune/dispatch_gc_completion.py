@@ -123,10 +123,13 @@ def _decide_completed_worktree_outcome(
     if forge is not None:
         outcome_or_err = _fetch_outcome_for_active(active, forge)
         if outcome_or_err == "error":
-            return CompletedWorktreeDecision(
-                action="completion_skipped_forge_error", subtask_id=subtask_id
-            )
-        outcome = outcome_or_err
+            if has_new_commits:
+                return CompletedWorktreeDecision(
+                    action="completion_skipped_forge_error", subtask_id=subtask_id
+                )
+            outcome = None
+        else:
+            outcome = outcome_or_err
     else:
         outcome = None
 
