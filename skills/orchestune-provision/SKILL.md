@@ -15,6 +15,10 @@ output_schema:
 
 This skill takes an **approved `decomposition_plan.md` from the `orchestune` skill** and files each subtask as a GitHub Issue via the `orchestune provision` CLI, wiring up the parent/child and dependency relationships.
 
+> [!NOTE]
+> **User-Facing Response Language**:
+> While this skill instruction is written in English, all user-facing explanations, plans, questions, and responses must use the user's preferred language (e.g., Japanese if the user interacts in Japanese or matches the user's environment). The language of this instruction document must not determine the output language.
+
 ## Trigger conditions
 
 **This is not normally a skill users invoke directly.** The [orchestune skill](../orchestune/SKILL.md) loads it internally as a handoff once a decomposition plan has been approved.
