@@ -9,8 +9,10 @@ resultはdone/not-needed/blockedの3値。blockedはreasonを持つ
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, cast
 
 OUTCOME_MARKER = "<!-- orchestune:outcome -->"
@@ -178,14 +180,26 @@ def _extract_record(body: str) -> OutcomeRecord | None:
     return _record_from_dict(data)
 
 
+def _parse_comment_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
+
+
 def parse_from_comments(
     comments: Sequence[Mapping[str, Any]],
+    since: float | None = None,
 ) -> OutcomeRecord | None:
     """コメント列からoutcomeレコードを復元する。
 
     複数のoutcomeコメントが存在する場合は`created_at`が最大（最新）のものを
-    採用する。マーカー不在・マーカー重複・不正JSON・スキーマ不一致のいずれの
-    場合も例外を送出せず、該当コメントを無視するか全体としてNoneを返す。
+    採用する。`since`が指定された場合、`since`（UNIXエポック秒）より前に投稿された
+    古いコメントは除外する。マーカー不在・マーカー重複・不正JSON・スキーマ不一致の
+    いずれの場合も例外を送出せず、該当コメントを無視するか全体としてNoneを返す。
     """
     latest_created_at: str | None = None
     latest_record: OutcomeRecord | None = None
@@ -193,11 +207,16 @@ def parse_from_comments(
         body = comment.get("body")
         if not isinstance(body, str):
             continue
+        created_at_raw = comment.get("created_at") or comment.get("createdAt")
+        created_at = created_at_raw if isinstance(created_at_raw, str) else ""
+        if since is not None and created_at:
+            ts = _parse_comment_timestamp(created_at)
+            if ts is not None and ts < math.floor(since):
+                continue
+
         record = _extract_record(body)
         if record is None:
             continue
-        created_at = comment.get("created_at")
-        created_at = created_at if isinstance(created_at, str) else ""
         if latest_created_at is None or created_at >= latest_created_at:
             latest_created_at = created_at
             latest_record = record

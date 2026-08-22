@@ -23,7 +23,7 @@ from orchestune.dispatch_gc_completion import (
     _finalize_abandoned_cloud_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
-    _is_stale_closed_pr_for_active,
+    _is_stale_pr_for_active,
     _is_worktree_complete,
     _local_pr_completion_status,
     _parse_github_timestamp,
@@ -52,6 +52,7 @@ from orchestune.dispatch_state import (
     save_run_state,
 )
 from orchestune.models import PrRecord, Usage
+from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
 from orchestune.process_utils import is_process_alive
 
 __all__ = [
@@ -70,7 +71,7 @@ __all__ = [
     "_finalize_abandoned_cloud_worktree",
     "_finalize_completed_worktree",
     "_finalize_not_needed_worktree",
-    "_is_stale_closed_pr_for_active",
+    "_is_stale_pr_for_active",
     "_is_worktree_complete",
     "_local_pr_completion_status",
     "_parse_github_timestamp",
@@ -86,21 +87,35 @@ __all__ = [
 def _rule_not_needed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
-    """#280: status:not-neededラベル検知による即時完了処理。
+    """#280/#552: status:not-neededラベルまたはoutcome(not-needed)検知による即時完了処理。
 
     セッションが「対応不要」と判断した場合、コミット・PRを作らないため
     closingIssuesReferences等の完了シグナルが発生せず、`_rule_completed`
-    （PID/PR存在ベース）は永遠にマッチしない。ラベル検知を最優先の完了
-    シグナルとして扱い、stale判定より先に評価する。
+    （PID/PR存在ベース）は永遠にマッチしない。ラベルまたはoutcome検知を最優先の
+    完了シグナルとして扱い、stale判定より先に評価する。
     """
-    if active_task is None or "status:not-needed" not in active_task.status_labels:
+    has_not_needed_label = (
+        active_task is not None and "status:not-needed" in active_task.status_labels
+    )
+    has_not_needed_outcome = False
+    if not has_not_needed_label:
+        try:
+            comments = ctx.config.resolved_forge.list_comments(active.issue_number)
+            outcome = parse_from_comments(comments, since=active.started_at)
+            has_not_needed_outcome = (
+                outcome is not None and outcome.result == RESULT_NOT_NEEDED
+            )
+        except Exception:
+            pass
+
+    if not has_not_needed_label and not has_not_needed_outcome:
         return None
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
     completed_subtask_id = None
     if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
-        if active_task.subtask_id:
+        if active_task and active_task.subtask_id:
             completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
@@ -402,14 +417,24 @@ def _rule_completed(
             return None
 
     completion_event = _finalize_completed_worktree(
-        completion_active, active_task, ctx.config
+        completion_active,
+        active_task,
+        ctx.config,
+        dispatch_not_needed_review=ctx.not_needed_review_dispatcher,
     )
     action = completion_event["action"]
+    if action == "completion_skipped_forge_error":
+        return None
     if action in ("completed", "escalated_token_limit_exceeded"):
         return _record_completed_worktree(
             ctx, key, completion_active, active_task, completion_event
         )
-    if action == "completed_no_commits":
+    if action in (
+        "completed_no_commits",
+        "completed_without_outcome",
+        "not_needed",
+        "not_needed_review_dispatched",
+    ):
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
     elif action == "completion_skipped_dirty_worktree":

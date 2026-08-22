@@ -38,13 +38,13 @@ stateDiagram-v2
     queued --> blocked_human_review: 重複起動検知\n(_apply_duplicate_skip)
     blocked --> blocked_human_review: 重複起動検知\n(_apply_duplicate_skip)
 
-    in_progress --> done: プロセス終了+新規コミットあり\n(_finalize_completed_worktree)
-    in_progress --> blocked_human_review: 新規コミット無しの完了\n(_finalize_completed_worktree)
+    in_progress --> done: プロセス終了+新規コミットあり+outcome(done)\n(_finalize_completed_worktree)
+    in_progress --> blocked_human_review: outcome不在または新規コミット無しの完了\n(_finalize_completed_worktree)
     in_progress --> blocked_human_review: 依存元PRがCHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: 自動リベース失敗\n(_apply_auto_rebase)
     in_progress --> queued: ゾンビ/タイムアウト検知によるGC\n(_collect_zombies_and_timeouts)
     in_progress --> blocked_human_review: GC回収回数が上限超過\n(_apply_zombie_or_timeout_reclaim)
-    in_progress --> not_needed: status:not-neededラベル検知\n(クローズ or 検証レビュー)
+    in_progress --> not_needed: outcome(not-needed)またはstatus:not-needed検知\n(クローズ or 検証レビュー)
     in_progress --> blocked: staleな帳簿エントリの破棄\n(_apply_stale_active_entry_discard、\nラベル自体は外部で既に変更済み)
 
     done --> queued: Integrator仮マージCI失敗による差し戻し\n(handle_merge_failure)
@@ -87,13 +87,18 @@ stateDiagram-v2
 ### 4. `status:in-progress` → `status:done`（完了）
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_completed_worktree`
 - 条件: エージェントプロセスが終了し、worktreeに未コミットの変更が無く、
-  かつbase_branchに対して実コミットが1件以上ある場合。
+  base_branchに対して実コミットが1件以上あり、かつ完了宣言レコード
+  （`orchestune:outcome`、`result: done`）がPRまたはIssueコメントから
+  確認できた場合。
 
-### 5. `status:in-progress` → `status:blocked-human-review`（空コミット完了）
+### 5. `status:in-progress` → `status:blocked-human-review`（空コミット完了またはoutcome不在）
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_completed_worktree`
 - 条件: プロセスは終了しworktreeもcleanだが、base_branchに対する新規コミットが
-  0件の場合（権限拒否等で実際には何も作業されなかった可能性があるため、
-  自動的な完了・依存タスク昇格を見送る）。
+  0件の場合（空コミット完了、権限拒否等で実際には何も作業されなかった可能性があるため）、
+  または新規コミットが存在しても完了宣言レコード（`orchestune:outcome`）が
+  検出できない場合（outcome不在終了、レビューサイクル未完了や作業途中終了の可能性があるため）。
+  いずれの場合も自動的な完了・依存タスク昇格を見送り、`status:blocked-human-review`へ
+  フェイルクローズに倒す。
 
 ### 6. `status:in-progress` → `status:blocked-human-review`（重複起動検知）
 - 発生元: `orchestune/dispatch_launch.py`の`_apply_duplicate_skip`
@@ -154,11 +159,13 @@ stateDiagram-v2
     （`_apply_dirty_worktree_hold`。#212で導入された保留）
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
-- 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree`
-- 条件: セッションが`status:not-needed`ラベルを付与した場合。クラウド
+- 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree` / `_rule_not_needed`
+- 条件: セッションが完了宣言レコード（`orchestune:outcome`、`result: not-needed`）を残したか、
+  `status:not-needed`ラベルを付与した場合。クラウド
   ルーチンが利用可能なら即座にクローズせず独立検証レビューを起動し
   （`orchestune/integration_coordinator.py`）、レビュー結果に応じて後続
   サイクルでクローズする。ローカル環境では従来通り即座にクローズする。
+
 
 ### 11. `status:done` → `status:queued`（仮マージCI失敗によるロールバック）
 - 発生元: `orchestune/integrator_pr.py`の`handle_merge_failure`

@@ -646,3 +646,82 @@ class TestGetIssue:
         with pytest.raises(ValueError):
             forge.get_issue("1; evil")
         gh_run.assert_not_called()
+
+
+class TestListComments:
+    def test_returns_parsed_and_normalized_comments(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"comments": ['
+            '{"body": "hello world", "createdAt": "2026-01-01T00:00:00Z", "author": {"login": "alice"}},'
+            '{"body": "second comment", "createdAt": "2026-01-02T00:00:00Z", "author": {"login": "bob"}}'
+            "]}"
+        )
+
+        comments = forge.list_comments(42)
+
+        assert comments == [
+            {
+                "body": "hello world",
+                "created_at": "2026-01-01T00:00:00Z",
+                "author": "alice",
+            },
+            {
+                "body": "second comment",
+                "created_at": "2026-01-02T00:00:00Z",
+                "author": "bob",
+            },
+        ]
+        called_args = gh_run.call_args.args[0]
+        assert called_args == ["gh", "issue", "view", "42", "--json", "comments"]
+
+    def test_returns_empty_list_when_no_comments(self, forge: GitHubForge, gh_run):
+        gh_run.stdout('{"comments": []}')
+
+        assert forge.list_comments(42) == []
+
+    def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.list_comments("invalid; injection")
+        gh_run.assert_not_called()
+
+    def test_falls_back_to_pr_view_when_issue_view_fails(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.side_effect = [
+            subprocess.CalledProcessError(
+                1,
+                ["gh", "issue", "view", "101", "--json", "comments"],
+                stderr="GraphQL: Could not resolve to an issue with the number of 101.",
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"comments": [{"body": "pr comment", "createdAt": "2026-01-01T00:00:00Z", "author": {"login": "carol"}}]}',
+            ),
+        ]
+
+        comments = forge.list_comments(101)
+
+        assert comments == [
+            {
+                "body": "pr comment",
+                "created_at": "2026-01-01T00:00:00Z",
+                "author": "carol",
+            }
+        ]
+        assert gh_run.call_args_list[0].args[0] == [
+            "gh",
+            "issue",
+            "view",
+            "101",
+            "--json",
+            "comments",
+        ]
+        assert gh_run.call_args_list[1].args[0] == [
+            "gh",
+            "pr",
+            "view",
+            "101",
+            "--json",
+            "comments",
+        ]

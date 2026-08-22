@@ -20,6 +20,7 @@ from orchestune.dispatch_targets import (
     LocalProcessDispatchTarget,
 )
 from orchestune.models import Task, Usage
+from orchestune.outcome_record import OutcomeRecord
 
 
 class _DummyDispatchTarget(DispatchTarget):
@@ -413,7 +414,13 @@ class TestTaskTokenLimitEscalation:
             created_at="2026-01-01T00:00:00+00:00",
         )
         forge = MagicMock()
+        outcome = OutcomeRecord(result="done", issue=42)
+        forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        forge.list_prs.return_value = []
         target = MagicMock()
+
         target.collect_usage.return_value = Usage(
             input_tokens=15000,
             output_tokens=5000,
