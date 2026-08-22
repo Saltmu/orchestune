@@ -48,6 +48,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator_steps",
             "integrator_types",
             "parent_completion",
+            "provisioning_flow",
         }
     ),
     2: frozenset(
@@ -83,6 +84,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "not_needed_review_state",
             "status_snapshot",
             "symbol_verification",
+            "provisioning_parent",
+            "provisioning_plan",
+            "provisioning_rendering",
+            "provisioning_subtasks",
         }
     ),
     1: frozenset({"forge", "forge_admin", "forge_issues", "forge_prs", "git_cli"}),
