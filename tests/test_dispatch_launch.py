@@ -972,6 +972,47 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         # 報告が失敗してもクオータは解放済み（次サイクルで再試行できる）
         assert launch_history_from_body(bodies["current"]) == []
 
+    def test_releases_the_reservation_when_launch_raises_unexpected_exception(
+        self, tmp_path
+    ):
+        """#568: create_worktree_and_launch 自体が予期せぬ例外（OSErrorやクラッシュ等）
+        を送出した場合でも、try/finally (コンテキストマネージャ) により確実に予約が解放される。
+        """
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
+            current=body
+        )
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with patch(
+            "orchestune.dispatch_launch.create_worktree_and_launch",
+            side_effect=RuntimeError("unexpected crash during worktree creation"),
+        ):
+            with pytest.raises(
+                RuntimeError, match="unexpected crash during worktree creation"
+            ):
+                _apply_task_launches(plans, RunState(active_worktrees={}), now, config)
+
+        # 予期せぬ例外で脱出しても、finally でクオータは解放される
+        assert launch_history_from_body(bodies["current"]) == []
+
     def test_keeps_the_reservation_when_launch_succeeds(self, tmp_path):
         """成功時は当然、予約を残す（解放処理が誤って消さないこと）。"""
         from unittest.mock import MagicMock
@@ -1298,3 +1339,117 @@ depends_on:
 
         assert eligible_tasks == []
         assert base_branches == {}
+
+
+class TestLaunchReservationContextManager:
+    """#568: _launch_reservation コンテキストマネージャ単体の構造的保証を検証する。"""
+
+    def test_launch_reservation_preserves_slot_when_committed(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
+            current=body
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with _launch_reservation(now, config) as commit:
+            assert launch_history_from_body(bodies["current"]) == [now]
+            commit()
+
+        assert launch_history_from_body(bodies["current"]) == [now]
+
+    def test_launch_reservation_releases_slot_when_not_committed(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
+            current=body
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with _launch_reservation(now, config):
+            assert launch_history_from_body(bodies["current"]) == [now]
+            # commit is not called
+
+        assert launch_history_from_body(bodies["current"]) == []
+
+    def test_launch_reservation_releases_slot_on_exception(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
+            current=body
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with pytest.raises(ValueError, match="simulated failure"):
+            with _launch_reservation(now, config):
+                assert launch_history_from_body(bodies["current"]) == [now]
+                raise ValueError("simulated failure")
+
+        assert launch_history_from_body(bodies["current"]) == []
+
+    def test_launch_reservation_yields_none_when_persist_fails(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = RuntimeError("transient GitHub error")
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with _launch_reservation(now, config, issue_number=1) as commit:
+            assert commit is None
+
+        assert launch_history_from_body(bodies["current"]) == []

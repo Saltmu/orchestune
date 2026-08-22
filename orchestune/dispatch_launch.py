@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -366,6 +367,42 @@ def _release_launch_reservation(now: float, config: DispatcherConfig) -> None:
         )
 
 
+@contextmanager
+def _launch_reservation(
+    now: float, config: DispatcherConfig, issue_number: int | None = None
+) -> Iterator[Callable[[], None] | None]:
+    """#568: 親Issueの起動履歴予約を構造的に管理するコンテキストマネージャ。
+
+    起動試行前に予約を書き込み、起動が成功して`commit()`が明示的に呼ばれなかった場合は、
+    例外送出や`continue`による脱出時にも`finally`節で確実に予約を解放する。
+    予約自体の失敗時は警告を出力してNoneをyieldし、呼び出し元がスキップできるようにする。
+    """
+    try:
+        _persist_launch_history(now, config)
+    except Exception as e:
+        target = f"issue #{issue_number}" if issue_number is not None else "task"
+        print(
+            f"Warning: skipping launch of {target}: failed to "
+            f"reserve a launch slot in parent issue "
+            f"#{config.parent_issue_number}: {e}",
+            file=sys.stderr,
+        )
+        yield None
+        return
+
+    committed = False
+
+    def commit() -> None:
+        nonlocal committed
+        committed = True
+
+    try:
+        yield commit
+    finally:
+        if not committed:
+            _release_launch_reservation(now, config)
+
+
 def _apply_task_launches(
     plans: list[TaskLaunchPlan],
     run_state: RunState,
@@ -398,118 +435,106 @@ def _apply_task_launches(
         # （安全側の非対称）。予約に失敗したタスクは起動せずqueuedのまま残し、
         # 次サイクルで再試行する（fail-closed）。
         #
-        # なお`active_worktrees`側のローカル先行順序（後段のsave_run_state →
-        # ラベル遷移）とは別の関心事: あちらは「GitHub側が確定してローカルが空」
-        # という検出不能な非対称を避けるためのもの。
-        try:
-            _persist_launch_history(now, config)
-        except Exception as e:
-            print(
-                f"Warning: skipping launch of issue #{task.issue_number}: failed to "
-                f"reserve a launch slot in parent issue "
-                f"#{config.parent_issue_number}: {e}",
-                file=sys.stderr,
+        # #568: 予約・起動試行・解放のライフサイクルを `_launch_reservation`
+        # コンテキストマネージャで構造的に保護する。
+        with _launch_reservation(
+            now, config, issue_number=task.issue_number
+        ) as commit_reservation:
+            if commit_reservation is None:
+                continue
+
+            launch = create_worktree_and_launch(
+                task,
+                plan.branch_name,
+                config.worktree_root,
+                config.dispatch_target,
+                apply=True,
+                base_branch=plan.base_branch_for_launch,
             )
-            continue
+            if not launch.launched:
+                # エージェントは1つも起動していないためクオータを消費していない。
+                # 予約は _launch_reservation の finally 節で自動的に解放される（#568）。
+                # GitHubへの報告処理がforgeエラーで例外を送出しても、finally により
+                # 解放が確実に実行される。
+                old_labels = tuple(
+                    label
+                    for label in ("status:queued", "status:blocked")
+                    if label in task.status_labels
+                )
+                if launch.validation_error:
+                    transition_status_label(
+                        config.resolved_forge,
+                        task.issue_number,
+                        "status:blocked-human-review",
+                        old_labels,
+                    )
+                    config.resolved_forge.add_comment(
+                        task.issue_number,
+                        f"ブランチ名またはsubtask_idが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
+                        f"エラー内容:\n```\n{launch.error_message}\n```",
+                    )
+                else:
+                    transition_status_label(
+                        config.resolved_forge,
+                        task.issue_number,
+                        "status:blocked",
+                        old_labels,
+                    )
+                    config.resolved_forge.add_comment(
+                        task.issue_number,
+                        f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
+                        f"エラー内容:\n```\n{launch.error_message}\n```",
+                    )
+                continue
 
-        launch = create_worktree_and_launch(
-            task,
-            plan.branch_name,
-            config.worktree_root,
-            config.dispatch_target,
-            apply=True,
-            base_branch=plan.base_branch_for_launch,
-        )
-        if not launch.launched:
-            # エージェントは1つも起動していないためクオータを消費していない。
-            # 予約を解放しないと、この失敗1件が同じ親配下の全タスクを
-            # 1ウィンドウぶんブロックしてしまう（#519レビュー4巡目 P2）。
-            #
-            # 解放はGitHubへの報告（transition_status_label / add_comment）
-            # より**先**に行う。報告は一時的なforgeエラーで送出しうるため、
-            # 後ろに置くと解放へ到達せず予約が漏れる（#519レビュー7巡目 P2）。
-            # 逆順にしても危険は無い: 解放自体は失敗を握りつぶすため報告へ
-            # 必ず到達し、また解放とラベル/コメントの間にクラッシュしても
-            # 残るのは「起動していないのにstatus:queuedのまま」という、
-            # 次サイクルが通常のキュー投入として再評価できる状態である。
-            _release_launch_reservation(now, config)
-            old_labels = tuple(
-                label
-                for label in ("status:queued", "status:blocked")
-                if label in task.status_labels
+            commit_reservation()
+
+            # run_stateへの登録・永続化を先に行い、GitHubラベルの更新は後で行う。
+            # 起動(create_worktree_and_launch)は既に成功しているため、この順序なら
+            # この後でクラッシュしても「run_stateには記録済みだがGitHubラベルは
+            # まだstatus:queuedのまま」という、次回サイクルの冒頭でラベルを見て
+            # 機械的に検出・破棄できる非対称にしかならない（逆順だと「GitHub側は
+            # 確定・run_state側は空」という検出不能な非対称になってしまう）。
+            # #262レビュー対応: サイクル共通の`now`やworktree準備（prune/backup/add）
+            # 開始前の時刻を`started_at`に使うと、実際の起動（cloud routine fire等）
+            # より前の時刻になり、その間に作成された無関係な既存PRを新sessionの
+            # 成果物と誤認しうる。`create_worktree_and_launch`が
+            # dispatch_target.launch()呼び出し直前に取得した時刻を使う。
+            run_state.active_worktrees[str(task.issue_number)] = ActiveWorktree(
+                issue_number=task.issue_number,
+                branch=plan.branch_name,
+                worktree_path=launch.worktree_path,
+                pid=launch.pid,
+                started_at=launch.dispatch_started_at or now,
+                declared_footprint=task.footprint,
+                external_id=launch.external_id,
+                external_url=launch.external_url,
+                base_branch=plan.base_branch_for_state,
             )
-            if launch.validation_error:
-                transition_status_label(
-                    config.resolved_forge,
-                    task.issue_number,
-                    "status:blocked-human-review",
-                    old_labels,
-                )
-                config.resolved_forge.add_comment(
-                    task.issue_number,
-                    f"ブランチ名またはsubtask_idが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
-                    f"エラー内容:\n```\n{launch.error_message}\n```",
-                )
-            else:
-                transition_status_label(
-                    config.resolved_forge,
-                    task.issue_number,
-                    "status:blocked",
-                    old_labels,
-                )
-                config.resolved_forge.add_comment(
-                    task.issue_number,
-                    f"Git worktreeの作成またはエージェントの起動に失敗しました。\n"
-                    f"エラー内容:\n```\n{launch.error_message}\n```",
-                )
-            continue
+            run_state.launch_history.append(now)
+            save_run_state(
+                run_state,
+                config.run_state_path,
+                now=now,
+                launch_window_seconds=config.window_seconds,
+                open_prs=open_prs,
+            )
 
-        # run_stateへの登録・永続化を先に行い、GitHubラベルの更新は後で行う。
-        # 起動(create_worktree_and_launch)は既に成功しているため、この順序なら
-        # この後でクラッシュしても「run_stateには記録済みだがGitHubラベルは
-        # まだstatus:queuedのまま」という、次回サイクルの冒頭でラベルを見て
-        # 機械的に検出・破棄できる非対称にしかならない（逆順だと「GitHub側は
-        # 確定・run_state側は空」という検出不能な非対称になってしまう）。
-        # #262レビュー対応: サイクル共通の`now`やworktree準備（prune/backup/add）
-        # 開始前の時刻を`started_at`に使うと、実際の起動（cloud routine fire等）
-        # より前の時刻になり、その間に作成された無関係な既存PRを新sessionの
-        # 成果物と誤認しうる。`create_worktree_and_launch`が
-        # dispatch_target.launch()呼び出し直前に取得した時刻を使う。
-        run_state.active_worktrees[str(task.issue_number)] = ActiveWorktree(
-            issue_number=task.issue_number,
-            branch=plan.branch_name,
-            worktree_path=launch.worktree_path,
-            pid=launch.pid,
-            started_at=launch.dispatch_started_at or now,
-            declared_footprint=task.footprint,
-            external_id=launch.external_id,
-            external_url=launch.external_url,
-            base_branch=plan.base_branch_for_state,
-        )
-        run_state.launch_history.append(now)
-        save_run_state(
-            run_state,
-            config.run_state_path,
-            now=now,
-            launch_window_seconds=config.window_seconds,
-            open_prs=open_prs,
-        )
+            # #381: status:in-progressを先にadd、旧ラベルは後でremoveする。この順序
+            # なら、ラベル更新の途中でクラッシュしてもIssueは必ずいずれかの
+            # status:*ラベルを持ち続ける。
+            transition_status_label(
+                config.resolved_forge,
+                task.issue_number,
+                "status:in-progress",
+                (
+                    label
+                    for label in ("status:queued", "status:blocked")
+                    if label in task.status_labels
+                ),
+            )
 
-        # #381: status:in-progressを先にadd、旧ラベルは後でremoveする。この順序
-        # なら、ラベル更新の途中でクラッシュしてもIssueは必ずいずれかの
-        # status:*ラベルを持ち続ける。
-        transition_status_label(
-            config.resolved_forge,
-            task.issue_number,
-            "status:in-progress",
-            (
-                label
-                for label in ("status:queued", "status:blocked")
-                if label in task.status_labels
-            ),
-        )
-
-        actually_selected.append(task)
+            actually_selected.append(task)
 
     save_run_state(
         run_state,
