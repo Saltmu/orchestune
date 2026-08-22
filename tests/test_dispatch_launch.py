@@ -1428,3 +1428,28 @@ class TestLaunchReservationContextManager:
                 raise ValueError("simulated failure")
 
         assert launch_history_from_body(bodies["current"]) == []
+
+    def test_launch_reservation_yields_none_when_persist_fails(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.issue_parsing import launch_history_from_body
+
+        now = 5_000_000.0
+        bodies = {"current": "EPIC body"}
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body=bodies["current"])
+        forge.update_issue_body.side_effect = RuntimeError("transient GitHub error")
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            parent_issue_number=100,
+            forge=forge,
+        )
+
+        with _launch_reservation(now, config, issue_number=1) as commit:
+            assert commit is None
+
+        assert launch_history_from_body(bodies["current"]) == []

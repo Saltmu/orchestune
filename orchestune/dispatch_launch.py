@@ -369,16 +369,27 @@ def _release_launch_reservation(now: float, config: DispatcherConfig) -> None:
 
 @contextmanager
 def _launch_reservation(
-    now: float, config: DispatcherConfig
-) -> Iterator[Callable[[], None]]:
+    now: float, config: DispatcherConfig, issue_number: int | None = None
+) -> Iterator[Callable[[], None] | None]:
     """#568: 親Issueの起動履歴予約を構造的に管理するコンテキストマネージャ。
 
     起動試行前に予約を書き込み、起動が成功して`commit()`が明示的に呼ばれなかった場合は、
     例外送出や`continue`による脱出時にも`finally`節で確実に予約を解放する。
-    これにより、報告処理（`transition_status_label`等）のforge例外やコード配置順序の
-    変更による予約漏れを構造的に防止する。
+    予約自体の失敗時は警告を出力してNoneをyieldし、呼び出し元がスキップできるようにする。
     """
-    _persist_launch_history(now, config)
+    try:
+        _persist_launch_history(now, config)
+    except Exception as e:
+        target = f"issue #{issue_number}" if issue_number is not None else "task"
+        print(
+            f"Warning: skipping launch of {target}: failed to "
+            f"reserve a launch slot in parent issue "
+            f"#{config.parent_issue_number}: {e}",
+            file=sys.stderr,
+        )
+        yield None
+        return
+
     committed = False
 
     def commit() -> None:
@@ -424,21 +435,14 @@ def _apply_task_launches(
         # （安全側の非対称）。予約に失敗したタスクは起動せずqueuedのまま残し、
         # 次サイクルで再試行する（fail-closed）。
         #
-        # #568: 予約成功後の起動試行・解放ライフサイクルを try/finally で保護し、
-        # 起動未完了時の解放（_release_launch_reservation）を構造的に保証する。
-        try:
-            _persist_launch_history(now, config)
-        except Exception as e:
-            print(
-                f"Warning: skipping launch of issue #{task.issue_number}: failed to "
-                f"reserve a launch slot in parent issue "
-                f"#{config.parent_issue_number}: {e}",
-                file=sys.stderr,
-            )
-            continue
+        # #568: 予約・起動試行・解放のライフサイクルを `_launch_reservation`
+        # コンテキストマネージャで構造的に保護する。
+        with _launch_reservation(
+            now, config, issue_number=task.issue_number
+        ) as commit_reservation:
+            if commit_reservation is None:
+                continue
 
-        reservation_committed = False
-        try:
             launch = create_worktree_and_launch(
                 task,
                 plan.branch_name,
@@ -449,7 +453,7 @@ def _apply_task_launches(
             )
             if not launch.launched:
                 # エージェントは1つも起動していないためクオータを消費していない。
-                # 予約は finally 節で自動的に解放される（#568）。
+                # 予約は _launch_reservation の finally 節で自動的に解放される（#568）。
                 # GitHubへの報告処理がforgeエラーで例外を送出しても、finally により
                 # 解放が確実に実行される。
                 old_labels = tuple(
@@ -483,7 +487,7 @@ def _apply_task_launches(
                     )
                 continue
 
-            reservation_committed = True
+            commit_reservation()
 
             # run_stateへの登録・永続化を先に行い、GitHubラベルの更新は後で行う。
             # 起動(create_worktree_and_launch)は既に成功しているため、この順序なら
@@ -531,9 +535,6 @@ def _apply_task_launches(
             )
 
             actually_selected.append(task)
-        finally:
-            if not reservation_committed:
-                _release_launch_reservation(now, config)
 
     save_run_state(
         run_state,
