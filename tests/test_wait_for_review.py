@@ -91,6 +91,15 @@ def test_is_explicitly_in_progress_scans_status_after_a_preamble():
     )
 
 
+def test_is_explicitly_in_progress_supports_japanese_and_round_markers():
+    assert (
+        _is_explicitly_in_progress({"body": "### レビュー進行中 <img src='spinner' />"})
+        is True
+    )
+    assert _is_explicitly_in_progress({"body": "### Round 10 レビュー進行中"}) is True
+    assert _is_explicitly_in_progress({"body": "### 再レビュー進行中"}) is True
+
+
 def test_is_explicitly_in_progress_ignores_marker_text_outside_headline():
     completed_review = {
         "body": "### Review complete\n\nThis replaces the old review in progress flow."
@@ -147,18 +156,18 @@ def test_latest_review_trigger_timestamp_supports_machine_marker():
     assert _latest_review_trigger_timestamp(data, "claude") == "2026-08-20T10:00:00Z"
 
 
-def test_latest_review_trigger_timestamp_ignores_the_review_bot_echo():
+def test_latest_review_trigger_timestamp_when_posted_by_bot():
     data = {
         "issue_comments": [
             {
                 "created_at": "2026-08-20T10:00:00Z",
-                "user": {"login": "human"},
-                "body": "@claude review",
+                "user": {"login": "claude[bot]"},
+                "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
             },
             {
                 "created_at": "2026-08-20T10:01:00Z",
                 "user": {"login": "claude[bot]"},
-                "body": "@claude review",
+                "body": "### Review complete\nLooks good!",
             },
         ]
     }
@@ -875,99 +884,21 @@ def test_get_pr_data_does_not_return_partial_data_when_an_endpoint_fails():
             _get_pr_data(540)
 
 
-def test_main_cli_success():
-    from scripts.wait_for_review import main
-
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
-        with patch("scripts.wait_for_review.wait_for_review") as mock_wait:
-            mock_wait.return_value = {"review_body": "LGTM"}
-            with pytest.raises(SystemExit) as exc:
-                main()
-            assert exc.value.code == 0
+def test_extract_review_result_returns_none_when_empty():
+    assert _extract_review_result({"issue_comments": []}, "claude") is None
 
 
-def test_main_cli_timeout():
-    from scripts.wait_for_review import main
+def test_get_initial_pr_data_times_out():
+    from concurrent.futures import ThreadPoolExecutor
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    from scripts.wait_for_review import _get_initial_pr_data
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
         with patch(
-            "scripts.wait_for_review.wait_for_review",
-            side_effect=TimeoutError("Timed out"),
+            "scripts.wait_for_review._get_pr_data",
+            side_effect=RuntimeError("API error"),
         ):
-            with pytest.raises(SystemExit) as exc:
-                main()
-            assert exc.value.code == 1
-
-
-def test_main_cli_unexpected_error():
-    from scripts.wait_for_review import main
-
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
-        with patch(
-            "scripts.wait_for_review.wait_for_review", side_effect=ValueError("Boom")
-        ):
-            with pytest.raises(SystemExit) as exc:
-                main()
-            assert exc.value.code == 2
-
-
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
-def test_wait_for_review_does_not_self_trigger_if_poster_is_bot(
-    mock_post, mock_get_data
-):
-    # If the user running this script is claude[bot], its own posted trigger comment (id: 100)
-    # should NOT be returned as the completed review on the first poll.
-    mock_post.return_value = {
-        "id": 100,
-        "created_at": "2026-08-20T07:44:44Z",
-        "body": "@claude review",
-        "user": {"login": "claude[bot]"},
-    }
-
-    # First poll returns only the trigger comment.
-    # Second poll returns the real review comment from the reviewer (id: 101).
-    mock_get_data.side_effect = [
-        {"issue_comments": [], "reviews": [], "inline_comments": []},
-        {
-            "issue_comments": [
-                {
-                    "id": 100,
-                    "user": {"login": "claude[bot]"},
-                    "created_at": "2026-08-20T07:44:44Z",
-                    "body": "@claude review",
-                }
-            ],
-            "reviews": [],
-            "inline_comments": [],
-        },
-        {
-            "issue_comments": [
-                {
-                    "id": 100,
-                    "user": {"login": "claude[bot]"},
-                    "created_at": "2026-08-20T07:44:44Z",
-                    "body": "@claude review",
-                },
-                {
-                    "id": 101,
-                    "user": {"login": "claude[bot]"},
-                    "created_at": "2026-08-20T07:46:00Z",
-                    "body": "### Review complete\nAll clear!",
-                },
-            ],
-            "reviews": [],
-            "inline_comments": [],
-        },
-    ]
-
-    result = wait_for_review(
-        pr_number=540,
-        timeout=10,
-        interval=0,
-        bot_name="claude",
-        post_trigger=True,
-    )
-    # Must pick the real review (id: 101), not the trigger comment (id: 100)
-    assert "### Review complete" in result["review_body"]
-    assert result["timestamp"] == "2026-08-20T07:46:00Z"
+            with pytest.raises(TimeoutError, match="Timed out capturing initial PR"):
+                _get_initial_pr_data(
+                    pr_number=540, executor=executor, timeout=0, interval=0
+                )

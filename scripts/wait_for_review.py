@@ -9,13 +9,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+# Exit codes contract
+EXIT_NO_FINDINGS = 0  # No blocking findings / Clean (LGTM / All checks passed)
+EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
+EXIT_FINDINGS_PRESENT = 10  # Findings present / Blocking issues or inline comments
+EXIT_IN_PROGRESS = 11  # Review in progress / Working state
+EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded
+EXIT_TIMEOUT = 20  # Timeout waiting for review activity
+EXIT_UNDETERMINED = 30  # Undetermined / Ambiguous (Delegate to LLM context analysis)
+
 GH_COMMAND_TIMEOUT_SECONDS = 30
+
+
+class MaxRoundsExceededError(RuntimeError):
+    """Raised when the maximum number of review rounds is exceeded."""
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -80,11 +95,67 @@ def _review_trigger_marker(bot_name: str) -> str:
     return f"<!-- orchestune:review-trigger bot={bot_name.lower()} -->"
 
 
-def _mark_review_trigger(body: str, bot_name: str) -> str:
-    marker = _review_trigger_marker(bot_name)
-    if marker in body.lower():
-        return body
-    return f"{body.rstrip()}\n\n{marker}"
+def _review_round_marker(round_num: int) -> str:
+    return f"<!-- orchestune:review-round {round_num} -->"
+
+
+def _parse_review_round_marker(body: str) -> int | None:
+    match = re.search(
+        r"<!--\s*orchestune:review-round\s+(\d+)\s*-->", body, re.IGNORECASE
+    )
+    return int(match.group(1)) if match else None
+
+
+def _is_trigger_comment(
+    item: dict[str, Any], bot_name: str, round_num: int | None = None
+) -> bool:
+    body = item.get("body") or ""
+    body_lower = body.lower()
+    marker = _review_trigger_marker(bot_name).lower()
+    trigger_line = f"@{bot_name.lower()} review"
+
+    is_trigger = marker in body_lower or any(
+        line.strip().lower() == trigger_line for line in body.splitlines()
+    )
+    if not is_trigger:
+        return False
+    if round_num is not None:
+        return _parse_review_round_marker(body) == round_num
+    return True
+
+
+def _get_latest_review_round(
+    data: dict[str, list[dict[str, Any]]], bot_name: str | None = None
+) -> int:
+    rounds: list[int] = []
+    for item in data.get("issue_comments", []):
+        if bot_name and not _is_trigger_comment(item, bot_name):
+            continue
+        round_num = _parse_review_round_marker(item.get("body") or "")
+        if round_num is not None:
+            rounds.append(round_num)
+    return max(rounds, default=0)
+
+
+def _find_existing_trigger_comment(
+    data: dict[str, list[dict[str, Any]]], bot_name: str, round_num: int
+) -> dict[str, Any] | None:
+    for item in data.get("issue_comments", []):
+        if _is_trigger_comment(item, bot_name, round_num=round_num):
+            return item
+    return None
+
+
+def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None) -> str:
+    trigger_marker = _review_trigger_marker(bot_name)
+    result = body
+    if trigger_marker not in result.lower():
+        result = f"{result.rstrip()}\n\n{trigger_marker}"
+    if round_num is not None:
+        round_marker = _review_round_marker(round_num)
+        if round_marker not in result.lower():
+            result = f"{result.rstrip()}\n{round_marker}"
+    return result
 
 
 def post_review_trigger(
@@ -92,6 +163,7 @@ def post_review_trigger(
     bot_name: str = "claude",
     body: str | None = None,
     body_file: str | None = None,
+    round_num: int = 1,
 ) -> dict[str, Any]:
     if body_file:
         with open(body_file, encoding="utf-8") as f:
@@ -100,7 +172,7 @@ def post_review_trigger(
         comment_body = body.strip()
     else:
         comment_body = f"@{bot_name} review"
-    comment_body = _mark_review_trigger(comment_body, bot_name)
+    comment_body = _mark_review_trigger(comment_body, bot_name, round_num=round_num)
 
     stdout = _run_gh(
         [
@@ -233,16 +305,10 @@ def _latest_bot_summary_item(
 def _latest_review_trigger_timestamp(
     data: dict[str, list[dict[str, Any]]], bot_name: str
 ) -> str:
-    trigger_line = f"@{bot_name.lower()} review"
-    marker = _review_trigger_marker(bot_name)
     trigger_timestamps = [
         item.get("created_at") or ""
         for item in data.get("issue_comments", [])
-        if not _is_bot_user((item.get("user") or {}).get("login", ""), bot_name)
-        and (
-            marker in (body := (item.get("body") or "")).lower()
-            or any(line.strip().lower() == trigger_line for line in body.splitlines())
-        )
+        if _is_trigger_comment(item, bot_name)
     ]
     return max(trigger_timestamps, default="")
 
@@ -265,12 +331,25 @@ def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
         "re-review in progress",
         "claude is reviewing this pr",
         "codex is reviewing this pr",
+        "レビュー進行中",
+        "再レビュー進行中",
     )
     is_task_progress = _has_unfinished_task_list(body)
-    return is_task_progress or any(line in markers for line in status_lines)
+    has_marker = any(
+        line in markers or bool(re.match(r"^round\s+\d+\s+レビュー進行中$", line))
+        for line in status_lines
+    )
+    return is_task_progress or has_marker
 
 
 def _has_unfinished_task_list(body: str) -> bool:
+    in_completed_summary = "### review complete" in body.lower()
+    if in_completed_summary:
+        return False
+    if "view job run" in body.lower() and any(
+        line.strip().startswith("- [ ]") for line in body.splitlines()
+    ):
+        return True
     in_tasks_section = False
     for line in body.splitlines():
         stripped_line = line.strip()
@@ -278,7 +357,9 @@ def _has_unfinished_task_list(body: str) -> bool:
             heading = stripped_line.lstrip("#").strip().lower()
             if in_tasks_section:
                 return False
-            in_tasks_section = heading == "tasks"
+            in_tasks_section = (
+                heading == "tasks" or "進行中" in heading or "in progress" in heading
+            )
         elif in_tasks_section and stripped_line.startswith("- [ ]"):
             return True
     return False
@@ -364,22 +445,239 @@ def _get_initial_pr_data(
     executor: ThreadPoolExecutor,
     timeout: int,
     interval: int,
+    max_retries: int = 1,
 ) -> dict[str, list[dict[str, Any]]]:
     initial_fetch_start = time.time()
+    retries = 0
     while True:
         try:
             return _get_pr_data(pr_number, executor=executor)
         except Exception as e:
+            retries += 1
             print(
                 f"Warning: Error capturing initial PR review data: {e}",
                 file=sys.stderr,
             )
-            if time.time() - initial_fetch_start >= timeout:
+            if retries > max_retries or (time.time() - initial_fetch_start >= timeout):
                 raise TimeoutError(
                     f"Timed out capturing initial PR review data for PR #{pr_number} "
-                    f"after {timeout}s."
+                    f"after {timeout}s ({retries} retry attempts)."
                 ) from e
             time.sleep(interval)
+
+
+def _evaluate_marker_layer(body: str) -> int | None:
+    marker_match = re.search(
+        r"<!--\s*orchestune:verdict\s+(pass|fail)\s*-->", body, re.IGNORECASE
+    )
+    if marker_match:
+        verdict_str = marker_match.group(1).lower()
+        return EXIT_NO_FINDINGS if verdict_str == "pass" else EXIT_FINDINGS_PRESENT
+    return None
+
+
+def _evaluate_codex_signals(
+    body_lower: str, inlines: list[dict[str, Any]]
+) -> int | None:
+    if len(inlines) > 0:
+        return EXIT_FINDINGS_PRESENT
+    if any(
+        signal in body_lower
+        for signal in (
+            "p1 badge",
+            "p2 badge",
+            "p1:",
+            "p2:",
+            "[p1]",
+            "[p2]",
+            "here are some automated review suggestions",
+        )
+    ):
+        return EXIT_FINDINGS_PRESENT
+    if any(
+        signal in body_lower
+        for signal in (
+            "didn't find any major issues",
+            "no major issues found",
+            "no issues found",
+            "nice work",
+            "lgtm",
+        )
+    ):
+        return EXIT_NO_FINDINGS
+    return None
+
+
+def _evaluate_claude_signals(
+    body_lower: str, inlines: list[dict[str, Any]]
+) -> int | None:
+    if len(inlines) > 0:
+        return EXIT_FINDINGS_PRESENT
+
+    clean_pass_patterns = (
+        r"\b(?:no|without)\b(?:\s+\w+){0,3}\s+blocking\s+(?:issues?|bugs?|problems?)",
+        r"\ball\s+checks\s+passed\b",
+        r"\blooks\s+good\b",
+        r"\blgtm\b",
+    )
+    has_clean_pass = any(re.search(pat, body_lower) for pat in clean_pass_patterns)
+
+    blocking_matches = list(
+        re.finditer(r"\bblocking\s+(?:bugs?|issues?)\b", body_lower)
+    )
+    has_blocking_keyword = False
+    for m in blocking_matches:
+        start = max(0, m.start() - 30)
+        prefix = body_lower[start : m.start()]
+        if not re.search(r"\b(?:no|without)\b(?:\s+\w+){0,3}\s*$", prefix):
+            has_blocking_keyword = True
+            break
+
+    blocking_other_patterns = (
+        r"marking\s+this\s+\*\*fail\*\*",
+        r"marking\s+this\s+fail\b",
+        r"verdict:\s*fail\b",
+        r"should\s+not\s+be\s+merged\b",
+    )
+    has_blocking = has_blocking_keyword or any(
+        re.search(pat, body_lower) for pat in blocking_other_patterns
+    )
+
+    if "### findings" in body_lower:
+        findings_part = body_lower.split("### findings", 1)[1]
+        if any(
+            mark in findings_part
+            for mark in ("- [ ]", "🔴", "⚠️", "bug:", "defect:", "vulnerability")
+        ):
+            has_blocking = True
+
+    if has_blocking:
+        return EXIT_FINDINGS_PRESENT
+    if has_clean_pass:
+        return EXIT_NO_FINDINGS
+    return None
+
+
+def _evaluate_generic_bot_signals(
+    body_lower: str, inlines: list[dict[str, Any]]
+) -> int | None:
+    if len(inlines) > 0:
+        return EXIT_FINDINGS_PRESENT
+    if any(
+        signal in body_lower
+        for signal in ("lgtm", "all checks passed", "no blocking issues")
+    ):
+        return EXIT_NO_FINDINGS
+    return None
+
+
+def evaluate_review_verdict(
+    review_body: str,
+    inline_comments: list[dict[str, Any]] | None = None,
+    bot_name: str = "claude",
+) -> int:
+    """Evaluate 3-layer review verdict contract."""
+    inlines = inline_comments or []
+    body = review_body or ""
+    body_lower = body.lower()
+    bot = bot_name.lower()
+
+    if (marker_verdict := _evaluate_marker_layer(body)) is not None:
+        return marker_verdict
+
+    if _is_explicitly_in_progress({"body": body}):
+        return EXIT_IN_PROGRESS
+
+    if bot == "codex":
+        structural_verdict = _evaluate_codex_signals(body_lower, inlines)
+    elif bot == "claude":
+        structural_verdict = _evaluate_claude_signals(body_lower, inlines)
+    else:
+        structural_verdict = _evaluate_generic_bot_signals(body_lower, inlines)
+
+    if structural_verdict is not None:
+        return structural_verdict
+
+    return EXIT_UNDETERMINED
+
+
+def _handle_review_trigger(
+    pr_number: int,
+    bot_name: str,
+    initial_data: dict[str, list[dict[str, Any]]],
+    initial_snapshot: dict[str, str],
+    excluded_ids: set[int | str],
+    current_round: int,
+    max_rounds: int,
+    body: str | None,
+    body_file: str | None,
+) -> str:
+    existing_trigger = _find_existing_trigger_comment(
+        initial_data, bot_name, current_round
+    )
+    if existing_trigger is not None:
+        trigger_id = existing_trigger.get("id")
+        trigger_time = str(existing_trigger.get("created_at") or "")
+        if trigger_id is not None:
+            excluded_ids.add(trigger_id)
+        print(
+            f"Review trigger for @{bot_name} (Round {current_round}) already exists "
+            f"(Comment ID: {trigger_id}); skipping post and waiting..."
+        )
+        return trigger_time
+
+    print(
+        f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
+        f"for @{bot_name} on PR #{pr_number}..."
+    )
+    trigger_info = post_review_trigger(
+        pr_number,
+        bot_name=bot_name,
+        body=body,
+        body_file=body_file,
+        round_num=current_round,
+    )
+    trigger_id = trigger_info.get("id")
+    trigger_time = str(trigger_info.get("created_at") or "")
+    trigger_body = trigger_info.get("body") or ""
+    if trigger_id is not None:
+        excluded_ids.add(trigger_id)
+        initial_snapshot[f"comment_{trigger_id}"] = (
+            f"{trigger_time}:{len(trigger_body)}"
+        )
+    print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
+    return trigger_time
+
+
+def _check_immediate_review_result(
+    initial_data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    latest_trigger_time: str,
+    current_round: int,
+) -> dict[str, Any] | None:
+    latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
+    latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
+    if (
+        latest_bot_item is not None
+        and latest_trigger_time
+        and _get_item_created_timestamp(latest_bot_item) >= latest_trigger_time
+        and not (
+            latest_bot_activity is not None
+            and _is_explicitly_in_progress(latest_bot_activity)
+        )
+    ):
+        result = _extract_review_result(
+            initial_data, bot_name, latest_item=latest_bot_item
+        )
+        if result is not None:
+            result["verdict"] = evaluate_review_verdict(
+                result.get("review_body", ""),
+                result.get("inline_comments", []),
+                bot_name=bot_name,
+            )
+            result["round"] = current_round
+            return result
+    return None
 
 
 def wait_for_review(
@@ -391,67 +689,70 @@ def wait_for_review(
     post_trigger: bool = True,
     body: str | None = None,
     body_file: str | None = None,
+    max_rounds: int = 5,
+    max_retries: int = 1,
+    round_num: int | None = None,
 ) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=3) as executor:
-        # Capture initial state before triggering/waiting
-        initial_data = _get_initial_pr_data(pr_number, executor, timeout, interval)
+        initial_data = _get_initial_pr_data(
+            pr_number,
+            executor,
+            timeout,
+            interval,
+            max_retries=max_retries,
+        )
         initial_snapshot = _build_snapshot(initial_data, bot_name)
         excluded_ids: set[int | str] = set()
-        latest_trigger_time = ""
+
+        latest_existing_round = _get_latest_review_round(initial_data, bot_name)
+        if round_num is not None:
+            current_round = round_num
+        elif post_trigger:
+            current_round = latest_existing_round + 1
+        else:
+            current_round = max(1, latest_existing_round)
+
+        if current_round > max_rounds:
+            raise MaxRoundsExceededError(
+                f"Maximum review rounds ({max_rounds}) exceeded (attempted round {current_round})."
+            )
 
         if post_trigger:
-            print(
-                f"Posting review trigger comment for @{bot_name} on PR #{pr_number}..."
+            latest_trigger_time = _handle_review_trigger(
+                pr_number,
+                bot_name,
+                initial_data,
+                initial_snapshot,
+                excluded_ids,
+                current_round,
+                max_rounds,
+                body,
+                body_file,
             )
-            trigger_info = post_review_trigger(
-                pr_number, bot_name=bot_name, body=body, body_file=body_file
-            )
-            trigger_id = trigger_info.get("id")
-            trigger_time = trigger_info.get("created_at", "")
-            latest_trigger_time = trigger_time
-            trigger_body = trigger_info.get("body") or ""
-            if trigger_id is not None:
-                excluded_ids.add(trigger_id)
-                # Seed into initial snapshot to prevent self-detection if posted under bot identity
-                initial_snapshot[f"comment_{trigger_id}"] = (
-                    f"{trigger_time}:{len(trigger_body)}"
-                )
-            print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
-
-        if not post_trigger:
+        else:
             latest_trigger_time = _latest_review_trigger_timestamp(
                 initial_data, bot_name
             )
-            latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
-            latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
-            if (
-                latest_bot_item is not None
-                and latest_trigger_time
-                and _get_item_created_timestamp(latest_bot_item) >= latest_trigger_time
-                and not (
-                    latest_bot_activity is not None
-                    and _is_explicitly_in_progress(latest_bot_activity)
-                )
-            ):
-                result = _extract_review_result(
-                    initial_data, bot_name, latest_item=latest_bot_item
-                )
-                if result is not None:
-                    return result
+            immediate = _check_immediate_review_result(
+                initial_data, bot_name, latest_trigger_time, current_round
+            )
+            if immediate is not None:
+                return immediate
 
         print(
             f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
         )
         start_time = time.time()
+        consecutive_errors = 0
 
         while True:
             try:
                 current_data = _get_pr_data(pr_number, executor=executor)
+                consecutive_errors = 0
                 current_snapshot = _build_snapshot(
                     current_data, bot_name, exclude_ids=excluded_ids
                 )
 
-                # Check if any new item appeared or existing item was updated
                 has_changes = any(
                     k not in initial_snapshot or initial_snapshot[k] != v
                     for k, v in current_snapshot.items()
@@ -482,6 +783,12 @@ def wait_for_review(
                                 latest_item=latest_bot_item,
                             )
                             if result is not None:
+                                result["verdict"] = evaluate_review_verdict(
+                                    result.get("review_body", ""),
+                                    result.get("inline_comments", []),
+                                    bot_name=bot_name,
+                                )
+                                result["round"] = current_round
                                 return result
                         else:
                             initial_snapshot = current_snapshot
@@ -491,7 +798,12 @@ def wait_for_review(
                             )
 
             except Exception as e:
+                consecutive_errors += 1
                 print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
+                if consecutive_errors > max_retries:
+                    raise RuntimeError(
+                        f"Exceeded maximum retries ({max_retries}) during review polling: {e}"
+                    ) from e
 
             if time.time() - start_time >= timeout:
                 break
@@ -547,10 +859,28 @@ def main() -> None:
         action="store_true",
         help="Skip posting a review trigger comment and only wait for activity",
     )
+    parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=5,
+        help="Maximum number of review rounds allowed (default: 5)",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=1,
+        help="Maximum number of retry attempts on transient failures (default: 1)",
+    )
+    parser.add_argument(
+        "--round",
+        type=int,
+        default=None,
+        help="Explicit review round number (default: auto-detected from PR comments)",
+    )
 
     args = parser.parse_args()
     try:
-        wait_for_review(
+        result = wait_for_review(
             args.pr,
             timeout=args.timeout,
             interval=args.interval,
@@ -558,14 +888,27 @@ def main() -> None:
             post_trigger=not args.no_post,
             body=args.body,
             body_file=args.body_file,
+            max_rounds=args.max_rounds,
+            max_retries=args.max_retries,
+            round_num=args.round,
         )
-        sys.exit(0)
+        verdict = result.get("verdict")
+        if verdict is None:
+            verdict = evaluate_review_verdict(
+                result.get("review_body", ""),
+                result.get("inline_comments", []),
+                bot_name=args.bot_name,
+            )
+        sys.exit(verdict)
+    except MaxRoundsExceededError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(EXIT_MAX_ROUNDS)
     except TimeoutError as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_TIMEOUT)
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_INTERNAL_ERROR)
 
 
 if __name__ == "__main__":
