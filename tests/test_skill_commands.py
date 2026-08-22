@@ -2,10 +2,11 @@
 
 detect-bloat・baseline-aware CI・quarantine 機構のIssue群と同じ形の腐敗
 （文書やコメントが存在しない機構を前提に判断を委ねる状態）の再発を止める
-ため、SKILL.md のフェンス付きコードブロック内で `poetry run` / `./scripts/`
-形式で参照されているコマンドが、実際に pyproject.toml のスクリプト定義・
-Poetry仮想環境にインストールされた実行可能ファイル、またはリポジトリ内の
-実ファイルに対応していることを機械的に検証する。
+ため、SKILL.md のフェンス付きコードブロックおよびインラインコードスパン
+（`` `...` ``）内で `poetry run` / `./scripts/` 形式で参照されている
+コマンドが、実際に pyproject.toml のスクリプト定義・Poetry仮想環境に
+インストールされた実行可能ファイル、またはリポジトリ内の実ファイルに
+対応していることを機械的に検証する。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ REPO_ROOT = Path(__file__).parents[1]
 SKILLS_ROOT = REPO_ROOT / "skills"
 
 _FENCED_CODE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_INLINE_CODE_SPAN = re.compile(r"`([^`\n]+)`")
 _POETRY_RUN = re.compile(r"^poetry run (\S+)(?:\s+(\S+))?")
 _SCRIPT_PATH = re.compile(r"^(\.[\\/]scripts[\\/]\S+)")
 _EXECUTABLE_SUFFIXES = frozenset({".exe", ".cmd", ".bat"})
@@ -55,35 +57,54 @@ def _known_poetry_commands() -> set[str]:
     return names
 
 
+def _extract_target(candidate: str) -> str | None:
+    """1行分のコマンド候補文字列から検証対象のスクリプト名/パスを抽出する。
+
+    `poetry run` / `./scripts/` / `.\\scripts\\` のいずれの形式にも
+    一致しない場合や、workflow-template のプレースホルダ
+    （`<CI_ENTRYPOINT>` 等）を含む場合は None を返す。
+    """
+    candidate = candidate.strip()
+    if not candidate or candidate.startswith("#"):
+        return None
+
+    target: str | None = None
+    poetry_match = _POETRY_RUN.match(candidate)
+    if poetry_match:
+        first, second = poetry_match.group(1), poetry_match.group(2)
+        target = second if first == "python" and second else first
+    else:
+        script_match = _SCRIPT_PATH.match(candidate)
+        if script_match:
+            target = script_match.group(1)
+
+    if target is None or "<" in target or ">" in target:
+        return None
+    return target
+
+
 def _iter_command_targets(markdown_text: str) -> list[tuple[str, str]]:
-    """フェンス付きコードブロックから `poetry run` / `./scripts/` /
-    `.\\scripts\\` 形式のコマンドを抽出する。
+    """フェンス付きコードブロックおよびインラインコードスパンから
+    `poetry run` / `./scripts/` / `.\\scripts\\` 形式のコマンドを抽出する。
 
     戻り値は (表示用の生コマンド行, 検証対象のスクリプト名/パス) のタプル
-    のリスト。workflow-template のプレースホルダ（`<CI_ENTRYPOINT>` 等）を
-    含む行は検証対象から除外する。
+    のリスト。
     """
     results: list[tuple[str, str]] = []
+
     for block_match in _FENCED_CODE_BLOCK.finditer(markdown_text):
         for raw_line in block_match.group(1).splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
+            target = _extract_target(raw_line)
+            if target is not None:
+                results.append((raw_line.strip(), target))
 
-            target: str | None = None
-            poetry_match = _POETRY_RUN.match(line)
-            if poetry_match:
-                first, second = poetry_match.group(1), poetry_match.group(2)
-                target = second if first == "python" and second else first
-            else:
-                script_match = _SCRIPT_PATH.match(line)
-                if script_match:
-                    target = script_match.group(1)
+    prose_only = _FENCED_CODE_BLOCK.sub("", markdown_text)
+    for span_match in _INLINE_CODE_SPAN.finditer(prose_only):
+        span = span_match.group(1)
+        target = _extract_target(span)
+        if target is not None:
+            results.append((span.strip(), target))
 
-            if target is None or "<" in target or ">" in target:
-                continue
-
-            results.append((line, target))
     return results
 
 
@@ -159,12 +180,25 @@ def test_workflow_template_placeholder_is_excluded():
     assert _iter_command_targets(text) == []
 
 
-def test_inline_code_span_is_not_extracted():
-    """フェンス付きコードブロック外のインラインコード
-    （`poetry run detect-bloat` 等）は抽出対象としない。"""
+def test_inline_code_span_is_extracted():
+    """地の文中のインラインコードスパン（例:
+    `` `poetry run detect-bloat` ``）も抽出・検証対象に含める。
+    フェンス付きコードブロックに書かれていなければ検証を逃れられる、
+    という抜け穴を作らないため。"""
     text = "この警告は `poetry run detect-bloat` 等で検知します。\n"
 
-    assert _iter_command_targets(text) == []
+    targets = _iter_command_targets(text)
+
+    assert targets == [("poetry run detect-bloat", "detect-bloat")]
+    assert not _command_exists(targets[0][1], _known_poetry_commands())
+
+
+def test_inline_code_span_inside_fenced_block_is_not_double_counted():
+    text = "```bash\npoetry run ruff format\n```\n"
+
+    targets = _iter_command_targets(text)
+
+    assert targets == [("poetry run ruff format", "ruff")]
 
 
 def test_python_script_target_resolves_to_script_path():
