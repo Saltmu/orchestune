@@ -2,6 +2,9 @@
 
 This document provides detailed procedures for Test-Driven Development (TDD) and local CI verification. Replace placeholders (`<...>`) with the appropriate commands for your project.
 
+Perform every command in this document from the prepared worktree. Do not edit,
+test, commit, or push from the primary checkout.
+
 ---
 
 ## 3. Reproducer Step

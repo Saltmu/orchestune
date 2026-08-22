@@ -17,6 +17,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 | :--- | :--- | :--- |
 | **Plan Approval (Step 1)** | Present to user and wait for approval | Proceed immediately to implementation after writing `implementation_plan.md` |
 | **Issue Creation (Step 2)** | Create manually or via CLI if needed | Use issue number provided in prompt (skip creation) |
+| **Worktree (Step 2.5)** | Create and clean up a task worktree | Use the dispatcher-provisioned worktree; skip setup and cleanup |
 | **Reviewer Selection (Step 11)** | Ask user to select reviewer (Claude/Codex) | Automatically select a cross-model distinct from the author |
 | **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
 
@@ -30,6 +31,7 @@ For documentation updates or typo fixes that do not alter code logic, **Steps 3â
 | **0** | **Requirement Satisfaction Check** | If requirements are already met on `main`, do not create a PR; post an outcome record (`result: not-needed`) to the Issue and exit. | - |
 | **1** | **Design & Implementation Plan** | Write `implementation_plan.md` and define the approach. | - |
 | **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: `gh issue create --title "..." --body "..."`. | - |
+| **2.5** | **Worktree Preparation** | For a requested change or existing Issue fix, create `worktree/<BRANCH_SLUG>` and perform all remaining work there. | [references/worktree.md](references/worktree.md) |
 | **3â€“9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via `gh pr create`. | [references/pr.md](references/pr.md) |
 | **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py`. | [references/review-loop.md](references/review-loop.md) |

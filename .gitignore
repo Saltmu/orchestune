@@ -17,6 +17,7 @@ run_state.lock
 not_needed_review_state.json
 events.jsonl
 worktrees/
+worktree/
 logs/
 decomposition_plan.md
 

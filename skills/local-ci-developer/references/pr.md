@@ -2,6 +2,9 @@
 
 This document provides detailed procedures for finalizing and creating Pull Requests (PRs) after passing local CI.
 
+Run the preparation and `gh pr create` commands from the Issue's prepared
+worktree, so the PR contains only that worktree branch's commits.
+
 ---
 
 ## 10. PR Creation Procedure (Pull Request Finalization)
