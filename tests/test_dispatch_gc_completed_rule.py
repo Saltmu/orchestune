@@ -100,11 +100,11 @@ class TestRuleCompleted:
         ]
 
     def test_closed_unmerged_cloud_pr_is_requeued_without_completing_dependency(
-        self,
+        self, fake_forge
     ):
         active = _active(external_id="session-1")
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
         ctx.run_state.active_worktrees["1"] = active
 
@@ -120,9 +120,6 @@ class TestRuleCompleted:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_remove,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -132,24 +129,25 @@ class TestRuleCompleted:
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         mock_remove.assert_called_once_with(active.worktree_path)
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
-        mock_add_comment.assert_called_once()
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.add_comment.assert_called_once()
 
-    def test_local_pr_waits_for_process_before_using_open_pr_as_completion(self):
+    def test_local_pr_waits_for_process_before_using_open_pr_as_completion(
+        self, fake_forge
+    ):
         active = _active(pid=123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
         with (
             patch(
                 "orchestune.dispatch_gc_completion.is_process_alive", return_value=True
             ),
-            patch("orchestune.forge.GitHubForge.list_prs") as mock_list_prs,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is None
-        mock_list_prs.assert_not_called()
+        fake_forge.list_prs.assert_not_called()
 
     def test_local_closed_pr_closed_before_launch_is_ignored_as_stale(self):
         active = _active(pid=123, started_at=1_800_000_000.0)
