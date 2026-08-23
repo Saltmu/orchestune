@@ -997,7 +997,10 @@ def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
                 for alias in node.names
                 if alias.name == "unittest"
             )
-        elif isinstance(node, ast.ImportFrom) and node.module == "orchestune.forge":
+        elif isinstance(node, ast.ImportFrom) and node.module in {
+            "orchestune",
+            "orchestune.forge",
+        }:
             github_forge_names.update(
                 alias.asname or alias.name
                 for alias in node.names
@@ -1033,6 +1036,13 @@ def _call_argument(node: ast.Call, position: int, keyword: str) -> ast.expr | No
     )
 
 
+def _is_github_forge_target(target: ast.expr | None, names: set[str]) -> bool:
+    if isinstance(target, ast.Constant) and isinstance(target.value, str):
+        return bool(_GITHUB_FORGE_PATCH_TARGET.search(target.value))
+    target_name = _dotted_name(target) if target else None
+    return bool(target_name and target_name.rsplit(".", 1)[-1] in names)
+
+
 def _github_forge_patch_lines(source: str) -> list[int]:
     tree = ast.parse(source)
     patch_references, github_forge_names = _mock_patch_references(tree)
@@ -1053,10 +1063,13 @@ def _github_forge_patch_lines(source: str) -> list[int]:
             )
             if any(_GITHUB_FORGE_PATCH_TARGET.search(value) for value in target_values):
                 violations.append(node.lineno)
-        elif function_name in {f"{ref}.object" for ref in patch_references}:
+        elif function_name in {
+            f"{ref}.{method}"
+            for ref in patch_references
+            for method in ("object", "multiple")
+        }:
             target = _call_argument(node, 0, "target")
-            target_name = _dotted_name(target) if target else None
-            if target_name and target_name.rsplit(".", 1)[-1] in github_forge_names:
+            if _is_github_forge_target(target, github_forge_names):
                 violations.append(node.lineno)
     return sorted(violations)
 
@@ -1136,6 +1149,30 @@ with unittest.mock.patch("orchestune.forge.GitHubForge.list_prs"):
 """
 
     assert _github_forge_patch_lines(source) == [4]
+
+
+def test_github_forge_patch_detector_flags_public_import_alias() -> None:
+    source = """
+from unittest.mock import patch
+from orchestune import GitHubForge as ProductionForge
+
+with patch.object(ProductionForge, "list_prs"):
+    pass
+"""
+
+    assert _github_forge_patch_lines(source) == [5]
+
+
+def test_github_forge_patch_detector_flags_patch_multiple() -> None:
+    source = """
+from unittest.mock import DEFAULT, patch
+from orchestune.forge import GitHubForge
+
+with patch.multiple(target=GitHubForge, list_prs=DEFAULT):
+    pass
+"""
+
+    assert _github_forge_patch_lines(source) == [5]
 
 
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:
