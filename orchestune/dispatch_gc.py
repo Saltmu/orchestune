@@ -362,10 +362,17 @@ def _abandoned_worktree_outcome(
     active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome:
     completion_event = _finalize_abandoned_cloud_worktree(
-        active, active_task, ctx.config
+        active, active_task, ctx.config, ctx.run_state
     )
-    if completion_event["action"] == "abandoned_pr_requeued" and ctx.config.apply:
-        del ctx.run_state.active_worktrees[key]
+    if (
+        completion_event["action"]
+        in ("abandoned_pr_requeued", "escalated_reclaim_limit_exceeded")
+        and ctx.config.apply
+    ):
+        ctx.run_state.active_worktrees.pop(key, None)
+        _persist_run_state_best_effort(
+            ctx, f"the released ledger entry for issue #{active.issue_number}"
+        )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 
 

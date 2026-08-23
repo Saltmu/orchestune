@@ -23,7 +23,7 @@ from orchestune.dispatch_gc_completion import (
     _local_pr_completion_status,
 )
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
@@ -384,6 +384,74 @@ class TestFinalizeAbandonedCloudWorktree:
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
         mock_add_comment.assert_called_once()
+
+    def test_increments_task_reclaim_counts_and_requeues_within_limit(self, tmp_path):
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=100.0)
+            },
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            event = _finalize_abandoned_cloud_worktree(
+                active, task, config, run_state=run_state
+            )
+
+        assert event["action"] == "abandoned_pr_requeued"
+        assert run_state.task_reclaim_counts[280].count == 2
+        mock_add_label.assert_called_once_with(280, "status:queued")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        comment = mock_add_comment.call_args.args[1]
+        assert "回収2回目 / 上限3回" in comment
+
+    def test_escalates_to_human_review_when_max_task_reclaims_exceeded(self, tmp_path):
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=2
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=100.0)
+            },
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
+            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+        ):
+            event = _finalize_abandoned_cloud_worktree(
+                active, task, config, run_state=run_state
+            )
+
+        assert event["action"] == "escalated_reclaim_limit_exceeded"
+        assert run_state.task_reclaim_counts[280].count == 3
+        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
+        mock_remove_label.assert_called_once_with(280, "status:in-progress")
+        comment = mock_add_comment.call_args.args[1]
+        assert "上限（max_task_reclaims=2）を超えた（今回で3回目）" in comment
 
 
 class TestFinalizeNotNeededWorktree:
