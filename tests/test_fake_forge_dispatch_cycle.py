@@ -21,4 +21,5 @@ _MIGRATED_FILES = (
 
 @pytest.mark.parametrize("filename", _MIGRATED_FILES)
 def test_dispatch_cycle_tests_do_not_patch_github_forge_directly(filename: str) -> None:
-    assert "orchestune.forge.GitHubForge" not in (_TESTS_ROOT / filename).read_text()
+    source = (_TESTS_ROOT / filename).read_text(encoding="utf-8")
+    assert "orchestune.forge.GitHubForge" not in source
