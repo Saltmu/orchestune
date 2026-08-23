@@ -18,7 +18,7 @@ from tests.conftest import make_issue
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
-def _ctx(**overrides):
+def _ctx(*, forge=None, **overrides):
     defaults = dict(
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
@@ -33,6 +33,7 @@ def _ctx(**overrides):
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
+            forge=forge,
         ),
     )
     defaults.update(overrides)

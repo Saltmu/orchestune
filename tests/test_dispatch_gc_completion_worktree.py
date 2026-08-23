@@ -64,12 +64,14 @@ def _task(**overrides):
 class TestFinalizeCompletedWorktree:
     """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
 
-    def test_no_new_commits_is_not_treated_as_completed(self, tmp_path):
+    def test_no_new_commits_is_not_treated_as_completed(self, tmp_path, fake_forge):
         """#74再現: worktreeはcleanだがbase_branchに対して新規コミットが0件の場合、
         status:doneを付与せず、依存先タスクの誤昇格を防ぐためcompleted以外のアクションにする。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -82,26 +84,25 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _finalize_completed_worktree(active, task, config)
 
         assert event["action"] != "completed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
-        mock_add_comment.assert_called_once()
-        assert mock_add_comment.call_args.args[0] == 280
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
+        fake_forge.add_comment.assert_called_once()
+        assert fake_forge.add_comment.call_args.args[0] == 280
 
     def test_new_commits_without_outcome_is_escalated_to_blocked_human_review(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         """コミットがあってもoutcomeレコードが存在しない場合はcompletedにせずstatus:blocked-human-reviewに倒す。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -115,11 +116,6 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -128,20 +124,27 @@ class TestFinalizeCompletedWorktree:
 
         assert event["action"] == "completed_without_outcome"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
-        mock_add_comment.assert_called_once()
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
+        fake_forge.add_comment.assert_called_once()
         assert (
             "完了宣言レコード（orchestune:outcome）が検出できませんでした"
-            in mock_add_comment.call_args.args[1]
+            in fake_forge.add_comment.call_args.args[1]
         )
 
-    def test_new_commits_with_outcome_done_is_treated_as_completed(self, tmp_path):
+    def test_new_commits_with_outcome_done_is_treated_as_completed(
+        self, tmp_path, fake_forge
+    ):
         """base_branchに対する実コミットがありoutcome(done)があればcompleted+status:doneとする。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         outcome = OutcomeRecord(result="done", issue=280)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -155,15 +158,6 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -172,18 +166,23 @@ class TestFinalizeCompletedWorktree:
 
         assert event["action"] == "completed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:done")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:done")
         assert event["commit_sha"] == "deadbeef"
 
     def test_new_commits_with_outcome_not_needed_is_routed_to_not_needed(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         """outcome(not-needed)の場合はnot-needed経路（クローズまたは検証レビュー）へ流す。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         outcome = OutcomeRecord(result="not-needed", issue=280)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -197,15 +196,6 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -214,15 +204,18 @@ class TestFinalizeCompletedWorktree:
 
         assert event["action"] == "not_needed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_close_issue.assert_called_once()
-        assert mock_close_issue.call_args.args[0] == 280
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.close_issue.assert_called_once()
+        assert fake_forge.close_issue.call_args.args[0] == 280
 
-    def test_outcome_forge_error_skips_completion(self, tmp_path):
+    def test_outcome_forge_error_skips_completion(self, tmp_path, fake_forge):
         """forgeエラー時は完了と判定せずスキップする（fail-closed）。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
+        fake_forge.list_comments.side_effect = RuntimeError("connection error")
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -231,10 +224,6 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_new_commits",
                 return_value=True,
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                side_effect=RuntimeError("connection error"),
             ),
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
@@ -245,11 +234,16 @@ class TestFinalizeCompletedWorktree:
         assert event["action"] == "completion_skipped_forge_error"
         mock_remove_worktree.assert_not_called()
 
-    def test_completed_also_removes_stale_queued_label(self, tmp_path):
+    def test_completed_also_removes_stale_queued_label(self, tmp_path, fake_forge):
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:queued", "status:in-progress"))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         outcome = OutcomeRecord(result="done", issue=280)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -261,15 +255,6 @@ class TestFinalizeCompletedWorktree:
             ),
             patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -277,17 +262,30 @@ class TestFinalizeCompletedWorktree:
             event = _finalize_completed_worktree(active, task, config)
 
         assert event["action"] == "completed"
-        mock_add_label.assert_called_once_with(280, "status:done")
-        mock_remove_label.assert_any_call(280, "status:in-progress")
-        mock_remove_label.assert_any_call(280, "status:queued")
-        assert mock_remove_label.call_count == 2
+        fake_forge.add_label.assert_called_once_with(280, "status:done")
+        fake_forge.remove_label.assert_any_call(280, "status:in-progress")
+        fake_forge.remove_label.assert_any_call(280, "status:queued")
+        assert fake_forge.remove_label.call_count == 2
 
-    def test_completed_adds_done_before_removing_in_progress(self, tmp_path):
+    def test_completed_adds_done_before_removing_in_progress(
+        self, tmp_path, fake_forge
+    ):
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         outcome = OutcomeRecord(result="done", issue=280)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
         call_order: list[tuple[str, str]] = []
+        fake_forge.add_label.side_effect = lambda issue, label: call_order.append(
+            ("add", label)
+        )
+        fake_forge.remove_label.side_effect = lambda issue, label: call_order.append(
+            ("remove", label)
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -299,21 +297,6 @@ class TestFinalizeCompletedWorktree:
             ),
             patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
-                side_effect=lambda issue, label: call_order.append(("add", label)),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=lambda issue, label: call_order.append(("remove", label)),
-            ),
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -329,64 +312,11 @@ class TestFinalizeCompletedWorktree:
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""
 
-    def test_apply_removes_worktree_and_closes_issue(self, tmp_path):
-        active = _active()
-        task = _task()
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
-        with (
-            patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
-                return_value=False,
-            ),
-            patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
-            ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
-        ):
-            event = _finalize_not_needed_worktree(active, task, config)
-
-        mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_close_issue.assert_called_once()
-        close_args = mock_close_issue.call_args.args
-        assert close_args[0] == 280
-        assert close_args[1] == "not planned"
-        assert event == {
-            "issue_number": 280,
-            "worktree_path": "worktrees/w1",
-            "action": "not_needed",
-            "subtask_id": "task-a",
-        }
-
-    def test_dirty_worktree_is_not_closed(self, tmp_path):
-        """未コミットの作業が残っている場合は、安全側に倒しクローズを見送る。"""
-        active = _active()
-        task = _task()
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
-        with (
-            patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
-            patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
-            ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
-        ):
-            event = _finalize_not_needed_worktree(active, task, config)
-
-        mock_remove_worktree.assert_not_called()
-        mock_remove_label.assert_not_called()
-        mock_close_issue.assert_not_called()
-        assert event["action"] == "completion_skipped_dirty_worktree"
-
-    def test_dry_run_does_not_call_github_or_mutate(self, tmp_path):
+    def test_apply_removes_worktree_and_closes_issue(self, tmp_path, fake_forge):
         active = _active()
         task = _task()
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=False
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
         )
         with (
             patch(
@@ -396,27 +326,78 @@ class TestFinalizeNotNeededWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
+        ):
+            event = _finalize_not_needed_worktree(active, task, config)
+
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.close_issue.assert_called_once()
+        close_args = fake_forge.close_issue.call_args.args
+        assert close_args[0] == 280
+        assert close_args[1] == "not planned"
+        assert event == {
+            "issue_number": 280,
+            "worktree_path": "worktrees/w1",
+            "action": "not_needed",
+            "subtask_id": "task-a",
+        }
+
+    def test_dirty_worktree_is_not_closed(self, tmp_path, fake_forge):
+        """未コミットの作業が残っている場合は、安全側に倒しクローズを見送る。"""
+        active = _active()
+        task = _task()
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
         ):
             event = _finalize_not_needed_worktree(active, task, config)
 
         mock_remove_worktree.assert_not_called()
-        mock_remove_label.assert_not_called()
-        mock_close_issue.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.close_issue.assert_not_called()
+        assert event["action"] == "completion_skipped_dirty_worktree"
+
+    def test_dry_run_does_not_call_github_or_mutate(self, tmp_path, fake_forge):
+        active = _active()
+        task = _task()
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=False, forge=fake_forge
+        )
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch_gc_completion.remove_worktree"
+            ) as mock_remove_worktree,
+        ):
+            event = _finalize_not_needed_worktree(active, task, config)
+
+        mock_remove_worktree.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.close_issue.assert_not_called()
         assert event["action"] == "not_needed"
 
-    def test_none_task_defaults_subtask_id_to_empty_string(self, tmp_path):
+    def test_none_task_defaults_subtask_id_to_empty_string(self, tmp_path, fake_forge):
         active = _active()
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.close_issue"),
         ):
             event = _finalize_not_needed_worktree(active, None, config)
         assert event["subtask_id"] == ""
@@ -434,12 +415,13 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         defaults.update(overrides)
         return DispatcherConfig(**defaults)
 
-    def test_dispatches_review_instead_of_closing(self, tmp_path):
+    def test_dispatches_review_instead_of_closing(self, tmp_path, fake_forge):
         active = _active()
         task = _task()
         config = self._cloud_config(
             tmp_path,
             not_needed_review_state_path=tmp_path / "state.json",
+            forge=fake_forge,
         )
         dispatch_review = MagicMock()
         with (
@@ -450,8 +432,6 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
         ):
             event = _finalize_not_needed_worktree(
                 active,
@@ -461,8 +441,8 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
             )
 
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_close_issue.assert_not_called()
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.close_issue.assert_not_called()
         dispatch_review.assert_called_once_with(280, "task-a", config)
         assert event["action"] == "not_needed_review_dispatched"
         assert event["subtask_id"] == "task-a"
@@ -696,12 +676,13 @@ class TestIsWorktreeComplete:
         assert handle.issue_number == 218
         assert handle.branch_name == "claude/issue-218-review-history-backend-api"
 
-    def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path):
+    def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path, fake_forge):
         target = CodexCloudDispatchTarget("env_123")
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=target,
+            forge=fake_forge,
         )
         active = ActiveWorktree(
             issue_number=1,
@@ -714,7 +695,6 @@ class TestIsWorktreeComplete:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc_completion.is_process_alive"
             ) as mock_is_alive,
@@ -724,13 +704,14 @@ class TestIsWorktreeComplete:
         mock_is_alive.assert_not_called()
 
     def test_codex_cloud_active_worktree_reclaims_when_task_failed_in_cloud(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         target = CodexCloudDispatchTarget("env_123")
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=target,
+            forge=fake_forge,
         )
         active = ActiveWorktree(
             issue_number=1,
@@ -743,7 +724,6 @@ class TestIsWorktreeComplete:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch.object(target, "_fetch_task_status", return_value="failed"),
         ):
             assert _cloud_worktree_completion_status(active, config) == "abandoned"

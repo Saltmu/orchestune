@@ -57,12 +57,16 @@ class TestFinalizeAbandonedCloudWorktree:
     再キューイングが、中断した以前の遷移で取り残された一次status:*ラベルを
     正しく後始末することを検証する。"""
 
-    def test_removes_stale_blocked_label_alongside_in_progress(self, tmp_path):
+    def test_removes_stale_blocked_label_alongside_in_progress(
+        self, tmp_path, fake_forge
+    ):
         # stacked launch中断で取り残されたstatus:blockedも併せて除去し、
         # status:queuedへ確実に収束させなければならない。
         active = _active()
         task = _task(status_labels=("status:blocked", "status:in-progress"))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
 
         with (
             patch(
@@ -70,19 +74,16 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             event = _finalize_abandoned_cloud_worktree(active, task, config)
 
         assert event["action"] == "abandoned_pr_requeued"
-        mock_add_label.assert_called_once_with(280, "status:queued")
-        mock_remove_label.assert_any_call(280, "status:in-progress")
-        mock_remove_label.assert_any_call(280, "status:blocked")
-        assert mock_remove_label.call_count == 2
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_any_call(280, "status:in-progress")
+        fake_forge.remove_label.assert_any_call(280, "status:blocked")
+        assert fake_forge.remove_label.call_count == 2
 
-    def test_does_not_overwrite_terminal_escalation_label(self, tmp_path):
+    def test_does_not_overwrite_terminal_escalation_label(self, tmp_path, fake_forge):
         # 中断した以前の遷移でstatus:blocked-human-reviewが既に付与されている
         # 場合、status:queuedへの書き換えは人間の確認要求を握りつぶして
         # しまうため、ラベルには一切触れてはならない。
@@ -90,7 +91,9 @@ class TestFinalizeAbandonedCloudWorktree:
         task = _task(
             status_labels=("status:blocked-human-review", "status:in-progress")
         )
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
 
         with (
             patch(
@@ -98,22 +101,24 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _finalize_abandoned_cloud_worktree(active, task, config)
 
         assert event["action"] == "abandoned_pr_requeued"
-        mock_add_label.assert_not_called()
-        mock_remove_label.assert_not_called()
-        mock_add_comment.assert_called_once()
+        fake_forge.add_label.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_comment.assert_called_once()
 
-    def test_increments_task_reclaim_counts_and_requeues_within_limit(self, tmp_path):
+    def test_increments_task_reclaim_counts_and_requeues_within_limit(
+        self, tmp_path, fake_forge
+    ):
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -128,9 +133,6 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active, task, config, run_state=run_state
@@ -138,16 +140,21 @@ class TestFinalizeAbandonedCloudWorktree:
 
         assert event["action"] == "abandoned_pr_requeued"
         assert run_state.task_reclaim_counts[280].count == 2
-        mock_add_label.assert_called_once_with(280, "status:queued")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        comment = mock_add_comment.call_args.args[1]
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        comment = fake_forge.add_comment.call_args.args[1]
         assert "回収2回目 / 上限3回" in comment
 
-    def test_escalates_to_human_review_when_max_task_reclaims_exceeded(self, tmp_path):
+    def test_escalates_to_human_review_when_max_task_reclaims_exceeded(
+        self, tmp_path, fake_forge
+    ):
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=2
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=2,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -162,9 +169,6 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active, task, config, run_state=run_state
@@ -172,16 +176,19 @@ class TestFinalizeAbandonedCloudWorktree:
 
         assert event["action"] == "escalated_reclaim_limit_exceeded"
         assert run_state.task_reclaim_counts[280].count == 3
-        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        comment = mock_add_comment.call_args.args[1]
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        comment = fake_forge.add_comment.call_args.args[1]
         assert "上限（max_task_reclaims=2）を超えた（今回で3回目）" in comment
 
-    def test_escalation_triggers_on_label_applied_callback(self, tmp_path):
+    def test_escalation_triggers_on_label_applied_callback(self, tmp_path, fake_forge):
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=1
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=1,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -201,9 +208,6 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -217,12 +221,15 @@ class TestFinalizeAbandonedCloudWorktree:
         assert callback_called is True
 
     def test_requeue_triggers_on_label_applied_callback_and_tolerates_comment_failure(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -236,18 +243,14 @@ class TestFinalizeAbandonedCloudWorktree:
             nonlocal callback_called
             callback_called = True
 
+        fake_forge.add_comment.side_effect = RuntimeError("Comment API timeout")
+
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
-                side_effect=RuntimeError("Comment API timeout"),
-            ),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -261,11 +264,16 @@ class TestFinalizeAbandonedCloudWorktree:
         assert callback_called is True
         assert run_state.task_reclaim_counts[280].count == 2
 
-    def test_reclaim_triggers_on_reclaim_reserved_before_label_change(self, tmp_path):
+    def test_reclaim_triggers_on_reclaim_reserved_before_label_change(
+        self, tmp_path, fake_forge
+    ):
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -287,9 +295,6 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -304,11 +309,16 @@ class TestFinalizeAbandonedCloudWorktree:
         assert order == ["reserved", "label_applied"]
         assert run_state.task_reclaim_counts[280].pending is False
 
-    def test_reclaim_reuses_existing_pending_reservation_on_retry(self, tmp_path):
+    def test_reclaim_reuses_existing_pending_reservation_on_retry(
+        self, tmp_path, fake_forge
+    ):
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -323,9 +333,6 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -339,13 +346,16 @@ class TestFinalizeAbandonedCloudWorktree:
         assert run_state.task_reclaim_counts[280].count == 2
         assert run_state.task_reclaim_counts[280].pending is False
 
-    def test_reservation_failure_rolls_back_and_raises(self, tmp_path):
+    def test_reservation_failure_rolls_back_and_raises(self, tmp_path, fake_forge):
         import pytest
 
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -363,7 +373,6 @@ class TestFinalizeAbandonedCloudWorktree:
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_rm,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_label,
         ):
             with pytest.raises(OSError, match="Disk full"):
                 _finalize_abandoned_cloud_worktree(
@@ -377,15 +386,20 @@ class TestFinalizeAbandonedCloudWorktree:
         assert run_state.task_reclaim_counts[280].count == 1
         assert run_state.task_reclaim_counts[280].pending is False
         mock_rm.assert_not_called()
-        mock_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
 
-    def test_reclaim_settles_even_if_old_label_removal_fails(self, tmp_path):
+    def test_reclaim_settles_even_if_old_label_removal_fails(
+        self, tmp_path, fake_forge
+    ):
         import pytest
 
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -399,17 +413,14 @@ class TestFinalizeAbandonedCloudWorktree:
             nonlocal settled
             settled = True
 
+        fake_forge.remove_label.side_effect = RuntimeError("Failed to remove old label")
+
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=RuntimeError("Failed to remove old label"),
-            ),
         ):
             with pytest.raises(RuntimeError, match="Failed to remove old label"):
                 _finalize_abandoned_cloud_worktree(
