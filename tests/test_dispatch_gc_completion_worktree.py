@@ -64,12 +64,14 @@ def _task(**overrides):
 class TestFinalizeCompletedWorktree:
     """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
 
-    def test_no_new_commits_is_not_treated_as_completed(self, tmp_path):
+    def test_no_new_commits_is_not_treated_as_completed(self, tmp_path, fake_forge):
         """#74再現: worktreeはcleanだがbase_branchに対して新規コミットが0件の場合、
         status:doneを付与せず、依存先タスクの誤昇格を防ぐためcompleted以外のアクションにする。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -82,26 +84,25 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _finalize_completed_worktree(active, task, config)
 
         assert event["action"] != "completed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
-        mock_add_comment.assert_called_once()
-        assert mock_add_comment.call_args.args[0] == 280
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
+        fake_forge.add_comment.assert_called_once()
+        assert fake_forge.add_comment.call_args.args[0] == 280
 
     def test_new_commits_without_outcome_is_escalated_to_blocked_human_review(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         """コミットがあってもoutcomeレコードが存在しない場合はcompletedにせずstatus:blocked-human-reviewに倒す。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -115,11 +116,6 @@ class TestFinalizeCompletedWorktree:
             patch(
                 "orchestune.dispatch_gc_completion.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -128,12 +124,12 @@ class TestFinalizeCompletedWorktree:
 
         assert event["action"] == "completed_without_outcome"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
-        mock_add_comment.assert_called_once()
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
+        fake_forge.add_comment.assert_called_once()
         assert (
             "完了宣言レコード（orchestune:outcome）が検出できませんでした"
-            in mock_add_comment.call_args.args[1]
+            in fake_forge.add_comment.call_args.args[1]
         )
 
     def test_new_commits_with_outcome_done_is_treated_as_completed(self, tmp_path):
