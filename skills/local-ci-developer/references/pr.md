@@ -19,7 +19,18 @@ Copy the repository's PR template (`.github/pull_request_template.md`) to a temp
 > [!NOTE]
 > For minor changes (typo or documentation fixes only), explicitly state "N/A due to minor change" in the Reproducer and test result sections.
 
-### 2. Submitting the PR
+### 2. Pre-PR Remote Branch & Blob Verification (GitHub MCP Route)
+When files or branches are created or updated via GitHub MCP write tools rather than direct Git pushes from the worktree, execute the following post-write verification steps prior to opening a PR:
+
+1. **Branch & Blob SHA Verification**:
+   - Re-fetch the updated file contents and remote blob SHA for each modified file on the target branch.
+   - Reconcile remote content against the locally verified worktree state to detect formatting discrepancies, missing characters, or corrupted escape sequences (e.g., string escaping issues during JSON-RPC tool calls).
+
+2. **Pre-PR Cumulative Diff Check (Multi-Commit Writes)**:
+   - When sequential file updates produce multiple separate commits on the remote branch, inspect the full cumulative diff against the base branch (e.g., `origin/main`) prior to PR creation.
+   - Confirm that the cumulative diff contains only the intended changes and no partial or duplicate modifications.
+
+### 3. Submitting the PR
 Submit the PR using the fixed backend selected during Step 0 Preflight:
 
 - **When using `gh` CLI**:
@@ -30,20 +41,11 @@ Submit the PR using the fixed backend selected during Step 0 Preflight:
   - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, title, and body content from `/tmp/pr_body.md`.
   - Or create the PR via the GitHub Web UI with the same title and body content.
 
-### 3. Post-Write Verification (GitHub MCP Route)
-When files, branches, or PRs are created or modified via GitHub MCP tools rather than direct Git pushes from the worktree, execute the following verification steps to ensure remote consistency:
-
-1. **Branch & Blob SHA Verification**:
-   - Re-fetch the updated file contents and remote blob SHA for each modified file on the target branch.
-   - Reconcile remote content against the locally verified worktree state to detect formatting discrepancies, missing characters, or corrupted escape sequences (e.g., string escaping issues during JSON-RPC tool calls).
-
-2. **Pre-PR Cumulative Diff Check (Multi-Commit Writes)**:
-   - When sequential file updates produce multiple separate commits on the remote branch, inspect the full cumulative diff against the base branch (e.g., `origin/main`) prior to PR creation.
-   - Confirm that the cumulative diff contains only the intended changes and no partial or duplicate modifications.
-
-3. **PR Head Diff Verification**:
-   - After PR creation, retrieve and inspect the PR head diff and changed files list.
-   - Verify that the PR's cumulative diff matches the local worktree diff and local CI verification target exactly before proceeding to Step 11.
+### 4. Post-Creation PR Head Diff Verification
+After PR submission (especially when operating via GitHub MCP), perform head diff verification:
+- Retrieve and inspect the PR head diff and changed files list.
+- Verify that the PR's cumulative diff matches the local worktree diff and local CI verification target exactly before proceeding to Step 11.
 
 Once the PR is created and verified, record the issued PR number and proceed to Step 11 (Review Loop).
+
 
