@@ -104,7 +104,7 @@ def _provision_and_link_one_subtask(
     dependencies_done: dict[str, bool],
     resolved_numbers: dict[str, int],
     metadata_search_supported: bool,
-) -> tuple[int, bool, bool, bool, bool]:
+) -> tuple[int, bool, bool, bool]:
     subtask_id = subtask.id
     number, is_reused, is_done, has_parent_metadata = _provision_subtask(
         resolved_forge,
@@ -135,7 +135,6 @@ def _provision_and_link_one_subtask(
         is_reused,
         is_done,
         link_result.degraded,
-        sync_parent_decomposition_plan(resolved_forge, parent_issue_number, plan_path),
     )
 
 
@@ -163,7 +162,6 @@ def _provision_subtasks_loop(
             is_reused,
             is_done,
             is_degraded,
-            synced,
         ) = _provision_and_link_one_subtask(
             resolved_forge,
             subtask,
@@ -182,7 +180,9 @@ def _provision_subtasks_loop(
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
         write_issue_numbers(plan_path, {subtask_id: number})
-        if not synced:
+        if not sync_parent_decomposition_plan(
+            resolved_forge, parent_issue_number, plan_path
+        ):
             plan_synced = False
 
     return created, reused, degraded_subtask_ids, plan_synced
