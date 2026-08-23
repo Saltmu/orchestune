@@ -51,4 +51,4 @@ test, commit, or push from the primary checkout.
 1. **Format/Lint**: Run `<FORMAT_LINT_COMMAND>` and fix any unresolved errors.
 2. **Type Checking**: Run `<TYPE_CHECK_COMMAND>` and resolve type mismatches.
 3. **Test Failures**: Identify and fix `<TEST_COMMAND>` failures. Qualification is Baseline-aware (zero new failures introduced beyond baseline failures).
-4. **Bloat Warnings**: If file size or complexity warnings are detected, distinguish between pre-existing baseline warnings and newly introduced/worsened warnings when a bloat baseline was recorded. If new/worsened bloat warnings are detected (or if no comparable bloat baseline exists), pause code modification and present a modular refactoring plan to the user for approval.
+4. **Bloat Warnings**: If file size or complexity warnings are detected, **pause code modification** and present a modular refactoring plan to the user for approval. Distinguish between pre-existing baseline warnings and newly introduced/worsened warnings for context.
