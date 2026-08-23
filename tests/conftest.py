@@ -23,6 +23,8 @@ from orchestune.git_cli import (
 )
 from orchestune.models import IssueRecord, PrRecord
 
+pytest_plugins = ["tests.test_provisioning_support"]
+
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
 
 

@@ -16,7 +16,7 @@ from orchestune.provisioning import (
     _resolve_parent_issue,
     provision_issues,
 )
-from tests.test_provisioning import FakeForge
+from tests.test_provisioning_support import FakeForge
 
 
 def test_embed_and_extract_decomposition_plan():
