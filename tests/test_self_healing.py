@@ -23,9 +23,8 @@ def test_recover_run_state_no_missing(tmp_path):
     assert len(run_state.active_worktrees) == 0
 
 
-@patch("orchestune.forge.GitHubForge.list_open_prs")
 @patch("subprocess.run")
-def test_recover_run_state_with_missing_no_pr(mock_subproc, mock_list_prs, tmp_path):
+def test_recover_run_state_with_missing_no_pr(mock_subproc, tmp_path, fake_forge):
     # status:in-progress の Issue があるが、run_state にない場合 (PRなし)
     run_state = RunState(active_worktrees={})
 
@@ -50,10 +49,11 @@ footprint:
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
         worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
     )
 
     # PRは存在しない
-    mock_list_prs.return_value = []
+    fake_forge.list_open_prs.return_value = []
 
     # git worktree list のモック (空)
     mock_res = MagicMock()
@@ -75,9 +75,8 @@ footprint:
     assert active.external_id is None
 
 
-@patch("orchestune.forge.GitHubForge.list_open_prs")
 @patch("subprocess.run")
-def test_recover_run_state_with_missing_and_pr(mock_subproc, mock_list_prs, tmp_path):
+def test_recover_run_state_with_missing_and_pr(mock_subproc, tmp_path, fake_forge):
     # status:in-progress の Issue があり、紐づく PR がある場合
     run_state = RunState(active_worktrees={})
 
@@ -100,6 +99,7 @@ footprint: []
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
         worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
     )
 
     # PRのモック
@@ -109,7 +109,7 @@ footprint: []
         changed_files=(),
         closes_issue_numbers=(102,),
     )
-    mock_list_prs.return_value = [mock_pr]
+    fake_forge.list_open_prs.return_value = [mock_pr]
 
     # git worktree list (worktrees/feature-my-branch が物理的に存在すると仮定)
     # これにより、物理チェックをパスさせる

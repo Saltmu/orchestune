@@ -52,14 +52,15 @@ class TestRunBootstrap:
         captured = capsys.readouterr()
         assert "打ち切" in captured.err
 
-    def test_uses_github_forge_by_default(self):
-        with patch("orchestune.bootstrap.GitHubForge") as mock_forge_cls:
-            mock_forge_cls.return_value = _fake_forge(
-                result=BootstrapResult(created_labels=(), existing_labels=())
-            )
-            exit_code = run_bootstrap()
+    def test_uses_injected_forge(self, fake_forge):
+        fake_forge.ensure_labels.return_value = BootstrapResult(
+            created_labels=(), existing_labels=()
+        )
 
-        mock_forge_cls.assert_called_once()
+        exit_code = run_bootstrap(forge=fake_forge)
+
+        fake_forge.check_auth.assert_called_once_with()
+        fake_forge.ensure_labels.assert_called_once()
         assert exit_code == 0
 
 

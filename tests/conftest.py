@@ -557,7 +557,6 @@ _FAKE_FORGE_MIGRATION_MODULES = (
 @pytest.fixture(autouse=True)
 def inject_fake_forge_for_dispatch_migration(
     request: pytest.FixtureRequest,
-    fake_forge: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Route Issue #625 tests' default forge construction to their shared fake."""
@@ -566,6 +565,7 @@ def inject_fake_forge_for_dispatch_migration(
 
     from fake_forge_proxy import active_fake_forge
 
+    fake_forge = request.getfixturevalue("fake_forge")
     active_fake_forge.forge = fake_forge
     for module_name in _FAKE_FORGE_MIGRATION_MODULES:
         module = sys.modules.get(module_name)

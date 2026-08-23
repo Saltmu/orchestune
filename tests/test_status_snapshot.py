@@ -7,7 +7,6 @@
 """
 
 import os
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -28,14 +27,17 @@ from orchestune.status_snapshot import (
 
 
 @pytest.fixture(autouse=True)
-def _stub_get_issue_labels():
+def _stub_get_issue_labels(fake_forge):
     """既定ではstatus:in-progressを返し、PID/external_idベースの分類テストが
     従来通り動作するようにする。優先順位そのもののテストは個別にオーバーライドする。"""
-    with patch(
-        "orchestune.forge.GitHubForge.get_issue_labels",
-        return_value=("status:in-progress",),
-    ) as mock:
-        yield mock
+    fake_forge.get_issue_labels.return_value = ("status:in-progress",)
+    yield fake_forge
+
+
+class _FakeForgeTest:
+    @pytest.fixture(autouse=True)
+    def _inject_forge(self, _stub_get_issue_labels):
+        self.forge = _stub_get_issue_labels
 
 
 def _active(**overrides):
@@ -202,72 +204,71 @@ class TestDeriveMonitorState:
         )
 
 
-class TestFetchLabelsCached:
+class TestFetchLabelsCached(_FakeForgeTest):
     def test_fetches_and_caches_within_ttl(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            return_value=("status:queued",),
-        ) as mock_fetch:
-            first = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
-            second = _fetch_labels_cached(133, cache, now=1005.0, ttl=15.0)
+        self.forge.get_issue_labels.return_value = ("status:queued",)
+
+        first = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0, forge=self.forge)
+        second = _fetch_labels_cached(
+            133, cache, now=1005.0, ttl=15.0, forge=self.forge
+        )
 
         assert first == ("status:queued",)
         assert second == ("status:queued",)
-        mock_fetch.assert_called_once_with(133)
+        self.forge.get_issue_labels.assert_called_once_with(133)
 
     def test_refetches_after_ttl_expires(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            return_value=("status:queued",),
-        ) as mock_fetch:
-            _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
-            _fetch_labels_cached(133, cache, now=1020.0, ttl=15.0)
+        self.forge.get_issue_labels.return_value = ("status:queued",)
 
-        assert mock_fetch.call_count == 2
+        _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0, forge=self.forge)
+        _fetch_labels_cached(133, cache, now=1020.0, ttl=15.0, forge=self.forge)
+
+        assert self.forge.get_issue_labels.call_count == 2
 
     def test_fetch_failure_without_cache_returns_none(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            side_effect=RuntimeError("gh unavailable"),
-        ):
-            result = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
+        self.forge.get_issue_labels.side_effect = RuntimeError("gh unavailable")
+
+        result = _fetch_labels_cached(
+            133, cache, now=1000.0, ttl=15.0, forge=self.forge
+        )
         assert result is None
 
     def test_fetch_failure_with_stale_cache_returns_stale_value(self):
         cache: dict[int, tuple[float, tuple[str, ...]]] = {
             133: (900.0, ("status:queued",))
         }
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            side_effect=RuntimeError("gh unavailable"),
-        ):
-            result = _fetch_labels_cached(133, cache, now=1000.0, ttl=15.0)
+        self.forge.get_issue_labels.side_effect = RuntimeError("gh unavailable")
+
+        result = _fetch_labels_cached(
+            133, cache, now=1000.0, ttl=15.0, forge=self.forge
+        )
         assert result == ("status:queued",)
 
 
-class TestFetchLabelsCachedWithFakeForge:
+class TestFetchLabelsCachedWithFakeForge(_FakeForgeTest):
     """#294: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
     `forge`引数への注入だけでテストが書けることを示す。"""
 
     def test_uses_injected_fake_forge_instead_of_patching(self):
-        fake_forge = MagicMock()
-        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
 
         result = _fetch_labels_cached(
-            133, cache, now=1000.0, ttl=15.0, forge=fake_forge
+            133, cache, now=1000.0, ttl=15.0, forge=self.forge
         )
 
         assert result == ("status:in-progress",)
-        fake_forge.get_issue_labels.assert_called_once_with(133)
+        self.forge.get_issue_labels.assert_called_once_with(133)
 
 
-class TestBuildStatusSnapshot:
+class TestBuildStatusSnapshot(_FakeForgeTest):
+    def build_status_snapshot(self, *args, **kwargs):
+        return build_status_snapshot(*args, **kwargs, forge=self.forge)
+
     def test_empty_when_no_run_state_file(self, tmp_path):
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             tmp_path / "run_state.json", tmp_path / "logs", now=1_700_000_100.0
         )
         assert snapshot.worktrees == []
@@ -282,7 +283,7 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -295,7 +296,7 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -309,7 +310,7 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -327,7 +328,7 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -340,13 +341,11 @@ class TestBuildStatusSnapshot:
         state = RunState(active_worktrees={"133": _active(pid=os.getpid())})
         save_run_state(state, run_state_path)
 
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            return_value=("status:done",),
-        ):
-            snapshot = build_status_snapshot(
-                run_state_path, tmp_path / "logs", now=1_700_000_100.0
-            )
+        self.forge.get_issue_labels.return_value = ("status:done",)
+
+        snapshot = self.build_status_snapshot(
+            run_state_path, tmp_path / "logs", now=1_700_000_100.0
+        )
 
         assert snapshot.worktrees[0].state == MonitorState.DONE
 
@@ -355,13 +354,11 @@ class TestBuildStatusSnapshot:
         state = RunState(active_worktrees={"133": _active(pid=999_999_999)})
         save_run_state(state, run_state_path)
 
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            side_effect=RuntimeError("network error"),
-        ):
-            snapshot = build_status_snapshot(
-                run_state_path, tmp_path / "logs", now=1_700_000_100.0
-            )
+        self.forge.get_issue_labels.side_effect = RuntimeError("network error")
+
+        snapshot = self.build_status_snapshot(
+            run_state_path, tmp_path / "logs", now=1_700_000_100.0
+        )
 
         assert snapshot.worktrees[0].labels_fetch_failed is True
         assert snapshot.worktrees[0].state == MonitorState.PROCESS_EXITED
@@ -371,7 +368,7 @@ class TestBuildStatusSnapshot:
         state = RunState(active_worktrees={}, last_reconciled_at=1_700_000_000.0)
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -384,7 +381,7 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -395,7 +392,7 @@ class TestBuildStatusSnapshot:
         state = RunState(active_worktrees={"133": _active(started_at=None)})
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -411,7 +408,9 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(run_state_path, log_dir, now=1_700_000_100.0)
+        snapshot = self.build_status_snapshot(
+            run_state_path, log_dir, now=1_700_000_100.0
+        )
 
         assert snapshot.worktrees[0].log_tail == ["hello", "world"]
 
@@ -422,7 +421,7 @@ class TestBuildStatusSnapshot:
         )
         save_run_state(state, run_state_path)
 
-        snapshot = build_status_snapshot(
+        snapshot = self.build_status_snapshot(
             run_state_path, tmp_path / "logs", now=1_700_000_100.0
         )
 
@@ -434,24 +433,20 @@ class TestBuildStatusSnapshot:
         save_run_state(state, run_state_path)
         cache: dict[int, tuple[float, tuple[str, ...]]] = {}
 
-        with patch(
-            "orchestune.forge.GitHubForge.get_issue_labels",
-            return_value=("status:in-progress",),
-        ) as mock_fetch:
-            build_status_snapshot(
-                run_state_path,
-                tmp_path / "logs",
-                now=1_700_000_100.0,
-                label_cache=cache,
-            )
-            build_status_snapshot(
-                run_state_path,
-                tmp_path / "logs",
-                now=1_700_000_101.0,
-                label_cache=cache,
-            )
+        self.build_status_snapshot(
+            run_state_path,
+            tmp_path / "logs",
+            now=1_700_000_100.0,
+            label_cache=cache,
+        )
+        self.build_status_snapshot(
+            run_state_path,
+            tmp_path / "logs",
+            now=1_700_000_101.0,
+            label_cache=cache,
+        )
 
-        mock_fetch.assert_called_once_with(133)
+        self.forge.get_issue_labels.assert_called_once_with(133)
 
 
 def _status(**overrides):
