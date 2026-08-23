@@ -579,6 +579,7 @@ def test_local_ci_developer_preflight_and_backend_selection():
     assert "gh auth status" in skill_md_lower or "auth" in skill_md_lower
     assert "mcp" in skill_md_lower
     assert "backend" in skill_md_lower
+    assert "selected backend" in skill_md_lower
 
     # tdd.md prerequisites
     tdd_md_lower = tdd_md.lower()

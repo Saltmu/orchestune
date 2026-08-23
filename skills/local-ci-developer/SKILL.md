@@ -16,7 +16,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 | Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch) |
 | :--- | :--- | :--- |
 | **Plan Approval (Step 1)** | Present to user and wait for approval | Proceed immediately to implementation after writing `implementation_plan.md` |
-| **Issue Creation (Step 2)** | Create manually or via CLI if needed | Use issue number provided in prompt (skip creation) |
+| **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
 | **Worktree (Step 2.5)** | Create and clean up a task worktree | Use the dispatcher-provisioned worktree; skip setup and cleanup |
 | **Reviewer Selection (Step 11)** | Ask user to select reviewer (Claude/Codex) | Automatically select a cross-model distinct from the author |
 | **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
@@ -35,12 +35,12 @@ At session start, inspect and record the execution environment:
 | :--- | :--- | :--- | :--- |
 | **0** | **Preflight & Requirement Check** | Verify Poetry, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
 | **1** | **Design & Implementation Plan** | Write `implementation_plan.md` recording preflight results, selected backend, and design. | - |
-| **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: `gh issue create --title "..." --body "..."`. | - |
+| **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: use selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
 | **2.5** | **Worktree Preparation** | For a requested change or existing Issue fix, create `worktree/<BRANCH_SLUG>` and perform all remaining work there. | [references/worktree.md](references/worktree.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
-| **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via `gh pr create`. | [references/pr.md](references/pr.md) |
+| **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
 | **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py`. | [references/review-loop.md](references/review-loop.md) |
-| **12** | **Outcome Declaration** | Post an outcome record (`result: done`) to PR/Issue comments and finish work. | - |
+| **12** | **Outcome Declaration** | Post an outcome record (`result: done`) to PR/Issue comments via selected backend and finish work. | - |
 
 ### Outcome Record Format
 Upon task completion, post the following machine-readable marker in a comment on the PR (or Issue):
