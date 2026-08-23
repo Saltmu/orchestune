@@ -35,50 +35,55 @@ def ensure_integration_pr(
     forge = forge or GitHubForge()
     try:
         base = base_branch.removeprefix("origin/")
-        if base.startswith("parent/"):
-            merge_note = (
-                "このPRはOrchestune Integratorが自動的にマージし、"
-                "対象Issueも自動的にクローズします。"
-            )
-        else:
-            merge_note = "最終マージは人間が行ってください。"
-        title = f"Integrate completed tasks ({', '.join(merged_tasks)})"
-        body = (
-            "Orchestune Integrator が仮マージCI通過後に作成した統合PRです。\n"
-            f"統合済みタスク: {', '.join(merged_tasks)}\n\n"
-            f"{merge_note}"
-        )
-
-        existing = [
-            pr
-            for pr in forge.list_open_prs()
-            if _is_reusable_integration_pr(pr, temp_branch, base)
-        ]
-        if existing:
-            pr_number = existing[0].number
-            # #375: 複数サイクルにまたがって同じPRへタスクが追加統合される
-            # ことがあるため、再利用時もタイトル・本文を最新のmerged_tasksへ
-            # 同期する。更新自体が失敗しても、PRそのものは既に有効なので
-            # 再利用を諦めない（警告のみ出し番号は返す）。
-            try:
-                forge.update_pull_request(pr_number, title=title, body=body)
-            except Exception as update_error:
-                print(
-                    f"Warning: Failed to update integration PR #{pr_number}: "
-                    f"{update_error}",
-                    file=sys.stderr,
-                )
-            return pr_number
-
+        title, body = _integration_pr_content(base, merged_tasks)
+        existing = _find_reusable_integration_pr(forge, temp_branch, base)
+        if existing is not None:
+            _update_reused_integration_pr(forge, existing.number, title, body)
+            return existing.number
         return forge.create_pull_request(
-            head=temp_branch,
-            base=base,
-            title=title,
-            body=body,
+            head=temp_branch, base=base, title=title, body=body
         )
     except Exception as e:
         print(f"Warning: Failed to ensure integration PR: {e}", file=sys.stderr)
         return None
+
+
+def _integration_pr_content(base: str, merged_tasks: list[str]) -> tuple[str, str]:
+    merge_note = (
+        "このPRはOrchestune Integratorが自動的にマージし、対象Issueも自動的にクローズします。"
+        if base.startswith("parent/")
+        else "最終マージは人間が行ってください。"
+    )
+    tasks = ", ".join(merged_tasks)
+    return f"Integrate completed tasks ({tasks})", (
+        "Orchestune Integrator が仮マージCI通過後に作成した統合PRです。\n"
+        f"統合済みタスク: {tasks}\n\n{merge_note}"
+    )
+
+
+def _find_reusable_integration_pr(
+    forge: Forge, head: str, base: str
+) -> PrRecord | None:
+    return next(
+        (
+            pr
+            for pr in forge.list_open_prs()
+            if _is_reusable_integration_pr(pr, head, base)
+        ),
+        None,
+    )
+
+
+def _update_reused_integration_pr(
+    forge: Forge, number: int, title: str, body: str
+) -> None:
+    try:
+        forge.update_pull_request(number, title=title, body=body)
+    except Exception as error:
+        print(
+            f"Warning: Failed to update integration PR #{number}: {error}",
+            file=sys.stderr,
+        )
 
 
 def ensure_parent_final_pr(
