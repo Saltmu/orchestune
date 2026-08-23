@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -524,15 +525,13 @@ def _resolve_depends_on(
     return depends_on
 
 
-def parse_task_from_issue(
+def _extract_footprint_metadata(
     issue: IssueRecord,
-    issue_to_subtask_id: dict[int, str] | None = None,
-) -> Task:
+) -> tuple[str, tuple[str, ...], tuple[str, ...], bool, re.Match[str] | None]:
     subtask_id = ""
     footprint: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
     yaml_error = False
-
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if match:
         try:
@@ -547,14 +546,17 @@ def parse_task_from_issue(
                 file=sys.stderr,
             )
             yaml_error = True
+    return subtask_id, footprint, symbols, yaml_error, match
 
-    depends_on = _resolve_depends_on(issue, issue_to_subtask_id, match, yaml_error)
 
+def _extract_labels_metadata(
+    labels: Sequence[str], issue_number: int
+) -> tuple[str, bool, bool]:
     priority = "medium"
     has_unknown_priority_label = False
     risk = False
     progress_partial = False
-    for label in issue.labels:
+    for label in labels:
         if label.startswith("priority:"):
             candidate = label.split(":", 1)[1]
             if candidate in BASE_PRIORITY:
@@ -563,7 +565,7 @@ def parse_task_from_issue(
                 has_unknown_priority_label = True
                 print(
                     f"Warning: Unknown priority label '{label}' on issue "
-                    f"#{issue.number}; falling back to 'medium'.",
+                    f"#{issue_number}; falling back to 'medium'.",
                     file=sys.stderr,
                 )
         elif label == "risk:flagged":
@@ -573,17 +575,31 @@ def parse_task_from_issue(
 
     if has_unknown_priority_label:
         priority = "medium"
+    return priority, risk, progress_partial
 
-    parent_number = None
-    parent_state = None
+
+def _extract_parent_metadata(issue: IssueRecord) -> tuple[int | None, str | None]:
     if issue.parent:
-        parent_number = issue.parent.get("number")
-        parent_state = issue.parent.get("state")
-    else:
-        # #485: ネイティブSub-issue関係が無い（MCP-only縮退環境で作成された）
-        # Issueでも、本文metadataから親を復元する。closed判定は分からないため
-        # `parent_state`はNoneのままとする(=未closedとして扱う、安全側)。
-        parent_number = parent_issue_number_from_body(issue.body)
+        return issue.parent.get("number"), issue.parent.get("state")
+    return parent_issue_number_from_body(issue.body), None
+
+
+def parse_task_from_issue(
+    issue: IssueRecord,
+    issue_to_subtask_id: dict[int, str] | None = None,
+) -> Task:
+    (
+        subtask_id,
+        footprint,
+        symbols,
+        yaml_error,
+        match,
+    ) = _extract_footprint_metadata(issue)
+    depends_on = _resolve_depends_on(issue, issue_to_subtask_id, match, yaml_error)
+    priority, risk, progress_partial = _extract_labels_metadata(
+        issue.labels, issue.number
+    )
+    parent_number, parent_state = _extract_parent_metadata(issue)
 
     return Task(
         issue_number=issue.number,

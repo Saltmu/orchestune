@@ -274,40 +274,14 @@ def _updated_subtask(
     )
 
 
-def recompute_dag_for_footprint_change(
-    subtasks: dict[str, SubTask],
+def _detect_footprint_conflicts_and_edges(
+    subtask_list: list[SubTask],
     subtask_id: str,
-    updated_footprint: Iterable[str] | None = None,
-    updated_symbols: Iterable[str] | None = None,
-    threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
-    ignore_patterns: Iterable[re.Pattern[str]] = (),
-) -> tuple[DagResult, list[FootprintConflict]]:
-    """Recompute the DAG after a running subtask changes its touch set."""
-    if subtask_id not in subtasks:
-        raise KeyError(f"未知のサブタスクIDです: {subtask_id}")
-
-    # build_similarity_edgesを2回呼ぶため、使い捨てiterable（ジェネレータ等）が
-    # 渡された場合に2回目が空になる問題を避けてtupleへ実体化する。
-    ignore_patterns = tuple(ignore_patterns)
-
-    previous_pairs = {
-        frozenset((edge.source, edge.target))
-        for edge in build_similarity_edges(
-            list(subtasks.values()),
-            threshold=threshold,
-            ignore_patterns=ignore_patterns,
-        )
-    }
-    updated_subtasks = dict(subtasks)
-    updated_subtasks[subtask_id] = _updated_subtask(
-        subtasks[subtask_id],
-        updated_footprint,
-        updated_symbols,
-    )
-    subtask_list = list(updated_subtasks.values())
-    explicit_edges = _collect_explicit_edges(subtask_list)
-    explicit_pairs = {(edge.source, edge.target) for edge in explicit_edges}
-
+    previous_pairs: set[frozenset[str]],
+    explicit_pairs: set[tuple[str, str]],
+    threshold: float,
+    ignore_patterns: tuple[re.Pattern[str], ...],
+) -> tuple[list[DagEdge], list[FootprintConflict]]:
     conflicts: list[FootprintConflict] = []
     final_similarity_edges: list[DagEdge] = []
     for edge in build_similarity_edges(
@@ -337,6 +311,48 @@ def recompute_dag_for_footprint_change(
                 )
             )
         final_similarity_edges.append(edge)
+    return final_similarity_edges, conflicts
+
+
+def recompute_dag_for_footprint_change(
+    subtasks: dict[str, SubTask],
+    subtask_id: str,
+    updated_footprint: Iterable[str] | None = None,
+    updated_symbols: Iterable[str] | None = None,
+    threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+) -> tuple[DagResult, list[FootprintConflict]]:
+    """Recompute the DAG after a running subtask changes its touch set."""
+    if subtask_id not in subtasks:
+        raise KeyError(f"未知のサブタスクIDです: {subtask_id}")
+
+    ignore_patterns_tuple = tuple(ignore_patterns)
+    previous_pairs = {
+        frozenset((edge.source, edge.target))
+        for edge in build_similarity_edges(
+            list(subtasks.values()),
+            threshold=threshold,
+            ignore_patterns=ignore_patterns_tuple,
+        )
+    }
+    updated_subtasks = dict(subtasks)
+    updated_subtasks[subtask_id] = _updated_subtask(
+        subtasks[subtask_id],
+        updated_footprint,
+        updated_symbols,
+    )
+    subtask_list = list(updated_subtasks.values())
+    explicit_edges = _collect_explicit_edges(subtask_list)
+    explicit_pairs = {(edge.source, edge.target) for edge in explicit_edges}
+
+    final_similarity_edges, conflicts = _detect_footprint_conflicts_and_edges(
+        subtask_list,
+        subtask_id,
+        previous_pairs,
+        explicit_pairs,
+        threshold,
+        ignore_patterns_tuple,
+    )
 
     result = _assemble_dag(subtask_list, [*explicit_edges, *final_similarity_edges])
     return result, conflicts

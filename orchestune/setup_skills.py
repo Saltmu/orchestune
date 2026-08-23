@@ -59,47 +59,56 @@ def get_skills_source_dir() -> Path:
     )
 
 
-def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
-    """Link (or copy) a single skill into place. Returns True on success/already-ok."""
-    if dest_skill.exists() or dest_skill.is_symlink():
-        if not dest_skill.is_symlink():
-            if dest_skill.is_dir() and (dest_skill / "SKILL.md").is_file():
-                print(
-                    f"  Skipped '{skill_name}' (already present as a copy at {dest_skill})"
-                )
-                return True
+def _handle_existing_skill_link(
+    src_skill: Path, dest_skill: Path, skill_name: str
+) -> bool | None:
+    if not (dest_skill.exists() or dest_skill.is_symlink()):
+        return None
+
+    if not dest_skill.is_symlink():
+        if dest_skill.is_dir() and (dest_skill / "SKILL.md").is_file():
             print(
-                f"  Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
-                "and does not look like a valid skill installation.",
+                f"  Skipped '{skill_name}' (already present as a copy at {dest_skill})"
+            )
+            return True
+        print(
+            f"  Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
+            "and does not look like a valid skill installation.",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        link_target = dest_skill.readlink()
+        if _normalized_path(str(link_target.resolve())) == _normalized_path(
+            str(src_skill.resolve())
+        ):
+            print(f"  Skipped '{skill_name}' (already correctly linked to {src_skill})")
+            return True
+        print(
+            f"  Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})"
+        )
+        dest_skill.unlink()
+    except Exception as e:
+        print(
+            f"  Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite."
+        )
+        try:
+            dest_skill.unlink()
+        except Exception as unlink_e:
+            print(
+                f"  Error: Failed to remove stale link {dest_skill}: {unlink_e}",
                 file=sys.stderr,
             )
             return False
+    return None
 
-        try:
-            link_target = dest_skill.readlink()
-            if _normalized_path(str(link_target.resolve())) == _normalized_path(
-                str(src_skill.resolve())
-            ):
-                print(
-                    f"  Skipped '{skill_name}' (already correctly linked to {src_skill})"
-                )
-                return True
-            print(
-                f"  Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})"
-            )
-            dest_skill.unlink()
-        except Exception as e:
-            print(
-                f"  Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite."
-            )
-            try:
-                dest_skill.unlink()
-            except Exception as unlink_e:
-                print(
-                    f"  Error: Failed to remove stale link {dest_skill}: {unlink_e}",
-                    file=sys.stderr,
-                )
-                return False
+
+def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
+    """Link (or copy) a single skill into place. Returns True on success/already-ok."""
+    handled = _handle_existing_skill_link(src_skill, dest_skill, skill_name)
+    if handled is not None:
+        return handled
 
     try:
         setup_method = _create_skill_link(src_skill, dest_skill)
@@ -190,111 +199,59 @@ def _copy_workflow_template_skill(
         return False
 
 
-def setup_skills(with_workflow_skill: bool = False) -> int:
-    """Set up skill links for detected AI assistants.
+def _setup_project_workflow_skill(
+    skills_dir: Path, home: Path
+) -> tuple[bool, int, int]:
+    src_workflow_skill = skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
+    if not src_workflow_skill.is_dir():
+        fallback = next(
+            (
+                candidate / WORKFLOW_TEMPLATE_SKILL_NAME
+                for candidate in _package_relative_skills_dirs()
+                if (candidate / WORKFLOW_TEMPLATE_SKILL_NAME).is_dir()
+            ),
+            None,
+        )
+        if fallback is not None:
+            src_workflow_skill = fallback
 
-    `with_workflow_skill=True`は、`WORKFLOW_TEMPLATE_SKILL_NAME`（#394）を
-    グローバルスキルディレクトリではなく、カレントディレクトリ（対象
-    プロジェクトのルート）を基点にしたプロジェクトローカルなスキル
-    ディレクトリへ実体コピーする。`local-ci-developer`と同様、この
-    スキルが定義する規律（テストコマンド等）はプロジェクト固有であるべき
-    ため、他の全プロジェクトへ波及するグローバルリンクの対象外
-    （`SKILLS_EXCLUDED_FROM_SETUP`）にしている。
+    if not src_workflow_skill.is_dir():
+        print(
+            f"  Error: workflow template skill source not found in {skills_dir}, "
+            "cannot fulfill --with-workflow-skill.",
+            file=sys.stderr,
+        )
+        return False, 0, 1
 
-    Returns an exit code: 0 on full success (or nothing to do), 1 if any
-    required skill link could not be created/verified.
-    """
-    try:
-        skills_dir = get_skills_source_dir()
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-
-    home = Path.home()
-
-    targets = {
-        "Claude Code": (home / ".claude", home / ".claude" / "skills"),
-        "Codex CLI": (home / ".codex", home / ".codex" / "skills"),
-        "Antigravity": (home / ".gemini", home / ".gemini" / "config" / "skills"),
+    project_dir = Path.cwd()
+    project_skill_dirs = {
+        "Claude Code": (home / ".claude", project_dir / ".claude" / "skills"),
+        "Codex CLI": (home / ".codex", project_dir / ".codex" / "skills"),
+        "Antigravity": (
+            home / ".gemini",
+            project_dir / ".gemini" / "config" / "skills",
+        ),
     }
-
-    skills_to_link = sorted(
-        [
-            d.name
-            for d in skills_dir.iterdir()
-            if (
-                d.is_dir()
-                and (d / "SKILL.md").is_file()
-                and d.name not in SKILLS_EXCLUDED_FROM_SETUP
-            )
-        ]
-    )
-
     assistants_detected = False
     success_count = 0
     failure_count = 0
-
-    for assistant_name, (base_dir, target_dir) in targets.items():
-        result = _setup_for_assistant(
-            assistant_name, base_dir, target_dir, skills_dir, skills_to_link
-        )
-        if result is None:
+    for base_dir, project_skills_dir in project_skill_dirs.values():
+        if not base_dir.is_dir():
             continue
         assistants_detected = True
-        assistant_success, assistant_failure = result
-        success_count += assistant_success
-        failure_count += assistant_failure
-
-    if with_workflow_skill:
-        src_workflow_skill = skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
-        if not src_workflow_skill.is_dir():
-            # `skills_dir` may be a project-local tree that has 'orchestune'
-            # but not 'workflow-template' (e.g. a partial vendor copy). Fall
-            # back to the installed package's own skills/ before giving up,
-            # so a pipx install still finds the template it ships with.
-            fallback = next(
-                (
-                    candidate / WORKFLOW_TEMPLATE_SKILL_NAME
-                    for candidate in _package_relative_skills_dirs()
-                    if (candidate / WORKFLOW_TEMPLATE_SKILL_NAME).is_dir()
-                ),
-                None,
-            )
-            if fallback is not None:
-                src_workflow_skill = fallback
-
-        if not src_workflow_skill.is_dir():
-            print(
-                f"  Error: workflow template skill source not found in {skills_dir}, "
-                "cannot fulfill --with-workflow-skill.",
-                file=sys.stderr,
-            )
-            failure_count += 1
+        dest_skill = project_skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
+        if _copy_workflow_template_skill(
+            src_workflow_skill, dest_skill, WORKFLOW_TEMPLATE_SKILL_NAME
+        ):
+            success_count += 1
         else:
-            project_dir = Path.cwd()
-            project_skill_dirs = {
-                "Claude Code": (
-                    home / ".claude",
-                    project_dir / ".claude" / "skills",
-                ),
-                "Codex CLI": (home / ".codex", project_dir / ".codex" / "skills"),
-                "Antigravity": (
-                    home / ".gemini",
-                    project_dir / ".gemini" / "config" / "skills",
-                ),
-            }
-            for base_dir, project_skills_dir in project_skill_dirs.values():
-                if not base_dir.is_dir():
-                    continue
-                assistants_detected = True
-                dest_skill = project_skills_dir / WORKFLOW_TEMPLATE_SKILL_NAME
-                if _copy_workflow_template_skill(
-                    src_workflow_skill, dest_skill, WORKFLOW_TEMPLATE_SKILL_NAME
-                ):
-                    success_count += 1
-                else:
-                    failure_count += 1
+            failure_count += 1
+    return assistants_detected, success_count, failure_count
 
+
+def _evaluate_setup_outcome(
+    assistants_detected: bool, success_count: int, failure_count: int
+) -> int:
     if not assistants_detected and failure_count == 0:
         print(
             "\nNo supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory."
@@ -318,3 +275,64 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
 
     print("\nSetup completed.")
     return 0
+
+
+def setup_skills(with_workflow_skill: bool = False) -> int:
+    """Set up skill links for detected AI assistants.
+
+    `with_workflow_skill=True`は、`WORKFLOW_TEMPLATE_SKILL_NAME`（#394）を
+    グローバルスキルディレクトリではなく、カレントディレクトリ（対象
+    プロジェクトのルート）を基点にしたプロジェクトローカルなスキル
+    ディレクトリへ実体コピーする。
+
+    Returns an exit code: 0 on full success (or nothing to do), 1 if any
+    required skill link could not be created/verified.
+    """
+    try:
+        skills_dir = get_skills_source_dir()
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    home = Path.home()
+    targets = {
+        "Claude Code": (home / ".claude", home / ".claude" / "skills"),
+        "Codex CLI": (home / ".codex", home / ".codex" / "skills"),
+        "Antigravity": (home / ".gemini", home / ".gemini" / "config" / "skills"),
+    }
+    skills_to_link = sorted(
+        [
+            d.name
+            for d in skills_dir.iterdir()
+            if (
+                d.is_dir()
+                and (d / "SKILL.md").is_file()
+                and d.name not in SKILLS_EXCLUDED_FROM_SETUP
+            )
+        ]
+    )
+    assistants_detected = False
+    success_count = 0
+    failure_count = 0
+
+    for assistant_name, (base_dir, target_dir) in targets.items():
+        result = _setup_for_assistant(
+            assistant_name, base_dir, target_dir, skills_dir, skills_to_link
+        )
+        if result is None:
+            continue
+        assistants_detected = True
+        assistant_success, assistant_failure = result
+        success_count += assistant_success
+        failure_count += assistant_failure
+
+    if with_workflow_skill:
+        wf_detected, wf_success, wf_failure = _setup_project_workflow_skill(
+            skills_dir, home
+        )
+        if wf_detected:
+            assistants_detected = True
+        success_count += wf_success
+        failure_count += wf_failure
+
+    return _evaluate_setup_outcome(assistants_detected, success_count, failure_count)
