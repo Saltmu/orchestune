@@ -108,10 +108,14 @@ class TestApplyStaleActiveEntryDiscard:
         mock_kill.assert_called_once_with(12345, 9)
         assert run_state.active_worktrees == {}
 
-    def test_backup_failure_skips_discard_and_preserves_entry(self, tmp_path):
+    def test_backup_failure_skips_discard_and_preserves_entry(
+        self, tmp_path, fake_forge
+    ):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+        )
 
         with (
             patch(
@@ -121,7 +125,6 @@ class TestApplyStaleActiveEntryDiscard:
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
             patch("orchestune.dispatch_gc.os.kill") as mock_kill,
             patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state, "280", active, "test reason", config
@@ -130,8 +133,8 @@ class TestApplyStaleActiveEntryDiscard:
         assert discarded is False
         mock_kill.assert_not_called()
         mock_remove.assert_not_called()
-        mock_comment.assert_called_once()
-        assert "test reason" in mock_comment.call_args.args[1]
+        fake_forge.add_comment.assert_called_once()
+        assert "test reason" in fake_forge.add_comment.call_args.args[1]
         # バックアップ失敗時は帳簿を温存し、次サイクルでの再試行に委ねる。
         assert run_state.active_worktrees == {"280": active}
 
@@ -159,14 +162,16 @@ class TestApplyStaleActiveEntryDiscard:
 
 
 class TestRuleStaleEntry:
-    def test_backup_failure_defers_terminal_outcome_to_next_cycle(self, tmp_path):
+    def test_backup_failure_defers_terminal_outcome_to_next_cycle(
+        self, tmp_path, fake_forge
+    ):
         # #382 Reproducer: WIPバックアップ失敗時は、破棄処理をスキップして
         # このサイクルではNoneを返し（terminalな完了イベントを発行しない）、
         # run_stateのエントリも温存して次サイクルでの再試行に委ねる。
         active = _active(worktree_path=str(tmp_path), pid=12345)
         task = _task(status_labels=("status:blocked",))
         run_state = RunState(active_worktrees={"280": active})
-        ctx = _ctx(run_state=run_state)
+        ctx = _ctx(run_state=run_state, forge=fake_forge)
         ctx.config.apply = True
 
         with (
@@ -175,7 +180,6 @@ class TestRuleStaleEntry:
                 return_value="fatal: unable to write new index file",
             ),
             patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             outcome = _rule_stale_entry(ctx, "280", active, task)
 
