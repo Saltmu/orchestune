@@ -501,6 +501,38 @@ def test_workflow_template_structure():
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_worker_skills_forbid_direct_label_operations(skill_name: str):
+    """Worker skills must explicitly prohibit direct label operations and avoid status label references."""
+    skill_dir = SKILLS_ROOT / skill_name
+    skill_md = skill_dir / "SKILL.md"
+    skill_text = skill_md.read_text(encoding="utf-8")
+    skill_text_lower = skill_text.lower()
+
+    # Must explicitly state that direct label modifications are prohibited
+    assert "label" in skill_text_lower
+    assert (
+        "no direct github label operations" in skill_text_lower
+        or "never add, remove, or modify" in skill_text_lower
+    )
+    assert "outcome record" in skill_text_lower
+
+    # Prohibit all direct status label occurrences across all markdown files in worker skills
+    for md_file in skill_dir.rglob("*.md"):
+        file_text = md_file.read_text(encoding="utf-8")
+        for forbidden in (
+            "status:in-progress",
+            "status:not-needed",
+            "status:blocked-human-review",
+            "status:queued",
+            "status:blocked",
+            "status:done",
+        ):
+            assert (
+                forbidden not in file_text
+            ), f"{md_file} must not contain direct status label '{forbidden}'"
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
 def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
     """変更作業はリポジトリ直下の隔離 worktree で完結させる。"""
     skill_dir = SKILLS_ROOT / skill_name

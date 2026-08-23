@@ -77,11 +77,11 @@ The dividing line is not "what the LLM does not do" but **scope**: whose territo
 
 | | Writes to |
 |---|---|
-| **LLM** | The isolation it was given (its worktree and its own branch), plus the statement of its judgement (labels, comments, a PR) |
-| **Python** | **The shared state that advances automatically** — integration merges from a child PR into the parent branch, whether an Issue lives or dies, dependency resolution, the quota ledger |
+| **LLM** | The isolation it was given (its worktree and its own branch), plus the statement of its judgement (Outcome Records, comments, a PR) |
+| **Python** | **The shared state that advances automatically** — integration merges from a child PR into the parent branch, whether an Issue lives or dies, label transitions, dependency resolution, the quota ledger |
 | **Human** | **The acceptance merge** — the final PR from the parent branch into `main`; the "one human click" of Section 4 |
 
-Some label transitions do belong to the LLM. An implementation agent applies `status:not-needed` itself when it finds the requirement already satisfied (it writes no commit and opens no PR, so the label is the only completion signal available), and it commits, pushes, and opens PRs. All of that stays inside its own branch, though. **What the agent never decides is whether that work enters shared state.**
+Worker agents never mutate shared GitHub labels directly. When an implementation agent finds a requirement already satisfied, it records an Outcome Record (`<!-- orchestune:outcome -->` with `result: not-needed`) as a comment rather than modifying labels, and it commits, pushes, and opens PRs only within its assigned branch. **What the agent never decides is whether that work enters shared state.**
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
@@ -93,7 +93,7 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 | Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
 | Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch_locks.check_footprint_deviation`) | DAG recomputation (with exclusion rules and a retry cap) |
 | Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
-| The agent's own report (`status:not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by a label |
+| The agent's own report (`result: not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by the outcome record and status label |
 
 The detailed behaviour of each mechanism — its exclusion rules, its skip conditions, how it differs per dispatch target — belongs to that mechanism's own section and to the docstring of its implementation. All that matters here is that each one follows from the same principle.
 

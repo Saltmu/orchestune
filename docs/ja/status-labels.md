@@ -163,8 +163,7 @@ stateDiagram-v2
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
 - 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree` / `_rule_not_needed`
-- 条件: セッションが完了宣言レコード（`orchestune:outcome`、`result: not-needed`）を残したか、
-  `status:not-needed`ラベルを付与した場合。クラウド
+- 条件: セッションが完了宣言レコード（`orchestune:outcome`、`result: not-needed`）を残した場合。クラウド
   ルーチンが利用可能なら即座にクローズせず独立検証レビューを起動し
   （`orchestune/integration_coordinator.py`）、レビュー結果に応じて後続
   サイクルでクローズする。ローカル環境では従来通り即座にクローズする。
