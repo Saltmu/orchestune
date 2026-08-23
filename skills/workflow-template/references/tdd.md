@@ -19,7 +19,7 @@ test, commit, or push from the primary checkout.
   poetry run python scripts/ci_baseline.py record
   ```
 - **Fallback procedure (when no baseline script exists)**:
-  Run `<TEST_COMMAND>` on unmodified code and note existing test failures (failures or flaky tests unrelated to this issue) in a temporary note. Use this record in Step 9 to distinguish new regressions.
+  Run `<TEST_COMMAND>` (and any bloat inspection command) on unmodified code and note existing test failures or bloat warnings (failures, flaky tests, or pre-existing bloat warnings unrelated to this issue) in a temporary note. Use this record in Step 9 to distinguish new regressions and newly introduced bloat.
 - This record enables Step 9 to automatically distinguish between new regressions and pre-existing failures on the base branch.
 
 ## 5. Pre-Implementation Test Creation (Test-First)
@@ -51,4 +51,4 @@ test, commit, or push from the primary checkout.
 1. **Format/Lint**: Run `<FORMAT_LINT_COMMAND>` and fix any unresolved errors.
 2. **Type Checking**: Run `<TYPE_CHECK_COMMAND>` and resolve type mismatches.
 3. **Test Failures**: Identify and fix `<TEST_COMMAND>` failures. Qualification is Baseline-aware (zero new failures introduced beyond baseline failures).
-4. **Bloat Warnings**: If file size or complexity warnings are detected, distinguish between pre-existing baseline warnings and newly introduced/worsened warnings. If new bloat warnings are detected, pause code modification and present a modular refactoring plan to the user for approval.
+4. **Bloat Warnings**: If file size or complexity warnings are detected, distinguish between pre-existing baseline warnings and newly introduced/worsened warnings when a bloat baseline was recorded. If new/worsened bloat warnings are detected (or if no comparable bloat baseline exists), pause code modification and present a modular refactoring plan to the user for approval.
