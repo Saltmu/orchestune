@@ -203,3 +203,51 @@ class TestParseFromCommentsSinceFilter:
         comments = [{"body": record.render(), "created_at": "invalid-timestamp"}]
         since_ts = 1787270400.0
         assert parse_from_comments(comments, since=since_ts) == record
+
+
+class TestParseFromCommentsTypeNormalization:
+    def test_string_integer_issue_and_pr_normalized(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": "548", "pr": "560"}}\n```\n'
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        record = parse_from_comments(comments)
+        assert record == OutcomeRecord(result="done", issue=548, pr=560)
+
+    def test_hash_prefixed_issue_and_pr_normalized(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": "#548", "pr": "#560"}}\n```\n'
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        record = parse_from_comments(comments)
+        assert record == OutcomeRecord(result="done", issue=548, pr=560)
+
+    def test_whitespace_around_issue_and_pr_normalized(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": " #548 ", "pr": " 560 "}}\n```\n'
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        record = parse_from_comments(comments)
+        assert record == OutcomeRecord(result="done", issue=548, pr=560)
+
+    def test_string_attempt_and_rounds_normalized(self):
+        body = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            '{"result": "done", "issue": 548, "pr": 560, "attempt": "2", "review": {"rounds": "3", "verdict": "lgtm"}}\n```\n'
+        )
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        record = parse_from_comments(comments)
+        assert record == OutcomeRecord(
+            result="done",
+            issue=548,
+            pr=560,
+            attempt=2,
+            review=ReviewSummary(rounds=3, verdict="lgtm"),
+        )
+
+    def test_invalid_string_integers_fail_closed(self):
+        for invalid_issue in ("abc", "#abc", "12a", "", " ", "#", "-1", "12.34"):
+            body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": "{invalid_issue}", "pr": 1}}\n```\n'
+            comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+            assert (
+                parse_from_comments(comments) is None
+            ), f"Expected {invalid_issue} to be rejected"
+
+    def test_float_issue_fails_closed(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": 12.34, "pr": 1}}\n```\n'
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        assert parse_from_comments(comments) is None

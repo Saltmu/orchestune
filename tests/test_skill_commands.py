@@ -542,6 +542,21 @@ def test_worker_skills_forbid_direct_label_operations(skill_name: str):
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_worker_skills_document_all_outcome_record_patterns(skill_name: str):
+    """Worker skills must document complete JSON templates for all 3 outcome results (done, not-needed, blocked)."""
+    skill_dir = SKILLS_ROOT / skill_name
+    skill_md = skill_dir / "SKILL.md"
+    skill_text = skill_md.read_text(encoding="utf-8")
+
+    assert '"result": "done"' in skill_text or 'result: "done"' in skill_text
+    assert (
+        '"result": "not-needed"' in skill_text or 'result: "not-needed"' in skill_text
+    )
+    assert '"result": "blocked"' in skill_text or 'result: "blocked"' in skill_text
+    assert "base-branch-red" in skill_text
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
 def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
     """変更作業はリポジトリ直下の隔離 worktree で完結させる。"""
     skill_dir = SKILLS_ROOT / skill_name
