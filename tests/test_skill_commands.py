@@ -561,3 +561,31 @@ def test_skills_require_locale_aware_user_responses():
             or "response language" in text
             or "preferred language" in text
         ), f"{skill_md.relative_to(REPO_ROOT)} must contain explicit directive for user-facing response language"
+
+
+def test_local_ci_developer_preflight_and_backend_selection():
+    """local-ci-developer defines execution environment preflight and fixes the GitHub backend."""
+    skill_dir = SKILLS_ROOT / "local-ci-developer"
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    tdd_md = (skill_dir / "references" / "tdd.md").read_text(encoding="utf-8")
+    pr_md = (skill_dir / "references" / "pr.md").read_text(encoding="utf-8")
+
+    # SKILL.md preflight checks and backend locking
+    skill_md_lower = skill_md.lower()
+    assert "preflight" in skill_md_lower
+    assert "poetry" in skill_md_lower
+    assert "lock" in skill_md_lower or "lockfile" in skill_md_lower
+    assert "gitleaks" in skill_md_lower
+    assert "gh auth status" in skill_md_lower or "auth" in skill_md_lower
+    assert "mcp" in skill_md_lower
+    assert "backend" in skill_md_lower
+    assert "selected backend" in skill_md_lower
+
+    # tdd.md prerequisites
+    tdd_md_lower = tdd_md.lower()
+    assert "poetry" in tdd_md_lower
+    assert "lock" in tdd_md_lower or "install" in tdd_md_lower
+
+    # pr.md fallback and MCP continuation
+    pr_md_lower = pr_md.lower()
+    assert "mcp" in pr_md_lower

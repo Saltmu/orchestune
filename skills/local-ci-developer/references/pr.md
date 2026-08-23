@@ -20,10 +20,14 @@ Copy the repository's PR template (`.github/pull_request_template.md`) to a temp
 > For minor changes (typo or documentation fixes only), explicitly state "N/A due to minor change" in the Reproducer and test result sections.
 
 ### 2. Submitting the PR
-Create the PR using the `gh` CLI:
-```bash
-gh pr create --title "PR Title" --body-file /tmp/pr_body.md
-```
-*(Note: If `gh` CLI is unavailable, submit the same content via GitHub MCP or the Web UI.)*
+Submit the PR using the fixed backend selected during Step 0 Preflight:
+
+- **When using `gh` CLI**:
+  ```bash
+  gh pr create --title "PR Title" --body-file /tmp/pr_body.md
+  ```
+- **When using GitHub MCP (or if `gh` CLI is unauthenticated/unavailable)**:
+  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, title, and body content from `/tmp/pr_body.md`.
+  - Or create the PR via the GitHub Web UI with the same title and body content.
 
 Once the PR is created, record the issued PR number and proceed to Step 11 (Review Loop).
