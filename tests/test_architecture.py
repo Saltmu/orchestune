@@ -1013,6 +1013,21 @@ def _string_scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]
     assigned: set[str] = set()
     rebound_outer: set[str] = set()
     values: dict[str, set[str]] = defaultdict(set)
+    if isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+        arguments = scope.args
+        assigned.update(
+            argument.arg
+            for argument in (
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            )
+        )
+        assigned.update(
+            argument.arg
+            for argument in (arguments.vararg, arguments.kwarg)
+            if argument is not None
+        )
     for node in _nodes_in_scope(scope):
         if isinstance(node, _SCOPE_NODES):
             continue
@@ -1233,6 +1248,22 @@ def harmless_helper():
     target = "orchestune.dispatch_gc.is_process_alive"
     with patch(target):
         pass
+"""
+
+    assert _github_forge_patch_lines(source) == []
+
+
+def test_github_forge_patch_detector_treats_parameters_as_local() -> None:
+    source = """
+from unittest.mock import patch
+
+target = "orchestune.forge.GitHubForge.list_prs"
+
+def helper(target):
+    with patch(target):
+        pass
+
+lambda target: patch(target)
 """
 
     assert _github_forge_patch_lines(source) == []
