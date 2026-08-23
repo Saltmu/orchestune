@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +27,7 @@ from orchestune.dispatch_labels import (
 )
 from orchestune.dispatch_rules import NotNeededReviewDispatcher
 from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
+from orchestune.dispatch_state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -527,8 +530,42 @@ def _cloud_worktree_completion_status(
     return "completed" if _call_is_complete(config, handle) else "pending"
 
 
+def _reserve_cloud_reclaim_record(
+    issue_number: int,
+    run_state: RunState | None,
+    on_reclaim_reserved: Callable[[], None] | None = None,
+) -> int:
+    if run_state is None:
+        return 1
+    previous_record = run_state.task_reclaim_counts.get(issue_number)
+    if previous_record is None:
+        reclaim_count = 1
+    elif previous_record.pending:
+        reclaim_count = previous_record.count
+    else:
+        reclaim_count = previous_record.count + 1
+    run_state.task_reclaim_counts[issue_number] = TaskReclaimRecord(
+        count=reclaim_count, last_reclaimed_at=time.time(), pending=True
+    )
+    if on_reclaim_reserved is not None:
+        try:
+            on_reclaim_reserved()
+        except Exception:
+            if previous_record is None:
+                run_state.task_reclaim_counts.pop(issue_number, None)
+            else:
+                run_state.task_reclaim_counts[issue_number] = previous_record
+            raise
+    return reclaim_count
+
+
 def _finalize_abandoned_cloud_worktree(
-    active: ActiveWorktree, active_task: Task | None, config: DispatcherConfig
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+    run_state: RunState | None = None,
+    on_label_applied: Callable[[], None] | None = None,
+    on_reclaim_reserved: Callable[[], None] | None = None,
 ) -> dict:
     event = {
         "issue_number": active.issue_number,
@@ -539,7 +576,6 @@ def _finalize_abandoned_cloud_worktree(
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if config.apply:
-        remove_worktree(active.worktree_path)
         status_labels = (
             active_task.status_labels if active_task else ("status:in-progress",)
         )
@@ -547,27 +583,69 @@ def _finalize_abandoned_cloud_worktree(
         # /status:manual-merge-requiredが既に付与されている場合、status:queuedへの
         # 書き換えは人間の確認要求を握りつぶしてしまう。その場合はラベルに触れない。
         if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
+            remove_worktree(active.worktree_path)
             config.resolved_forge.add_comment(
                 active.issue_number,
                 "タスクのPRがマージされずにクローズされたためworktreeを回収しました。"
                 "既に人間の確認が必要な状態のため、status:*ラベルは変更していません。",
             )
-        else:
-            # stacked launch等の中断した遷移でstatus:blockedが取り残されている
-            # 場合も併せて除去し、status:queuedへ確実に収束させる。
-            stale_labels = tuple(
-                label for label in PRIMARY_STATUS_LABELS if label in status_labels
-            )
-            transition_status_label(
-                config.resolved_forge,
+            event["action"] = "abandoned_pr_requeued"
+            return event
+
+        reclaim_count = _reserve_cloud_reclaim_record(
+            active.issue_number, run_state, on_reclaim_reserved=on_reclaim_reserved
+        )
+
+        def _settle_reclaim() -> None:
+            if run_state is not None:
+                rec = run_state.task_reclaim_counts.get(active.issue_number)
+                if rec is not None:
+                    rec.pending = False
+            if on_label_applied is not None:
+                on_label_applied()
+
+        remove_worktree(active.worktree_path)
+        if reclaim_count > config.max_task_reclaims:
+            apply_human_review_escalation(
                 active.issue_number,
-                "status:queued",
-                stale_labels,
+                status_labels,
+                "タスクのPRがクローズされたか、Cloudタスクの失敗により回収を行いました。\n"
+                f"回収・再投入の累計回数が上限（max_task_reclaims="
+                f"{config.max_task_reclaims}）を超えた"
+                f"（今回で{reclaim_count}回目）ため、"
+                "status:queuedへの再投入を打ち切り、"
+                "status:blocked-human-reviewへ遷移しました。\n"
+                "タスクの実装方針や実行環境を確認してください。",
+                forge=config.resolved_forge,
+                on_label_applied=_settle_reclaim,
             )
+            event["action"] = "escalated_reclaim_limit_exceeded"
+            return event
+
+        # stacked launch等の中断した遷移でstatus:blockedが取り残されている
+        # 場合も併せて除去し、status:queuedへ確実に収束させる。
+        stale_labels = tuple(
+            label for label in PRIMARY_STATUS_LABELS if label in status_labels
+        )
+        transition_status_label(
+            config.resolved_forge,
+            active.issue_number,
+            "status:queued",
+            stale_labels,
+            on_label_added=_settle_reclaim,
+        )
+        try:
             config.resolved_forge.add_comment(
                 active.issue_number,
-                "タスクのPRがマージされずにクローズされたため、完了扱いにはせず、"
-                "GCによりタスクを再キューイング（status:queued）しました。",
+                "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
+                "GCによりタスクを再キューイング（status:queued）しました"
+                f"（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
+            )
+        except Exception as e:  # noqa: BLE001 - 通知の失敗で回収をやり直さない
+            print(
+                f"Warning: requeued issue #{active.issue_number} but failed to post "
+                f"abandonment comment: {e}",
+                file=sys.stderr,
             )
     event["action"] = "abandoned_pr_requeued"
     return event

@@ -143,7 +143,7 @@ orchestune setup --with-workflow-skill
    orchestune dispatch --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
    ```
 
-Before submission, Orchestune pushes the task branch to `origin`, then runs `codex cloud exec --env <environment_id> --branch <branch>` non-interactively. Completion is detected when an open PR has that branch as its head. If the environment ID is missing, Orchestune warns and safely falls back to the no-op target.
+Before submission, Orchestune pushes the task branch to `origin`, then runs `codex cloud exec --env <environment_id> --branch <branch>` non-interactively. After submission, it tracks the actual Cloud task ID and URL, combining Cloud task status checks (early detection of failed / cancelled tasks) with branch PR / outcome record status to determine completion. If the environment ID is missing, Orchestune warns and safely falls back to the no-op target.
 
 ---
 

@@ -338,6 +338,9 @@ def _apply_stale_active_entry_discard(
         remove_worktree(active.worktree_path)
 
     del run_state.active_worktrees[key]
+    record = run_state.task_reclaim_counts.get(active.issue_number)
+    if record is not None and record.pending:
+        record.pending = False
     return True
 
 
@@ -361,11 +364,65 @@ def _abandoned_worktree_outcome(
     active: ActiveWorktree,
     active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome:
-    completion_event = _finalize_abandoned_cloud_worktree(
-        active, active_task, ctx.config
-    )
-    if completion_event["action"] == "abandoned_pr_requeued" and ctx.config.apply:
-        del ctx.run_state.active_worktrees[key]
+    released = False
+
+    def _release_entry() -> None:
+        nonlocal released
+        ctx.run_state.active_worktrees.pop(key, None)
+        rec = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+        if rec is not None:
+            rec.pending = False
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+        released = True
+
+    def _reserve_reclaim() -> None:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+
+    try:
+        completion_event = _finalize_abandoned_cloud_worktree(
+            active,
+            active_task,
+            ctx.config,
+            ctx.run_state,
+            on_label_applied=_release_entry,
+            on_reclaim_reserved=_reserve_reclaim,
+        )
+    except Exception as e:
+        print(
+            f"Warning: skipping abandonment of issue #{active.issue_number}: "
+            f"failed to persist the reclaim count: {e}",
+            file=sys.stderr,
+        )
+        return ActiveWorktreeRuleOutcome(
+            completion_event={
+                "issue_number": active.issue_number,
+                "subtask_id": active_task.subtask_id if active_task else "",
+                "worktree_path": active.worktree_path,
+                "action": "abandonment_skipped_persistence_failure",
+            },
+            terminal=True,
+        )
+
+    if (
+        completion_event["action"]
+        in ("abandoned_pr_requeued", "escalated_reclaim_limit_exceeded")
+        and ctx.config.apply
+        and not released
+    ):
+        ctx.run_state.active_worktrees.pop(key, None)
+        _persist_run_state_best_effort(
+            ctx, f"the released ledger entry for issue #{active.issue_number}"
+        )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 
 

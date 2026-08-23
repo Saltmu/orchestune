@@ -143,7 +143,7 @@ orchestune setup --with-workflow-skill
    orchestune dispatch --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
    ```
 
-起動前にタスク用ブランチを `origin` へ push し、`codex cloud exec --env <environment_id> --branch <branch>` を非対話で実行します。完了は、そのブランチを head とする open PR の検知で判定します。environment ID が未設定の場合は、警告の上で安全なダミー起動へフォールバックします。
+起動前にタスク用ブランチを `origin` へ push し、`codex cloud exec --env <environment_id> --branch <branch>` を非対話で実行します。投入後は実タスク ID / URL を追跡し、Cloud 上の実タスク状態（failed / cancelled 等の早期検知）および対象ブランチの PR / outcome record を用いて完了を判定します。environment ID が未設定の場合は、警告の上で安全なダミー起動へフォールバックします。
 
 ---
 
