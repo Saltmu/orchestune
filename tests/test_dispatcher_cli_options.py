@@ -26,30 +26,25 @@ tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 @pytest.fixture(autouse=True)
-def _stub_forge_check_auth_by_default():
+def _stub_forge_check_auth_by_default(fake_forge):
     """テスト環境において GitHubForge.check_auth() が実際の gh 認証エラーを
     投げないように、デフォルトで pass するようにスタブする。"""
-    with patch("orchestune.forge.GitHubForge.check_auth") as mock_check:
-        yield mock_check
+    fake_forge.check_auth.reset_mock(side_effect=True)
+    mock_check = fake_forge.check_auth
+    yield mock_check
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 def _issue(

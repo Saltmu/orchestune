@@ -89,22 +89,16 @@ def _patch_gc_process_alive(*, return_value: bool):
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 class TestRunDispatchCycleBlockedPromotion:
@@ -124,7 +118,9 @@ class TestRunDispatchCycleBlockedPromotion:
         defaults.update(overrides)
         return DispatcherConfig(**defaults)
 
-    def test_promotes_blocked_task_when_dependency_already_done(self, tmp_path):
+    def test_promotes_blocked_task_when_dependency_already_done(
+        self, tmp_path, fake_forge
+    ):
         config = self._config(tmp_path)
         done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
         blocked_issue = _full_issue(
@@ -133,14 +129,18 @@ class TestRunDispatchCycleBlockedPromotion:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
 
             def _list(label, **_):
@@ -157,7 +157,9 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label.assert_any_call(2, "status:queued")
         assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
 
-    def test_promotes_blocked_task_when_dependency_done_and_closed(self, tmp_path):
+    def test_promotes_blocked_task_when_dependency_done_and_closed(
+        self, tmp_path, fake_forge
+    ):
         """#236: 完了Issueが通常のGitHub運用でCloseされていても、
         status:done検索がstate="all"で呼ばれる限り依存解決できる。"""
         config = self._config(tmp_path)
@@ -168,14 +170,18 @@ class TestRunDispatchCycleBlockedPromotion:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
 
             def _list(label, state="open"):
@@ -194,7 +200,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label.assert_any_call(2, "status:queued")
         assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
 
-    def test_does_not_promote_when_dependency_unresolved(self, tmp_path):
+    def test_does_not_promote_when_dependency_unresolved(self, tmp_path, fake_forge):
         config = self._config(tmp_path)
         blocked_issue = _full_issue(
             2,
@@ -202,14 +208,18 @@ class TestRunDispatchCycleBlockedPromotion:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [blocked_issue] if label == "status:blocked" else []
@@ -220,7 +230,9 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label.assert_not_called()
         assert report.promotion_events == []
 
-    def test_promotes_when_dependency_completes_in_same_cycle(self, tmp_path):
+    def test_promotes_when_dependency_completes_in_same_cycle(
+        self, tmp_path, fake_forge
+    ):
         """依存先が同一サイクル内で完了検知された場合も即座に昇格させる。"""
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
@@ -250,21 +262,24 @@ class TestRunDispatchCycleBlockedPromotion:
             depends_on=("task-a",),
         )
         outcome = OutcomeRecord(result="done", issue=1)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -291,7 +306,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label.assert_any_call(2, "status:queued")
         assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
 
-    def test_dry_run_promotion_does_not_call_github(self, tmp_path):
+    def test_dry_run_promotion_does_not_call_github(self, tmp_path, fake_forge):
         config = self._config(tmp_path, apply=False)
         done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
         blocked_issue = _full_issue(
@@ -300,14 +315,18 @@ class TestRunDispatchCycleBlockedPromotion:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
 
             def _list(label, **_):
@@ -324,7 +343,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label.assert_not_called()
         assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
 
-    def test_yaml_error_transitions_to_blocked(self, tmp_path):
+    def test_yaml_error_transitions_to_blocked(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -345,15 +364,20 @@ class TestRunDispatchCycleBlockedPromotion:
             labels=("status:queued",),
             created_at="2026-01-01T00:00:00+00:00",
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:queued" else []
@@ -366,24 +390,29 @@ class TestRunDispatchCycleBlockedPromotion:
             mock_add_label.assert_any_call(9, "status:blocked")
             mock_add_comment.assert_called_once_with(9, ANY)
 
-    def test_worktree_launch_failure_transitions_to_blocked(self, tmp_path):
+    def test_worktree_launch_failure_transitions_to_blocked(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
         )
         issue = _full_issue(1)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:queued" else []
@@ -401,7 +430,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
 
 class TestBaseBranchRedCycleReconciliation:
-    def test_base_branch_red_requeued_when_base_sha_advances(self, tmp_path):
+    def test_base_branch_red_requeued_when_base_sha_advances(
+        self, tmp_path, fake_forge
+    ):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -419,20 +450,26 @@ class TestBaseBranchRedCycleReconciliation:
         )
         comments = [{"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}]
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = comments
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=comments),
             patch(
                 "orchestune.dispatch_reconciliation._get_branch_commit_sha",
                 return_value="2222222222222222222222222222222222222222",
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:blocked" else []
@@ -447,7 +484,9 @@ class TestBaseBranchRedCycleReconciliation:
             mock_add_label.assert_any_call(1, "status:queued")
             mock_add_comment.assert_called_once()
 
-    def test_base_branch_red_escalated_when_3_attempts_reached(self, tmp_path):
+    def test_base_branch_red_escalated_when_3_attempts_reached(
+        self, tmp_path, fake_forge
+    ):
         config = DispatcherConfig(
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -465,20 +504,26 @@ class TestBaseBranchRedCycleReconciliation:
         )
         comments = [{"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}]
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = comments
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=comments),
             patch(
                 "orchestune.dispatch_reconciliation._get_branch_commit_sha",
                 return_value="2222222222222222222222222222222222222222",
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:blocked" else []

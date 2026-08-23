@@ -31,30 +31,25 @@ tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 @pytest.fixture(autouse=True)
-def _stub_forge_check_auth_by_default():
+def _stub_forge_check_auth_by_default(fake_forge):
     """テスト環境において GitHubForge.check_auth() が実際の gh 認証エラーを
     投げないように、デフォルトで pass するようにスタブする。"""
-    with patch("orchestune.forge.GitHubForge.check_auth") as mock_check:
-        yield mock_check
+    fake_forge.check_auth.reset_mock(side_effect=True)
+    mock_check = fake_forge.check_auth
+    yield mock_check
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 def _issue(
@@ -472,7 +467,7 @@ class TestDispatcherConfigLoading:
 
         assert mock_build.call_args.args[0].dispatch_target_name == dispatch_target
 
-    def test_post_cycle_failures_in_main(self, tmp_path, capsys):
+    def test_post_cycle_failures_in_main(self, tmp_path, capsys, fake_forge):
         r1 = PhaseResult("poll_pending_not_needed_reviews", PhaseStatus.SUCCESS)
         r2 = PhaseResult("run_semantic_integrator", PhaseStatus.SUCCESS)
         r2_retryable = PhaseResult(
@@ -585,14 +580,12 @@ class TestDispatcherConfigLoading:
             assert out["post_cycle_results"][1]["status"] == "fatal_failure"
 
         # ケース4: main()のcheck_auth()自体がForgeAuthErrorを投げる場合
+        fake_forge.check_auth.reset_mock(side_effect=True)
+        fake_forge.check_auth.side_effect = ForgeAuthError("main-auth-failed")
         with (
             patch(
                 "orchestune.dispatcher.run_dispatch_cycle",
                 return_value=self._empty_report(),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.check_auth",
-                side_effect=ForgeAuthError("main-auth-failed"),
             ),
         ):
             code = main(
@@ -697,7 +690,9 @@ class TestDispatcherConfigLoading:
         mock_post.assert_called_once()
         assert mock_post.call_args.args[1] is cycle_report
 
-    def test_custom_window_seconds_preserves_launch_history_quota(self, tmp_path):
+    def test_custom_window_seconds_preserves_launch_history_quota(
+        self, tmp_path, fake_forge
+    ):
         now = time.time()
         # window_seconds = 172800 (48時間)
         config = DispatcherConfig(
@@ -727,12 +722,14 @@ class TestDispatcherConfigLoading:
         assert len(loaded.launch_history) == 2
 
         # 2回起動済み（max_launches_per_window=2）のため新規起動がブロックされる
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [_issue(10, subtask_id="t10")] if label == "status:queued" else []

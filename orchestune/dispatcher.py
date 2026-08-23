@@ -34,7 +34,7 @@ from orchestune.dispatch_targets import (
     build_dispatch_target,
     resolve_default_dispatch_target_name,
 )
-from orchestune.forge import ForgeAuthError, GitHubForge
+from orchestune.forge import ForgeAuthError
 
 
 def _non_negative_int(value: str) -> int:
@@ -443,7 +443,7 @@ def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
     if config.apply:
         auth_error = None
         try:
-            GitHubForge().check_auth()
+            config.resolved_forge.check_auth()
         except ForgeAuthError as e:
             auth_error = e
 

@@ -38,30 +38,25 @@ tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 @pytest.fixture(autouse=True)
-def _stub_forge_check_auth_by_default():
+def _stub_forge_check_auth_by_default(fake_forge):
     """テスト環境において GitHubForge.check_auth() が実際の gh 認証エラーを
     投げないように、デフォルトで pass するようにスタブする。"""
-    with patch("orchestune.forge.GitHubForge.check_auth") as mock_check:
-        yield mock_check
+    fake_forge.check_auth.reset_mock(side_effect=True)
+    mock_check = fake_forge.check_auth
+    yield mock_check
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 def _issue(
@@ -161,7 +156,9 @@ class TestAppendEventLog:
 
 
 class TestRecoveredActiveTask:
-    def test_run_cycle_reclaims_recovered_task_without_pr_or_worktree(self, tmp_path):
+    def test_run_cycle_reclaims_recovered_task_without_pr_or_worktree(
+        self, tmp_path, fake_forge
+    ):
         """#383: PRが見つからないまま自己修復されたエントリ（started_at=None、
         物理worktreeも不在）は、同一サイクル内のゾンビGCにより即座に回収され、
         status:queuedへ再キューイングされること（無期限のクオータ占有を防ぐ）。"""
@@ -175,15 +172,19 @@ class TestRecoveredActiveTask:
         )
         issue = _issue(1, labels=("status:in-progress",), subtask_id="task-a")
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment"),
             patch(
                 "orchestune.git_cli.subprocess.run",
                 return_value=MagicMock(stdout=""),
@@ -204,7 +205,7 @@ class TestRecoveredActiveTask:
         mock_add_label.assert_called_once_with(1, "status:queued")
 
     def test_next_cycle_completes_recovered_task_when_closing_pr_appears(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -231,21 +232,24 @@ class TestRecoveredActiveTask:
         )
 
         outcome = OutcomeRecord(result="done", issue=1, pr=101)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = [pr]
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = [pr]
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[pr]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[pr]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -271,7 +275,9 @@ class TestRecoveredActiveTask:
 
 class TestDispatcherLocking:
     @pytest.mark.uses_real_file_lock
-    def test_run_dispatch_cycle_raises_runtime_error_if_locked(self, tmp_path):
+    def test_run_dispatch_cycle_raises_runtime_error_if_locked(
+        self, tmp_path, fake_forge
+    ):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -284,17 +290,14 @@ class TestDispatcherLocking:
 
         with file_lock(lock_path):
             with pytest.raises(RuntimeError) as exc_info:
+                fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+                fake_forge.list_issues_by_label.return_value = []
+                fake_forge.list_open_prs.reset_mock(side_effect=True)
+                fake_forge.list_open_prs.return_value = []
                 with (
-                    patch(
-                        "orchestune.forge.GitHubForge.list_issues_by_label",
-                        return_value=[],
-                    ),
                     patch(
                         "orchestune.dispatch_phase_rebase.list_remote_branches",
                         return_value=[],
-                    ),
-                    patch(
-                        "orchestune.forge.GitHubForge.list_open_prs", return_value=[]
                     ),
                 ):
                     run_dispatch_cycle(config)
@@ -306,7 +309,7 @@ class TestLaunchOrderingCrashSafety:
     「GitHub側は確定・run_state側は空」という検出不能な非対称が起きないようにする。"""
 
     def test_run_state_is_persisted_before_label_transition_and_survives_crash(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
             max_concurrent=2,
@@ -324,17 +327,18 @@ class TestLaunchOrderingCrashSafety:
             if label == "status:queued":
                 raise RuntimeError("simulated crash during label transition")
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        fake_forge.remove_label.side_effect = remove_label_side_effect
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=remove_label_side_effect,
             ),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
@@ -368,7 +372,9 @@ class TestStaleActiveEntryReconciliation:
     status:in-progressになっていない（起動直後のクラッシュ等による）場合、
     run_state側を破棄してGitHubラベルを正とする（ゾンビGCの拡張）。"""
 
-    def test_stale_entry_without_in_progress_label_is_discarded(self, tmp_path):
+    def test_stale_entry_without_in_progress_label_is_discarded(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
             RunState(
@@ -401,14 +407,18 @@ class TestStaleActiveEntryReconciliation:
         # （status:in-progressへの遷移は未完了）という状況を再現する。
         queued_issue = _issue(1, labels=("status:queued",), subtask_id="task-1")
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -430,26 +440,22 @@ class TestStaleActiveEntryReconciliation:
 
 
 class TestPreventDuplicateSessions:
-    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[])
-    @patch("orchestune.forge.GitHubForge.list_open_prs")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.add_label")
-    @patch("orchestune.forge.GitHubForge.add_comment")
     @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
         self,
         mock_popen,
         mock_subproc_run,
-        mock_add_comment,
-        mock_add_label,
-        mock_remove_label,
-        mock_list_prs,
         mock_list_branches,
-        mock_list_issues,
         tmp_path,
+        fake_forge,
     ):
+        mock_add_comment = fake_forge.add_comment
+        mock_add_label = fake_forge.add_label
+        mock_remove_label = fake_forge.remove_label
+        mock_list_prs = fake_forge.list_open_prs
+        mock_list_issues = fake_forge.list_issues_by_label
         config = DispatcherConfig(
             max_concurrent=2,
             max_launches_per_window=2,
@@ -459,6 +465,7 @@ class TestPreventDuplicateSessions:
             log_dir=tmp_path / "logs",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
         queued_issue = _issue(1, subtask_id="task-1")
         mock_list_issues.side_effect = lambda label, **_: (
@@ -489,26 +496,22 @@ class TestPreventDuplicateSessions:
         mock_add_comment.assert_called_once()
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
-    @patch("orchestune.forge.GitHubForge.list_issues_by_label")
     @patch("orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[])
-    @patch("orchestune.forge.GitHubForge.list_open_prs")
-    @patch("orchestune.forge.GitHubForge.remove_label")
-    @patch("orchestune.forge.GitHubForge.add_label")
-    @patch("orchestune.forge.GitHubForge.add_comment")
     @patch("orchestune.dispatch_worktree.subprocess.run")
     @patch("orchestune.dispatch_targets.subprocess.Popen")
     def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
         self,
         mock_popen,
         mock_subproc_run,
-        mock_add_comment,
-        mock_add_label,
-        mock_remove_label,
-        mock_list_prs,
         mock_list_branches,
-        mock_list_issues,
         tmp_path,
+        fake_forge,
     ):
+        mock_add_comment = fake_forge.add_comment
+        mock_add_label = fake_forge.add_label
+        mock_remove_label = fake_forge.remove_label
+        mock_list_prs = fake_forge.list_open_prs
+        mock_list_issues = fake_forge.list_issues_by_label
         config = DispatcherConfig(
             max_concurrent=2,
             max_launches_per_window=2,
@@ -518,6 +521,7 @@ class TestPreventDuplicateSessions:
             log_dir=tmp_path / "logs",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
         queued_issue = _issue(1, subtask_id="task-1")
         mock_list_issues.side_effect = lambda label, **_: (
@@ -546,7 +550,9 @@ class TestPreventDuplicateSessions:
         mock_add_label.assert_any_call(1, "status:in-progress")
         mock_add_comment.assert_not_called()
 
-    def test_ls_remote_uses_existing_pr_head_ref_for_closes_issue_match(self, tmp_path):
+    def test_ls_remote_uses_existing_pr_head_ref_for_closes_issue_match(
+        self, tmp_path, fake_forge
+    ):
         config = DispatcherConfig(
             max_concurrent=2,
             max_launches_per_window=2,
@@ -591,27 +597,29 @@ class TestPreventDuplicateSessions:
             )
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = [
+            PrRecord(
+                number=101,
+                head_ref="claude/issue-1-human-authored",
+                changed_files=(),
+                review_decision="",
+                is_ci_passing=False,
+                closes_issue_numbers=(1,),
+            )
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
-                return_value=[
-                    PrRecord(
-                        number=101,
-                        head_ref="claude/issue-1-human-authored",
-                        changed_files=(),
-                        review_decision="",
-                        is_ci_passing=False,
-                        closes_issue_numbers=(1,),
-                    )
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch(
                 "orchestune.git_cli.subprocess.run",
                 side_effect=ls_remote_result,
@@ -645,7 +653,9 @@ class TestPreventDuplicateSessions:
         mock_add_label.assert_any_call(1, "status:blocked-human-review")
         mock_add_comment.assert_called_once()
 
-    def test_ls_remote_failure_transitions_to_blocked_human_review(self, tmp_path):
+    def test_ls_remote_failure_transitions_to_blocked_human_review(
+        self, tmp_path, fake_forge
+    ):
         """ls-remoteが例外等で失敗した場合は、安全のため重複とみなして起動をスキップする。"""
         config = DispatcherConfig(
             max_concurrent=2,
@@ -673,27 +683,29 @@ class TestPreventDuplicateSessions:
         )
         save_run_state(run_state, config.run_state_path)
 
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = [
+            PrRecord(
+                number=101,
+                head_ref="claude/issue-1-task-1",
+                changed_files=(),
+                review_decision="",
+                is_ci_passing=False,
+                closes_issue_numbers=(1,),
+            )
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
-                return_value=[
-                    PrRecord(
-                        number=101,
-                        head_ref="claude/issue-1-task-1",
-                        changed_files=(),
-                        review_decision="",
-                        is_ci_passing=False,
-                        closes_issue_numbers=(1,),
-                    )
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             patch(
                 "orchestune.dispatch_worktree.subprocess.run",
                 side_effect=subprocess.CalledProcessError(
