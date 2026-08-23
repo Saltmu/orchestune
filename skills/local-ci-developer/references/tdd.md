@@ -12,6 +12,9 @@ test, commit, or push from the primary checkout.
 - **For new features**: Skip this step and proceed to Step 4.
 
 ## 4. Baseline Recording (Baseline Record)
+- **Prerequisites**: Confirm that the worktree environment is ready before recording the baseline:
+  - Run `poetry check --lock` to verify lockfile consistency.
+  - Run `poetry install` to ensure all dependencies and virtual environment scripts are available.
 - Record the baseline status on unmodified code (select command based on your OS):
 ```bash
 # Linux / macOS

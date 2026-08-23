@@ -24,12 +24,17 @@ This skill acts as a router orchestrating the standard development workflow: des
 ## Fast-Path for Minor Changes (Typo / Docs)
 For documentation updates or typo fixes that do not alter code logic, **Steps 3–8 (TDD) may be skipped**. However, to prevent secret leaks (gitleaks) and ensure quality, **Step 9 Local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`) must always be executed** before proceeding to Step 10 (PR creation).
 
+## Preflight & GitHub Backend Selection (Step 0)
+At session start, inspect and record the execution environment:
+1. **Tooling Availability**: Check `poetry --version`, `poetry check --lock`, and `gitleaks version`.
+2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all GitHub operations throughout the session, and record the choice in `implementation_plan.md`. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
+
 ## Development Steps
 
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
-| **0** | **Requirement Satisfaction Check** | If requirements are already met on `main`, do not create a PR; post an outcome record (`result: not-needed`) to the Issue and exit. | - |
-| **1** | **Design & Implementation Plan** | Write `implementation_plan.md` and define the approach. | - |
+| **0** | **Preflight & Requirement Check** | Verify Poetry, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
+| **1** | **Design & Implementation Plan** | Write `implementation_plan.md` recording preflight results, selected backend, and design. | - |
 | **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: `gh issue create --title "..." --body "..."`. | - |
 | **2.5** | **Worktree Preparation** | For a requested change or existing Issue fix, create `worktree/<BRANCH_SLUG>` and perform all remaining work there. | [references/worktree.md](references/worktree.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
