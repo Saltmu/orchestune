@@ -27,6 +27,10 @@ def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):
 
 
 class TestCodexCloudDispatchTarget:
+    @pytest.fixture(autouse=True)
+    def _inject_forge(self, fake_forge):
+        self.forge = fake_forge
+
     def test_launch_pushes_branch_and_submits_codex_cloud_task(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
         exec_output = "Task created: https://chatgpt.com/codex/tasks/task_e_6a8859c41f24832ab443a9db2294023d\n"
@@ -255,11 +259,11 @@ class TestCodexCloudDispatchTarget:
             issue_number=1,
         )
         with (
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch.object(self.forge, "list_prs", return_value=[]),
             patch.object(target, "_fetch_task_status", return_value="failed"),
         ):
-            assert target.completion_status(handle) == "abandoned"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "abandoned"
+            assert target.is_complete(handle, forge=self.forge) is False
 
     def test_completion_status_when_cloud_task_cancelled(self):
         target = CodexCloudDispatchTarget("env_123")
@@ -269,11 +273,11 @@ class TestCodexCloudDispatchTarget:
             issue_number=1,
         )
         with (
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch.object(self.forge, "list_prs", return_value=[]),
             patch.object(target, "_fetch_task_status", return_value="cancelled"),
         ):
-            assert target.completion_status(handle) == "abandoned"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "abandoned"
+            assert target.is_complete(handle, forge=self.forge) is False
 
     def test_completion_status_when_cloud_task_running(self):
         target = CodexCloudDispatchTarget("env_123")
@@ -283,11 +287,11 @@ class TestCodexCloudDispatchTarget:
             issue_number=1,
         )
         with (
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch.object(self.forge, "list_prs", return_value=[]),
             patch.object(target, "_fetch_task_status", return_value="running"),
         ):
-            assert target.completion_status(handle) == "pending"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "pending"
+            assert target.is_complete(handle, forge=self.forge) is False
 
     def test_completion_status_when_forge_fails_returns_pending_and_does_not_abandon(
         self,
@@ -299,16 +303,17 @@ class TestCodexCloudDispatchTarget:
             issue_number=1,
         )
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 side_effect=RuntimeError("GitHub API outage"),
             ),
             patch.object(
                 target, "_fetch_task_status", return_value="failed"
             ) as mock_fetch,
         ):
-            assert target.completion_status(handle) == "pending"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "pending"
+            assert target.is_complete(handle, forge=self.forge) is False
             mock_fetch.assert_not_called()
 
     def test_completion_status_when_comments_lookup_fails_returns_pending_and_does_not_abandon(
@@ -321,8 +326,9 @@ class TestCodexCloudDispatchTarget:
             issue_number=1,
         )
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -332,39 +338,45 @@ class TestCodexCloudDispatchTarget:
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 side_effect=RuntimeError("GitHub comments outage"),
             ),
             patch.object(
                 target, "_fetch_task_status", return_value="failed"
             ) as mock_fetch,
         ):
-            assert target.completion_status(handle) == "pending"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "pending"
+            assert target.is_complete(handle, forge=self.forge) is False
             mock_fetch.assert_not_called()
 
     def test_is_complete_when_pr_is_open_for_task_branch(self):
         target = CodexCloudDispatchTarget("env_123")
         outcome = OutcomeRecord(result="done", issue=1, pr=1)
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1, head_ref="claude/issue-1-task-a", changed_files=()
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 return_value=[
                     {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
                 ],
             ),
         ):
             assert (
-                target.is_complete(DispatchHandle(branch_name="claude/issue-1-task-a"))
+                target.is_complete(
+                    DispatchHandle(branch_name="claude/issue-1-task-a"),
+                    forge=self.forge,
+                )
                 is True
             )
 
@@ -378,13 +390,14 @@ class TestCodexCloudDispatchTarget:
             closes_issue_numbers=(210,),
             state="MERGED",
         )
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[merged_pr],
         ) as mock_list_prs:
             handle = DispatchHandle(
                 branch_name="codex/issue-210-task-a",
                 issue_number=210,
             )
-            assert target.is_complete(handle) is True
+            assert target.is_complete(handle, forge=self.forge) is True
         mock_list_prs.assert_called_once_with(state="all")

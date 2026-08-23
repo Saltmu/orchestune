@@ -437,25 +437,12 @@ def test_closed_loop_flow():
         events_log_path=repo.local_path / "events.jsonl",
         apply=True,
         dispatch_target=agent_target,
+        forge=dummy_github,
         deviation_buffer_lines=1,
     )
 
-    # Apply patches to simulate GitHub API
+    # Git operations remain patched because they are not Forge methods.
     patches = [
-        # #292: dispatch_cycle/dispatch_gcはForge注入経由でGitHubForgeを呼び、
-        # list_remote_branches/branch_changed_filesはorchestune.git_cliから
-        # 直接importして使うため、GitHubForgeのクラスメソッドと
-        # dispatch_cycle自身の名前空間の両方を同じdummy_githubへ差し替える。
-        patch(
-            "orchestune.forge.GitHubForge.list_issues_by_label",
-            dummy_github.list_issues_by_label,
-        ),
-        patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
-        patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
-        patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
-        patch("orchestune.forge.GitHubForge.list_comments", dummy_github.list_comments),
-        patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
-        patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
             "orchestune.dispatch_phase_rebase.list_remote_branches",
             dummy_github.list_remote_branches,
@@ -463,13 +450,6 @@ def test_closed_loop_flow():
         patch(
             "orchestune.dispatch_phase_rebase.branch_changed_files",
             dummy_github.branch_changed_files,
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor", dummy_github.get_label_actor
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            dummy_github.get_actor_permission,
         ),
     ]
 
@@ -504,6 +484,7 @@ def test_closed_loop_flow():
             base_branch="origin/main",
             temp_branch="integration/temp-main",
             apply=True,
+            forge=dummy_github,
         )
         integrator = Integrator(int_config)
         res = integrator.run()
@@ -545,6 +526,7 @@ def test_closed_loop_flow():
             base_branch="origin/main",
             temp_branch="integration/temp-main",
             apply=True,
+            forge=dummy_github,
         )
         integrator2 = Integrator(int_config2)
         res2 = integrator2.run()
@@ -700,40 +682,14 @@ def test_closed_loop_dag_recomputation_serialization():
         events_log_path=repo.local_path / "events.jsonl",
         apply=True,
         dispatch_target=agent_target,
+        forge=dummy_github,
         deviation_buffer_lines=1,
         max_recompute_retries=0,  # Trigger force-serial immediately on first deviation
         parent_issue_number=100,  # For notification comments
     )
 
-    # Apply patches to simulate GitHub API
+    # Git operations remain patched because they are not Forge methods.
     patches = [
-        # #292: dispatch_cycle/dispatch_gcはForge注入経由でGitHubForgeを呼び、
-        # list_remote_branches/branch_changed_filesはorchestune.git_cliから
-        # 直接importして使うため、GitHubForgeのクラスメソッドと
-        # dispatch_cycle自身の名前空間の両方を同じdummy_githubへ差し替える。
-        patch(
-            "orchestune.forge.GitHubForge.list_issues_by_label",
-            dummy_github.list_issues_by_label,
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.list_sub_issues",
-            dummy_github.list_sub_issues,
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
-            dummy_github.find_issues_by_parent_metadata,
-        ),
-        patch("orchestune.forge.GitHubForge.get_issue", dummy_github.get_issue),
-        patch(
-            "orchestune.forge.GitHubForge.update_issue_body",
-            dummy_github.update_issue_body,
-        ),
-        patch("orchestune.forge.GitHubForge.add_label", dummy_github.add_label),
-        patch("orchestune.forge.GitHubForge.remove_label", dummy_github.remove_label),
-        patch("orchestune.forge.GitHubForge.add_comment", dummy_github.add_comment),
-        patch("orchestune.forge.GitHubForge.list_comments", dummy_github.list_comments),
-        patch("orchestune.forge.GitHubForge.list_open_prs", dummy_github.list_open_prs),
-        patch("orchestune.forge.GitHubForge.list_prs", dummy_github.list_prs),
         patch(
             "orchestune.dispatch_phase_rebase.list_remote_branches",
             dummy_github.list_remote_branches,
@@ -741,13 +697,6 @@ def test_closed_loop_dag_recomputation_serialization():
         patch(
             "orchestune.dispatch_phase_rebase.branch_changed_files",
             dummy_github.branch_changed_files,
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor", dummy_github.get_label_actor
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            dummy_github.get_actor_permission,
         ),
     ]
 

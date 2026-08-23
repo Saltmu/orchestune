@@ -6,6 +6,7 @@ import argparse
 import time
 from pathlib import Path
 
+from orchestune.forge import Forge
 from orchestune.status_snapshot import build_status_snapshot, format_status_report
 
 _CLEAR_SCREEN = "\x1b[2J\x1b[H"
@@ -60,13 +61,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, forge: Forge | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     label_cache: dict[int, tuple[float, tuple[str, ...]]] = {}
 
     if not args.watch:
         snapshot = build_status_snapshot(
-            args.run_state_path, args.log_dir, time.time(), args.tail_lines, label_cache
+            args.run_state_path,
+            args.log_dir,
+            time.time(),
+            args.tail_lines,
+            label_cache,
+            forge=forge,
         )
         print(format_status_report(snapshot, time.time()))
         return 0
@@ -75,7 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         while True:
             now = time.time()
             snapshot = build_status_snapshot(
-                args.run_state_path, args.log_dir, now, args.tail_lines, label_cache
+                args.run_state_path,
+                args.log_dir,
+                now,
+                args.tail_lines,
+                label_cache,
+                forge=forge,
             )
             print(_CLEAR_SCREEN, end="")
             print(format_status_report(snapshot, now))

@@ -8,7 +8,7 @@
 
 import os
 import time
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -17,14 +17,11 @@ from orchestune.monitor import main
 
 
 @pytest.fixture(autouse=True)
-def _stub_get_issue_labels():
+def _stub_get_issue_labels(fake_forge):
     """既定ではstatus:in-progressを返し、PID/external_idベースの分類テストが
     従来通り動作するようにする。"""
-    with patch(
-        "orchestune.forge.GitHubForge.get_issue_labels",
-        return_value=("status:in-progress",),
-    ) as mock:
-        yield mock
+    fake_forge.get_issue_labels.return_value = ("status:in-progress",)
+    yield fake_forge
 
 
 def _active(**overrides):
@@ -41,7 +38,9 @@ def _active(**overrides):
 
 
 class TestMain:
-    def test_one_shot_mode_prints_report_and_returns_zero(self, tmp_path, capsys):
+    def test_one_shot_mode_prints_report_and_returns_zero(
+        self, tmp_path, capsys, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         state = RunState(active_worktrees={"133": _active()})
         save_run_state(state, run_state_path)
@@ -52,7 +51,8 @@ class TestMain:
                 str(run_state_path),
                 "--log-dir",
                 str(tmp_path / "logs"),
-            ]
+            ],
+            forge=fake_forge,
         )
 
         captured = capsys.readouterr()
@@ -74,7 +74,7 @@ class TestMain:
         assert "現在アクティブなディスパッチはありません" in captured.out
 
     def test_watch_mode_loops_until_keyboard_interrupt(
-        self, tmp_path, capsys, monkeypatch
+        self, tmp_path, capsys, monkeypatch, _stub_get_issue_labels
     ):
         run_state_path = tmp_path / "run_state.json"
         state = RunState(active_worktrees={"133": _active()})
@@ -92,7 +92,8 @@ class TestMain:
                 "--watch",
                 "--interval",
                 "1",
-            ]
+            ],
+            forge=_stub_get_issue_labels,
         )
 
         captured = capsys.readouterr()
@@ -119,12 +120,13 @@ class TestMain:
                 "--watch",
                 "--interval",
                 "1",
-            ]
+            ],
+            forge=_stub_get_issue_labels,
         )
 
         # #137: watchループ間でラベルキャッシュを共有し、interval(1秒)ごとに
         # activeなIssue数だけgh呼び出しが増え続けないことを保証する。
-        assert _stub_get_issue_labels.call_count == 1
+        assert _stub_get_issue_labels.get_issue_labels.call_count == 1
 
     def test_interval_zero_is_rejected(self, tmp_path, capsys):
         with pytest.raises(SystemExit) as exc_info:
@@ -199,7 +201,9 @@ class TestMain:
             )
         assert exc_info.value.code == 2
 
-    def test_tail_lines_zero_shows_no_log_tail(self, tmp_path, capsys):
+    def test_tail_lines_zero_shows_no_log_tail(
+        self, tmp_path, capsys, _stub_get_issue_labels
+    ):
         run_state_path = tmp_path / "run_state.json"
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
@@ -214,7 +218,8 @@ class TestMain:
                 str(log_dir),
                 "--tail-lines",
                 "0",
-            ]
+            ],
+            forge=_stub_get_issue_labels,
         )
 
         captured = capsys.readouterr()

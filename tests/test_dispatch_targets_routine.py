@@ -30,6 +30,10 @@ def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):
 
 
 class TestClaudeCodeCloudRoutineDispatchTarget:
+    @pytest.fixture(autouse=True)
+    def _inject_forge(self, fake_forge):
+        self.forge = fake_forge
+
     def _response(
         self, session_id="session_1", session_url="https://claude.ai/code/session_1"
     ):
@@ -315,16 +319,18 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         outcome = OutcomeRecord(result="done", issue=1, pr=1)
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1, head_ref="claude/issue-1-task-a", changed_files=()
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 return_value=[
                     {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
                 ],
@@ -333,12 +339,13 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             handle = DispatchHandle(
                 external_id="session_1", branch_name="claude/issue-1-task-a"
             )
-            assert target.is_complete(handle) is True
+            assert target.is_complete(handle, forge=self.forge) is True
 
     def test_is_complete_false_when_no_matching_pr(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(number=1, head_ref="other-branch", changed_files=())
             ],
@@ -346,12 +353,13 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             handle = DispatchHandle(
                 external_id="session_1", branch_name="claude/issue-1-task-a"
             )
-            assert target.is_complete(handle) is False
+            assert target.is_complete(handle, forge=self.forge) is False
 
     def test_closed_pr_closed_before_launch_is_ignored_as_stale(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -368,13 +376,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_800_000_000.0,
             )
-            assert target.completion_status(handle) == "pending"
+            assert target.completion_status(handle, forge=self.forge) == "pending"
 
     def test_pr_created_and_closed_after_launch_is_abandoned(self):
         """#246: session開始後に作成されたPRがCLOSEされた場合のみabandoned。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -391,7 +400,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_800_000_000.0,
             )
-            assert target.completion_status(handle) == "abandoned"
+            assert target.completion_status(handle, forge=self.forge) == "abandoned"
 
     def test_pr_created_in_same_second_as_started_at_is_not_stale(self):
         """#246レビュー(#262 P1) Reproducer: GitHubのcreated_atは秒精度で
@@ -403,8 +412,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         outcome = OutcomeRecord(result="done", issue=1, pr=1)
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -415,8 +425,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 return_value=[
                     {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
                 ],
@@ -427,14 +438,15 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_767_225_600.9,
             )
-            assert target.completion_status(handle) == "completed"
+            assert target.completion_status(handle, forge=self.forge) == "completed"
 
     def test_pr_created_one_full_second_before_started_at_is_still_stale(self):
         """秒単位に精度を揃えても、実際に1秒以上前に作成された古いPRの
         stale判定は維持される。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -450,15 +462,16 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_767_225_600.9,
             )
-            assert target.completion_status(handle) == "pending"
+            assert target.completion_status(handle, forge=self.forge) == "pending"
 
     def test_merged_pr_created_before_launch_is_ignored_as_stale(self):
         """#246 Reproducer: 同名branchの古いMERGED PR（session開始前に作成）が
         あると、再キューした新sessionが次サイクルで即completed扱いされていた。
         起動前のPRは状態に関係なく現sessionの成果物ではないため除外する。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -475,13 +488,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_800_000_000.0,
             )
-            assert target.completion_status(handle) == "pending"
+            assert target.completion_status(handle, forge=self.forge) == "pending"
 
     def test_merged_pr_created_after_launch_is_completed(self):
         """#246/#210: session開始後に作成・マージされたPRは完了シグナルのまま。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -498,13 +512,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_800_000_000.0,
             )
-            assert target.completion_status(handle) == "completed"
+            assert target.completion_status(handle, forge=self.forge) == "completed"
 
     def test_open_pr_created_before_launch_is_ignored_as_stale(self):
         """#246: session開始前から存在するOPEN PRも現sessionの成果物ではない。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -520,13 +535,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_800_000_000.0,
             )
-            assert target.completion_status(handle) == "pending"
+            assert target.completion_status(handle, forge=self.forge) == "pending"
 
     def test_pr_without_created_at_is_ignored_when_started_at_known(self):
         """#246: created_atを解釈できないPRは現世代の証拠にならない（fail closed）。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -541,13 +557,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=1_800_000_000.0,
             )
-            assert target.completion_status(handle) == "pending"
+            assert target.completion_status(handle, forge=self.forge) == "pending"
 
     def test_pr_counts_when_handle_has_no_started_at(self):
         """started_atを持たないhandle（復元経路）では従来通りPRを完了扱いする。"""
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -563,11 +580,16 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 started_at=None,
             )
-            assert target.completion_status(handle) == "completed"
+            assert target.completion_status(handle, forge=self.forge) == "completed"
 
     def test_is_complete_false_without_branch_name(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        assert target.is_complete(DispatchHandle(external_id="session_1")) is False
+        assert (
+            target.is_complete(
+                DispatchHandle(external_id="session_1"), forge=self.forge
+            )
+            is False
+        )
 
     def test_is_complete_true_via_closing_issue_reference_when_branch_mismatches(self):
         """#239: AIセッションがブランチ名指示に従わなかった場合でも、
@@ -575,8 +597,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         outcome = OutcomeRecord(result="done", issue=218, pr=1)
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -587,8 +610,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 return_value=[
                     {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
                 ],
@@ -599,12 +623,13 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-218-review-history-backend-api",
                 issue_number=218,
             )
-            assert target.is_complete(handle) is True
+            assert target.is_complete(handle, forge=self.forge) is True
 
     def test_is_complete_false_when_neither_branch_nor_issue_match(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[
                 PrRecord(
                     number=1,
@@ -619,7 +644,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-218-review-history-backend-api",
                 issue_number=218,
             )
-            assert target.is_complete(handle) is False
+            assert target.is_complete(handle, forge=self.forge) is False
 
     def test_closed_unmerged_pr_is_abandoned_not_complete(self):
         """#210 review: rejected PRs must not mark dependencies done."""
@@ -630,8 +655,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             changed_files=(),
             state="CLOSED",
         )
-        with patch(
-            "orchestune.forge.GitHubForge.list_prs",
+        with patch.object(
+            self.forge,
+            "list_prs",
             return_value=[closed_pr],
         ) as mock_list_prs:
             handle = DispatchHandle(
@@ -639,16 +665,17 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-210-task-a",
                 issue_number=210,
             )
-            assert target.completion_status(handle) == "abandoned"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "abandoned"
+            assert target.is_complete(handle, forge=self.forge) is False
         assert mock_list_prs.call_count == 2
         mock_list_prs.assert_called_with(state="all")
 
     def test_open_pr_without_outcome_is_pending(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -659,22 +686,23 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     )
                 ],
             ),
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=[]),
+            patch.object(self.forge, "list_comments", return_value=[]),
         ):
             handle = DispatchHandle(
                 external_id="session_1",
                 branch_name="claude/issue-1-task-a",
                 issue_number=1,
             )
-            assert target.completion_status(handle) == "pending"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "pending"
+            assert target.is_complete(handle, forge=self.forge) is False
 
     def test_open_pr_with_outcome_done_is_completed(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         outcome = OutcomeRecord(result="done", issue=1, pr=1)
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -685,8 +713,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 return_value=[
                     {"body": outcome.render(), "created_at": "2026-01-01T01:00:00Z"}
                 ],
@@ -697,15 +726,16 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 issue_number=1,
             )
-            assert target.completion_status(handle) == "completed"
-            assert target.is_complete(handle) is True
+            assert target.completion_status(handle, forge=self.forge) == "completed"
+            assert target.is_complete(handle, forge=self.forge) is True
 
     def test_open_pr_with_outcome_not_needed_is_completed(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         outcome = OutcomeRecord(result="not-needed", issue=1, pr=1)
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -716,8 +746,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 return_value=[
                     {"body": outcome.render(), "created_at": "2026-01-01T01:00:00Z"}
                 ],
@@ -728,14 +759,15 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 issue_number=1,
             )
-            assert target.completion_status(handle) == "completed"
-            assert target.is_complete(handle) is True
+            assert target.completion_status(handle, forge=self.forge) == "completed"
+            assert target.is_complete(handle, forge=self.forge) is True
 
     def test_open_pr_with_forge_error_is_pending(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_prs",
+            patch.object(
+                self.forge,
+                "list_prs",
                 return_value=[
                     PrRecord(
                         number=1,
@@ -746,8 +778,9 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                     )
                 ],
             ),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
+            patch.object(
+                self.forge,
+                "list_comments",
                 side_effect=RuntimeError("forge connection timeout"),
             ),
         ):
@@ -756,8 +789,8 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 branch_name="claude/issue-1-task-a",
                 issue_number=1,
             )
-            assert target.completion_status(handle) == "pending"
-            assert target.is_complete(handle) is False
+            assert target.completion_status(handle, forge=self.forge) == "pending"
+            assert target.is_complete(handle, forge=self.forge) is False
 
 
 class TestPushBranchAndVerifyWithRealGit:
