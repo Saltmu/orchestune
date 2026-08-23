@@ -30,6 +30,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
+from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_targets import (
     ROUTINE_ID_ENV_VAR,
@@ -316,7 +317,7 @@ def _finalize_pending_review(
             forge.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
             consumed.add(entry.issue_number)
             reopened.append(entry.issue_number)
-        elif now - entry.dispatched_at > timeout_seconds:
+        elif exceeds_limit(now - entry.dispatched_at, timeout_seconds):
             _escalate_timed_out_review(
                 entry.issue_number,
                 labels,
