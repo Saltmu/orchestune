@@ -512,6 +512,9 @@ def _apply_task_launches(
                 base_branch=plan.base_branch_for_state,
             )
             run_state.launch_history.append(now)
+            reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)
+            if reclaim_record is not None and reclaim_record.pending:
+                reclaim_record.pending = False
             save_run_state(
                 run_state,
                 config.run_state_path,

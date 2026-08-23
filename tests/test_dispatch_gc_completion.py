@@ -700,6 +700,37 @@ class TestFinalizeAbandonedCloudWorktree:
         assert run_state.task_reclaim_counts[280].pending is False
         assert run_state.task_reclaim_counts[280].count == 2
 
+    def test_stale_active_entry_discard_settles_pending_reservation(self, tmp_path):
+        from orchestune.dispatch_gc import _apply_stale_active_entry_discard
+
+        active = _active()
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=100.0, pending=True)
+            },
+        )
+
+        with (
+            patch("os.path.exists", return_value=False),
+            patch("orchestune.dispatch_gc.remove_worktree"),
+        ):
+            discarded = _apply_stale_active_entry_discard(
+                run_state,
+                "w1",
+                active,
+                "issue label is no longer status:in-progress",
+                config,
+            )
+
+        assert discarded is True
+        assert "w1" not in run_state.active_worktrees
+        assert run_state.task_reclaim_counts[280].pending is False
+        assert run_state.task_reclaim_counts[280].count == 2
+
 
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""

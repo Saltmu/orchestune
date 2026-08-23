@@ -338,6 +338,9 @@ def _apply_stale_active_entry_discard(
         remove_worktree(active.worktree_path)
 
     del run_state.active_worktrees[key]
+    record = run_state.task_reclaim_counts.get(active.issue_number)
+    if record is not None and record.pending:
+        record.pending = False
     return True
 
 
@@ -366,6 +369,9 @@ def _abandoned_worktree_outcome(
     def _release_entry() -> None:
         nonlocal released
         ctx.run_state.active_worktrees.pop(key, None)
+        rec = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+        if rec is not None:
+            rec.pending = False
         save_run_state(
             ctx.run_state,
             ctx.config.run_state_path,
