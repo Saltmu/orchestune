@@ -202,7 +202,7 @@ def scan_project(
 def _render_report(
     report: BloatReport, root_dir: Path, previous_lines: int | None = None
 ) -> str:
-    path = report.path.relative_to(root_dir)
+    path = report.path.relative_to(root_dir).as_posix()
     previous = f" (was {previous_lines}; " if previous_lines is not None else " ("
     if report.category == "function":
         return (
@@ -217,7 +217,7 @@ def _warning_snapshot(report: BloatReport, root_dir: Path) -> dict[str, object]:
         "category": report.category,
         "limit": report.limit,
         "lines": report.lines,
-        "path": str(report.path.relative_to(root_dir)),
+        "path": report.path.relative_to(root_dir).as_posix(),
         "symbol": report.symbol,
     }
 
