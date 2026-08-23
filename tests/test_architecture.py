@@ -992,6 +992,11 @@ def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
                 for alias in node.names
                 if alias.name == "unittest.mock"
             )
+            patch_references.update(
+                f"{alias.asname or alias.name}.mock.patch"
+                for alias in node.names
+                if alias.name == "unittest"
+            )
         elif isinstance(node, ast.ImportFrom) and node.module == "orchestune.forge":
             github_forge_names.update(
                 alias.asname or alias.name
@@ -1019,17 +1024,26 @@ def _bound_string_values(tree: ast.AST) -> dict[str, set[str]]:
     return values
 
 
+def _call_argument(node: ast.Call, position: int, keyword: str) -> ast.expr | None:
+    if len(node.args) > position:
+        return node.args[position]
+    return next(
+        (item.value for item in node.keywords if item.arg == keyword),
+        None,
+    )
+
+
 def _github_forge_patch_lines(source: str) -> list[int]:
     tree = ast.parse(source)
     patch_references, github_forge_names = _mock_patch_references(tree)
     bound_strings = _bound_string_values(tree)
     violations: list[int] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not node.args:
+        if not isinstance(node, ast.Call):
             continue
         function_name = _dotted_name(node.func)
         if function_name in patch_references:
-            target = node.args[0]
+            target = _call_argument(node, 0, "target")
             target_values = (
                 {target.value}
                 if isinstance(target, ast.Constant) and isinstance(target.value, str)
@@ -1040,7 +1054,8 @@ def _github_forge_patch_lines(source: str) -> list[int]:
             if any(_GITHUB_FORGE_PATCH_TARGET.search(value) for value in target_values):
                 violations.append(node.lineno)
         elif function_name in {f"{ref}.object" for ref in patch_references}:
-            target_name = _dotted_name(node.args[0])
+            target = _call_argument(node, 0, "target")
+            target_name = _dotted_name(target) if target else None
             if target_name and target_name.rsplit(".", 1)[-1] in github_forge_names:
                 violations.append(node.lineno)
     return sorted(violations)
@@ -1096,6 +1111,31 @@ for target in (
 """
 
     assert _github_forge_patch_lines(source) == [7]
+
+
+def test_github_forge_patch_detector_flags_keyword_targets() -> None:
+    source = """
+from unittest.mock import patch
+from orchestune.forge import GitHubForge
+
+with patch(target="orchestune.forge.GitHubForge.list_prs"):
+    pass
+with patch.object(target=GitHubForge, attribute="list_prs"):
+    pass
+"""
+
+    assert _github_forge_patch_lines(source) == [5, 7]
+
+
+def test_github_forge_patch_detector_flags_unittest_import() -> None:
+    source = """
+import unittest
+
+with unittest.mock.patch("orchestune.forge.GitHubForge.list_prs"):
+    pass
+"""
+
+    assert _github_forge_patch_lines(source) == [4]
 
 
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:
