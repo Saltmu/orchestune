@@ -453,6 +453,45 @@ class TestFinalizeAbandonedCloudWorktree:
         comment = mock_add_comment.call_args.args[1]
         assert "上限（max_task_reclaims=2）を超えた（今回で3回目）" in comment
 
+    def test_escalation_triggers_on_label_applied_callback(self, tmp_path):
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=1
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=100.0)
+            },
+        )
+        callback_called = False
+
+        def _on_label():
+            nonlocal callback_called
+            callback_called = True
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            event = _finalize_abandoned_cloud_worktree(
+                active,
+                task,
+                config,
+                run_state=run_state,
+                on_label_applied=_on_label,
+            )
+
+        assert event["action"] == "escalated_reclaim_limit_exceeded"
+        assert callback_called is True
+
 
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""

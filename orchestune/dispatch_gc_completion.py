@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -533,6 +534,7 @@ def _finalize_abandoned_cloud_worktree(
     active_task: Task | None,
     config: DispatcherConfig,
     run_state: RunState | None = None,
+    on_label_applied: Callable[[], None] | None = None,
 ) -> dict:
     event = {
         "issue_number": active.issue_number,
@@ -579,6 +581,7 @@ def _finalize_abandoned_cloud_worktree(
                 "status:blocked-human-reviewへ遷移しました。\n"
                 "タスクの実装方針や実行環境を確認してください。",
                 forge=config.resolved_forge,
+                on_label_applied=on_label_applied,
             )
             event["action"] = "escalated_reclaim_limit_exceeded"
             return event
