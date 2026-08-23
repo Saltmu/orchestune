@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -109,6 +110,85 @@ def test_warn_only_tolerates_non_utf8_files(tmp_path: Path) -> None:
     source_dir.joinpath("invalid.py").write_bytes(b"\xff")
 
     assert detect_bloat.main(["--root", str(tmp_path), "--warn-only"]) == 0
+
+
+def test_recorded_baseline_allows_unchanged_warnings(tmp_path: Path) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    source_dir.joinpath("large.py").write_text("pass\n" * 101, encoding="utf-8")
+    baseline = tmp_path / "bloat-baseline.json"
+
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--record-baseline", str(baseline)])
+        == 0
+    )
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--baseline", str(baseline)]) == 0
+    )
+
+    snapshot = json.loads(baseline.read_text(encoding="utf-8"))
+    assert snapshot == {
+        "version": 1,
+        "warnings": [
+            {
+                "category": "code",
+                "limit": 100,
+                "lines": 101,
+                "path": "orchestune/large.py",
+                "symbol": None,
+            }
+        ],
+    }
+
+
+def test_baseline_comparison_fails_for_new_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    baseline = tmp_path / "bloat-baseline.json"
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--record-baseline", str(baseline)])
+        == 0
+    )
+    source_dir.joinpath("large.py").write_text("pass\n" * 101, encoding="utf-8")
+
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--baseline", str(baseline)]) == 1
+    )
+    assert (
+        "[new] [code] orchestune/large.py has 101 lines (limit: 100)"
+        in capsys.readouterr().out
+    )
+
+
+def test_baseline_comparison_fails_when_warning_grows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    source = source_dir / "large.py"
+    source.write_text("pass\n" * 101, encoding="utf-8")
+    baseline = tmp_path / "bloat-baseline.json"
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--record-baseline", str(baseline)])
+        == 0
+    )
+    source.write_text("pass\n" * 102, encoding="utf-8")
+
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--baseline", str(baseline)]) == 1
+    )
+    assert (
+        "[worsened] [code] orchestune/large.py has 102 lines (was 101; limit: 100)"
+        in capsys.readouterr().out
+    )
 
 
 @pytest.mark.parametrize(

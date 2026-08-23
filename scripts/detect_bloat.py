@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import sys
 import tomllib
 from collections.abc import Iterable, Sequence
@@ -34,6 +35,14 @@ class BloatReport:
     lines: int
     limit: int
     symbol: str | None = None
+
+
+@dataclass(frozen=True)
+class BloatRegression:
+    """A warning newly introduced or grown since the recorded baseline."""
+
+    report: BloatReport
+    previous_lines: int | None
 
 
 class FunctionLineCounter(ast.NodeVisitor):
@@ -202,13 +211,108 @@ def _render_report(report: BloatReport, root_dir: Path) -> str:
     )
 
 
+def _warning_snapshot(report: BloatReport, root_dir: Path) -> dict[str, object]:
+    return {
+        "category": report.category,
+        "limit": report.limit,
+        "lines": report.lines,
+        "path": str(report.path.relative_to(root_dir)),
+        "symbol": report.symbol,
+    }
+
+
+def _warning_key(snapshot: dict[str, object]) -> tuple[str, str, str | None]:
+    category = snapshot.get("category")
+    path = snapshot.get("path")
+    symbol = snapshot.get("symbol")
+    if not isinstance(category, str) or not isinstance(path, str):
+        raise ValueError("baseline warning must include string category and path")
+    if symbol is not None and not isinstance(symbol, str):
+        raise ValueError("baseline warning symbol must be a string or null")
+    return category, path, symbol
+
+
+def write_baseline(path: Path, reports: Sequence[BloatReport], root_dir: Path) -> None:
+    """Write a stable JSON snapshot of the current bloat warnings."""
+
+    warnings = [_warning_snapshot(report, root_dir) for report in reports]
+    warnings.sort(key=_warning_key)
+    path.write_text(
+        json.dumps({"version": 1, "warnings": warnings}, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_baseline(path: Path) -> list[dict[str, object]]:
+    """Read and validate a baseline created by :func:`write_baseline`."""
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read baseline {path}: {exc}") from exc
+    if not isinstance(document, dict) or document.get("version") != 1:
+        raise ValueError("baseline must contain version 1")
+    warnings = document.get("warnings")
+    if not isinstance(warnings, list) or not all(
+        isinstance(item, dict) for item in warnings
+    ):
+        raise ValueError("baseline warnings must be a list")
+    for warning in warnings:
+        _warning_key(warning)
+        if not isinstance(warning.get("lines"), int):
+            raise ValueError("baseline warning lines must be an integer")
+    return warnings
+
+
+def find_regressions(
+    reports: Sequence[BloatReport],
+    baseline: Sequence[dict[str, object]],
+    root_dir: Path,
+) -> list[BloatRegression]:
+    """Return warnings absent from, or larger than, the recorded baseline."""
+
+    baseline_lines = {_warning_key(item): item["lines"] for item in baseline}
+    regressions: list[BloatRegression] = []
+    for report in reports:
+        snapshot = _warning_snapshot(report, root_dir)
+        previous_lines = baseline_lines.get(_warning_key(snapshot))
+        if previous_lines is None or report.lines > previous_lines:
+            regressions.append(BloatRegression(report, previous_lines))
+    return regressions
+
+
+def _render_regression(regression: BloatRegression, root_dir: Path) -> str:
+    rendered = _render_report(regression.report, root_dir)
+    if regression.previous_lines is None:
+        return f"[new] {rendered}"
+    return "[worsened] " + rendered.replace(
+        f"has {regression.report.lines} lines (limit:",
+        f"has {regression.report.lines} lines (was {regression.previous_lines}; limit:",
+        1,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".", help="project root to scan")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--warn-only",
         action="store_true",
         help="report warnings without failing the command",
+    )
+    mode.add_argument(
+        "--record-baseline",
+        type=Path,
+        metavar="PATH",
+        help="write the current warnings to a JSON baseline",
+    )
+    mode.add_argument(
+        "--baseline",
+        type=Path,
+        metavar="PATH",
+        help="fail only for warnings that are new or worse than this JSON baseline",
     )
     args = parser.parse_args(argv)
     root_dir = Path(args.root).resolve()
@@ -218,6 +322,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         print(f"[detect-bloat] Configuration error: {exc}", file=sys.stderr)
         return 2
+
+    if args.record_baseline:
+        write_baseline(args.record_baseline, reports, root_dir)
+        print(f"[detect-bloat] Recorded baseline: {args.record_baseline}")
+        return 0
+
+    if args.baseline:
+        try:
+            regressions = find_regressions(
+                reports, load_baseline(args.baseline), root_dir
+            )
+        except ValueError as exc:
+            print(f"[detect-bloat] Baseline error: {exc}", file=sys.stderr)
+            return 2
+        if not regressions:
+            print("[detect-bloat] No new or worsened bloat warnings.")
+            return 0
+        print("[detect-bloat] New or worsened bloat warnings:")
+        for regression in regressions:
+            print(_render_regression(regression, root_dir))
+        return 1
 
     if not reports:
         print("[detect-bloat] No bloat detected.")
