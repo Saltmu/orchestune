@@ -84,22 +84,16 @@ def _patch_gc_process_alive(*, return_value: bool):
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 class TestRunDispatchCycleCompletion:
@@ -136,7 +130,9 @@ class TestRunDispatchCycleCompletion:
             run_state_path,
         )
 
-    def test_completed_clean_worktree_is_removed_and_labeled_done(self, tmp_path):
+    def test_completed_clean_worktree_is_removed_and_labeled_done(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path)
         config = self._config(tmp_path, run_state_path)
@@ -144,21 +140,24 @@ class TestRunDispatchCycleCompletion:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         outcome = OutcomeRecord(result="done", issue=1)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -205,7 +204,7 @@ class TestRunDispatchCycleCompletion:
         logged_entry = json.loads(events_lines[0])
         assert logged_entry["completion_events"] == report.completion_events
 
-    def test_cloud_completion_uses_remote_branch_commits(self, tmp_path):
+    def test_cloud_completion_uses_remote_branch_commits(self, tmp_path, fake_forge):
         """#177: クラウド実行の結果は、起動時のローカルworktreeではなく
         fetch済みのリモートブランチで検証する。"""
         run_state_path = tmp_path / "run_state.json"
@@ -217,21 +216,23 @@ class TestRunDispatchCycleCompletion:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         outcome = OutcomeRecord(result="done", issue=1)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -261,7 +262,9 @@ class TestRunDispatchCycleCompletion:
         )
         mock_add_label.assert_any_call(1, "status:done")
 
-    def test_cloud_completion_without_verified_sha_is_not_marked_done(self, tmp_path):
+    def test_cloud_completion_without_verified_sha_is_not_marked_done(
+        self, tmp_path, fake_forge
+    ):
         """#177: SHAを取得できなければ、完了ラベルへ遷移しない。"""
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
@@ -271,14 +274,17 @@ class TestRunDispatchCycleCompletion:
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
@@ -303,22 +309,27 @@ class TestRunDispatchCycleCompletion:
             call.args != (1, "status:done") for call in mock_add_label.call_args_list
         )
 
-    def test_dirty_worktree_completion_is_skipped(self, tmp_path):
+    def test_dirty_worktree_completion_is_skipped(self, tmp_path, fake_forge):
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path)
         config = self._config(tmp_path, run_state_path)
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -346,7 +357,9 @@ class TestRunDispatchCycleCompletion:
         persisted = json.loads(run_state_path.read_text())
         assert "1" in persisted["active_worktrees"]
 
-    def test_dry_run_completion_does_not_mutate_or_call_github(self, tmp_path):
+    def test_dry_run_completion_does_not_mutate_or_call_github(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path)
         config = self._config(tmp_path, run_state_path, apply=False)
@@ -354,21 +367,24 @@ class TestRunDispatchCycleCompletion:
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
         outcome = OutcomeRecord(result="done", issue=1)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -397,7 +413,7 @@ class TestRunDispatchCycleCompletion:
         assert "1" in persisted["active_worktrees"]
 
     def test_no_commits_completion_frees_quota_without_promoting_dependents(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         """#74: 空コミット完了はcompleted_subtask_idsに含めず依存先を昇格させないが、
         run_state側のクオータは解放する(worktree・ラベルはdispatch_gc側で片付け済みのため)。"""
@@ -413,16 +429,22 @@ class TestRunDispatchCycleCompletion:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -457,7 +479,9 @@ class TestRunDispatchCycleCompletion:
         assert "1" not in persisted["active_worktrees"]
         assert persisted["completed_worktrees"] == []
 
-    def test_freed_quota_allows_new_task_to_launch_same_cycle(self, tmp_path):
+    def test_freed_quota_allows_new_task_to_launch_same_cycle(
+        self, tmp_path, fake_forge
+    ):
         """#193の核心: 完了検知でクオータが解放され、同一サイクル内で
         新規タスクが選出・起動されることを検証する（恒久停止バグの回帰テスト）。"""
         run_state_path = tmp_path / "run_state.json"
@@ -468,22 +492,24 @@ class TestRunDispatchCycleCompletion:
         )
         queued_issue = _full_issue(2, footprint=("src/bar.py",), subtask_id="task-b")
         outcome = OutcomeRecord(result="done", issue=1)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.reset_mock(side_effect=True)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -555,7 +581,7 @@ class TestRunDispatchCycleNotNeeded:
         )
 
     def test_not_needed_label_closes_issue_regardless_of_pr_or_process_state(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         """セッションがコミット・PRを一切作らない対応不要ケースでも、
         PID/PR存在に依存せずラベル検知だけで完了・クローズできることを検証する
@@ -566,14 +592,18 @@ class TestRunDispatchCycleNotNeeded:
         not_needed_issue = _full_issue(
             1, labels=("status:not-needed",), subtask_id="task-a"
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.close_issue.reset_mock(side_effect=True)
+        mock_close_issue = fake_forge.close_issue
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
             # プロセスは生きたまま・PRも存在しない、という「対応不要」の典型状態
             _patch_gc_process_alive(return_value=True),
             patch(
@@ -606,21 +636,27 @@ class TestRunDispatchCycleNotNeeded:
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"] == {}
 
-    def test_dry_run_not_needed_does_not_call_github_or_mutate(self, tmp_path):
+    def test_dry_run_not_needed_does_not_call_github_or_mutate(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         self._seed_active(tmp_path, run_state_path)
         config = self._config(tmp_path, run_state_path, apply=False)
         not_needed_issue = _full_issue(
             1, labels=("status:not-needed",), subtask_id="task-a"
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.close_issue.reset_mock(side_effect=True)
+        mock_close_issue = fake_forge.close_issue
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.close_issue") as mock_close_issue,
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
@@ -643,7 +679,9 @@ class TestRunDispatchCycleNotNeeded:
         persisted = json.loads(run_state_path.read_text())
         assert "1" in persisted["active_worktrees"]
 
-    def test_blocked_task_promotes_when_dependency_is_not_needed(self, tmp_path):
+    def test_blocked_task_promotes_when_dependency_is_not_needed(
+        self, tmp_path, fake_forge
+    ):
         """対応不要と判定された依存先も、status:done同様に依存解決済みとして
         扱われ、後続のstatus:blockedタスクがstatus:queuedへ昇格すること。"""
         run_state_path = tmp_path / "run_state.json"
@@ -657,14 +695,18 @@ class TestRunDispatchCycleNotNeeded:
             subtask_id="task-b",
             depends_on=("task-a",),
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
         ):
 
             def _list(label, **_):

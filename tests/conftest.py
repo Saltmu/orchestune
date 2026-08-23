@@ -493,8 +493,8 @@ class FakeForge:
 
 
 @pytest.fixture
-def fake_forge() -> MagicMock:
-    """A configurable Forge double with full default returns for Forge protocol methods."""
+def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """A configurable Forge double injected into dispatcher configs that request it."""
     forge = MagicMock(spec=Forge)
     # RepoAdminForge
     forge.check_auth.return_value = None
@@ -520,6 +520,16 @@ def fake_forge() -> MagicMock:
     forge.is_branch_merged_into.return_value = False
     forge.is_current_branch_tip_merged_into.return_value = False
     forge.get_merged_pr_timestamp.return_value = None
+
+    original_init = DispatcherConfig.__init__
+
+    def init_with_fake_forge(
+        config: DispatcherConfig, *args: Any, **kwargs: Any
+    ) -> None:
+        kwargs.setdefault("forge", forge)
+        original_init(config, *args, **kwargs)
+
+    monkeypatch.setattr(DispatcherConfig, "__init__", init_with_fake_forge)
     return forge
 
 

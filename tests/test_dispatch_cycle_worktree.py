@@ -94,22 +94,16 @@ def _patch_gc_process_alive(*, return_value: bool):
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 class TestProcessActiveWorktrees:
@@ -178,7 +172,9 @@ class TestProcessActiveWorktrees:
         assert any_forced_serial is False
         assert completed_subtask_ids == set()
 
-    def test_dirty_worktree_skips_completion_and_does_not_fall_through(self):
+    def test_dirty_worktree_skips_completion_and_does_not_fall_through(
+        self, fake_forge
+    ):
         active = _active(
             branch="feature",
             declared_footprint=("a.py",),
@@ -198,6 +194,8 @@ class TestProcessActiveWorktrees:
             subtask_branch_map={"task-parent": "parent-branch"},
         )
 
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
         with (
             patch(
                 "orchestune.dispatch_gc._is_worktree_complete",
@@ -205,7 +203,6 @@ class TestProcessActiveWorktrees:
             ),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={"action": "completion_skipped_dirty_worktree"},
@@ -232,7 +229,9 @@ class TestProcessActiveWorktrees:
         assert any_forced_serial is False
         assert completed_subtask_ids == set()
 
-    def test_dirty_worktree_hold_survives_same_cycle_zombie_gc(self, tmp_path):
+    def test_dirty_worktree_hold_survives_same_cycle_zombie_gc(
+        self, tmp_path, fake_forge
+    ):
         """#212: 完了判定の保留を同一サイクルのゾンビGCが上書きしない。"""
         worktree_path = tmp_path / "w1"
         worktree_path.mkdir()
@@ -252,6 +251,8 @@ class TestProcessActiveWorktrees:
             config=config,
         )
 
+        fake_forge.list_prs.reset_mock(side_effect=True)
+        fake_forge.list_prs.return_value = []
         with (
             patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
             patch(
@@ -268,7 +269,6 @@ class TestProcessActiveWorktrees:
             ),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_phase_reconciliation._promote_blocked_tasks",
                 return_value=[],
@@ -337,7 +337,7 @@ class TestProcessActiveWorktrees:
         assert completed_subtask_ids == {task.subtask_id}
         assert "1" not in ctx.run_state.active_worktrees
 
-    def test_auto_rebase_failure_discards_active_entry(self, tmp_path):
+    def test_auto_rebase_failure_discards_active_entry(self, tmp_path, fake_forge):
         active = _active(
             branch="feature",
             worktree_path="worktrees/w1",
@@ -369,6 +369,12 @@ class TestProcessActiveWorktrees:
             # 判定されるよう、空のstdoutを返す。
             return subprocess.CompletedProcess(args, 0, stdout="")
 
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove = fake_forge.remove_label
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add = fake_forge.add_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_comment = fake_forge.add_comment
         with (
             patch(
                 "orchestune.dispatch_gc._is_worktree_complete",
@@ -383,9 +389,6 @@ class TestProcessActiveWorktrees:
                 "orchestune.git_cli.subprocess.run",
                 side_effect=mock_subprocess_run,
             ),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
         ):
             (
                 completion_events,

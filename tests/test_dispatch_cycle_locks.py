@@ -89,22 +89,16 @@ def _patch_gc_process_alive(*, return_value: bool):
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 class TestDecideExternalLockSync:
@@ -164,50 +158,50 @@ class TestDecideExternalLockSync:
 
 
 class TestApplyExternalLockSync:
-    def test_unlocking_blocked_task_does_not_requeue_it(self, tmp_path):
+    def test_unlocking_blocked_task_does_not_requeue_it(self, tmp_path, fake_forge):
         task = _task(status_labels=("status:blocked", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
 
-        with (
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-            _apply_external_lock_sync(
-                lock_result,
-                DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
-            )
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        _apply_external_lock_sync(
+            lock_result,
+            DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+        )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
         mock_add_label.assert_not_called()
 
-    def test_unlocking_in_progress_task_does_not_requeue_it(self, tmp_path):
+    def test_unlocking_in_progress_task_does_not_requeue_it(self, tmp_path, fake_forge):
         task = _task(status_labels=("status:in-progress", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
 
-        with (
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-            _apply_external_lock_sync(
-                lock_result,
-                DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
-            )
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        _apply_external_lock_sync(
+            lock_result,
+            DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+        )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
         mock_add_label.assert_not_called()
 
-    def test_unlocking_queued_task_requeues_it(self, tmp_path):
+    def test_unlocking_queued_task_requeues_it(self, tmp_path, fake_forge):
         task = _task(status_labels=("status:queued", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[task])
 
-        with (
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-            _apply_external_lock_sync(
-                lock_result,
-                DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
-            )
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        _apply_external_lock_sync(
+            lock_result,
+            DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+        )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
         mock_add_label.assert_called_once_with(1, "status:queued")
@@ -216,7 +210,7 @@ class TestApplyExternalLockSync:
 class TestRunDispatchCycleBranchNormalization:
     """#194: リモートブランチ名のorigin/プレフィックス正規化。"""
 
-    def test_does_not_self_lock_own_active_branch(self, tmp_path):
+    def test_does_not_self_lock_own_active_branch(self, tmp_path, fake_forge):
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
             RunState(
@@ -245,13 +239,15 @@ class TestRunDispatchCycleBranchNormalization:
             apply=False,
         )
         queued_issue = _full_issue(2, footprint=("src/shared.py",))
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-a"],
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_phase_rebase.branch_changed_files",
                 return_value=["src/shared.py"],
@@ -268,7 +264,9 @@ class TestRunDispatchCycleBranchNormalization:
 
         assert report.lock_changes["to_lock"] == []
 
-    def test_excludes_branch_with_open_pr_multisegment_headref(self, tmp_path):
+    def test_excludes_branch_with_open_pr_multisegment_headref(
+        self, tmp_path, fake_forge
+    ):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
@@ -279,19 +277,16 @@ class TestRunDispatchCycleBranchNormalization:
             log_dir=tmp_path / "logs",
             apply=False,
         )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = [
+            PrRecord(number=1, head_ref="feature/foo", changed_files=("src/x.py",))
+        ]
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/feature/foo"],
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
-                return_value=[
-                    PrRecord(
-                        number=1, head_ref="feature/foo", changed_files=("src/x.py",)
-                    )
-                ],
             ),
             patch(
                 "orchestune.dispatch_phase_rebase.branch_changed_files"
@@ -301,7 +296,9 @@ class TestRunDispatchCycleBranchNormalization:
 
         mock_branch_files.assert_not_called()
 
-    def test_unrelated_external_branch_still_locks_overlapping_task(self, tmp_path):
+    def test_unrelated_external_branch_still_locks_overlapping_task(
+        self, tmp_path, fake_forge
+    ):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
@@ -313,13 +310,15 @@ class TestRunDispatchCycleBranchNormalization:
             apply=False,
         )
         queued_issue = _full_issue(1, footprint=("src/shared.py",))
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/someone-elses-branch"],
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_phase_rebase.branch_changed_files",
                 return_value=["src/shared.py"],

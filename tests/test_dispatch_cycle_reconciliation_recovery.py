@@ -92,22 +92,16 @@ def _patch_gc_process_alive(*, return_value: bool):
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 class TestDualStatusReconciliation:
@@ -134,7 +128,9 @@ class TestDualStatusReconciliation:
 
         assert [t.issue_number for t in result] == [1]
 
-    def test_apply_removes_status_done_for_dual_status_tasks(self, tmp_path):
+    def test_apply_removes_status_done_for_dual_status_tasks(
+        self, tmp_path, fake_forge
+    ):
         dual_status_task = _task(
             issue_number=1,
             subtask_id="task-a",
@@ -147,13 +143,14 @@ class TestDualStatusReconciliation:
             apply=True,
         )
 
-        with patch("orchestune.forge.GitHubForge.remove_label") as mock_remove:
-            events = _reconcile_dual_status_tasks({1: dual_status_task}, config)
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove = fake_forge.remove_label
+        events = _reconcile_dual_status_tasks({1: dual_status_task}, config)
 
         mock_remove.assert_called_once_with(1, "status:done")
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
 
-    def test_dry_run_does_not_call_github(self, tmp_path):
+    def test_dry_run_does_not_call_github(self, tmp_path, fake_forge):
         dual_status_task = _task(
             issue_number=1,
             subtask_id="task-a",
@@ -166,8 +163,9 @@ class TestDualStatusReconciliation:
             apply=False,
         )
 
-        with patch("orchestune.forge.GitHubForge.remove_label") as mock_remove:
-            _reconcile_dual_status_tasks({1: dual_status_task}, config)
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove = fake_forge.remove_label
+        _reconcile_dual_status_tasks({1: dual_status_task}, config)
 
         mock_remove.assert_not_called()
 
@@ -214,7 +212,7 @@ class TestSelfHealRunState:
     ため、parent_issue_number指定時のfast pathでスコープが絞られていても、
     自己修復は常にリポジトリ全体のstatus:in-progress Issueを読み直す。"""
 
-    def test_noop_when_run_state_file_exists(self, tmp_path):
+    def test_noop_when_run_state_file_exists(self, tmp_path, fake_forge):
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
         config = DispatcherConfig(
@@ -224,13 +222,13 @@ class TestSelfHealRunState:
             apply=True,
         )
         run_state = RunState(active_worktrees={})
-        with patch(
-            "orchestune.forge.GitHubForge.list_issues_by_label",
-            side_effect=AssertionError("Should not fetch when file exists"),
-        ):
-            _self_heal_run_state(run_state, config)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.side_effect = AssertionError(
+            "Should not fetch when file exists"
+        )
+        _self_heal_run_state(run_state, config)
 
-    def test_noop_when_not_apply(self, tmp_path):
+    def test_noop_when_not_apply(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -238,14 +236,14 @@ class TestSelfHealRunState:
             apply=False,
         )
         run_state = RunState(active_worktrees={})
-        with patch(
-            "orchestune.forge.GitHubForge.list_issues_by_label",
-            side_effect=AssertionError("Should not fetch when apply=False"),
-        ):
-            _self_heal_run_state(run_state, config)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.side_effect = AssertionError(
+            "Should not fetch when apply=False"
+        )
+        _self_heal_run_state(run_state, config)
 
     def test_fetches_repo_wide_in_progress_issues_regardless_of_parent_scope(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -255,11 +253,10 @@ class TestSelfHealRunState:
             parent_issue_number=100,
         )
         run_state = RunState(active_worktrees={})
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        mock_list = fake_forge.list_issues_by_label
         with (
-            patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label",
-                return_value=[],
-            ) as mock_list,
             patch(
                 "orchestune.dispatch_reconciliation.recover_run_state",
                 return_value=False,
@@ -272,7 +269,7 @@ class TestSelfHealRunState:
 
 
 class TestDispatchCycleRecomputeExclusionAndRecovery:
-    def test_same_cycle_recompute_exclusion(self, tmp_path):
+    def test_same_cycle_recompute_exclusion(self, tmp_path, fake_forge):
         """同一サイクルで逸脱が発生した際、競合先タスクが candidate_tasks から除外されること"""
 
         run_state_path = tmp_path / "run_state.json"
@@ -333,6 +330,14 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             }
         ]
 
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.get_label_actor.reset_mock(side_effect=True)
+        fake_forge.get_label_actor.return_value = "some-user"
+        fake_forge.get_actor_permission.reset_mock(side_effect=True)
+        fake_forge.get_actor_permission.return_value = "write"
         with (
             patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
             patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
@@ -345,16 +350,6 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=[],
             ),
             patch("orchestune.dispatch_cycle._sync_external_locks"),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.get_label_actor",
-                return_value="some-user",
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_actor_permission",
-                return_value="write",
-            ),
             patch("orchestune.dispatch_phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
@@ -370,7 +365,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         assert normal_task in called_candidates
         assert blocked_task not in called_candidates
 
-    def test_recompute_resolved_automatic_recovery(self, tmp_path):
+    def test_recompute_resolved_automatic_recovery(self, tmp_path, fake_forge):
         """アクティブタスクが完了し競合が解消されたら、status:blocked-recomputeタスクが復帰すること"""
 
         run_state_path = tmp_path / "run_state.json"
@@ -417,21 +412,21 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             def filtered_by_parent(self, parent):
                 return self
 
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.get_label_actor.reset_mock(side_effect=True)
+        fake_forge.get_label_actor.return_value = "some-user"
+        fake_forge.get_actor_permission.reset_mock(side_effect=True)
+        fake_forge.get_actor_permission.return_value = "write"
         with (
             patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
             patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.get_label_actor",
-                return_value="some-user",
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_actor_permission",
-                return_value="write",
-            ),
             patch("orchestune.dispatch_phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
@@ -444,7 +439,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
 
-    def test_recompute_recovery_error_fail_closed(self, tmp_path):
+    def test_recompute_recovery_error_fail_closed(self, tmp_path, fake_forge):
         """逸脱検知でエラー（None）が発生した際、自動復帰が抑止されること (fail-closed)"""
 
         run_state_path = tmp_path / "run_state.json"
@@ -516,25 +511,24 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             def filtered_by_parent(self, parent):
                 return self
 
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_label.reset_mock(side_effect=True)
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.get_label_actor.reset_mock(side_effect=True)
+        fake_forge.get_label_actor.return_value = "some-user"
+        fake_forge.get_actor_permission.reset_mock(side_effect=True)
+        fake_forge.get_actor_permission.return_value = "write"
         with (
             patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
             patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
             patch(
                 "orchestune.dispatch_cycle._process_active_worktrees",
                 return_value=([], [], False, set()),
-            ),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.get_label_actor",
-                return_value="some-user",
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_actor_permission",
-                return_value="write",
             ),
             patch("orchestune.dispatch_phase_scheduling.save_run_state"),
             patch(
@@ -584,7 +578,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
         assert task not in promotable
 
-    def test_recompute_dag_error_fail_closed(self, tmp_path):
+    def test_recompute_dag_error_fail_closed(self, tmp_path, fake_forge):
         """DAG再計算で例外が発生した際、自動復帰が抑止されること (fail-closed)"""
 
         run_state_path = tmp_path / "run_state.json"
@@ -655,25 +649,24 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             def filtered_by_parent(self, parent):
                 return self
 
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.add_label.reset_mock(side_effect=True)
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.get_label_actor.reset_mock(side_effect=True)
+        fake_forge.get_label_actor.return_value = "some-user"
+        fake_forge.get_actor_permission.reset_mock(side_effect=True)
+        fake_forge.get_actor_permission.return_value = "write"
         with (
             patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
             patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
             patch(
                 "orchestune.dispatch_cycle._process_active_worktrees",
                 return_value=([], [], False, set()),
-            ),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.get_label_actor",
-                return_value="some-user",
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_actor_permission",
-                return_value="write",
             ),
             patch("orchestune.dispatch_phase_scheduling.save_run_state"),
             patch(

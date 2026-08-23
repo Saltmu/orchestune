@@ -102,22 +102,16 @@ def _patch_gc_process_alive(*, return_value: bool):
 
 
 @pytest.fixture(autouse=True)
-def _stub_label_actor_permission_by_default():
+def _stub_label_actor_permission_by_default(fake_forge):
     """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
     `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
     返すようスタブする。検証ロジック自体のテストは
     tests/test_dispatch_actor_verification.py に集約する。"""
-    with (
-        patch(
-            "orchestune.forge.GitHubForge.get_label_actor",
-            return_value="trusted-actor",
-        ),
-        patch(
-            "orchestune.forge.GitHubForge.get_actor_permission",
-            return_value="write",
-        ),
-    ):
-        yield
+    fake_forge.get_label_actor.reset_mock(side_effect=True)
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.reset_mock(side_effect=True)
+    fake_forge.get_actor_permission.return_value = "write"
+    yield
 
 
 class TestFilterDeviationBlockedCandidates:
@@ -196,7 +190,9 @@ class TestRunDispatchCycleFootprintRecompute:
             created_at="",
         )
 
-    def test_significant_deviation_triggers_recompute_and_notify(self, tmp_path):
+    def test_significant_deviation_triggers_recompute_and_notify(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
             RunState(
@@ -228,24 +224,24 @@ class TestRunDispatchCycleFootprintRecompute:
             similarity=0.5,
             blocked_subtask_id="task-b",
         )
+        fake_forge.list_sub_issues.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_sub_issues
+        fake_forge.find_issues_by_parent_metadata.reset_mock(side_effect=True)
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = self._epic_issue()
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
-            patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
-            patch(
-                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
-                return_value=[],
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_issue",
-                return_value=self._epic_issue(),
-            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
             patch("orchestune.dispatch_targets.subprocess.Popen"),
             _patch_gc_process_alive(return_value=True),
             patch(
@@ -279,7 +275,9 @@ class TestRunDispatchCycleFootprintRecompute:
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"]["1"]["recompute_count"] == 1
 
-    def test_dry_run_recompute_does_not_persist_or_call_github(self, tmp_path):
+    def test_dry_run_recompute_does_not_persist_or_call_github(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
             RunState(
@@ -307,23 +305,24 @@ class TestRunDispatchCycleFootprintRecompute:
             similarity=0.5,
             blocked_subtask_id="task-b",
         )
+        fake_forge.list_sub_issues.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_sub_issues
+        fake_forge.find_issues_by_parent_metadata.reset_mock(side_effect=True)
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = self._epic_issue()
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
-            patch(
-                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
-                return_value=[],
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_issue",
-                return_value=self._epic_issue(),
-            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation",
@@ -348,7 +347,9 @@ class TestRunDispatchCycleFootprintRecompute:
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"]["1"]["recompute_count"] == 0
 
-    def test_retry_limit_exceeded_triggers_forced_serialization(self, tmp_path):
+    def test_retry_limit_exceeded_triggers_forced_serialization(
+        self, tmp_path, fake_forge
+    ):
         """#200: リトライ上限超過時は再計算せず強制直列化にフォールバックする。"""
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
@@ -391,25 +392,26 @@ class TestRunDispatchCycleFootprintRecompute:
             save_run_state(ctx.run_state, ctx.config.run_state_path)
             return ctx.selected
 
+        fake_forge.list_sub_issues.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_sub_issues
+        fake_forge.find_issues_by_parent_metadata.reset_mock(side_effect=True)
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = self._epic_issue()
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
-            patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
-            patch(
-                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
-                return_value=[],
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_issue",
-                return_value=self._epic_issue(),
-            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
@@ -437,7 +439,9 @@ class TestRunDispatchCycleFootprintRecompute:
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"]["1"]["forced_serial"] is True
 
-    def test_forced_serial_filters_out_only_conflicting_candidates(self, tmp_path):
+    def test_forced_serial_filters_out_only_conflicting_candidates(
+        self, tmp_path, fake_forge
+    ):
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
             RunState(
@@ -487,22 +491,21 @@ class TestRunDispatchCycleFootprintRecompute:
             save_run_state(ctx.run_state, ctx.config.run_state_path)
             return ctx.selected
 
+        fake_forge.list_sub_issues.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_sub_issues
+        fake_forge.find_issues_by_parent_metadata.reset_mock(side_effect=True)
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = self._epic_issue()
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
         with (
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
-            patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
-            patch(
-                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
-                return_value=[],
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_issue",
-                return_value=self._epic_issue(),
-            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
@@ -524,7 +527,7 @@ class TestRunDispatchCycleFootprintRecompute:
         assert report.quota_slots_available == 2
         assert [task.issue_number for task in report.selected] == [4]
 
-    def test_already_forced_serial_does_not_recompute_again(self, tmp_path):
+    def test_already_forced_serial_does_not_recompute_again(self, tmp_path, fake_forge):
         """一度強制直列化された後は、再度の再計算・通知でチャーンさせない。"""
         run_state_path = tmp_path / "run_state.json"
         save_run_state(
@@ -549,24 +552,25 @@ class TestRunDispatchCycleFootprintRecompute:
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
         )
+        fake_forge.list_sub_issues.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_sub_issues
+        fake_forge.find_issues_by_parent_metadata.reset_mock(side_effect=True)
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = self._epic_issue()
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.add_comment.reset_mock(side_effect=True)
+        mock_add_comment = fake_forge.add_comment
         with (
             patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
-            patch("orchestune.forge.GitHubForge.list_sub_issues") as mock_list,
-            patch(
-                "orchestune.forge.GitHubForge.find_issues_by_parent_metadata",
-                return_value=[],
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.get_issue",
-                return_value=self._epic_issue(),
-            ),
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation",
