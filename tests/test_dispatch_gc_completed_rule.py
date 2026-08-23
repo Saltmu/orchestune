@@ -55,12 +55,14 @@ class TestRuleCompleted:
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.add_comment.assert_called_once()
 
-    def test_abandoned_requeue_adds_queued_before_removing_in_progress(self):
+    def test_abandoned_requeue_adds_queued_before_removing_in_progress(
+        self, fake_forge
+    ):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
         active = _active(pid=123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
         ctx.run_state.active_worktrees["1"] = active
         ctx.prs = [
@@ -72,26 +74,23 @@ class TestRuleCompleted:
                 state="CLOSED",
             )
         ]
+        fake_forge.list_prs.return_value = ctx.prs
         call_order: list[tuple[str, str]] = []
+        fake_forge.remove_label.side_effect = lambda issue, label: call_order.append(
+            ("remove", label)
+        )
+        fake_forge.add_label.side_effect = lambda issue, label: call_order.append(
+            ("add", label)
+        )
         with (
             patch(
                 "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
             ),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=ctx.prs),
             patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=lambda issue, label: call_order.append(("remove", label)),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
-                side_effect=lambda issue, label: call_order.append(("add", label)),
-            ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _rule_completed(ctx, "1", active, task)
 
