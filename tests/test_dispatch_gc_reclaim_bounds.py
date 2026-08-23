@@ -22,6 +22,7 @@ from orchestune.dispatch_state import (
     TaskReclaimRecord,
     load_run_state,
 )
+from tests.conftest import FakeForge
 
 _NOW = 2_000.0
 
@@ -61,6 +62,7 @@ def _config(tmp_path, **overrides):
         run_state_path=tmp_path / "run_state.json",
         apply=True,
         task_timeout_seconds=60,
+        forge=FakeForge(),
     )
     defaults.update(overrides)
     return DispatcherConfig(**defaults)
@@ -72,22 +74,26 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
     events = []
     labels: list[tuple[str, str]] = []
     comments: list[str] = []
+    forge = config.resolved_forge
     for _ in range(cycles):
         run_state.active_worktrees["280"] = _active(
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                forge,
+                "add_label",
                 side_effect=lambda issue, label: labels.append(("add", label)),
             ),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
+            patch.object(
+                forge,
+                "remove_label",
                 side_effect=lambda issue, label: labels.append(("remove", label)),
             ),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
+            patch.object(
+                forge,
+                "add_comment",
                 side_effect=lambda issue, body: comments.append(body),
             ),
         ):
@@ -178,9 +184,9 @@ class TestReclaimRetryBound:
                 started_at=None, worktree_path=str(tmp_path / "missing-280")
             )
             with (
-                patch("orchestune.forge.GitHubForge.add_label"),
-                patch("orchestune.forge.GitHubForge.remove_label"),
-                patch("orchestune.forge.GitHubForge.add_comment"),
+                patch.object(config.resolved_forge, "add_label"),
+                patch.object(config.resolved_forge, "remove_label"),
+                patch.object(config.resolved_forge, "add_comment"),
             ):
                 events = _collect_zombies_and_timeouts(
                     run_state, {280: _task()}, config
@@ -208,9 +214,9 @@ class TestReclaimRetryBound:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "add_label") as mock_add_label,
+            patch.object(config.resolved_forge, "remove_label") as mock_remove_label,
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -260,14 +266,15 @@ class TestReclaimRetryBound:
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch(
-                "orchestune.forge.GitHubForge.add_label", side_effect=_record_persisted
+            patch.object(
+                config.resolved_forge, "add_label", side_effect=_record_persisted
             ),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
+            patch.object(
+                config.resolved_forge,
+                "remove_label",
                 side_effect=_record_persisted,
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -300,9 +307,9 @@ class TestReclaimRetryBound:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch.object(config.resolved_forge, "add_label") as mock_add_label,
+            patch.object(config.resolved_forge, "remove_label") as mock_remove_label,
+            patch.object(config.resolved_forge, "add_comment") as mock_add_comment,
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -334,9 +341,9 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.save_run_state",
                 side_effect=OSError("boom"),
             ),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "add_label"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -356,10 +363,11 @@ class TestReclaimRetryBound:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
+            patch.object(config.resolved_forge, "add_label") as mock_add_label,
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(
+                config.resolved_forge,
+                "add_comment",
                 side_effect=lambda issue, body: comments.append(body),
             ),
         ):
@@ -424,12 +432,13 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
             ),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=RuntimeError("gh: API is unavailable"),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -461,12 +470,13 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
             ),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=RuntimeError("gh: API is unavailable"),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -493,12 +503,13 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
             ),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=RuntimeError("gh: API is unavailable"),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -519,9 +530,9 @@ class TestReclaimRetryBound:
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "add_label"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -539,8 +550,9 @@ class TestReclaimRetryBound:
         """
         config = _config(tmp_path, max_task_reclaims=1)
         run_state = RunState(active_worktrees={})
-        failing = patch(
-            "orchestune.forge.GitHubForge.add_label",
+        failing = patch.object(
+            config.resolved_forge,
+            "add_label",
             side_effect=RuntimeError("gh: API is unavailable"),
         )
 
@@ -552,8 +564,8 @@ class TestReclaimRetryBound:
             with (
                 patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
                 failing,
-                patch("orchestune.forge.GitHubForge.remove_label"),
-                patch("orchestune.forge.GitHubForge.add_comment"),
+                patch.object(config.resolved_forge, "remove_label"),
+                patch.object(config.resolved_forge, "add_comment"),
             ):
                 assert (
                     _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
@@ -570,12 +582,13 @@ class TestReclaimRetryBound:
         labels: list[tuple[str, str]] = []
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=lambda issue, label: labels.append(("add", label)),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -599,12 +612,13 @@ class TestReclaimRetryBound:
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
+            patch.object(config.resolved_forge, "add_label"),
+            patch.object(
+                config.resolved_forge,
+                "remove_label",
                 side_effect=RuntimeError("gh: label removal failed"),
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -631,13 +645,15 @@ class TestReclaimRetryBound:
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=lambda issue, label: labels.append(("add", label)),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(
+                config.resolved_forge,
+                "add_comment",
                 side_effect=RuntimeError("gh: comment failed"),
             ),
         ):
@@ -667,13 +683,15 @@ class TestReclaimRetryBound:
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=lambda issue, label: labels.append(("add", label)),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(
+                config.resolved_forge,
+                "add_comment",
                 side_effect=RuntimeError("gh: comment failed"),
             ),
         ):
@@ -709,8 +727,9 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
+            patch.object(
+                config.resolved_forge,
+                "add_comment",
                 side_effect=RuntimeError("gh: comment permission denied"),
             ),
         ):
@@ -745,13 +764,15 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=lambda issue, label: labels.append(("add", label)),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(
+                config.resolved_forge,
+                "add_comment",
                 side_effect=RuntimeError("gh: comment permission denied"),
             ),
         ):
@@ -779,12 +800,13 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
+            patch.object(
+                config.resolved_forge,
+                "add_label",
                 side_effect=RuntimeError("gh: API is unavailable"),
             ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "remove_label"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
@@ -807,7 +829,7 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch_gc_zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch.object(config.resolved_forge, "add_comment"),
         ):
             assert (
                 _collect_zombies_and_timeouts(run_state, {280: _task()}, config) == []

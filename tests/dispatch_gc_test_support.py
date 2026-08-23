@@ -8,7 +8,6 @@ test_dispatch_gc.py (1418行) を、ルール別・クリーンアップ別
 
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_rules import CycleContext
@@ -19,7 +18,7 @@ from tests.conftest import make_issue
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
-def _ctx(*, forge: Any | None = None, **overrides):
+def _ctx(*, forge=None, **overrides):
     defaults = dict(
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},

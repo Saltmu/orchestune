@@ -149,9 +149,7 @@ class TestRuleCompleted:
         assert outcome is None
         fake_forge.list_prs.assert_not_called()
 
-    def test_local_closed_pr_closed_before_launch_is_ignored_as_stale(
-        self, fake_forge
-    ):
+    def test_local_closed_pr_closed_before_launch_is_ignored_as_stale(self, fake_forge):
         active = _active(pid=123, started_at=1_800_000_000.0)
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)

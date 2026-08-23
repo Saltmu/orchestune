@@ -21,13 +21,14 @@ from tests.dispatch_gc_test_support import _issue
 
 
 class TestGC:
-    def test_gc_reclaim_zombie(self, tmp_path):
+    def test_gc_reclaim_zombie(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             apply=True,
+            forge=fake_forge,
             task_timeout_seconds=3600,
         )
         issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
@@ -50,11 +51,11 @@ class TestGC:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
             patch(
@@ -64,9 +65,9 @@ class TestGC:
             patch(
                 "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch.object(fake_forge, "add_label") as mock_add_label,
+            patch.object(fake_forge, "remove_label") as mock_remove_label,
+            patch.object(fake_forge, "add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
@@ -97,13 +98,14 @@ class TestGC:
         loaded = load_run_state(config.run_state_path)
         assert "1" not in loaded.active_worktrees
 
-    def test_gc_reclaim_zombie_only(self, tmp_path):
+    def test_gc_reclaim_zombie_only(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             apply=True,
+            forge=fake_forge,
             task_timeout_seconds=0,
             zombie_gc=True,
         )
@@ -126,11 +128,11 @@ class TestGC:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
             patch(
@@ -144,9 +146,9 @@ class TestGC:
                 "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch.object(fake_forge, "add_label") as mock_add_label,
+            patch.object(fake_forge, "remove_label") as mock_remove_label,
+            patch.object(fake_forge, "add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
@@ -167,13 +169,14 @@ class TestGC:
         loaded = load_run_state(config.run_state_path)
         assert "1" not in loaded.active_worktrees
 
-    def test_gc_reclaim_zombie_disabled(self, tmp_path):
+    def test_gc_reclaim_zombie_disabled(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             apply=True,
+            forge=fake_forge,
             task_timeout_seconds=0,
             zombie_gc=False,
         )
@@ -196,11 +199,12 @@ class TestGC:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch.object(fake_forge, "list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
             patch(
                 "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
             ),
@@ -211,9 +215,9 @@ class TestGC:
                 "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch.object(fake_forge, "add_label") as mock_add_label,
+            patch.object(fake_forge, "remove_label") as mock_remove_label,
+            patch.object(fake_forge, "add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
@@ -234,13 +238,14 @@ class TestGC:
         loaded = load_run_state(config.run_state_path)
         assert "1" in loaded.active_worktrees
 
-    def test_gc_reclaim_timeout(self, tmp_path):
+    def test_gc_reclaim_timeout(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             apply=True,
+            forge=fake_forge,
             task_timeout_seconds=600,
         )
         issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
@@ -266,16 +271,17 @@ class TestGC:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch.object(fake_forge, "list_open_prs", return_value=[]),
+            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
             patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
             patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch.object(fake_forge, "add_label") as mock_add_label,
+            patch.object(fake_forge, "remove_label") as mock_remove_label,
+            patch.object(fake_forge, "add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
@@ -296,13 +302,14 @@ class TestGC:
         loaded = load_run_state(config.run_state_path)
         assert "1" not in loaded.active_worktrees
 
-    def test_gc_reclaim_backup_failure_skips_deletion(self, tmp_path):
+    def test_gc_reclaim_backup_failure_skips_deletion(self, tmp_path, fake_forge):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             apply=True,
+            forge=fake_forge,
             task_timeout_seconds=3600,
         )
         issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
@@ -324,11 +331,11 @@ class TestGC:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=False),
             patch(
@@ -342,9 +349,9 @@ class TestGC:
                 "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch.object(fake_forge, "add_label") as mock_add_label,
+            patch.object(fake_forge, "remove_label") as mock_remove_label,
+            patch.object(fake_forge, "add_comment") as mock_add_comment,
             patch("orchestune.dispatch_gc_zombies.remove_worktree") as mock_remove_wt,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
         ):
