@@ -10,6 +10,101 @@ from orchestune.dispatch_cycle import CycleReport
 from orchestune.dispatch_result import PhaseResult, PhaseStatus
 
 
+def _format_post_cycle_summary(
+    post_cycle_results: list[PhaseResult],
+) -> list[str]:
+    lines = [
+        "### 🔄 後処理フェーズ結果（Post-Cycle Phases）",
+        "| フェーズ名 | ステータス | 再試行要否 | 詳細 / エラー |",
+        "| --- | --- | --- | --- |",
+    ]
+    for res in post_cycle_results:
+        status_emoji = {
+            PhaseStatus.SUCCESS: "✅ 成功",
+            PhaseStatus.WARNING: "⚠️ 警告",
+            PhaseStatus.RETRYABLE_FAILURE: "❌ 失敗（再試行可能）",
+            PhaseStatus.FATAL_FAILURE: "🚨 致命的失敗",
+        }.get(res.status, res.status.value)
+        retry_text = "🔄 必要" if res.retryable else "-"
+        detail = res.error_message if res.error_message else "-"
+        lines.append(
+            f"| `{res.phase_name}` | {status_emoji} | {retry_text} | {detail} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _format_integrator_summary(integrator_report: dict) -> list[str]:
+    lines = [
+        "### 🔍 仮マージ検証（Integrator）結果",
+        f"全体ステータス: **{integrator_report.get('status', 'unknown')}**\n",
+    ]
+    merged = integrator_report.get("merged", [])
+    failed = integrator_report.get("failed", [])
+    failed_reasons = integrator_report.get("failed_reasons", {})
+    integration_pr_number = integrator_report.get("integration_pr_number")
+
+    if not merged and not failed:
+        lines.append("検証対象の完了タスク（`status:done`）はありませんでした。\n")
+    else:
+        lines.append("| サブタスクID | 結果 | 詳細 / 理由 |")
+        lines.append("| --- | --- | --- |")
+        for task_id in merged:
+            lines.append(
+                f"| `{task_id}` | ✅ 成功 | 仮マージCI通過またはマージ済みスキップ |"
+            )
+        for task_id in failed:
+            reason = failed_reasons.get(task_id, "不明なエラー")
+            lines.append(f"| `{task_id}` | ❌ 失敗 | {reason.split(chr(10))[0]} |")
+        lines.append("")
+
+    if integration_pr_number:
+        repo_slug = os.environ.get("GITHUB_REPOSITORY")
+        pr_ref = (
+            f"https://github.com/{repo_slug}/pull/{integration_pr_number}"
+            if repo_slug
+            else f"#{integration_pr_number}"
+        )
+        lines.append(
+            f"➡️ **統合PR #{integration_pr_number}** が作成/検出されました。"
+            f"最終マージには人間によるレビューが必要です: {pr_ref}\n"
+        )
+    return lines
+
+
+def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
+    lines = ["### 🚀 新規起動タスク"]
+    if not cycle_report.selected:
+        lines.append("今回新たに起動されたタスクはありません。\n")
+    else:
+        lines.append("| サブタスクID | Issue番号 | 優先度 |")
+        lines.append("| --- | --- | --- |")
+        for task in cycle_report.selected:
+            lines.append(
+                f"| `{task.subtask_id}` | #{task.issue_number} | {task.priority} |"
+            )
+        lines.append("")
+
+    lines.append("### 🔒 外部ロック（External Lock）変更")
+    to_lock = cycle_report.lock_changes.get("to_lock", [])
+    to_unlock = cycle_report.lock_changes.get("to_unlock", [])
+    if not to_lock and not to_unlock:
+        lines.append("外部ロックの変更はありませんでした。\n")
+    else:
+        lines.append("| サブタスクID | Issue番号 | アクション |")
+        lines.append("| --- | --- | --- |")
+        for task in to_lock:
+            lines.append(
+                f"| `{task.subtask_id}` | #{task.issue_number} | 🔒 ロック付与 (`status:external-lock`) |"
+            )
+        for task in to_unlock:
+            lines.append(
+                f"| `{task.subtask_id}` | #{task.issue_number} | 🔓 ロック解除 |"
+            )
+        lines.append("")
+    return lines
+
+
 def write_github_step_summary(
     cycle_report: CycleReport | None,
     integrator_report: dict | None,
@@ -17,98 +112,12 @@ def write_github_step_summary(
     post_cycle_results: list[PhaseResult] | None = None,
 ) -> None:
     lines = ["## 🤖 Orchestune Dispatch Summary\n"]
-
     if post_cycle_results:
-        lines.append("### 🔄 後処理フェーズ結果（Post-Cycle Phases）")
-        lines.append("| フェーズ名 | ステータス | 再試行要否 | 詳細 / エラー |")
-        lines.append("| --- | --- | --- | --- |")
-        for res in post_cycle_results:
-            status_emoji = {
-                PhaseStatus.SUCCESS: "✅ 成功",
-                PhaseStatus.WARNING: "⚠️ 警告",
-                PhaseStatus.RETRYABLE_FAILURE: "❌ 失敗（再試行可能）",
-                PhaseStatus.FATAL_FAILURE: "🚨 致命的失敗",
-            }.get(res.status, res.status.value)
-
-            retry_text = "🔄 必要" if res.retryable else "-"
-            detail = res.error_message if res.error_message else "-"
-
-            lines.append(
-                f"| `{res.phase_name}` | {status_emoji} | {retry_text} | {detail} |"
-            )
-        lines.append("")
-
+        lines.extend(_format_post_cycle_summary(post_cycle_results))
     if integrator_report:
-        lines.append("### 🔍 仮マージ検証（Integrator）結果")
-        status = integrator_report.get("status", "unknown")
-        lines.append(f"全体ステータス: **{status}**\n")
-
-        merged = integrator_report.get("merged", [])
-        failed = integrator_report.get("failed", [])
-        failed_reasons = integrator_report.get("failed_reasons", {})
-        integration_pr_number = integrator_report.get("integration_pr_number")
-
-        if not merged and not failed:
-            lines.append("検証対象の完了タスク（`status:done`）はありませんでした。\n")
-        else:
-            lines.append("| サブタスクID | 結果 | 詳細 / 理由 |")
-            lines.append("| --- | --- | --- |")
-            for task_id in merged:
-                lines.append(
-                    f"| `{task_id}` | ✅ 成功 | 仮マージCI通過またはマージ済みスキップ |"
-                )
-            for task_id in failed:
-                reason = failed_reasons.get(task_id, "不明なエラー")
-                reason_short = reason.split("\n")[0]
-                lines.append(f"| `{task_id}` | ❌ 失敗 | {reason_short} |")
-            lines.append("")
-
-        # Integratorの仕事は統合PRの作成までで、最終マージは常に人間が行うため、
-        # そのPRへのリンクをサマリー上で必ず可視化する（run #68のように、成功していても
-        # 誰にも気づかれず放置されるのを防ぐ）。
-        if integration_pr_number:
-            repo_slug = os.environ.get("GITHUB_REPOSITORY")
-            pr_ref = (
-                f"https://github.com/{repo_slug}/pull/{integration_pr_number}"
-                if repo_slug
-                else f"#{integration_pr_number}"
-            )
-            lines.append(
-                f"➡️ **統合PR #{integration_pr_number}** が作成/検出されました。"
-                f"最終マージには人間によるレビューが必要です: {pr_ref}\n"
-            )
-
+        lines.extend(_format_integrator_summary(integrator_report))
     if cycle_report:
-        lines.append("### 🚀 新規起動タスク")
-        if not cycle_report.selected:
-            lines.append("今回新たに起動されたタスクはありません。\n")
-        else:
-            lines.append("| サブタスクID | Issue番号 | 優先度 |")
-            lines.append("| --- | --- | --- |")
-            for task in cycle_report.selected:
-                lines.append(
-                    f"| `{task.subtask_id}` | #{task.issue_number} | {task.priority} |"
-                )
-            lines.append("")
-
-        lines.append("### 🔒 外部ロック（External Lock）変更")
-        to_lock = cycle_report.lock_changes.get("to_lock", [])
-        to_unlock = cycle_report.lock_changes.get("to_unlock", [])
-
-        if not to_lock and not to_unlock:
-            lines.append("外部ロックの変更はありませんでした。\n")
-        else:
-            lines.append("| サブタスクID | Issue番号 | アクション |")
-            lines.append("| --- | --- | --- |")
-            for task in to_lock:
-                lines.append(
-                    f"| `{task.subtask_id}` | #{task.issue_number} | 🔒 ロック付与 (`status:external-lock`) |"
-                )
-            for task in to_unlock:
-                lines.append(
-                    f"| `{task.subtask_id}` | #{task.issue_number} | 🔓 ロック解除 |"
-                )
-            lines.append("")
+        lines.extend(_format_cycle_report_summary(cycle_report))
 
     try:
         with open(summary_path, "a", encoding="utf-8") as f:

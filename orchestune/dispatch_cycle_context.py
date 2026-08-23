@@ -98,38 +98,12 @@ def _rotated_lookup_batch(run_state: RunState, unresolved: set[int]) -> list[int
     return batch
 
 
-def _resolve_ledger_issue_states(
-    run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
-) -> dict[int, str]:
-    """台帳に記録があるIssueの状態（OPEN/CLOSED）を、API呼び出しを抑えつつ解決する。
-
-    1. サイクルが既に取得したIssue一覧（追加コストなし）
-    2. 1で解決できない分は、終端ラベルのIssueをラベル単位で一括取得
-       （エスカレーション済みタスクが何件あっても定数回のリクエストで済む）
-    3. それでも残る分（status:*ラベルを持たない等）のみ、Issue番号を直接問い合わせる
-
-    取得に失敗したIssueは結果に含めない（呼び出し側は記録を保持する＝安全側）。
-
-    PR#520レビュー14巡目対応(Codex P2): 2の一括取得は台帳の記録数を賄える件数を
-    明示的に要求し（既定の1000件で頭打ちにしない）、3の個別問い合わせは1サイクル
-    あたり`_LEDGER_DIRECT_LOOKUPS_PER_CYCLE`件までに制限する。台帳自体は有界化して
-    いない（未完了タスクの回数を失わないため）ので、ここを無制限にすると
-    大規模リポジトリで毎サイクル数千回の逐次API呼び出しになり、ディスパッチ全体が
-    詰まりかねない。上限に掛かって未解決のまま残った記録は保持され、次サイクル以降で
-    順次確認される（記録が残る側＝安全側の遅延にすぎない）。問い合わせ対象は
-    `_rotated_lookup_batch`が`run_state`のカーソルで順送りに選ぶため、特定の記録だけが
-    永久に確認されないということはない。
-    """
-    recorded = set(run_state.task_reclaim_counts)
-    states = {
-        issue.number: issue.state.upper()
-        for issue in issues.all()
-        if issue.number in recorded
-    }
-    unresolved = recorded - set(states)
+def _resolve_bulk_label_states(
+    unresolved: set[int], states: dict[int, str], config: DispatcherConfig
+) -> set[int]:
     for label in _LEDGER_BULK_LOOKUP_LABELS:
         if not unresolved:
-            return states
+            return unresolved
         try:
             fetched = config.resolved_forge.list_issues_by_label(
                 label,
@@ -147,6 +121,15 @@ def _resolve_ledger_issue_states(
             if issue.number in unresolved:
                 states[issue.number] = issue.state.upper()
         unresolved -= set(states)
+    return unresolved
+
+
+def _resolve_direct_lookup_states(
+    run_state: RunState,
+    unresolved: set[int],
+    states: dict[int, str],
+    config: DispatcherConfig,
+) -> None:
     for issue_number in _rotated_lookup_batch(run_state, unresolved):
         try:
             states[issue_number] = config.resolved_forge.get_issue_state(
@@ -158,38 +141,26 @@ def _resolve_ledger_issue_states(
                 f"closed; keeping its reclaim count: {e}",
                 file=sys.stderr,
             )
+
+
+def _resolve_ledger_issue_states(
+    run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
+) -> dict[int, str]:
+    recorded = set(run_state.task_reclaim_counts)
+    states = {
+        issue.number: issue.state.upper()
+        for issue in issues.all()
+        if issue.number in recorded
+    }
+    unresolved = recorded - set(states)
+    unresolved = _resolve_bulk_label_states(unresolved, states, config)
+    _resolve_direct_lookup_states(run_state, unresolved, states, config)
     return states
 
 
 def discard_reclaim_counts_for_closed_issues(
     run_state: RunState, issues: IssuesByStatus, config: DispatcherConfig
 ) -> list[int]:
-    """#512: GitHub上でクローズ済みと確認できたIssueの回収回数を台帳から破棄する。
-
-    PR#520レビュー6巡目対応(Codex P2): 破棄の根拠は「Issueが閉じたこと」ただ一つに
-    統一する。`_finalize_completed_worktree`が完了を検知した時点（`status:done`）で
-    破棄していたが、その時点ではIssueはまだ開いており、Integratorの仮マージCIが
-    失敗すれば`handle_merge_failure`が同じIssueを`status:queued`へ差し戻す。
-    そこで回数が0に戻っていると、「GC回収 → ワーカー完了 → 統合失敗」の繰り返しで
-    `max_task_reclaims`を素通りできてしまう。クローズ済みのIssueが自動で再起動
-    されることはないため、これが安全に破棄できる唯一のタイミングである。
-
-    PR#520レビュー7巡目対応(Codex P2): 判定は取得済みのIssue一覧だけに頼らない。
-    `_fetch_issues`はステータスラベル別のopen検索（`status:done`/`status:not-needed`
-    のみstate="all"）であり、`status:blocked-human-review`のまま閉じられたIssueや
-    `--parent-issue`の対象外のIssueは一覧に現れないため、一覧だけを根拠にすると
-    それらのクローズを永久に観測できない（解決手順は`_resolve_ledger_issue_states`）。
-
-    状態を確認できなかったエントリは保持する（安全側: 回数を失うと上限判定が
-    0からやり直しになる）。この判定は毎サイクルGitHubから導出し直すため、破棄を
-    ディスクへ即時永続化する必要はない（保存前に落ちても次サイクルで同じ結論に
-    到達する）。
-
-    なお、クローズ後にディスパッチサイクルが1度もその状態を観測しないまま人手で
-    再オープンされた場合は、直前の回数がそのまま引き継がれる（そのIssueは常に
-    OPENに見えるため）。回数が多い側へ倒れる＝上限に早く到達して人間の確認へ回る
-    方向の誤差であり、終端の無い経路は生まれない。
-    """
     if not run_state.task_reclaim_counts:
         return []
     states = _resolve_ledger_issue_states(run_state, issues, config)
@@ -202,9 +173,6 @@ def discard_reclaim_counts_for_closed_issues(
 
 
 def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
-    """#156: `forge.list_sub_issues`が返す親Issue配下の全Issueを、
-    `list_issues_by_label`のstate引数（open/all）と同じ意味論でステータス
-    ラベル別に分類する（`status:done`/`status:not-needed`はclosedも含める）。"""
     queued: list[IssueRecord] = []
     locked: list[IssueRecord] = []
     in_progress: list[IssueRecord] = []
@@ -238,12 +206,6 @@ def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
 
 
 def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
-    """ステータスラベルごとにIssueをGitHubから取得する。
-
-    #156: `config.parent_issue_number`が指定されている場合、無関係な親配下の
-    Issueまでリポジトリ全体から取得して後段で破棄する無駄を避けるため、
-    `forge.list_sub_issues`による親Issue起点のfast pathを使う。
-    """
     if config.parent_issue_number is not None:
         result = find_children_by_parent(
             config.resolved_forge, config.parent_issue_number
@@ -255,28 +217,16 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
         locked=config.resolved_forge.list_issues_by_label("status:external-lock"),
         in_progress=config.resolved_forge.list_issues_by_label("status:in-progress"),
         blocked=config.resolved_forge.list_issues_by_label("status:blocked"),
-        # #236: 完了Issueは人間が通常のGitHub運用でCloseすることが多いため、
-        # 依存解決判定はclosedなIssueも含めて検索する。
         done=config.resolved_forge.list_issues_by_label("status:done", state="all"),
-        # #280: セッションがstatus:not-neededを付与すると同時にstatus:in-progressを
-        # 外すため、in_progress側の一覧には現れなくなる。tasks_by_issueに含めて
-        # おかないと_process_active_worktrees側で完了検知できず、依存解決からも
-        # 漏れてしまう（closedなIssueもクローズ後の依存解決に必要なためstate="all"）。
         not_needed=config.resolved_forge.list_issues_by_label(
             "status:not-needed", state="all"
         ),
     )
 
 
-def _build_cycle_context(
-    issues: IssuesByStatus,
-    run_state: RunState,
-    config: DispatcherConfig,
-) -> CycleContext:
-    """取得済みIssue群から、後続の各ステージが読み取り専用で参照する
-    `CycleContext`を組み立てる。"""
-    all_issues = issues.all()
-
+def _build_task_mappings(
+    all_issues: list[IssueRecord],
+) -> tuple[dict, dict, set[str]]:
     issue_to_subtask_id: dict[int, str] = {}
     for issue in all_issues:
         sub_id = _extract_raw_subtask_id(issue)
@@ -292,15 +242,15 @@ def _build_cycle_context(
         for task in tasks_by_issue.values()
         if task.subtask_id
     }
-
-    prs = config.resolved_forge.list_open_prs(paginate_files=True)
-
     done_subtask_ids = {
         task.subtask_id
         for task in tasks_by_issue.values()
         if "status:done" in task.status_labels and task.subtask_id
     }
+    return tasks_by_issue, issue_number_by_subtask_id, done_subtask_ids
 
+
+def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set, dict]:
     pr_by_branch = {pr.head_ref: pr for pr in prs}
     ci_passed_pr_subtask_ids = set()
     changes_requested_subtask_ids = set()
@@ -318,6 +268,34 @@ def _build_cycle_context(
                 changes_requested_subtask_ids.add(task.subtask_id)
             elif pr.is_ci_passing:
                 ci_passed_pr_subtask_ids.add(task.subtask_id)
+
+    return (
+        pr_by_branch,
+        ci_passed_pr_subtask_ids,
+        changes_requested_subtask_ids,
+        subtask_branch_map,
+    )
+
+
+def _build_cycle_context(
+    issues: IssuesByStatus,
+    run_state: RunState,
+    config: DispatcherConfig,
+) -> CycleContext:
+    all_issues = issues.all()
+    (
+        tasks_by_issue,
+        issue_number_by_subtask_id,
+        done_subtask_ids,
+    ) = _build_task_mappings(all_issues)
+
+    prs = config.resolved_forge.list_open_prs(paginate_files=True)
+    (
+        pr_by_branch,
+        ci_passed_pr_subtask_ids,
+        changes_requested_subtask_ids,
+        subtask_branch_map,
+    ) = _build_pr_mappings(tasks_by_issue, prs)
 
     return CycleContext(
         run_state=run_state,

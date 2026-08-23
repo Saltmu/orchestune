@@ -125,16 +125,57 @@ def _recovery_counters_for_issue(issue: IssueRecord) -> tuple[int, bool]:
     return (recompute_count, forced_serial)
 
 
+def _build_restored_active_worktree(
+    issue: IssueRecord,
+    subtask_id: str,
+    declared_footprint: tuple[str, ...],
+    open_prs: list[PrRecord],
+    issue_to_subtask_id: dict[int, str],
+    subtask_id_to_issue_number: dict[str, int],
+    config: DispatcherConfig,
+) -> ActiveWorktree:
+    recompute_count, forced_serial = _recovery_counters_for_issue(issue)
+    associated_pr = None
+    for pr in open_prs:
+        if issue.number in pr.closes_issue_numbers:
+            associated_pr = pr
+            break
+
+    if associated_pr:
+        branch_name = associated_pr.head_ref
+        external_id = str(associated_pr.number)
+        external_url = f"PR#{associated_pr.number}"
+    else:
+        branch_name = f"claude/issue-{issue.number}-{subtask_id}"
+        external_id = None
+        external_url = None
+
+    slug = branch_name.replace("/", "-")
+    worktree_path = Path(config.worktree_root) / slug
+    restored_base = _restored_base_branch(
+        issue, open_prs, issue_to_subtask_id, subtask_id_to_issue_number
+    )
+
+    return ActiveWorktree(
+        issue_number=issue.number,
+        branch=branch_name,
+        worktree_path=str(worktree_path),
+        pid=None,
+        started_at=None,
+        declared_footprint=declared_footprint,
+        recompute_count=recompute_count,
+        forced_serial=forced_serial,
+        external_id=external_id,
+        external_url=external_url,
+        base_branch=restored_base,
+    )
+
+
 def _decide_missing_active_worktrees(
     run_state: RunState,
     in_progress_issues: list[IssueRecord],
     config: DispatcherConfig,
 ) -> list[tuple[str, str, ActiveWorktree]]:
-    """in-progressなIssueのうちrun_stateに欠けているものについて、復元すべき
-    ActiveWorktreeを算出する（run_stateへの書き込みは行わない）。
-
-    戻り値は (run_state辞書キー, subtask_id, 復元するActiveWorktree) のリスト。
-    """
     missing_issues = []
     for issue in in_progress_issues:
         subtask_id, declared_footprint = _parse_subtask_info_from_issue(issue)
@@ -154,67 +195,22 @@ def _decide_missing_active_worktrees(
         for issue_number, subtask_id in issue_to_subtask_id.items()
     }
 
-    print(
-        f"Self-healing: Found {len(missing_issues)} active issues missing from run_state.",
-        file=sys.stderr,
-    )
-
     try:
         open_prs = config.resolved_forge.list_open_prs()
     except Exception as e:
-        print(
-            f"Self-healing warning: Failed to list open PRs: {e}",
-            file=sys.stderr,
-        )
+        print(f"Self-healing warning: Failed to list open PRs: {e}", file=sys.stderr)
         open_prs = []
 
     restorations: list[tuple[str, str, ActiveWorktree]] = []
     for issue, subtask_id, declared_footprint in missing_issues:
-        recompute_count, forced_serial = _recovery_counters_for_issue(issue)
-        associated_pr = None
-        for pr in open_prs:
-            if issue.number in pr.closes_issue_numbers:
-                associated_pr = pr
-                break
-
-        if associated_pr:
-            branch_name = associated_pr.head_ref
-            external_id = str(associated_pr.number)
-            external_url = f"PR#{associated_pr.number}"
-        else:
-            branch_name = f"claude/issue-{issue.number}-{subtask_id}"
-            external_id = None
-            external_url = None
-
-        slug = branch_name.replace("/", "-")
-        worktree_path = Path(config.worktree_root) / slug
-
-        restored_base_branch = _restored_base_branch(
+        active_worktree = _build_restored_active_worktree(
             issue,
+            subtask_id,
+            declared_footprint,
             open_prs,
             issue_to_subtask_id,
             subtask_id_to_issue_number,
-        )
-
-        active_worktree = ActiveWorktree(
-            issue_number=issue.number,
-            branch=branch_name,
-            worktree_path=str(worktree_path),
-            pid=None,
-            # Issue作成日時やPRメタデータはdispatch開始日時を表さない。信頼
-            # できる開始時刻を復元できないTaskはtimeout判定を保留する。
-            started_at=None,
-            declared_footprint=declared_footprint,
-            # #513: run_state.json消失時もDAG再計算のリトライ上限と
-            # forced_serialフォールバックを維持するため、Issue本文の
-            # Footprintフェンスへ永続化された値から復元する（`dispatch_rebase.py`
-            # が書き込み側）。フィールド欠落（本フィールド導入前のIssue）は
-            # (0, False)にフォールバックする。
-            recompute_count=recompute_count,
-            forced_serial=forced_serial,
-            external_id=external_id,
-            external_url=external_url,
-            base_branch=restored_base_branch,
+            config,
         )
         restorations.append((str(issue.number), subtask_id, active_worktree))
 

@@ -131,42 +131,34 @@ _INTEGRATOR_SUCCESS_STATUSES = {
 }
 
 
+def _build_integrator_config(
+    config: DispatcherConfig, semantic_review_enabled: bool
+) -> IntegratorConfig:
+    integrator_config = IntegratorConfig(
+        parent_issue_number=config.parent_issue_number,
+        apply=config.apply,
+        forge=config.forge,
+        ci_command=config.ci_command,
+        dag_ignore_patterns=config.dag_ignore_patterns,
+        dag_similarity_threshold=config.dag_similarity_threshold,
+    )
+    if semantic_review_enabled and isinstance(
+        config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
+    ):
+        integrator_config.enable_semantic_review = True
+        integrator_config.coordinator = IntegrationCoordinator(config.dispatch_target)
+    else:
+        integrator_config.enable_semantic_review = False
+    return integrator_config
+
+
 def _run_semantic_integrator(
     config: DispatcherConfig,
     semantic_review_enabled: bool,
     auth_error: ForgeAuthError | None = None,
 ) -> PhaseResult:
-    """統合コーディネーターによる意味的レビューを含め、Integratorを実行する。
-
-    レビューはdispatcherと同一のクラウドルーチンを再利用して起動するため、
-    実ディスパッチ先がクラウドルーチンのときのみ意味的レビューを有効化する。
-    レビューセッションは統合PRへコメントを残すのみで、自動マージ等の後続処理は
-    Python側では一切行わない。ベストエフォート処理: 失敗しても警告を出すだけで
-    main()は続行する。
-    """
-
     def work() -> dict:
-        integrator_config = IntegratorConfig(
-            parent_issue_number=config.parent_issue_number,
-            apply=config.apply,
-            forge=config.forge,
-            ci_command=config.ci_command,
-            dag_ignore_patterns=config.dag_ignore_patterns,
-            dag_similarity_threshold=config.dag_similarity_threshold,
-        )
-        if semantic_review_enabled and isinstance(
-            config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
-        ):
-            integrator_config.enable_semantic_review = True
-            integrator_config.coordinator = IntegrationCoordinator(
-                config.dispatch_target
-            )
-        else:
-            integrator_config.enable_semantic_review = False
-        # `_run_best_effort_phase`は`_process_parent_completion`等の異なる形の
-        # reportとも共有されるため`work`は`Callable[[], dict]`のまま。
-        # `IntegrationReport`(TypedDict)は`dict[Any, Any]`と型として
-        # 互換にならないため、ここで素の`dict`へ変換する。
+        integrator_config = _build_integrator_config(config, semantic_review_enabled)
         return dict(Integrator(integrator_config).run())
 
     def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:

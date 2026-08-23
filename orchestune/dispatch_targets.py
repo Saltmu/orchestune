@@ -189,16 +189,41 @@ def _is_stale_pr_for_handle(pr: PrRecord, handle: DispatchHandle) -> bool:
     return created_at is None or created_at < math.floor(handle.started_at)
 
 
+def _check_open_prs_outcome(
+    open_prs: list[PrRecord],
+    handle: DispatchHandle,
+    forge: Forge,
+) -> Literal["completed", "unknown", "pending"]:
+    all_comments: list[Mapping[str, Any]] = []
+    had_error = False
+    if handle.issue_number is not None:
+        try:
+            all_comments.extend(forge.list_comments(handle.issue_number))
+        except Exception:
+            had_error = True
+    pr_numbers = {pr.number for pr in open_prs}
+    for pr_num in pr_numbers:
+        if handle.issue_number is None or pr_num != handle.issue_number:
+            try:
+                all_comments.extend(forge.list_comments(pr_num))
+            except Exception:
+                had_error = True
+    outcome = parse_from_comments(all_comments, since=handle.started_at)
+    if outcome is not None and outcome.result in (
+        RESULT_DONE,
+        RESULT_NOT_NEEDED,
+        RESULT_BLOCKED,
+    ):
+        return "completed"
+    if had_error and outcome is None:
+        return "unknown"
+    return "pending"
+
+
 def _task_pr_completion_status(
     handle: DispatchHandle,
     forge: Forge | None = None,
 ) -> Literal["pending", "completed", "abandoned", "unknown"]:
-    """Classify matching cloud-task PRs without treating rejected PRs as done.
-
-    #552: PRがOPENの場合でも、完了宣言レコード（orchestune:outcome）が
-    確認できるまでcompletedとは判定せずpendingとする。
-    forgeのPR一覧取得失敗時はunknownを返し、呼び出し元での誤判定を防ぐ。
-    """
     if handle.branch_name is None and handle.issue_number is None:
         return "pending"
     forge = forge or GitHubForge()
@@ -223,30 +248,7 @@ def _task_pr_completion_status(
 
     open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
     if open_prs:
-        all_comments: list[Mapping[str, Any]] = []
-        had_error = False
-        if handle.issue_number is not None:
-            try:
-                all_comments.extend(forge.list_comments(handle.issue_number))
-            except Exception:
-                had_error = True
-        pr_numbers = {pr.number for pr in open_prs}
-        for pr_num in pr_numbers:
-            if handle.issue_number is None or pr_num != handle.issue_number:
-                try:
-                    all_comments.extend(forge.list_comments(pr_num))
-                except Exception:
-                    had_error = True
-        outcome = parse_from_comments(all_comments, since=handle.started_at)
-        if outcome is not None and outcome.result in (
-            RESULT_DONE,
-            RESULT_NOT_NEEDED,
-            RESULT_BLOCKED,
-        ):
-            return "completed"
-        if had_error and outcome is None:
-            return "unknown"
-        return "pending"
+        return _check_open_prs_outcome(open_prs, handle, forge)
 
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
@@ -574,11 +576,45 @@ def _parse_codex_cloud_exec_output(output: str) -> tuple[str | None, str | None]
     return None, None
 
 
+def _fetch_codex_cloud_page(
+    environment_id: str, cursor: str | None
+) -> tuple[list[Any], str | None, bool]:
+    cmd = ["codex", "cloud", "list", "--env", environment_id, "--json"]
+    if cursor:
+        cmd.extend(["--cursor", cursor])
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return [], None, False
+        data = json.loads(proc.stdout)
+        items: list[Any] = []
+        next_cursor: str | None = None
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            raw_items = data.get("items") or data.get("tasks")
+            if isinstance(raw_items, list):
+                items = raw_items
+            raw_cursor = data.get("cursor")
+            if isinstance(raw_cursor, str) and raw_cursor.strip():
+                next_cursor = raw_cursor.strip()
+        return items, next_cursor, True
+    except Exception:
+        return [], None, False
+
+
 def _fetch_codex_cloud_task_status(
     environment_id: str,
     task_id: str,
 ) -> str | None:
-    """codex cloud list --env <env> --json をページネーション末尾まで追従して実行し、該当タスクのstatusを返す。"""
     seen_cursors: set[str] = set()
     cursor: str | None = None
     while True:
@@ -587,47 +623,46 @@ def _fetch_codex_cloud_task_status(
         if cursor is not None:
             seen_cursors.add(cursor)
 
-        cmd = ["codex", "cloud", "list", "--env", environment_id, "--json"]
-        if cursor:
-            cmd.extend(["--cursor", cursor])
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-                timeout=30,
-            )
-            if proc.returncode != 0:
-                return None
-            data = json.loads(proc.stdout)
-            items: list[Any] = []
-            next_cursor: str | None = None
-            if isinstance(data, list):
-                items = data
-            elif isinstance(data, dict):
-                raw_items = data.get("items")
-                if raw_items is None:
-                    raw_items = data.get("tasks")
-                if isinstance(raw_items, list):
-                    items = raw_items
-                raw_cursor = data.get("cursor")
-                if isinstance(raw_cursor, str) and raw_cursor.strip():
-                    next_cursor = raw_cursor.strip()
-
-            for item in items:
-                if isinstance(item, dict) and item.get("id") == task_id:
-                    status = item.get("status")
-                    return str(status).lower() if status is not None else None
-
-            if not next_cursor:
-                break
-            cursor = next_cursor
-        except Exception:
+        items, next_cursor, success = _fetch_codex_cloud_page(environment_id, cursor)
+        if not success:
             return None
+
+        for item in items:
+            if isinstance(item, dict) and item.get("id") == task_id:
+                status = item.get("status")
+                return str(status).lower() if status is not None else None
+
+        if not next_cursor:
+            break
+        cursor = next_cursor
     return None
+
+
+def _run_codex_cloud_exec(
+    command: list[str],
+    worktree_path: Path,
+    log_path: Path,
+) -> str:
+    proc = subprocess.run(
+        command,
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    combined_output = f"{proc.stdout or ''}{proc.stderr or ''}"
+    with open(log_path, "a", encoding="utf-8") as log_fh:
+        log_fh.write(combined_output)
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode,
+            command,
+            output=proc.stdout,
+            stderr=proc.stderr,
+        )
+    return combined_output
 
 
 class CodexCloudDispatchTarget(DispatchTarget):
@@ -665,8 +700,6 @@ class CodexCloudDispatchTarget(DispatchTarget):
         *,
         force_push: bool = False,
     ) -> DispatchHandle:
-        # #384: 自動リベース後の再launchでは、書き換え済み履歴を再pushできる
-        # よう--force-with-leaseを付与する（初回起動時は付与しない）。
         push_args = ["push", "--set-upstream", "origin", branch_name]
         if force_push:
             push_args.insert(1, "--force-with-lease")
@@ -684,25 +717,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
             branch_name,
             self._build_prompt(task, branch_name),
         ]
-        proc = subprocess.run(
-            command,
-            cwd=str(worktree_path),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        combined_output = f"{proc.stdout or ''}{proc.stderr or ''}"
-        with open(log_path, "a", encoding="utf-8") as log_fh:
-            log_fh.write(combined_output)
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(
-                proc.returncode,
-                command,
-                output=proc.stdout,
-                stderr=proc.stderr,
-            )
+        combined_output = _run_codex_cloud_exec(command, worktree_path, log_path)
         task_id, task_url = _parse_codex_cloud_exec_output(combined_output)
         external_id = task_id or f"codex-cloud:{branch_name}"
         return DispatchHandle(
@@ -746,30 +761,13 @@ class TargetBuildConfig:
     allow_unsafe_agent_execution: bool = False
 
 
-def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
-    """#215: CLI引数・環境変数からディスパッチターゲットを組み立てる。
-
-    `cloud-routine`が指定されていても`routine_id`/`routine_token`が
-    環境変数・引数のいずれからも解決できない場合は、警告を出した上で
-    ローカルのダミー動作（`LocalProcessDispatchTarget`）へ自動フォールバックする。
-    `auto`が指定された場合はPATH上のローカルCLI（`claude`優先、次点`agy`、
-    `codex`）を検出し、見つかったCLIを指定した場合と同じ挙動にフォールスルーする。
-    いずれも見つからない場合も同様に警告を出し、ダミー動作へフォールバックする。
-    """
-    dispatch_target_name = config.dispatch_target_name
-    routine_id = config.routine_id
-    routine_token = config.routine_token
-    log_dir = config.log_dir
-    local_cmd = config.local_cmd
-    codex_cloud_env = config.codex_cloud_env
-    allow_unsafe_agent_execution = config.allow_unsafe_agent_execution
-
-    is_unsafe_target = dispatch_target_name in {"claude-cli", "agy-cli", "codex-cli"}
+def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
+    is_unsafe = dispatch_target_name in {"claude-cli", "agy-cli", "codex-cli"}
     if dispatch_target_name == "auto":
         detected = detect_installed_local_cli()
         if detected is not None:
             dispatch_target_name = f"{detected}-cli"
-            is_unsafe_target = True
+            is_unsafe = True
         else:
             print(
                 "警告: PATH上にclaude/agy/codexのいずれのCLIも見つかりませんでした。"
@@ -777,43 +775,75 @@ def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
                 file=sys.stderr,
             )
 
-    if is_unsafe_target and not allow_unsafe_agent_execution:
+    if is_unsafe and not allow_unsafe:
         raise ValueError(
             f"設定エラー: `{dispatch_target_name}` によるローカル無人実行は、承認やサンドボックスのバイパスを伴う完全権限実行となります。\n"
             "この実行を許可するには、信頼できる実行環境であることを確認の上、明示的に `--allow-unsafe-agent-execution` オプションを指定するか、"
             "設定ファイル（orchestune.toml 等）で `allow_unsafe_agent_execution = true` を設定してください。"
         )
+    return dispatch_target_name
 
-    if dispatch_target_name == "cloud-routine":
-        resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
-        resolved_token = routine_token or os.environ.get(ROUTINE_TOKEN_ENV_VAR)
-        if resolved_id and resolved_token:
-            return ClaudeCodeCloudRoutineDispatchTarget(resolved_id, resolved_token)
-        print(
-            f"警告: {ROUTINE_ID_ENV_VAR}/{ROUTINE_TOKEN_ENV_VAR}"
-            "が未設定のため、クラウドルーチンへのディスパッチはできません。"
-            "ローカルのダミー起動にフォールバックします。",
-            file=sys.stderr,
+
+def _build_cloud_routine_target(
+    routine_id: str | None, routine_token: str | None
+) -> ClaudeCodeCloudRoutineDispatchTarget | None:
+    resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
+    resolved_token = routine_token or os.environ.get(ROUTINE_TOKEN_ENV_VAR)
+    if resolved_id and resolved_token:
+        return ClaudeCodeCloudRoutineDispatchTarget(resolved_id, resolved_token)
+    print(
+        f"警告: {ROUTINE_ID_ENV_VAR}/{ROUTINE_TOKEN_ENV_VAR}"
+        "が未設定のため、クラウドルーチンへのディスパッチはできません。"
+        "ローカルのダミー起動にフォールバックします。",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _build_codex_cloud_target(
+    codex_cloud_env: str | None, log_dir: str | Path
+) -> CodexCloudDispatchTarget | None:
+    resolved_env = codex_cloud_env or os.environ.get(CODEX_CLOUD_ENV_VAR)
+    if resolved_env:
+        return CodexCloudDispatchTarget(resolved_env, log_dir=log_dir)
+    print(
+        f"警告: {CODEX_CLOUD_ENV_VAR}が未設定のため、Codex Cloudへの"
+        "ディスパッチはできません。ローカルのダミー起動にフォールバックします。",
+        file=sys.stderr,
+    )
+    return None
+
+
+def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
+    target_name = _resolve_target_name(
+        config.dispatch_target_name, config.allow_unsafe_agent_execution
+    )
+    if target_name == "cloud-routine":
+        cloud_target = _build_cloud_routine_target(
+            config.routine_id, config.routine_token
         )
-    if dispatch_target_name == "codex-cloud":
-        resolved_env = codex_cloud_env or os.environ.get(CODEX_CLOUD_ENV_VAR)
-        if resolved_env:
-            return CodexCloudDispatchTarget(resolved_env, log_dir=log_dir)
-        print(
-            f"警告: {CODEX_CLOUD_ENV_VAR}が未設定のため、Codex Cloudへの"
-            "ディスパッチはできません。ローカルのダミー起動にフォールバックします。",
-            file=sys.stderr,
-        )
-    if dispatch_target_name == "claude-cli":
+        if cloud_target is not None:
+            return cloud_target
+    elif target_name == "codex-cloud":
+        codex_target = _build_codex_cloud_target(config.codex_cloud_env, config.log_dir)
+        if codex_target is not None:
+            return codex_target
+
+    elif target_name == "claude-cli":
         return LocalProcessDispatchTarget(
-            log_dir=log_dir, local_cmd=local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+            log_dir=config.log_dir,
+            local_cmd=config.local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
         )
-    if dispatch_target_name == "agy-cli":
+    elif target_name == "agy-cli":
         return LocalProcessDispatchTarget(
-            log_dir=log_dir, local_cmd=local_cmd or AGY_CLI_LOCAL_CMD_TEMPLATE
+            log_dir=config.log_dir,
+            local_cmd=config.local_cmd or AGY_CLI_LOCAL_CMD_TEMPLATE,
         )
-    if dispatch_target_name == "codex-cli":
+    elif target_name == "codex-cli":
         return LocalProcessDispatchTarget(
-            log_dir=log_dir, local_cmd=local_cmd or CODEX_CLI_LOCAL_CMD_TEMPLATE
+            log_dir=config.log_dir,
+            local_cmd=config.local_cmd or CODEX_CLI_LOCAL_CMD_TEMPLATE,
         )
-    return LocalProcessDispatchTarget(log_dir=log_dir, local_cmd=local_cmd)
+    return LocalProcessDispatchTarget(
+        log_dir=config.log_dir, local_cmd=config.local_cmd
+    )

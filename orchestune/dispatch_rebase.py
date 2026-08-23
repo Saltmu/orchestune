@@ -199,46 +199,33 @@ def _decide_footprint_deviation_outcome(
     )
 
 
-def _apply_footprint_deviation_outcome(
+def _apply_forced_serial_event(
+    active: ActiveWorktree,
+    decision: FootprintDeviationDecision,
+    config: DispatcherConfig,
+) -> dict:
+    notify_force_serial(
+        decision.subtask_id,
+        active.issue_number,
+        config.parent_issue_number,
+        decision.recompute_count,
+        apply=config.apply,
+        forge=config.resolved_forge,
+    )
+    if config.apply:
+        active.forced_serial = True
+        _persist_recovery_counters(active, config)
+        config.resolved_forge.add_label(active.issue_number, "status:force-serial")
+    return {"recompute_count": decision.recompute_count}
+
+
+def _apply_recomputed_event(
     active: ActiveWorktree,
     deviated: list[str],
     decision: FootprintDeviationDecision,
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
 ) -> dict:
-    """decide層が判定した方針に基づき、通知・active/run_stateの更新を行う。"""
-    event: dict = {
-        "issue_number": active.issue_number,
-        "deviated_files": deviated,
-        "action": decision.action,
-    }
-
-    if decision.action in ("already_forced_serial", "skipped_unknown_subtask"):
-        return event
-
-    if decision.action == "forced_serial":
-        notify_force_serial(
-            decision.subtask_id,
-            active.issue_number,
-            config.parent_issue_number,
-            decision.recompute_count,
-            apply=config.apply,
-            forge=config.resolved_forge,
-        )
-        event["recompute_count"] = decision.recompute_count
-        if config.apply:
-            active.forced_serial = True
-            # #516レビュー指摘: ラベル（表示専用）より先に本文（自己修復が
-            # 読む唯一のソース）へ永続化する。逆順だと、add_label成功後に
-            # ここで失敗した場合、GitHub上に永続的なstatus:force-serial
-            # ラベルは付くのに本文のforced_serialはfalseのままという
-            # 不整合が残り、次の自己修復サイクルで既に強制直列化済みの
-            # タスクを「直列化されていない」と誤って復元してしまう。
-            _persist_recovery_counters(active, config)
-            config.resolved_forge.add_label(active.issue_number, "status:force-serial")
-        return event
-
-    # decision.action == "recomputed"
     for conflict in decision.conflicts:
         notify_recompute(
             conflict,
@@ -248,11 +235,36 @@ def _apply_footprint_deviation_outcome(
             issue_number_by_subtask_id=issue_number_by_subtask_id,
             forge=config.resolved_forge,
         )
-
-    event["conflicts"] = [dataclasses.asdict(c) for c in decision.conflicts]
     if config.apply:
         active.recompute_count += 1
         _persist_recovery_counters(active, config)
+    return {"conflicts": [dataclasses.asdict(c) for c in decision.conflicts]}
+
+
+def _apply_footprint_deviation_outcome(
+    active: ActiveWorktree,
+    deviated: list[str],
+    decision: FootprintDeviationDecision,
+    issue_number_by_subtask_id: dict[str, int],
+    config: DispatcherConfig,
+) -> dict:
+    event: dict = {
+        "issue_number": active.issue_number,
+        "deviated_files": deviated,
+        "action": decision.action,
+    }
+    if decision.action in ("already_forced_serial", "skipped_unknown_subtask"):
+        return event
+
+    if decision.action == "forced_serial":
+        event.update(_apply_forced_serial_event(active, decision, config))
+        return event
+
+    event.update(
+        _apply_recomputed_event(
+            active, deviated, decision, issue_number_by_subtask_id, config
+        )
+    )
     return event
 
 
@@ -359,16 +371,9 @@ def _decide_rebase_needed(
         return False
 
 
-def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
-    """実際にプロセス停止・git rebase・ローカルCI再実行・エージェント（LLM）の
-    再起動を行う。コンフリクトやCI失敗時はstatus:manual-merge-requiredへ遷移する。"""
-    active = ctx.active
-    active_task = ctx.active_task
-    assert active_task is not None
-    config = ctx.config
-    if not config.apply:
-        return
-
+def _prepare_wip_backup_for_rebase(
+    active: ActiveWorktree, config: DispatcherConfig, ctx: RebaseContext
+) -> bool:
     if active.pid:
         try:
             os.kill(active.pid, 9)
@@ -376,8 +381,6 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
         except Exception:
             pass
 
-    # #213: dirtyなworktreeのままrebaseすると構造的に必ず失敗し、未コミットの
-    # エージェント作業が退避されないまま失われる。rebase前にWIP退避を確定させる。
     backup_error = dispatch_gc.backup_wip_commit(
         active.worktree_path, "WIP: backup by Orchestune auto-rebase"
     )
@@ -396,6 +399,56 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
             f"エラー詳細:\n```\n{backup_error}\n```",
         )
         del ctx.run_state.active_worktrees[ctx.key]
+        return False
+    return True
+
+
+def _handle_rebase_failure(
+    active: ActiveWorktree,
+    parent_branch: str,
+    e: Exception,
+    config: DispatcherConfig,
+    ctx: RebaseContext,
+) -> None:
+    try:
+        run_git(["rebase", "--abort"], cwd=active.worktree_path, check=False)
+    except Exception:
+        pass
+
+    transition_status_label(
+        config.resolved_forge,
+        active.issue_number,
+        "status:manual-merge-required",
+        ("status:in-progress",),
+    )
+    cmd_args = getattr(e, "cmd", [])
+    if cmd_args == default_ci_command():
+        msg = "自動リベース後のローカルCI実行に失敗しました。手動で修正を行ってください。\n"
+    elif cmd_args and "push" in cmd_args:
+        msg = (
+            "自動リベース後のブランチpushに失敗しました"
+            "（rebase自体はコンフリクトなく成功しています）。"
+            "手動でpushと後続の対応を行ってください。\n"
+        )
+    else:
+        msg = "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n"
+
+    config.resolved_forge.add_comment(
+        active.issue_number,
+        f"{msg}対象の依存元ブランチ: {parent_branch}",
+    )
+    del ctx.run_state.active_worktrees[ctx.key]
+
+
+def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
+    active = ctx.active
+    active_task = ctx.active_task
+    assert active_task is not None
+    config = ctx.config
+    if not config.apply:
+        return
+
+    if not _prepare_wip_backup_for_rebase(active, config, ctx):
         return
 
     resolved_parent = resolve_local_or_remote_branch(
@@ -406,7 +459,6 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
 
     try:
         run_git(["rebase", resolved_parent], cwd=active.worktree_path, check=True)
-
         env = _get_ci_env(Path(config.worktree_root).resolve().parent)
         ci_res = subprocess.run(
             default_ci_command(),
@@ -417,7 +469,6 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
             errors="replace",
             env=env,
         )
-
         if ci_res.returncode != 0:
             raise subprocess.CalledProcessError(
                 ci_res.returncode,
@@ -427,8 +478,6 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
             )
 
         assert config.dispatch_target is not None
-        # #384: rebaseで書き換え済みの履歴を安全に再pushできるよう、
-        # force_push=Trueを明示的に渡す（初回起動時のみのforce無しpushと区別する）。
         handle = config.dispatch_target.launch(
             active_task, active.branch, Path(active.worktree_path), force_push=True
         )
@@ -438,41 +487,7 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
         active.started_at = time.time()
         active.base_branch = parent_branch
     except (subprocess.CalledProcessError, OSError) as e:
-        try:
-            run_git(["rebase", "--abort"], cwd=active.worktree_path, check=False)
-        except Exception:
-            pass
-
-        transition_status_label(
-            config.resolved_forge,
-            active.issue_number,
-            "status:manual-merge-required",
-            ("status:in-progress",),
-        )
-
-        # #384: cmd_args[0]は"git"（rebaseとpushで共通）のため、cmd全体を見て
-        # push失敗をコンフリクトと誤判定しないよう区別する。
-        # #427: Windowsではdefault_ci_command()がpowershell経由のコマンドを返すため、
-        # cmd_args[0]（"powershell"）だけでは判定できない。cmd全体を
-        # default_ci_command()と厳密一致で比較する（部分一致だと、rebase/push対象の
-        # ブランチ名やパスに偶然"local-ci"を含む場合に誤検知しうるため）。
-        cmd_args = getattr(e, "cmd", [])
-        if cmd_args == default_ci_command():
-            msg = "自動リベース後のローカルCI実行に失敗しました。手動で修正を行ってください。\n"
-        elif cmd_args and "push" in cmd_args:
-            msg = (
-                "自動リベース後のブランチpushに失敗しました"
-                "（rebase自体はコンフリクトなく成功しています）。"
-                "手動でpushと後続の対応を行ってください。\n"
-            )
-        else:
-            msg = "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n"
-
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            f"{msg}対象の依存元ブランチ: {parent_branch}",
-        )
-        del ctx.run_state.active_worktrees[ctx.key]
+        _handle_rebase_failure(active, parent_branch, e, config, ctx)
 
 
 def _try_auto_rebase(ctx: RebaseContext) -> bool:

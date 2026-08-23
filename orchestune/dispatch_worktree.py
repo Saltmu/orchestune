@@ -145,62 +145,14 @@ def _cleanup_failed_worktree(worktree_path: Path) -> None:
         pass
 
 
-def create_worktree_and_launch(
+def _prepare_and_launch(
     task: Task,
     branch_name: str,
+    worktree_path: Path,
     worktree_root: str | Path,
     dispatch_target: DispatchTarget,
-    apply: bool,
-    base_branch: str | None = None,
+    base_branch: str | None,
 ) -> LaunchResult:
-    try:
-        worktree_path = _resolve_worktree_path(worktree_root, branch_name)
-    except ValueError as e:
-        print(
-            f"Error: Invalid branch name {branch_name!r} for issue #{task.issue_number}: {e}",
-            file=sys.stderr,
-        )
-        return LaunchResult(
-            issue_number=task.issue_number,
-            branch=branch_name,
-            worktree_path="",
-            pid=None,
-            launched=False,
-            error_message=str(e),
-            validation_error=True,
-        )
-
-    if not apply:
-        return LaunchResult(
-            issue_number=task.issue_number,
-            branch=branch_name,
-            worktree_path=str(worktree_path),
-            pid=None,
-            launched=False,
-        )
-
-    # 1. すでにディレクトリが存在する場合のクリーンアップ
-    backup_error = _cleanup_existing_worktree(worktree_path, task.issue_number)
-    if backup_error is not None:
-        error_message = (
-            f"Uncommitted changes in {worktree_path} could not be "
-            f"backed up before recreation: {backup_error}"
-        )
-        print(
-            f"Error: Failed to back up uncommitted changes for issue "
-            f"#{task.issue_number} before recreation: {backup_error}",
-            file=sys.stderr,
-        )
-        return LaunchResult(
-            issue_number=task.issue_number,
-            branch=branch_name,
-            worktree_path=str(worktree_path),
-            pid=None,
-            launched=False,
-            error_message=error_message,
-        )
-
-    # 2. worktreeの作成 & 3. プロセス起動
     worktree_created = False
     try:
         _create_worktree(worktree_path, Path(worktree_root), branch_name, base_branch)
@@ -236,3 +188,75 @@ def create_worktree_and_launch(
             launched=False,
             error_message=f"{e}{error_details}",
         )
+
+
+def _handle_backup_error(
+    worktree_path: Path, issue_number: int, branch_name: str, backup_error: str
+) -> LaunchResult:
+    error_message = (
+        f"Uncommitted changes in {worktree_path} could not be "
+        f"backed up before recreation: {backup_error}"
+    )
+    print(
+        f"Error: Failed to back up uncommitted changes for issue "
+        f"#{issue_number} before recreation: {backup_error}",
+        file=sys.stderr,
+    )
+    return LaunchResult(
+        issue_number=issue_number,
+        branch=branch_name,
+        worktree_path=str(worktree_path),
+        pid=None,
+        launched=False,
+        error_message=error_message,
+    )
+
+
+def create_worktree_and_launch(
+    task: Task,
+    branch_name: str,
+    worktree_root: str | Path,
+    dispatch_target: DispatchTarget,
+    apply: bool,
+    base_branch: str | None = None,
+) -> LaunchResult:
+    try:
+        worktree_path = _resolve_worktree_path(worktree_root, branch_name)
+    except ValueError as e:
+        print(
+            f"Error: Invalid branch name {branch_name!r} for issue #{task.issue_number}: {e}",
+            file=sys.stderr,
+        )
+        return LaunchResult(
+            issue_number=task.issue_number,
+            branch=branch_name,
+            worktree_path="",
+            pid=None,
+            launched=False,
+            error_message=str(e),
+            validation_error=True,
+        )
+
+    if not apply:
+        return LaunchResult(
+            issue_number=task.issue_number,
+            branch=branch_name,
+            worktree_path=str(worktree_path),
+            pid=None,
+            launched=False,
+        )
+
+    backup_error = _cleanup_existing_worktree(worktree_path, task.issue_number)
+    if backup_error is not None:
+        return _handle_backup_error(
+            worktree_path, task.issue_number, branch_name, backup_error
+        )
+
+    return _prepare_and_launch(
+        task,
+        branch_name,
+        worktree_path,
+        worktree_root,
+        dispatch_target,
+        base_branch,
+    )
