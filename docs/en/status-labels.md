@@ -162,7 +162,7 @@ independently of the lifecycle above (see "External lock" below).
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
 - Source: `_finalize_not_needed_worktree` / `_rule_not_needed` in `orchestune/dispatch_gc.py`
-- Condition: the session produced an outcome record (`orchestune:outcome` with `result: not-needed`). If a cloud
+- Condition: the session produced an outcome record (`orchestune:outcome` with `result: not-needed`) or the `status:not-needed` label was set by external automation (workers themselves must not modify labels directly). If a cloud
   routine is available, the Issue is not closed immediately; an independent
   verification review is dispatched (`orchestune/integration_coordinator.py`)
   and the Issue is closed in a later cycle based on the review outcome.

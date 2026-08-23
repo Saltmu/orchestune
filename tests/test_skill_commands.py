@@ -516,20 +516,29 @@ def test_worker_skills_forbid_direct_label_operations(skill_name: str):
     )
     assert "outcome record" in skill_text_lower
 
-    # Prohibit all direct status label occurrences across all markdown files in worker skills
+    # Prohibit all status:* label references and unconstrained label mutation commands
     for md_file in skill_dir.rglob("*.md"):
         file_text = md_file.read_text(encoding="utf-8")
-        for forbidden in (
-            "status:in-progress",
-            "status:not-needed",
-            "status:blocked-human-review",
-            "status:queued",
-            "status:blocked",
-            "status:done",
-        ):
-            assert (
-                forbidden not in file_text
-            ), f"{md_file} must not contain direct status label '{forbidden}'"
+        status_labels = re.findall(r"\bstatus:[a-zA-Z0-9_-]+", file_text)
+        assert (
+            not status_labels
+        ), f"{md_file} must not contain status label references: {status_labels}"
+
+        for line in file_text.splitlines():
+            line_lower = line.lower()
+            if any(
+                cmd in line_lower
+                for cmd in (
+                    "--add-label",
+                    "--remove-label",
+                    "add_label",
+                    "remove_label",
+                )
+            ):
+                assert any(
+                    guard in line_lower
+                    for guard in ("never", "no direct", "prohibit", "forbidden")
+                ), f"{md_file} contains label mutation command outside prohibition admonition: {line}"
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
