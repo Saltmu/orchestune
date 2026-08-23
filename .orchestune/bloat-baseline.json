@@ -441,62 +441,6 @@
       "lines": 54,
       "path": "orchestune/symbol_verification.py",
       "symbol": "find_missing_symbols"
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1086,
-      "path": "tests/test_dispatch_cycle_reconciliation.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1432,
-      "path": "tests/test_dispatch_gc_completion.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1319,
-      "path": "tests/test_dispatch_gc_reclaim_limit.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1455,
-      "path": "tests/test_dispatch_launch.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1568,
-      "path": "tests/test_dispatch_reconciliation.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1789,
-      "path": "tests/test_dispatch_targets.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 1212,
-      "path": "tests/test_dispatcher_cli.py",
-      "symbol": null
-    },
-    {
-      "category": "test",
-      "limit": 1000,
-      "lines": 2165,
-      "path": "tests/test_provisioning.py",
-      "symbol": null
     }
   ]
 }

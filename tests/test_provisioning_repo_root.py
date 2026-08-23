@@ -12,7 +12,7 @@ import pytest
 
 from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.provisioning import provision_issues
-from tests.test_provisioning import FakeForge
+from tests.test_provisioning_support import FakeForge
 
 _TEMPLATE = (
     "# [FEAT] {{subtask_id}}: {{description}}\n\n"

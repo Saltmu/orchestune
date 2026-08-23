@@ -5,9 +5,8 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 （#343）。
 """
 
-import subprocess
 from contextlib import ExitStack, contextmanager
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -25,10 +24,8 @@ from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import (
     ActiveWorktree,
     RunState,
-    save_run_state,
 )
 from orchestune.models import IssueRecord
-from orchestune.outcome_record import OutcomeRecord
 from tests.conftest import make_issue
 
 
@@ -277,7 +274,6 @@ class TestSelfHealRunState:
 class TestDispatchCycleRecomputeExclusionAndRecovery:
     def test_same_cycle_recompute_exclusion(self, tmp_path):
         """同一サイクルで逸脱が発生した際、競合先タスクが candidate_tasks から除外されること"""
-        from orchestune.dispatch_cycle import run_dispatch_cycle
 
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
@@ -376,7 +372,6 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
     def test_recompute_resolved_automatic_recovery(self, tmp_path):
         """アクティブタスクが完了し競合が解消されたら、status:blocked-recomputeタスクが復帰すること"""
-        from orchestune.dispatch_cycle import run_dispatch_cycle
 
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
@@ -451,7 +446,6 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
     def test_recompute_recovery_error_fail_closed(self, tmp_path):
         """逸脱検知でエラー（None）が発生した際、自動復帰が抑止されること (fail-closed)"""
-        from orchestune.dispatch_cycle import run_dispatch_cycle
 
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
@@ -592,7 +586,6 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
     def test_recompute_dag_error_fail_closed(self, tmp_path):
         """DAG再計算で例外が発生した際、自動復帰が抑止されること (fail-closed)"""
-        from orchestune.dispatch_cycle import run_dispatch_cycle
 
         run_state_path = tmp_path / "run_state.json"
         run_state_path.write_text("{}")
@@ -700,387 +693,3 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
         # remove_label が呼ばれない（fail-closed）ことを検証
         mock_remove_label.assert_not_called()
-
-
-class TestRunDispatchCycleBlockedPromotion:
-    """#193: 依存解決によるstatus:blocked → status:queued昇格。"""
-
-    def _config(self, tmp_path, **overrides):
-        defaults = dict(
-            max_concurrent=2,
-            max_launches_per_window=2,
-            window_seconds=3600,
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            log_dir=tmp_path / "logs",
-            events_log_path=tmp_path / "events.jsonl",
-            apply=True,
-        )
-        defaults.update(overrides)
-        return DispatcherConfig(**defaults)
-
-    def test_promotes_blocked_task_when_dependency_already_done(self, tmp_path):
-        config = self._config(tmp_path)
-        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
-        blocked_issue = _full_issue(
-            2,
-            labels=("status:blocked",),
-            subtask_id="task-b",
-            depends_on=("task-a",),
-        )
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-
-            def _list(label, **_):
-                if label == "status:done":
-                    return [done_issue]
-                if label == "status:blocked":
-                    return [blocked_issue]
-                return []
-
-            mock_list.side_effect = _list
-            report = run_dispatch_cycle(config)
-
-        mock_remove_label.assert_any_call(2, "status:blocked")
-        mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
-
-    def test_promotes_blocked_task_when_dependency_done_and_closed(self, tmp_path):
-        """#236: 完了Issueが通常のGitHub運用でCloseされていても、
-        status:done検索がstate="all"で呼ばれる限り依存解決できる。"""
-        config = self._config(tmp_path)
-        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
-        blocked_issue = _full_issue(
-            2,
-            labels=("status:blocked",),
-            subtask_id="task-b",
-            depends_on=("task-a",),
-        )
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-
-            def _list(label, state="open"):
-                # closedなIssueもstatus:done検索に含まれるのはstate="all"の
-                # 呼び出しのみ（実際のgh issue list --state open/allの挙動を模す）。
-                if label == "status:done" and state == "all":
-                    return [done_issue]
-                if label == "status:blocked":
-                    return [blocked_issue]
-                return []
-
-            mock_list.side_effect = _list
-            report = run_dispatch_cycle(config)
-
-        mock_remove_label.assert_any_call(2, "status:blocked")
-        mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
-
-    def test_does_not_promote_when_dependency_unresolved(self, tmp_path):
-        config = self._config(tmp_path)
-        blocked_issue = _full_issue(
-            2,
-            labels=("status:blocked",),
-            subtask_id="task-b",
-            depends_on=("task-a",),
-        )
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-            mock_list.side_effect = lambda label, **_: (
-                [blocked_issue] if label == "status:blocked" else []
-            )
-            report = run_dispatch_cycle(config)
-
-        mock_add_label.assert_not_called()
-        mock_remove_label.assert_not_called()
-        assert report.promotion_events == []
-
-    def test_promotes_when_dependency_completes_in_same_cycle(self, tmp_path):
-        """依存先が同一サイクル内で完了検知された場合も即座に昇格させる。"""
-        run_state_path = tmp_path / "run_state.json"
-        save_run_state(
-            RunState(
-                active_worktrees={
-                    "1": ActiveWorktree(
-                        issue_number=1,
-                        branch="claude/issue-1-task-a",
-                        worktree_path=str(tmp_path / "w1"),
-                        pid=111,
-                        started_at=1_699_999_000.0,
-                        declared_footprint=("src/foo.py",),
-                    )
-                },
-                launch_history=[],
-            ),
-            run_state_path,
-        )
-        config = self._config(tmp_path, run_state_path=run_state_path)
-        in_progress_issue = _full_issue(
-            1, labels=("status:in-progress",), subtask_id="task-a"
-        )
-        blocked_issue = _full_issue(
-            2,
-            labels=("status:blocked",),
-            subtask_id="task-b",
-            depends_on=("task-a",),
-        )
-        outcome = OutcomeRecord(result="done", issue=1)
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
-            patch(
-                "orchestune.forge.GitHubForge.list_comments",
-                return_value=[
-                    {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
-                ],
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            _patch_gc_process_alive(return_value=False),
-            patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
-                return_value=False,
-            ),
-            patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
-                return_value=True,
-            ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
-        ):
-
-            def _list(label, **_):
-                if label == "status:in-progress":
-                    return [in_progress_issue]
-                if label == "status:blocked":
-                    return [blocked_issue]
-                return []
-
-            mock_list.side_effect = _list
-            report = run_dispatch_cycle(config)
-
-        mock_remove_label.assert_any_call(2, "status:blocked")
-        mock_add_label.assert_any_call(2, "status:queued")
-        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
-
-    def test_dry_run_promotion_does_not_call_github(self, tmp_path):
-        config = self._config(tmp_path, apply=False)
-        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
-        blocked_issue = _full_issue(
-            2,
-            labels=("status:blocked",),
-            subtask_id="task-b",
-            depends_on=("task-a",),
-        )
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-        ):
-
-            def _list(label, **_):
-                if label == "status:done":
-                    return [done_issue]
-                if label == "status:blocked":
-                    return [blocked_issue]
-                return []
-
-            mock_list.side_effect = _list
-            report = run_dispatch_cycle(config)
-
-        mock_add_label.assert_not_called()
-        mock_remove_label.assert_not_called()
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
-
-    def test_yaml_error_transitions_to_blocked(self, tmp_path):
-        config = DispatcherConfig(
-            run_state_path=tmp_path / "run_state.json",
-            events_log_path=tmp_path / "events.jsonl",
-            apply=True,
-        )
-        body = (
-            "## Footprint\n"
-            "```yaml\n"
-            "subtask_id: task-invalid\n"
-            "footprint:\n"
-            "  - [invalid-yaml-structure:\n"
-            "```\n"
-        )
-        issue = IssueRecord(
-            number=9,
-            title="t",
-            body=body,
-            labels=("status:queued",),
-            created_at="2026-01-01T00:00:00+00:00",
-        )
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-        ):
-            mock_list.side_effect = lambda label, **_: (
-                [issue] if label == "status:queued" else []
-            )
-
-            report = run_dispatch_cycle(config)
-
-            assert report.selected == []
-            mock_remove_label.assert_any_call(9, "status:queued")
-            mock_add_label.assert_any_call(9, "status:blocked")
-            mock_add_comment.assert_called_once_with(9, ANY)
-
-    def test_worktree_launch_failure_transitions_to_blocked(self, tmp_path):
-        config = DispatcherConfig(
-            run_state_path=tmp_path / "run_state.json",
-            events_log_path=tmp_path / "events.jsonl",
-            apply=True,
-        )
-        issue = _full_issue(1)
-        with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-        ):
-            mock_list.side_effect = lambda label, **_: (
-                [issue] if label == "status:queued" else []
-            )
-            mock_run.side_effect = subprocess.CalledProcessError(
-                returncode=128,
-                cmd="git worktree add",
-            )
-            report = run_dispatch_cycle(config)
-
-            assert report.selected == []
-            mock_remove_label.assert_any_call(1, "status:queued")
-            mock_add_label.assert_any_call(1, "status:blocked")
-            mock_add_comment.assert_called_once_with(1, ANY)
-
-
-class TestBaseBranchRedCycleReconciliation:
-    def test_base_branch_red_requeued_when_base_sha_advances(self, tmp_path):
-        config = DispatcherConfig(
-            run_state_path=tmp_path / "run_state.json",
-            events_log_path=tmp_path / "events.jsonl",
-            apply=True,
-        )
-        issue = _full_issue(
-            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=None
-        )
-        outcome = OutcomeRecord(
-            result="blocked",
-            issue=1,
-            reason="base-branch-red",
-            base_sha="1111111111111111111111111111111111111111",
-            attempt=1,
-        )
-        comments = [{"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}]
-
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=comments),
-            patch(
-                "orchestune.dispatch_reconciliation._get_branch_commit_sha",
-                return_value="2222222222222222222222222222222222222222",
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-        ):
-            mock_list.side_effect = lambda label, **_: (
-                [issue] if label == "status:blocked" else []
-            )
-            report = run_dispatch_cycle(config)
-
-            assert report.promotion_events == [
-                {"issue_number": 1, "subtask_id": "task-a"}
-            ]
-            mock_remove_label.assert_any_call(1, "ci:base-branch-red")
-            mock_remove_label.assert_any_call(1, "status:blocked")
-            mock_add_label.assert_any_call(1, "status:queued")
-            mock_add_comment.assert_called_once()
-
-    def test_base_branch_red_escalated_when_3_attempts_reached(self, tmp_path):
-        config = DispatcherConfig(
-            run_state_path=tmp_path / "run_state.json",
-            events_log_path=tmp_path / "events.jsonl",
-            apply=True,
-        )
-        issue = _full_issue(
-            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=None
-        )
-        outcome = OutcomeRecord(
-            result="blocked",
-            issue=1,
-            reason="base-branch-red",
-            base_sha="1111111111111111111111111111111111111111",
-            attempt=3,
-        )
-        comments = [{"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}]
-
-        with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
-            patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
-            ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=comments),
-            patch(
-                "orchestune.dispatch_reconciliation._get_branch_commit_sha",
-                return_value="2222222222222222222222222222222222222222",
-            ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-        ):
-            mock_list.side_effect = lambda label, **_: (
-                [issue] if label == "status:blocked" else []
-            )
-            report = run_dispatch_cycle(config)
-
-            assert report.promotion_events == []
-            mock_remove_label.assert_any_call(1, "ci:base-branch-red")
-            mock_add_label.assert_any_call(1, "status:blocked-human-review")
-            mock_add_comment.assert_called_once()
