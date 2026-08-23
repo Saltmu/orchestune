@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -551,12 +552,61 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         return self.completion_status(handle, forge=forge) == "completed"
 
 
+_CODEX_TASK_URL_RE = re.compile(r"https?://[^\s]+/tasks/([a-zA-Z0-9_-]+)")
+_CODEX_TASK_ID_RE = re.compile(r"\b(task_[a-zA-Z0-9_-]+)\b")
+_CODEX_CLOUD_TERMINAL_FAILED_STATUSES: frozenset[str] = frozenset(
+    {"failed", "cancelled", "canceled", "error"}
+)
+
+
+def _parse_codex_cloud_exec_output(output: str) -> tuple[str | None, str | None]:
+    """codex cloud exec の出力から実タスク ID / URL を抽出する。"""
+    url_match = _CODEX_TASK_URL_RE.search(output)
+    if url_match:
+        return url_match.group(1), url_match.group(0)
+    id_match = _CODEX_TASK_ID_RE.search(output)
+    if id_match:
+        return id_match.group(1), None
+    return None, None
+
+
+def _fetch_codex_cloud_task_status(environment_id: str, task_id: str) -> str | None:
+    """codex cloud list --env <env> --json を実行し、該当タスクのstatusを返す。"""
+    try:
+        proc = subprocess.run(
+            ["codex", "cloud", "list", "--env", environment_id, "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        data = json.loads(proc.stdout)
+        items: list[Any] = (
+            data
+            if isinstance(data, list)
+            else data.get("tasks", [])
+            if isinstance(data, dict)
+            else []
+        )
+        for item in items:
+            if isinstance(item, dict) and item.get("id") == task_id:
+                status = item.get("status")
+                return str(status).lower() if status is not None else None
+    except Exception:
+        return None
+    return None
+
+
 class CodexCloudDispatchTarget(DispatchTarget):
     """Codex Cloud CLIへサブタスクを非対話で投入するターゲット。
 
     Codex Cloudはリモートブランチをチェックアウトするため、投入前にworktreeの
-    タスクブランチをoriginへpushする。CLIプロセスの終了は投入完了だけを意味するため、
-    完了判定はClaude Code Cloud Routineと同様にPR作成をシグナルとして用いる。
+    タスクブランチをoriginへpushする。投入時に実タスクID/URLを抽出し、
+    Cloud実タスク状態照合とPR状態を組み合わせて完了判定を行う。
     """
 
     def __init__(self, environment_id: str, log_dir: str | Path = Path("logs")):
@@ -573,6 +623,10 @@ class CodexCloudDispatchTarget(DispatchTarget):
             f"想定footprint: {footprint}\n"
             f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
         )
+
+    def _fetch_task_status(self, task_id: str) -> str | None:
+        """テスト容易性のための内部委任フック。"""
+        return _fetch_codex_cloud_task_status(self._environment_id, task_id)
 
     def launch(
         self,
@@ -601,23 +655,40 @@ class CodexCloudDispatchTarget(DispatchTarget):
             branch_name,
             self._build_prompt(task, branch_name),
         ]
-        with open(log_path, "ab") as log_fh:
-            subprocess.run(
-                command,
-                cwd=str(worktree_path),
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                check=True,
-            )
+        proc = subprocess.run(
+            command,
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
+        combined_output = f"{proc.stdout or ''}{proc.stderr or ''}"
+        with open(log_path, "a", encoding="utf-8") as log_fh:
+            log_fh.write(combined_output)
+        task_id, task_url = _parse_codex_cloud_exec_output(combined_output)
+        external_id = task_id or f"codex-cloud:{branch_name}"
         return DispatchHandle(
-            external_id=f"codex-cloud:{branch_name}",
+            external_id=external_id,
+            external_url=task_url,
             branch_name=branch_name,
+            issue_number=task.issue_number,
         )
 
     def completion_status(
         self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
-        return _task_pr_completion_status(handle, forge=forge)
+        pr_status = _task_pr_completion_status(handle, forge=forge)
+        if pr_status != "pending":
+            return pr_status
+        if handle.external_id is not None and not handle.external_id.startswith(
+            "codex-cloud:"
+        ):
+            cloud_status = self._fetch_task_status(handle.external_id)
+            if cloud_status in _CODEX_CLOUD_TERMINAL_FAILED_STATUSES:
+                return "abandoned"
+        return "pending"
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return self.completion_status(handle, forge=forge) == "completed"

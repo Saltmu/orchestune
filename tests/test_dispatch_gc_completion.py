@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_gc_completion import (
+    _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
     _finalize_abandoned_cloud_worktree,
@@ -781,6 +782,31 @@ class TestIsWorktreeComplete:
             assert _is_worktree_complete(active, config) is False
 
         mock_is_alive.assert_not_called()
+
+    def test_codex_cloud_active_worktree_reclaims_when_task_failed_in_cloud(
+        self, tmp_path
+    ):
+        target = CodexCloudDispatchTarget("env_123")
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            dispatch_target=target,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=4242,
+            started_at=1_699_999_000.0,
+            declared_footprint=("src/foo.py",),
+            external_id="task_fail_123",
+        )
+
+        with (
+            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch.object(target, "_fetch_task_status", return_value="failed"),
+        ):
+            assert _cloud_worktree_completion_status(active, config) == "abandoned"
 
     def test_recovered_local_active_worktree_waits_for_pid_reconciliation(
         self, tmp_path
