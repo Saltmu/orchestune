@@ -76,25 +76,17 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
     events = []
     labels: list[tuple[str, str]] = []
     comments: list[str] = []
+    forge = config.resolved_forge
+    forge.add_label.side_effect = lambda issue, label: labels.append(("add", label))
+    forge.remove_label.side_effect = lambda issue, label: labels.append(
+        ("remove", label)
+    )
+    forge.add_comment.side_effect = lambda issue, body: comments.append(body)
     for _ in range(cycles):
         run_state.active_worktrees["280"] = _active(
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
-        with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
-                side_effect=lambda issue, label: labels.append(("add", label)),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=lambda issue, label: labels.append(("remove", label)),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
-                side_effect=lambda issue, body: comments.append(body),
-            ),
-        ):
+        with patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW):
             cycle_events = _collect_zombies_and_timeouts(run_state, {280: task}, config)
         assert len(cycle_events) == 1
         events.append(cycle_events[0])
@@ -109,8 +101,8 @@ class TestReclaimCounterLifecycle:
     Integratorの仮マージCI失敗で`status:queued`へ差し戻され得るため破棄しない。
     """
 
-    def _completed_ctx(self, action="completed"):
-        ctx = _ctx()
+    def _completed_ctx(self, fake_forge, action="completed"):
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
         active = ctx.run_state.active_worktrees.setdefault(
             "1", _active(issue_number=280, worktree_path="worktrees/w1")
@@ -121,7 +113,6 @@ class TestReclaimCounterLifecycle:
         task = _task(status_labels=("status:in-progress",))
         with (
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={"action": action, "commit_sha": "abc123d"},
@@ -130,7 +121,7 @@ class TestReclaimCounterLifecycle:
             outcome = _rule_completed(ctx, "1", active, task)
         return ctx, outcome
 
-    def test_worker_completion_alone_keeps_the_reclaim_count(self):
+    def test_worker_completion_alone_keeps_the_reclaim_count(self, fake_forge):
         """ワーカー完了（status:done）だけでは破棄しない。
 
         `_finalize_completed_worktree`はIssueをクローズしないため、この時点で
@@ -138,15 +129,17 @@ class TestReclaimCounterLifecycle:
         `status:queued`へ差し戻されたタスクが回数0から再開してしまい、
         「GC回収 → ワーカー完了 → 統合失敗」の繰り返しで上限を素通りできる。
         """
-        ctx, outcome = self._completed_ctx()
+        ctx, outcome = self._completed_ctx(fake_forge)
 
         assert outcome is not None
         assert ctx.run_state.task_reclaim_counts == {
             280: TaskReclaimRecord(count=2, last_reclaimed_at=_NOW)
         }
 
-    def test_token_limit_escalation_keeps_the_reclaim_count(self):
-        ctx, outcome = self._completed_ctx(action="escalated_token_limit_exceeded")
+    def test_token_limit_escalation_keeps_the_reclaim_count(self, fake_forge):
+        ctx, outcome = self._completed_ctx(
+            fake_forge, action="escalated_token_limit_exceeded"
+        )
 
         assert outcome is not None
         assert ctx.run_state.task_reclaim_counts == {
@@ -185,7 +178,6 @@ class TestDirtyWorktreeHoldLimit:
     def _hold_cycle(self, ctx, active, task):
         with (
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={
@@ -194,15 +186,16 @@ class TestDirtyWorktreeHoldLimit:
                     "worktree_path": active.worktree_path,
                 },
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
-        return outcome, mock_add_label, mock_add_comment
+        return (
+            outcome,
+            ctx.config.resolved_forge.add_label,
+            ctx.config.resolved_forge.add_comment,
+        )
 
-    def test_repeated_holds_escalate_at_the_limit(self, tmp_path):
-        ctx = _ctx()
+    def test_repeated_holds_escalate_at_the_limit(self, tmp_path, fake_forge):
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
         ctx.config.run_state_path = tmp_path / "run_state.json"
         ctx.config.max_task_reclaims = 2
@@ -228,9 +221,9 @@ class TestDirtyWorktreeHoldLimit:
         assert ctx.run_state.active_worktrees == {}
         assert load_run_state(ctx.config.run_state_path).active_worktrees == {}
 
-    def test_hold_count_shares_the_reclaim_ledger(self, tmp_path):
+    def test_hold_count_shares_the_reclaim_ledger(self, tmp_path, fake_forge):
         """回収回数と同じ台帳を共有する（保留と回収を通算して上限に到達する）。"""
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
         ctx.config.run_state_path = tmp_path / "run_state.json"
         ctx.config.max_task_reclaims = 3
@@ -247,14 +240,15 @@ class TestDirtyWorktreeHoldLimit:
         assert ctx.run_state.task_reclaim_counts[280].count == 2
         assert ctx.run_state.task_reclaim_counts[280].pending is False
 
-    def test_escalation_failure_does_not_abort_the_cycle(self, tmp_path):
+    def test_escalation_failure_does_not_abort_the_cycle(self, tmp_path, fake_forge):
         """PR#520レビュー12巡目対応(Codex P1): エスカレーションの失敗で
         サイクル全体を止めない（1タスクが全体のスケジューリングを妨げない）。
 
         ラベル遷移すら失敗した場合は保留のまま次サイクルで再試行し、回数は
         GitHubへ触れる前に永続化済みであることを確認する。
         """
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
+        fake_forge.add_label.side_effect = RuntimeError("gh: API is unavailable")
         ctx.config.apply = True
         ctx.config.run_state_path = tmp_path / "run_state.json"
         ctx.config.max_task_reclaims = 0
@@ -265,7 +259,6 @@ class TestDirtyWorktreeHoldLimit:
 
         with (
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={
@@ -274,12 +267,6 @@ class TestDirtyWorktreeHoldLimit:
                     "worktree_path": active.worktree_path,
                 },
             ),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
-                side_effect=RuntimeError("gh: API is unavailable"),
-            ),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -292,9 +279,12 @@ class TestDirtyWorktreeHoldLimit:
             == 1
         )
 
-    def test_comment_failure_after_escalation_still_releases_the_entry(self, tmp_path):
+    def test_comment_failure_after_escalation_still_releases_the_entry(
+        self, tmp_path, fake_forge
+    ):
         """ラベル遷移が成功していればコメント失敗でもエントリを解放する。"""
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
+        fake_forge.add_comment.side_effect = RuntimeError("gh: comment failed")
         ctx.config.apply = True
         ctx.config.run_state_path = tmp_path / "run_state.json"
         ctx.config.max_task_reclaims = 0
@@ -305,7 +295,6 @@ class TestDirtyWorktreeHoldLimit:
 
         with (
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={
@@ -313,12 +302,6 @@ class TestDirtyWorktreeHoldLimit:
                     "issue_number": 280,
                     "worktree_path": active.worktree_path,
                 },
-            ),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch(
-                "orchestune.forge.GitHubForge.add_comment",
-                side_effect=RuntimeError("gh: comment failed"),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
@@ -328,8 +311,8 @@ class TestDirtyWorktreeHoldLimit:
         assert ctx.run_state.active_worktrees == {}
         assert load_run_state(ctx.config.run_state_path).active_worktrees == {}
 
-    def test_dry_run_does_not_count_the_hold(self, tmp_path):
-        ctx = _ctx()
+    def test_dry_run_does_not_count_the_hold(self, tmp_path, fake_forge):
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = False
         ctx.config.run_state_path = tmp_path / "run_state.json"
         active = ctx.run_state.active_worktrees.setdefault(
