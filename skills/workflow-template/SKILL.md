@@ -75,7 +75,7 @@ Upon task completion, satisfaction, or escalation, post the appropriate machine-
 ```
 ```
 
-3. **Escalation / Blocked (`result: "blocked"`)** — Post to **PR comments** (or Issue comments):
+3. **Escalation / Blocked (`result: "blocked"`)** — Post to **PR comments** (or Issue comments). Set `base_sha` to current base commit SHA and increment `attempt` from prior outcome (1 on first failure; escalates at 3):
 ```markdown
 <!-- orchestune:outcome -->
 ```json
