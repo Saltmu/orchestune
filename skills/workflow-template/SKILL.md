@@ -50,7 +50,9 @@ At session start, inspect and record the execution environment:
 | **12** | **Outcome Declaration** | Post an outcome record (`result: done`) to PR/Issue comments via selected backend and finish work. | - |
 
 ### Outcome Record Format
-Upon task completion, post the following machine-readable marker in a comment on the PR (or Issue):
+Upon task completion, satisfaction, or escalation, post the appropriate machine-readable outcome marker and JSON payload in a comment. Field values for `issue` and `pr` must be unquoted numbers (e.g. `123`).
+
+1. **Successful Completion (`result: "done"`)** — Post to **PR comments** (or Issue comments):
 ```markdown
 <!-- orchestune:outcome -->
 ```json
@@ -58,6 +60,31 @@ Upon task completion, post the following machine-readable marker in a comment on
   "result": "done",
   "issue": 123,
   "pr": 456
+}
+```
+```
+
+2. **Requirement Already Satisfied (`result: "not-needed"`)** — Post to **Issue comments** (no commit/PR created):
+```markdown
+<!-- orchestune:outcome -->
+```json
+{
+  "result": "not-needed",
+  "issue": 123
+}
+```
+```
+
+3. **Escalation / Blocked (`result: "blocked"`)** — Post to **Issue comments**. Set `base_sha` to current base commit SHA and increment `attempt` from prior outcome (1 on first failure; escalates at 3):
+```markdown
+<!-- orchestune:outcome -->
+```json
+{
+  "result": "blocked",
+  "issue": 123,
+  "reason": "base-branch-red",
+  "base_sha": "abc1234",
+  "attempt": 1
 }
 ```
 ```

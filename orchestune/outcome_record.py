@@ -65,8 +65,22 @@ class OutcomeRecord:
         return f"{OUTCOME_MARKER}\n```json\n{body}\n```\n"
 
 
-def _is_plain_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+def _normalize_int(value: Any) -> int | None:
+    """Normalize a value to an integer if possible, rejecting booleans, floats, and non-digit strings."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if s.startswith("#"):
+            s = s[1:].strip()
+        if s.isdigit():
+            try:
+                return int(s)
+            except ValueError:
+                return None
+    return None
 
 
 _INVALID = object()
@@ -83,9 +97,12 @@ def _review_from_value(value: Any) -> ReviewSummary | object:
     bot = value.get("bot")
     if bot is not None and not isinstance(bot, str):
         return _INVALID
-    rounds = value.get("rounds")
-    if rounds is not None and not _is_plain_int(rounds):
-        return _INVALID
+    rounds_raw = value.get("rounds")
+    rounds: int | None = None
+    if rounds_raw is not None:
+        rounds = _normalize_int(rounds_raw)
+        if rounds is None:
+            return _INVALID
     verdict = value.get("verdict")
     if verdict is not None and not isinstance(verdict, str):
         return _INVALID
@@ -108,13 +125,16 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if result not in VALID_RESULTS:
         return None
 
-    issue = data.get("issue")
-    if not _is_plain_int(issue):
+    issue = _normalize_int(data.get("issue"))
+    if issue is None:
         return None
 
-    pr = data.get("pr")
-    if pr is not None and not _is_plain_int(pr):
-        return None
+    pr_raw = data.get("pr")
+    pr: int | None = None
+    if pr_raw is not None:
+        pr = _normalize_int(pr_raw)
+        if pr is None:
+            return None
 
     reason = data.get("reason")
     if result == RESULT_BLOCKED:
@@ -127,9 +147,12 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if base_sha is not None and not isinstance(base_sha, str):
         return None
 
-    attempt = data.get("attempt")
-    if attempt is not None and not _is_plain_int(attempt):
-        return None
+    attempt_raw = data.get("attempt")
+    attempt: int | None = None
+    if attempt_raw is not None:
+        attempt = _normalize_int(attempt_raw)
+        if attempt is None:
+            return None
 
     review = _review_from_value(data.get("review"))
     if review is _INVALID:
@@ -147,7 +170,7 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
 
     return OutcomeRecord(
         result=result,
-        issue=cast(int, issue),
+        issue=issue,
         pr=pr,
         reason=reason,
         base_sha=base_sha,
