@@ -170,6 +170,7 @@ class TestFakeForgeClass:
         assert open_prs[0].number == 1
         assert open_prs[0].head_ref == "feat/foo"
         assert open_prs[0].base_ref == "parent/issue-100"
+        assert open_prs[0].is_cross_repository is False
 
         forge.update_pull_request(1, title="New PR title", body="New PR body")
         pr = forge.get_pr(1)

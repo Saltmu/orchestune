@@ -386,6 +386,7 @@ class FakeForge:
             base_ref=base,
             changed_files=(),
             created_at=datetime.now(UTC).isoformat(),
+            is_cross_repository=False,
         )
         self.pr_states[num] = "open"
         self.branches.add(head)
