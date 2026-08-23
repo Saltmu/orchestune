@@ -382,6 +382,7 @@ That migration is complete for test modules. Tests inject `fake_forge` (or a
 purpose-built in-memory forge) through the configuration or function boundary;
 they no longer patch methods on the concrete `GitHubForge` class. The
 `test_tests_do_not_patch_github_forge` architecture invariant parses every
-`tests/test_*.py` module except `test_forge.py` and reports the file and line of
-any direct `unittest.mock.patch` or `patch.object` regression. `test_forge.py`
-is the explicit exception because it owns the concrete adapter contract.
+Python module under `tests/`, including shared fixtures and support modules,
+except `test_forge.py`. It reports the file and line of any direct
+`unittest.mock.patch` or `patch.object` regression. `test_forge.py` is the
+explicit exception because it owns the concrete adapter contract.

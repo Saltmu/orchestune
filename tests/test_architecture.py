@@ -1001,9 +1001,28 @@ def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
     return patch_references, github_forge_names
 
 
+def _bound_string_values(tree: ast.AST) -> dict[str, set[str]]:
+    values: dict[str, set[str]] = defaultdict(set)
+    for node in ast.walk(tree):
+        targets, value = _assigned_names(node)
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    values[target.id].add(value.value)
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            if isinstance(node.iter, ast.List | ast.Tuple | ast.Set):
+                values[node.target.id].update(
+                    item.value
+                    for item in node.iter.elts
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                )
+    return values
+
+
 def _github_forge_patch_lines(source: str) -> list[int]:
     tree = ast.parse(source)
     patch_references, github_forge_names = _mock_patch_references(tree)
+    bound_strings = _bound_string_values(tree)
     violations: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not node.args:
@@ -1011,9 +1030,15 @@ def _github_forge_patch_lines(source: str) -> list[int]:
         function_name = _dotted_name(node.func)
         if function_name in patch_references:
             target = node.args[0]
-            if isinstance(target, ast.Constant) and isinstance(target.value, str):
-                if _GITHUB_FORGE_PATCH_TARGET.search(target.value):
-                    violations.append(node.lineno)
+            target_values = (
+                {target.value}
+                if isinstance(target, ast.Constant) and isinstance(target.value, str)
+                else bound_strings.get(target.id, set())
+                if isinstance(target, ast.Name)
+                else set()
+            )
+            if any(_GITHUB_FORGE_PATCH_TARGET.search(value) for value in target_values):
+                violations.append(node.lineno)
         elif function_name in {f"{ref}.object" for ref in patch_references}:
             target_name = _dotted_name(node.args[0])
             if target_name and target_name.rsplit(".", 1)[-1] in github_forge_names:
@@ -1023,8 +1048,9 @@ def _github_forge_patch_lines(source: str) -> list[int]:
 
 def _github_forge_patch_violations() -> list[str]:
     violations: list[str] = []
-    for path in sorted(TESTS_ROOT.rglob("test_*.py")):
-        if path.name in GITHUB_FORGE_PATCH_EXEMPTIONS:
+    for path in sorted(TESTS_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(TESTS_ROOT).as_posix()
+        if relative_path in GITHUB_FORGE_PATCH_EXEMPTIONS:
             continue
         for line in _github_forge_patch_lines(path.read_text(encoding="utf-8")):
             violations.append(f"{path.relative_to(REPO_ROOT)}:{line}")
@@ -1056,6 +1082,20 @@ with patch.object(ProductionForge, "list_prs"):
 """
 
     assert _github_forge_patch_lines(source) == [5]
+
+
+def test_github_forge_patch_detector_resolves_loop_target() -> None:
+    source = """
+from unittest.mock import patch
+for target in (
+    "orchestune.dispatch_gc.is_process_alive",
+    "orchestune.forge.GitHubForge.list_prs",
+):
+    with patch(target):
+        pass
+"""
+
+    assert _github_forge_patch_lines(source) == [7]
 
 
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:

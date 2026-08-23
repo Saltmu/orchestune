@@ -388,7 +388,7 @@ L1の境界は、単一の具象クライアントではなく3つの `Protocol`
 `fake_forge`（あるいは用途別のインメモリForge）を注入し、具象
 `GitHubForge` クラスのメソッドを直接パッチしません。
 `test_tests_do_not_patch_github_forge` アーキテクチャ不変条件は、
-`test_forge.py` を除くすべての `tests/test_*.py` をASTで解析し、
-`unittest.mock.patch` または `patch.object` による直接patchが再導入された場合、
-そのファイルと行を報告します。具象アダプタ自身の契約を検証する
-`test_forge.py` だけが明示的な例外です。
+共有fixture・支援モジュールを含む `tests/` 配下のすべてのPythonモジュールを、
+`test_forge.py` だけ除外してASTで解析します。`unittest.mock.patch` または
+`patch.object` による直接patchが再導入された場合、そのファイルと行を報告します。
+具象アダプタ自身の契約を検証する `test_forge.py` だけが明示的な例外です。

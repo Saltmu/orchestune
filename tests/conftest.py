@@ -24,6 +24,7 @@ from orchestune.git_cli import (
 from orchestune.git_cli import (
     get_clean_git_env as get_clean_git_env,
 )
+from orchestune.integrator_types import IntegratorConfig
 from orchestune.models import IssueRecord, PrRecord
 
 pytest_plugins = ["tests.test_provisioning_support"]
@@ -669,23 +670,32 @@ class IntegratorEnv:
 
 
 @pytest.fixture
-def integrator_env() -> Iterator[IntegratorEnv]:
-    with (
-        patch("orchestune.integrator.subprocess.run") as run,
-        patch("orchestune.forge.GitHubForge.list_issues_by_label") as list_issues,
-        patch("orchestune.forge.GitHubForge.list_open_prs") as list_open_prs,
-        patch("orchestune.forge.GitHubForge.create_pull_request") as create_pr,
-        patch("orchestune.forge.GitHubForge.merge_pull_request") as merge_pr,
-        patch("orchestune.forge.GitHubForge.close_issue") as close_issue,
-        patch("orchestune.forge.GitHubForge.add_label") as add_label,
-        patch("orchestune.forge.GitHubForge.remove_label") as remove_label,
-        patch("orchestune.forge.GitHubForge.add_comment") as add_comment,
-        patch("orchestune.forge.GitHubForge.is_current_branch_tip_merged_into") as tip,
-        patch("orchestune.forge.GitHubForge.delete_branch") as delete_branch,
-        patch("orchestune.forge.GitHubForge.branch_exists") as branch_exists,
-        patch("orchestune.forge.GitHubForge.get_issue_labels") as get_issue_labels,
-        patch("orchestune.forge.GitHubForge.ensure_labels") as ensure_labels,
-    ):
+def integrator_env(
+    fake_forge: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[IntegratorEnv]:
+    original_init = IntegratorConfig.__init__
+
+    def init_with_fake_forge(
+        config: IntegratorConfig, *args: Any, **kwargs: Any
+    ) -> None:
+        kwargs.setdefault("forge", fake_forge)
+        original_init(config, *args, **kwargs)
+
+    monkeypatch.setattr(IntegratorConfig, "__init__", init_with_fake_forge)
+    with patch("orchestune.integrator.subprocess.run") as run:
+        list_issues = fake_forge.list_issues_by_label
+        list_open_prs = fake_forge.list_open_prs
+        create_pr = fake_forge.create_pull_request
+        merge_pr = fake_forge.merge_pull_request
+        close_issue = fake_forge.close_issue
+        add_label = fake_forge.add_label
+        remove_label = fake_forge.remove_label
+        add_comment = fake_forge.add_comment
+        tip = fake_forge.is_current_branch_tip_merged_into
+        delete_branch = fake_forge.delete_branch
+        branch_exists = fake_forge.branch_exists
+        get_issue_labels = fake_forge.get_issue_labels
+        ensure_labels = fake_forge.ensure_labels
         run.return_value = _completed(stdout=b"")
         list_issues.side_effect = lambda label, *a, **k: []
         list_open_prs.return_value = []
