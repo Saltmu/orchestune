@@ -227,40 +227,7 @@ def process_pending_not_needed_reviews(
     now: float | None = None,
     timeout_seconds: float = DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
 ) -> dict:
-    """#282: 保留中の`status:not-needed`検証レビューをポーリングし、検証に通った
-    ものはIssueを決定論的にクローズする。レビューセッション自身はクローズを
-    実行しないため、この関数が「クローズしても問題ないものを実際にクローズする」
-    実行主体を担う。
-
-    - `not-needed-review:passed` を検知 → まずIssueのクローズを成功確定させてから
-      ラベルを外して記録を消費する（#205: クローズ成功より先にラベルを消費すると、
-      クローズ失敗時に完了シグナルだけ失われ、二度と再試行されなくなる）。
-      Issueが既にクローズ済み（前サイクルでクローズは成功したがラベル除去だけ
-      失敗していた場合）はクローズを再実行せず、ラベル除去のみ再試行する。
-    - `not-needed-review:failed` を検知 → `status:queued`への差し戻しは既に
-      レビューセッション自身が行っているため、Python側はラベルを外して記録を
-      消費するのみ。
-    - どちらのラベルもまだ無い場合、`now - entry.dispatched_at`が`timeout_seconds`
-      未満なら記録はそのまま保持し次サイクルで再確認する。**超えていれば
-      （#511）**、レビューセッションのクラッシュ等で結果が永久に返らないと
-      判断し、`status:not-needed`を外して`status:blocked-human-review`へ
-      エスカレーションし理由をコメントする（`apply_human_review_escalation`を
-      再利用。新ラベルの付与を旧ラベル除去・コメントより先に確定させる、
-      #512/PR#520で確立した順序をそのまま踏襲する）。エスカレーションが
-      決定した瞬間（新ラベル付与の直後）に台帳から消費する: 消費を
-      `apply_human_review_escalation`の完了まで遅らせると、旧ラベル除去や
-      コメント投稿だけが失敗したときにローカルが未確定のまま残り、次サイクルも
-      同じタイムアウト条件が再び真になって、届いているはずの
-      `status:blocked-human-review`へ重複コメントを送り続けてしまう。
-    - 1エントリの処理中の例外は他エントリの処理・状態保存を巻き込まない。
-      失敗したエントリは警告ログを出したうえでpendingのまま保持し、次サイクルで
-      自動的に再試行する。
-    - #226/PR#227: 保存する台帳は常に「元のpending − 消費済み（closed/reopened）」で
-      構成する。BaseException（割り込み・強制終了）でループが中断しても、消費済みの
-      先行エントリだけを除外し、要再試行・処理中・未処理のエントリはすべて温存する。
-      これにより「未処理エントリの取りこぼし」と「消費済みエントリの台帳復帰による
-      永久pending化」の両方（いずれも#205と同種のリーク）を防ぐ。
-    """
+    """Finalize completed or timed-out not-needed review entries safely."""
     forge = forge or GitHubForge()
     now = time.time() if now is None else now
     lock_path = Path(state_path).with_suffix(".lock")
@@ -278,57 +245,21 @@ def process_pending_not_needed_reviews(
 
         try:
             for entry in state.pending:
-                try:
-                    labels = forge.get_issue_labels(entry.issue_number)
-                except Exception as exc:  # noqa: BLE001 - GitHub障害でクラッシュさせない
-                    print(
-                        f"Warning: failed to poll labels for issue {entry.issue_number}: {exc}",
-                        file=sys.stderr,
-                    )
+                labels = _get_pending_review_labels(entry.issue_number, forge)
+                if labels is None:
                     continue
 
-                try:
-                    if NOT_NEEDED_VERIFIED_LABEL in labels:
-                        _close_verified_issue(entry.issue_number, forge)
-                        forge.remove_label(
-                            entry.issue_number, NOT_NEEDED_VERIFIED_LABEL
-                        )
-                        consumed.add(entry.issue_number)
-                        closed_summary.append(entry.issue_number)
-                    elif NOT_NEEDED_REJECTED_LABEL in labels:
-                        forge.remove_label(
-                            entry.issue_number, NOT_NEEDED_REJECTED_LABEL
-                        )
-                        consumed.add(entry.issue_number)
-                        reopened_summary.append(entry.issue_number)
-                    elif now - entry.dispatched_at > timeout_seconds:
-                        # #511: どちらの結果ラベルも付かないまま上限を超えた。
-                        # 台帳への消費登録は、新ラベル(status:blocked-human-review)の
-                        # 付与が確定した瞬間に行う（on_label_applied）。旧ラベル除去や
-                        # コメント投稿だけが失敗しても、次サイクルはこの条件を
-                        # 再評価しない（重複コメント防止）。
-                        timed_out_issue_number = entry.issue_number
-
-                        def _mark_consumed(n: int = timed_out_issue_number) -> None:
-                            consumed.add(n)
-
-                        _escalate_timed_out_review(
-                            entry.issue_number,
-                            labels,
-                            timeout_seconds,
-                            forge,
-                            on_label_applied=_mark_consumed,
-                        )
-                        timed_out_summary.append(entry.issue_number)
-                    # どちらのラベルも無く、上限未満であれば消費しない
-                    # （pendingのまま次サイクルで再確認）。
-                except Exception as exc:  # noqa: BLE001 - 1件の失敗で全体を止めない
-                    print(
-                        f"Warning: failed to finalize not-needed review for issue "
-                        f"{entry.issue_number}: {exc}",
-                        file=sys.stderr,
-                    )
-                    # 消費していないためpendingのまま残し、次サイクルで再試行する。
+                _finalize_pending_review(
+                    entry,
+                    labels,
+                    forge,
+                    now,
+                    timeout_seconds,
+                    consumed,
+                    closed_summary,
+                    reopened_summary,
+                    timed_out_summary,
+                )
         finally:
             # #226/PR#227: 保存する台帳は「元のpending − 消費済み」で構成する。
             # 消費済み（closed/reopened）エントリのみを除外し、要再試行・処理中・未処理の
@@ -349,6 +280,57 @@ def process_pending_not_needed_reviews(
         "timed_out": timed_out_summary,
         "still_pending": len(remaining),
     }
+
+
+def _get_pending_review_labels(
+    issue_number: int, forge: Forge
+) -> tuple[str, ...] | None:
+    try:
+        return forge.get_issue_labels(issue_number)
+    except Exception as error:  # noqa: BLE001 - transient forge failure
+        print(
+            f"Warning: failed to poll labels for issue {issue_number}: {error}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _finalize_pending_review(
+    entry: PendingNotNeededReview,
+    labels: tuple[str, ...],
+    forge: Forge,
+    now: float,
+    timeout_seconds: float,
+    consumed: set[int],
+    closed: list[int],
+    reopened: list[int],
+    timed_out: list[int],
+) -> None:
+    try:
+        if NOT_NEEDED_VERIFIED_LABEL in labels:
+            _close_verified_issue(entry.issue_number, forge)
+            forge.remove_label(entry.issue_number, NOT_NEEDED_VERIFIED_LABEL)
+            consumed.add(entry.issue_number)
+            closed.append(entry.issue_number)
+        elif NOT_NEEDED_REJECTED_LABEL in labels:
+            forge.remove_label(entry.issue_number, NOT_NEEDED_REJECTED_LABEL)
+            consumed.add(entry.issue_number)
+            reopened.append(entry.issue_number)
+        elif now - entry.dispatched_at > timeout_seconds:
+            _escalate_timed_out_review(
+                entry.issue_number,
+                labels,
+                timeout_seconds,
+                forge,
+                on_label_applied=lambda: consumed.add(entry.issue_number),
+            )
+            timed_out.append(entry.issue_number)
+    except Exception as error:  # noqa: BLE001 - leave entry pending for retry
+        print(
+            f"Warning: failed to finalize not-needed review for issue "
+            f"{entry.issue_number}: {error}",
+            file=sys.stderr,
+        )
 
 
 def _close_verified_issue(issue_number: int, forge: Forge) -> None:

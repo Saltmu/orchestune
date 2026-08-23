@@ -125,54 +125,67 @@ class IntegrationMerger:
     def _prepare_ci_environment(self) -> tuple[dict[str, str], str | None]:
         env = os.environ.copy()
         env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
-
         pyproject_path = self.repository_root / "pyproject.toml"
-        if pyproject_path.exists():
-            try:
-                subprocess.run(
-                    ["poetry", "install"],
-                    cwd=str(self.repository_root),
-                    check=True,
-                    capture_output=True,
-                    env=env,
-                )
-            except (subprocess.CalledProcessError, OSError) as exc:
-                return env, f"Failed to install Poetry dependencies: {exc}"
+        error = self._install_poetry_dependencies(pyproject_path, env)
+        if error:
+            return env, error
+        self._configure_virtualenv(pyproject_path, env)
+        return env, None
 
-        venv_path = None
-        if pyproject_path.exists():
-            try:
-                res = subprocess.run(
-                    ["poetry", "env", "info", "--path"],
-                    cwd=str(self.repository_root),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=True,
-                    env=env,
-                )
+    def _install_poetry_dependencies(
+        self, pyproject_path: Path, env: dict[str, str]
+    ) -> str | None:
+        if not pyproject_path.exists():
+            return None
+        try:
+            subprocess.run(
+                ["poetry", "install"],
+                cwd=str(self.repository_root),
+                check=True,
+                capture_output=True,
+                env=env,
+            )
+        except (subprocess.CalledProcessError, OSError) as exc:
+            return f"Failed to install Poetry dependencies: {exc}"
+        return None
 
-                p = Path(res.stdout.strip())
-                if p.exists():
-                    venv_path = p
-            except (subprocess.CalledProcessError, OSError):
-                pass
-
-        if venv_path is None:
-            venv_path = self.repository_root / ".venv"
-            if not venv_path.exists():
-                venv_path = self.original_root / ".venv"
-                if not venv_path.exists():
-                    venv_path = self._find_ancestor_venv(self.original_root)
-
+    def _configure_virtualenv(self, pyproject_path: Path, env: dict[str, str]) -> None:
+        venv_path = (
+            self._poetry_virtualenv_path(pyproject_path, env)
+            or self._fallback_venv_path()
+        )
         if venv_path and venv_path.exists():
             env["VIRTUAL_ENV"] = str(venv_path.resolve())
             bin_path = venv_path / "bin"
             if bin_path.exists():
                 env["PATH"] = f"{bin_path.resolve()}{os.pathsep}{env.get('PATH', '')}"
 
-        return env, None
+    def _poetry_virtualenv_path(
+        self, pyproject_path: Path, env: dict[str, str]
+    ) -> Path | None:
+        if not pyproject_path.exists():
+            return None
+        try:
+            result = subprocess.run(
+                ["poetry", "env", "info", "--path"],
+                cwd=str(self.repository_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+                env=env,
+            )
+            path = Path(result.stdout.strip())
+            return path if path.exists() else None
+        except (subprocess.CalledProcessError, OSError):
+            return None
+
+    def _fallback_venv_path(self) -> Path | None:
+        for path in (self.repository_root / ".venv", self.original_root / ".venv"):
+            if path.exists():
+                return path
+        return self._find_ancestor_venv(self.original_root)
 
     def _execute_ci_command(self, env: dict[str, str]) -> tuple[bool, str]:
         ci_cmd = self.ci_command or default_ci_command()
@@ -369,84 +382,21 @@ class IntegrationMerger:
         blocked_tasks: list[str] = []
         failed_reasons: dict[str, str] = {}
         blocked_reasons: dict[str, str] = {}
-        # #50: 失敗またはblockedになったsubtask_idを集約する。sorted_done_tasksは
-        # 依存関係のトポロジカル順で渡されるため、1回の順走査で後続タスクへ
-        # 推移的にblocked状態を伝播できる。
         unavailable_ids: set[str] = set()
-
         if apply:
             self.ensure_git_identity()
             self.ensure_full_history(base_branch)
-
-        def handle_failure(
-            task: Task, reason: str, ci_output: str | None = None
-        ) -> None:
-            failed_reasons[task.subtask_id] = reason
-            handle_merge_failure(task, reason, apply, ci_output, forge=self.forge)
-
-        def record_failure(
-            task: Task, reason: str, ci_output: str | None = None
-        ) -> None:
-            handle_failure(task, reason, ci_output)
-            failed_tasks.append(task.subtask_id)
-            unavailable_ids.add(task.subtask_id)
-
-        for task in sorted_done_tasks:
-            # #374: このタスクの処理中に想定外の例外（subprocess.CalledProcessError
-            # 以外）が発生しても、他タスクの処理・戻り値の一貫性を守るため、
-            # ループ本体全体を1タスク単位のtry/exceptで囲む。merge成功後の未検証
-            # コミットを後続タスクへ持ち越さないよう、captured_pre_merge_shaへ
-            # merge直前のHEADを記録しておき、except側でロールバックに使う。
-            captured_pre_merge_sha: str | None = None
-            try:
-                blocked_reason = self._check_task_blocking(task, unavailable_ids)
-                if blocked_reason:
-                    print(
-                        f"[Integrator] Skipping {task.subtask_id}: {blocked_reason}",
-                        file=sys.stderr,
-                    )
-                    blocked_reasons[task.subtask_id] = blocked_reason
-                    blocked_tasks.append(task.subtask_id)
-                    unavailable_ids.add(task.subtask_id)
-                    continue
-
-                if apply:
-                    branch_name = (
-                        f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
-                    )
-                    fetch_ok, already_merged, fetch_err = self._fetch_task_branch(
-                        branch_name, base_branch
-                    )
-                    if not fetch_ok:
-                        record_failure(task, fetch_err)
-                        continue
-                    if already_merged:
-                        merged_tasks.append(task.subtask_id)
-                        continue
-
-                    merge_ok, pre_merge_sha, merge_err = self._merge_task_branch(
-                        branch_name
-                    )
-                    captured_pre_merge_sha = pre_merge_sha
-                    if not merge_ok or pre_merge_sha is None:
-                        record_failure(task, merge_err)
-                        continue
-
-                    ci_ok, ci_reason, ci_out = self._verify_ci_and_rollback(
-                        pre_merge_sha
-                    )
-                    if not ci_ok:
-                        record_failure(task, ci_reason, ci_output=ci_out)
-                        continue
-
-                merged_tasks.append(task.subtask_id)
-            except Exception as error:
-                self._recover_from_unexpected_task_error(
-                    task, error, captured_pre_merge_sha, handle_failure
-                )
-                failed_tasks.append(task.subtask_id)
-                unavailable_ids.add(task.subtask_id)
-
+        self._merge_task_list(
+            sorted_done_tasks,
+            base_branch,
+            apply,
+            merged_tasks,
+            failed_tasks,
+            blocked_tasks,
+            failed_reasons,
+            blocked_reasons,
+            unavailable_ids,
+        )
         return (
             merged_tasks,
             failed_tasks,
@@ -454,3 +404,127 @@ class IntegrationMerger:
             failed_reasons,
             blocked_reasons,
         )
+
+    def _merge_task_list(
+        self,
+        tasks: list[Task],
+        base_branch: str,
+        apply: bool,
+        merged: list[str],
+        failed: list[str],
+        blocked: list[str],
+        failed_reasons: dict[str, str],
+        blocked_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> None:
+        for task in tasks:
+            self._merge_one_task(
+                task,
+                base_branch,
+                apply,
+                merged,
+                failed,
+                blocked,
+                failed_reasons,
+                blocked_reasons,
+                unavailable,
+            )
+
+    def _merge_one_task(
+        self,
+        task: Task,
+        base_branch: str,
+        apply: bool,
+        merged: list[str],
+        failed: list[str],
+        blocked: list[str],
+        failed_reasons: dict[str, str],
+        blocked_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> None:
+        pre_merge_sha: str | None = None
+        try:
+            blocked_reason = self._check_task_blocking(task, unavailable)
+            if blocked_reason:
+                print(
+                    f"[Integrator] Skipping {task.subtask_id}: {blocked_reason}",
+                    file=sys.stderr,
+                )
+                blocked_reasons[task.subtask_id] = blocked_reason
+                blocked.append(task.subtask_id)
+                unavailable.add(task.subtask_id)
+                return
+            pre_merge_sha = self._merge_task_if_needed(
+                task, base_branch, apply, merged, failed, failed_reasons, unavailable
+            )
+        except Exception as error:
+
+            def handle_failure(failed_task: Task, reason: str) -> None:
+                failed_reasons[failed_task.subtask_id] = reason
+                handle_merge_failure(failed_task, reason, apply, forge=self.forge)
+
+            self._recover_from_unexpected_task_error(
+                task, error, pre_merge_sha, handle_failure
+            )
+            failed.append(task.subtask_id)
+            unavailable.add(task.subtask_id)
+
+    def _merge_task_if_needed(
+        self,
+        task: Task,
+        base_branch: str,
+        apply: bool,
+        merged: list[str],
+        failed: list[str],
+        failed_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> str | None:
+        if not apply:
+            merged.append(task.subtask_id)
+            return None
+        branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
+        fetched, already_merged, reason = self._fetch_task_branch(
+            branch_name, base_branch
+        )
+        if not fetched:
+            self._record_failure(
+                task, reason, apply, failed, failed_reasons, unavailable
+            )
+            return None
+        if already_merged:
+            merged.append(task.subtask_id)
+            return None
+        merged_ok, pre_merge_sha, reason = self._merge_task_branch(branch_name)
+        if not merged_ok or pre_merge_sha is None:
+            self._record_failure(
+                task, reason, apply, failed, failed_reasons, unavailable
+            )
+            return pre_merge_sha
+        try:
+            ci_ok, reason, output = self._verify_ci_and_rollback(pre_merge_sha)
+        except Exception:
+            self.abort_merge()
+            self.rollback_to(pre_merge_sha)
+            raise
+        if not ci_ok:
+            self._record_failure(
+                task, reason, apply, failed, failed_reasons, unavailable, output
+            )
+            return pre_merge_sha
+        merged.append(task.subtask_id)
+        return pre_merge_sha
+
+    def _record_failure(
+        self,
+        task: Task,
+        reason: str,
+        apply: bool,
+        failed: list[str],
+        reasons: dict[str, str],
+        unavailable: set[str],
+        ci_output: str | None = None,
+    ) -> None:
+        reasons[task.subtask_id] = reason
+        handle_merge_failure(task, reason, apply, ci_output, forge=self.forge)
+        failed.append(task.subtask_id)
+        unavailable.add(task.subtask_id)

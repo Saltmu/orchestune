@@ -161,54 +161,8 @@ class SetupWorktreeStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
             return {"status": IntegrationStatus.SUCCESS}
-
         try:
-            worktree_manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
-            # GCだけを全integration runで短時間直列化する。CIやタスクmergeは
-            # run固有worktree上で行うため、このロックの外で並行実行できる。
-            try:
-                with _retry_file_lock(worktree_manager.gc_lock_path()):
-                    run_git(["worktree", "prune"], cwd=ctx.original_root, check=False)
-                    prune_stale_integration_temp_branches(
-                        ctx.original_root, forge=ctx.config.forge
-                    )
-            except RuntimeError as error:
-                # GCは孤児の掃除であり、現在のrunの正しさに必須ではない。
-                # 競合時は統合全体を失敗させず、次回に回収を委ねる。
-                print(
-                    f"Warning: Skipping integration GC due to lock contention: {error}",
-                    file=sys.stderr,
-                )
-
-            with file_lock(worktree_manager.lock_path()):
-                if ctx.config.parent_issue_number is not None:
-                    base_name = ctx.base_branch.removeprefix("origin/")
-                    with _retry_file_lock(
-                        worktree_manager.base_ref_lock_path(ctx.base_branch)
-                    ):
-                        run_git(
-                            [
-                                "fetch",
-                                "origin",
-                                f"{base_name}:refs/remotes/origin/{base_name}",
-                            ],
-                            cwd=ctx.original_root,
-                            check=True,
-                        )
-                worktree_manager.reclaim(worktree_manager.temp_path())
-                run_git(
-                    [
-                        "worktree",
-                        "add",
-                        str(worktree_manager.temp_path()),
-                        ctx.base_branch,
-                    ],
-                    cwd=ctx.original_root,
-                    check=True,
-                )
-            ctx.repository_root = worktree_manager.temp_path()
-            ctx.config.repository_root = worktree_manager.temp_path()
-            ctx.temp_worktree_path = worktree_manager.temp_path()
+            self._prepare_worktree(ctx)
         except (subprocess.CalledProcessError, OSError, RuntimeError) as error:
             return {
                 "status": IntegrationStatus.FAILED_TO_CREATE_TEMP_WORKTREE,
@@ -216,17 +170,56 @@ class SetupWorktreeStep(IntegrationComponent):
             }
         return {"status": IntegrationStatus.SUCCESS}
 
+    def _prepare_worktree(self, ctx: IntegrationContext) -> None:
+        manager = IntegrationWorktree(ctx.original_root, ctx.temp_branch)
+        self._run_garbage_collection(manager, ctx)
+        with file_lock(manager.lock_path()):
+            self._fetch_parent_base_if_needed(manager, ctx)
+            manager.reclaim(manager.temp_path())
+            run_git(
+                ["worktree", "add", str(manager.temp_path()), ctx.base_branch],
+                cwd=ctx.original_root,
+                check=True,
+            )
+        ctx.repository_root = manager.temp_path()
+        ctx.config.repository_root = manager.temp_path()
+        ctx.temp_worktree_path = manager.temp_path()
+
+    @staticmethod
+    def _run_garbage_collection(
+        manager: IntegrationWorktree, ctx: IntegrationContext
+    ) -> None:
+        try:
+            with _retry_file_lock(manager.gc_lock_path()):
+                run_git(["worktree", "prune"], cwd=ctx.original_root, check=False)
+                prune_stale_integration_temp_branches(
+                    ctx.original_root, forge=ctx.config.forge
+                )
+        except RuntimeError as error:
+            print(
+                f"Warning: Skipping integration GC due to lock contention: {error}",
+                file=sys.stderr,
+            )
+
+    @staticmethod
+    def _fetch_parent_base_if_needed(
+        manager: IntegrationWorktree, ctx: IntegrationContext
+    ) -> None:
+        if ctx.config.parent_issue_number is None:
+            return
+        base_name = ctx.base_branch.removeprefix("origin/")
+        with _retry_file_lock(manager.base_ref_lock_path(ctx.base_branch)):
+            run_git(
+                ["fetch", "origin", f"{base_name}:refs/remotes/origin/{base_name}"],
+                cwd=ctx.original_root,
+                check=True,
+            )
+
 
 class MergeAndTestStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-        merger = IntegrationMerger(
-            repository_root=ctx.repository_root,
-            original_root=ctx.original_root,
-            ci_command=ctx.config.ci_command or default_ci_command(),
-            forge=ctx.config.forge,
-        )
-
         try:
+            merger = self._new_merger(ctx)
             if not merger.create_temp_branch(
                 ctx.temp_branch, ctx.base_branch, ctx.config.apply
             ):
@@ -235,42 +228,48 @@ class MergeAndTestStep(IntegrationComponent):
                     "error": "Failed to create temp branch",
                 }
 
-            (
-                merged_tasks,
-                failed_tasks,
-                blocked_tasks,
-                failed_reasons,
-                blocked_reasons,
-            ) = merger.merge_and_test_tasks(
+            results = merger.merge_and_test_tasks(
                 ctx.active_done_tasks, ctx.base_branch, ctx.config.apply
             )
-            ctx.merged_tasks.extend(merged_tasks)
-            ctx.failed_tasks.extend(failed_tasks)
-            ctx.blocked_tasks.extend(blocked_tasks)
-            ctx.failed_reasons.update(failed_reasons)
-            ctx.blocked_reasons.update(blocked_reasons)
-
-            if not failed_tasks and merged_tasks:
-                return {"status": IntegrationStatus.SUCCESS}
-
-            status = (
-                IntegrationStatus.PARTIAL_SUCCESS
-                if merged_tasks
-                else IntegrationStatus.FAILURE
-            )
-            return {
-                "status": status,
-                "merged": ctx.merged_tasks,
-                "failed": ctx.failed_tasks,
-                "failed_reasons": ctx.failed_reasons,
-                "blocked": ctx.blocked_tasks,
-                "blocked_reasons": ctx.blocked_reasons,
-            }
+            return self._record_merge_results(ctx, results)
         except Exception as error:
             return {
                 "status": IntegrationStatus.FAILURE,
                 "error": f"Error during merge and test: {error}",
             }
+
+    @staticmethod
+    def _new_merger(ctx: IntegrationContext) -> IntegrationMerger:
+        return IntegrationMerger(
+            ctx.repository_root,
+            ctx.original_root,
+            ctx.config.ci_command or default_ci_command(),
+            ctx.config.forge,
+        )
+
+    @staticmethod
+    def _record_merge_results(
+        ctx: IntegrationContext,
+        results: tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]],
+    ) -> IntegrationReport:
+        merged, failed, blocked, failed_reasons, blocked_reasons = results
+        ctx.merged_tasks.extend(merged)
+        ctx.failed_tasks.extend(failed)
+        ctx.blocked_tasks.extend(blocked)
+        ctx.failed_reasons.update(failed_reasons)
+        ctx.blocked_reasons.update(blocked_reasons)
+        if not failed and merged:
+            return {"status": IntegrationStatus.SUCCESS}
+        return {
+            "status": IntegrationStatus.PARTIAL_SUCCESS
+            if merged
+            else IntegrationStatus.FAILURE,
+            "merged": ctx.merged_tasks,
+            "failed": ctx.failed_tasks,
+            "failed_reasons": ctx.failed_reasons,
+            "blocked": ctx.blocked_tasks,
+            "blocked_reasons": ctx.blocked_reasons,
+        }
 
 
 class PushTempBranchStep(IntegrationComponent):
@@ -512,68 +511,63 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return {"status": IntegrationStatus.SUCCESS}
         if ctx.failed_tasks or not ctx.merged_tasks:
             return {"status": ctx.status}
+        failure = self._update_parent_branch(ctx)
+        if failure is not None:
+            return failure
+        self._delete_merged_branches(ctx)
+        newly_included = _mark_tasks_included(ctx)
+        ctx.newly_included = newly_included
+        return {
+            "status": IntegrationStatus.SUCCESS,
+            "auto_merged": ctx.integration_pr_number is not None,
+            "closed_issues": self._close_merged_child_issues(ctx),
+            "newly_included": newly_included,
+        }
 
+    def _update_parent_branch(
+        self, ctx: IntegrationContext
+    ) -> IntegrationReport | None:
         if ctx.integration_pr_number is None:
-            # #373: 前サイクルで`merge_pull_request`は成功していたが、その
-            # 直後（ラベル付与前）にプロセスがクラッシュしたケースの回復経路。
-            # 今サイクルの一時ブランチは既にbase_branchへ統合済みのため差分
-            # 無しでPR作成に失敗する。全対象ブランチの先端が実際にbase_branch
-            # へ含まれていることを確認できた場合に限り、マージ済みとして
-            # ラベル付与・クローズだけを再試行する。1件でも未検証ならfail
-            # closedで何もしない（PR作成が一時的なAPI障害等で失敗しただけの
-            # ケースを誤って完了扱いしないため）。
-            if not self._verify_already_integrated(ctx):
-                return {"status": ctx.status}
-        else:
-            try:
-                base_branch = ctx.base_branch.removeprefix("origin/")
-                # #435: 通常pushは親branchが進んだ場合にnon-fast-forwardで拒否
-                # される。--forceを使わないため古いCI結果で上書きしない。
-                run_git(
-                    ["push", "origin", f"HEAD:refs/heads/{base_branch}"],
-                    cwd=ctx.repository_root,
-                    check=True,
-                )
-            except (subprocess.CalledProcessError, OSError) as error:
-                print(
-                    "Warning: Failed to update parent branch for integration PR "
-                    f"#{ctx.integration_pr_number}: {error}",
-                    file=sys.stderr,
-                )
-                self._comment_on_merge_failure(ctx, error)
-                # #437レビュー対応: 認証エラー・ネットワーク障害・ブランチ保護
-                # 拒否等の一時的なpush失敗まで無条件に「陳腐化」としてカウント
-                # すると、一時障害が解消してもエスカレーション済みの子Issueが
-                # 手動でのラベル除去なしに自己修復できなくなる。実際に
-                # non-fast-forward（CAS拒否）だったpush失敗のみを陳腐化として
-                # 記録・カウントする。`ctx.parent_branch_cas_rejected_this_cycle`
-                # がTrueのままなら、`IntegrationPipeline.execute`側のクリア処理を
-                # スキップさせ、マーカーの管理を`_handle_parent_branch_staleness`
-                # 自身に委ねる。
-                if _is_parent_branch_cas_rejection(error):
-                    ctx.parent_branch_cas_rejected_this_cycle = True
-                    self._handle_parent_branch_staleness(ctx, error)
-                return {
-                    "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
-                    "error": str(error),
-                    "auto_merged": False,
-                }
+            return (
+                None if self._verify_already_integrated(ctx) else {"status": ctx.status}
+            )
+        try:
+            base_branch = ctx.base_branch.removeprefix("origin/")
+            run_git(
+                ["push", "origin", f"HEAD:refs/heads/{base_branch}"],
+                cwd=ctx.repository_root,
+                check=True,
+            )
+            return None
+        except (subprocess.CalledProcessError, OSError) as error:
+            print(
+                f"Warning: Failed to update parent branch for integration PR #{ctx.integration_pr_number}: {error}",
+                file=sys.stderr,
+            )
+            self._comment_on_merge_failure(ctx, error)
+            if _is_parent_branch_cas_rejection(error):
+                ctx.parent_branch_cas_rejected_this_cycle = True
+                self._handle_parent_branch_staleness(ctx, error)
+            return {
+                "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
+                "error": str(error),
+                "auto_merged": False,
+            }
 
-        # 不要になったリモートブランチをクリーンアップ
-        task_by_subtask_id = {
+    @staticmethod
+    def _merged_branch_names(ctx: IntegrationContext) -> list[str]:
+        tasks = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
-        branches_to_delete = []
-        for subtask_id in ctx.merged_tasks:
-            task = task_by_subtask_id.get(subtask_id)
-            if task is not None:
-                branches_to_delete.append(
-                    f"claude/issue-{task.issue_number}-{task.subtask_id}"
-                )
-        if ctx.temp_branch:
-            branches_to_delete.append(ctx.temp_branch)
+        names = [
+            f"claude/issue-{tasks[task_id].issue_number}-{task_id}"
+            for task_id in ctx.merged_tasks
+            if task_id in tasks
+        ]
+        return names + ([ctx.temp_branch] if ctx.temp_branch else [])
 
-        for branch_name in branches_to_delete:
+    def _delete_merged_branches(self, ctx: IntegrationContext) -> None:
+        for branch_name in self._merged_branch_names(ctx):
             try:
                 if ctx.forge.branch_exists(branch_name):
                     ctx.forge.delete_branch(branch_name)
@@ -582,17 +576,6 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     f"Warning: Failed to delete remote branch '{branch_name}': {error}",
                     file=sys.stderr,
                 )
-
-        newly_included = _mark_tasks_included(ctx)
-        ctx.newly_included = newly_included
-
-        closed_issues = self._close_merged_child_issues(ctx)
-        return {
-            "status": IntegrationStatus.SUCCESS,
-            "auto_merged": ctx.integration_pr_number is not None,
-            "closed_issues": closed_issues,
-            "newly_included": newly_included,
-        }
 
     def _verify_already_integrated(self, ctx: IntegrationContext) -> bool:
         """`ctx.merged_tasks`の全ブランチが実際に`base_branch`へ含まれている
@@ -668,60 +651,14 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         if ctx.config.parent_issue_number is None:
             return
 
-        try:
-            ctx.forge.add_comment(
-                ctx.config.parent_issue_number,
-                (
-                    "⚠️ 親ブランチの陳腐化を検知しました（CAS拒否）\n\n"
-                    f"統合PR #{ctx.integration_pr_number} による "
-                    f"`{ctx.base_branch.removeprefix('origin/')}` への更新が、"
-                    f"第三者による先行pushのためnon-fast-forwardで拒否されました"
-                    f"（{error}）。親ブランチへの部分マージは残っていません。"
-                    "次回のディスパッチサイクルで自動的に再試行されます。"
-                ),
-            )
-        except Exception as comment_error:
-            print(
-                "Warning: Failed to comment on merge failure for parent issue "
-                f"#{ctx.config.parent_issue_number}: {comment_error}",
-                file=sys.stderr,
-            )
+        self._record_parent_branch_staleness(ctx, error)
 
-        try:
-            already_stale = _PARENT_BRANCH_STALE_LABEL in ctx.forge.get_issue_labels(
-                ctx.config.parent_issue_number
-            )
-        except Exception as label_error:
-            print(
-                "Warning: Failed to read labels for parent issue "
-                f"#{ctx.config.parent_issue_number}: {label_error}",
-                file=sys.stderr,
-            )
+        already_stale = self._parent_is_already_stale(ctx)
+        if already_stale is None:
             return
 
         if not already_stale:
-            # #437レビュー対応: `orchestune bootstrap`済みの既存リポジトリには
-            # このラベル自体がまだ存在しない可能性があるため、初回付与の直前に
-            # 自己修復的に用意する（存在済みならno-op）。
-            try:
-                ctx.forge.ensure_labels((_PARENT_BRANCH_STALE_LABEL_SPEC,))
-            except Exception as ensure_error:
-                print(
-                    "Warning: Failed to ensure parent-branch-stale label exists: "
-                    f"{ensure_error}",
-                    file=sys.stderr,
-                )
-            try:
-                ctx.forge.add_label(
-                    ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
-                )
-            except Exception as label_error:
-                print(
-                    "Warning: Failed to mark parent issue "
-                    f"#{ctx.config.parent_issue_number} as parent-branch-stale: "
-                    f"{label_error}",
-                    file=sys.stderr,
-                )
+            self._mark_parent_branch_stale(ctx)
             return
 
         # 2サイクル連続で陳腐化 → 設定/運用構成の異常の可能性が高いため、
@@ -764,6 +701,64 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
         if all_escalations_succeeded:
             clear_parent_branch_stale_marker(ctx)
+
+    @staticmethod
+    def _record_parent_branch_staleness(
+        ctx: IntegrationContext, error: Exception
+    ) -> None:
+        parent_issue_number = ctx.config.parent_issue_number
+        if parent_issue_number is None:
+            return
+        try:
+            ctx.forge.add_comment(
+                parent_issue_number,
+                (
+                    "⚠️ 親ブランチの陳腐化を検知しました（CAS拒否）\n\n"
+                    f"統合PR #{ctx.integration_pr_number} による `{ctx.base_branch.removeprefix('origin/')}` への更新が、"
+                    f"第三者による先行pushのためnon-fast-forwardで拒否されました（{error}）。親ブランチへの部分マージは残っていません。次回のディスパッチサイクルで自動的に再試行されます。"
+                ),
+            )
+        except Exception as comment_error:
+            print(
+                f"Warning: Failed to comment on merge failure for parent issue #{ctx.config.parent_issue_number}: {comment_error}",
+                file=sys.stderr,
+            )
+
+    @staticmethod
+    def _parent_is_already_stale(ctx: IntegrationContext) -> bool | None:
+        parent_issue_number = ctx.config.parent_issue_number
+        if parent_issue_number is None:
+            return None
+        try:
+            return _PARENT_BRANCH_STALE_LABEL in ctx.forge.get_issue_labels(
+                parent_issue_number
+            )
+        except Exception as label_error:
+            print(
+                f"Warning: Failed to read labels for parent issue #{ctx.config.parent_issue_number}: {label_error}",
+                file=sys.stderr,
+            )
+            return None
+
+    @staticmethod
+    def _mark_parent_branch_stale(ctx: IntegrationContext) -> None:
+        parent_issue_number = ctx.config.parent_issue_number
+        if parent_issue_number is None:
+            return
+        try:
+            ctx.forge.ensure_labels((_PARENT_BRANCH_STALE_LABEL_SPEC,))
+        except Exception as error:
+            print(
+                f"Warning: Failed to ensure parent-branch-stale label exists: {error}",
+                file=sys.stderr,
+            )
+        try:
+            ctx.forge.add_label(parent_issue_number, _PARENT_BRANCH_STALE_LABEL)
+        except Exception as error:
+            print(
+                f"Warning: Failed to mark parent issue #{ctx.config.parent_issue_number} as parent-branch-stale: {error}",
+                file=sys.stderr,
+            )
 
     def _close_merged_child_issues(self, ctx: IntegrationContext) -> list[int]:
         closed_issues: list[int] = []

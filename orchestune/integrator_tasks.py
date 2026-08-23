@@ -60,46 +60,56 @@ def get_sorted_done_tasks(
     done_issues = forge.list_issues_by_label("status:done", state="all")
     if not done_issues:
         return [], []
+    done_issues, all_issues = _load_integration_issues(
+        forge, done_issues, parent_issue_number
+    )
+    issue_to_subtask_id = build_issue_to_subtask_id_map(
+        _unique_issues(all_issues) + done_issues
+    )
+    tasks = [
+        parse_task_from_issue(issue, issue_to_subtask_id)
+        for issue in _unique_issues(all_issues)
+    ]
+    order = _topological_order(tasks, threshold, ignore_patterns)
+    return _order_done_tasks(done_issues, issue_to_subtask_id, order)
 
-    all_issues = []
-    for label in [
+
+def _load_integration_issues(
+    forge: Forge, done: list[IssueRecord], parent_number: int | None
+) -> tuple[list[IssueRecord], list[IssueRecord]]:
+    labels = (
         "status:queued",
         "status:in-progress",
         "status:blocked",
         "status:external-lock",
-        "status:done",
-    ]:
-        state = "all" if label == "status:done" else "open"
-        all_issues.extend(forge.list_issues_by_label(label, state=state))
-
-    # parent_issue_number が指定されている場合、親Issueが一致する子Issueのみにフィルタリングする
-    # #485 review (P1): ネイティブ`parent`だけでなく本文metadataフォールバック
-    # も見る`effective_parent_number`を使う。そうしないと、ネイティブ
-    # Sub-issueリンクが張れなかった（縮退時に作成された）metadata-onlyな
-    # 子IssueがここでNO_DONE_TASKS相当として除外され、そのPRが親branchへ
-    # 一生マージ・クローズされず、`process_parent_completion`側もその子を
-    # 「まだopen」として永久に完了待ちし続けてしまう。
-    if parent_issue_number is not None:
-        done_issues = [
-            i for i in done_issues if effective_parent_number(i) == parent_issue_number
-        ]
-        all_issues = [
-            i for i in all_issues if effective_parent_number(i) == parent_issue_number
-        ]
-
-    seen_numbers = set()
-    unique_issues = []
-    for issue in all_issues:
-        if issue.number not in seen_numbers:
-            seen_numbers.add(issue.number)
-            unique_issues.append(issue)
-
-    # すべてのIssueについて、YAML内の subtask_id を事前スキャンしてマッピングを構築する
-    issue_to_subtask_id = build_issue_to_subtask_id_map(unique_issues + done_issues)
-
-    tasks = [
-        parse_task_from_issue(issue, issue_to_subtask_id) for issue in unique_issues
+    )
+    issues = [
+        issue
+        for label in labels
+        for issue in forge.list_issues_by_label(label, state="open")
     ]
+    issues.extend(done)
+    if parent_number is None:
+        return done, issues
+    return (
+        [issue for issue in done if effective_parent_number(issue) == parent_number],
+        [issue for issue in issues if effective_parent_number(issue) == parent_number],
+    )
+
+
+def _unique_issues(issues: list[IssueRecord]) -> list[IssueRecord]:
+    seen: set[int] = set()
+    unique: list[IssueRecord] = []
+    for issue in issues:
+        if issue.number not in seen:
+            seen.add(issue.number)
+            unique.append(issue)
+    return unique
+
+
+def _topological_order(
+    tasks: list[Task], threshold: float, ignore_patterns: Iterable[re.Pattern[str]]
+) -> list[str]:
     subtasks = [
         SubTask(
             id=task.subtask_id,
@@ -113,29 +123,20 @@ def get_sorted_done_tasks(
         for task in tasks
         if task.subtask_id
     ]
-
     try:
-        dag = build_dag(subtasks, threshold=threshold, ignore_patterns=ignore_patterns)
-        topological_order = dag.topological_order
-    except Exception as e:
-        print(f"Warning: Failed to build DAG: {e}", file=sys.stderr)
-        topological_order = [t.id for t in subtasks]
+        return build_dag(
+            subtasks, threshold=threshold, ignore_patterns=ignore_patterns
+        ).topological_order
+    except Exception as error:
+        print(f"Warning: Failed to build DAG: {error}", file=sys.stderr)
+        return [task.id for task in subtasks]
 
-    done_tasks = [
-        parse_task_from_issue(issue, issue_to_subtask_id) for issue in done_issues
-    ]
-    unparsable_done_tasks = [t for t in done_tasks if not t.subtask_id]
-    done_task_map = {t.subtask_id: t for t in done_tasks if t.subtask_id}
 
-    sorted_done_tasks = []
-    for subtask_id in topological_order:
-        if subtask_id in done_task_map:
-            sorted_done_tasks.append(done_task_map[subtask_id])
-
-    for t in done_tasks:
-        if t.subtask_id and t.subtask_id not in [
-            x.subtask_id for x in sorted_done_tasks
-        ]:
-            sorted_done_tasks.append(t)
-
-    return sorted_done_tasks, unparsable_done_tasks
+def _order_done_tasks(
+    done_issues: list[IssueRecord], identifiers: dict[int, str], order: list[str]
+) -> tuple[list[Task], list[Task]]:
+    done = [parse_task_from_issue(issue, identifiers) for issue in done_issues]
+    unparsable = [task for task in done if not task.subtask_id]
+    by_id = {task.subtask_id: task for task in done if task.subtask_id}
+    sorted_done = [by_id.pop(task_id) for task_id in order if task_id in by_id]
+    return sorted_done + list(by_id.values()), unparsable
