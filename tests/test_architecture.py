@@ -126,6 +126,22 @@ _COMMAND_ROW = re.compile(r"^\s*\|\s*`(git|gh)`\s*\|")
 # Dotted so a module under a subpackage can be documented as `sub.worker`,
 # matching the name `_module_name()` produces for it.
 _BACKTICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)`")
+_BOUNDED_RECOVERY_LIMIT_NAME = re.compile(
+    r"^(?:max_.*(?:retries|reclaims)|.*_timeout_seconds)$"
+)
+# #566: This is intentionally an allowlist rather than a control-flow guesser.
+# It catches new finite retry/recovery limits by name, then makes the terminal
+# behaviour they promise explicit and mechanically checked.  A limit that is
+# not part of a retry/recovery loop (for example a throughput window) must not
+# be added here; its boundedness is verified by its owning feature's tests.
+BOUNDED_RECOVERY_TERMINALS = {
+    "max_recompute_retries": ("dispatch_rebase.py", "forced_serial"),
+    "max_task_reclaims": ("dispatch_gc_zombies.py", "apply_human_review_escalation"),
+    "not_needed_review_timeout_seconds": (
+        "integration_coordinator.py",
+        "apply_human_review_escalation",
+    ),
+}
 
 
 def _module_name(path: Path) -> str:
@@ -763,6 +779,78 @@ def test_architecture_docs_document_the_determinism_principle() -> None:
             f"{lang}のarchitecture.mdの0.1節に、終端状態'{escalation_label}'への"
             "言及がありません"
         )
+
+
+def _bounded_recovery_limits(config_source: str) -> set[str]:
+    """有限なリトライ／回収設定だけを`DispatcherConfig`から抽出する。
+
+    `0` と `None` は既定で無効なタイムアウトを表すため対象外にする。対象の
+    命名規約を持つ正の整数の設定が追加された場合、下のregistry完全性テストに
+    より対応する終端動作なしではCIを通せない。
+    """
+    tree = ast.parse(config_source)
+    config = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "DispatcherConfig"
+    )
+    return {
+        node.target.id
+        for node in config.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and _BOUNDED_RECOVERY_LIMIT_NAME.fullmatch(node.target.id)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, int)
+        and node.value.value > 0
+    }
+
+
+def _source_has_terminal_marker(source: str, marker: str) -> bool:
+    """AST上で終端動作を表す関数名または文字列リテラルを検出する。"""
+    tree = ast.parse(source)
+    return any(
+        (isinstance(node, ast.Name) and node.id == marker)
+        or (isinstance(node, ast.Constant) and node.value == marker)
+        for node in ast.walk(tree)
+    )
+
+
+def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() -> None:
+    """#566: 新たな有限リトライ／回収上限には終端動作を必ず宣言させる。"""
+    config_source = (PACKAGE_ROOT / "dispatch_config.py").read_text(encoding="utf-8")
+    assert _bounded_recovery_limits(config_source) == set(BOUNDED_RECOVERY_TERMINALS)
+
+
+def test_bounded_recovery_limit_registry_points_at_terminal_behaviour() -> None:
+    """#566: 登録済み上限が収束または人間エスカレーションへ実際に到達する。"""
+    for limit, (module, marker) in BOUNDED_RECOVERY_TERMINALS.items():
+        source = (PACKAGE_ROOT / module).read_text(encoding="utf-8")
+        assert _source_has_terminal_marker(
+            source, marker
+        ), f"{limit} has no terminal behaviour marker {marker!r} in {module}"
+
+
+def test_bounded_recovery_limit_detection_rejects_an_unregistered_limit() -> None:
+    """設定だけを追加してregistryを更新しない変更をRedにする検出器の例。"""
+    source = """
+class DispatcherConfig:
+    max_recompute_retries: int = 2
+    max_missing_retries: int = 1
+    task_timeout_seconds: int = 0
+"""
+    limits = _bounded_recovery_limits(source)
+    registry = {"max_recompute_retries"}
+    assert limits == {
+        "max_recompute_retries",
+        "max_missing_retries",
+    }
+    assert limits - registry == {"max_missing_retries"}
+
+
+def test_bounded_recovery_limit_detection_rejects_a_missing_terminal_marker() -> None:
+    """登録だけしても終端処理を消せばRedになる。"""
+    assert not _source_has_terminal_marker("def retry(): pass", "forced_serial")
 
 
 def _collect_dict_assignments(tree: ast.AST) -> dict[str, list[ast.Dict]]:
