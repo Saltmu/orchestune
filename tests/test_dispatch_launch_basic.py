@@ -239,8 +239,8 @@ class TestApplyTaskLaunches:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -363,8 +363,11 @@ class TestApplyTaskLaunches:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.forge.GitHubForge.add_label", side_effect=fake_add_label),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch(
+                "fake_forge_proxy.active_fake_forge.add_label",
+                side_effect=fake_add_label,
+            ),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -418,11 +421,11 @@ class TestApplyTaskLaunchesLabelOrdering:
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
         ):
@@ -465,14 +468,14 @@ class TestApplyTaskLaunchesLabelOrdering:
         with (
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             _apply_task_launches(plans, run_state, 1000.0, config)
 
@@ -498,14 +501,14 @@ class TestApplyYamlErrorBlockingLabelOrdering:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             _apply_yaml_error_blocking([task], config)
 
@@ -551,8 +554,8 @@ class TestLaunchSelectedTasks:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -583,9 +586,9 @@ class TestLaunchSelectedTasks:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             selected = _launch_selected_tasks(ctx)
 

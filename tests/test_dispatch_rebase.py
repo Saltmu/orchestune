@@ -96,8 +96,8 @@ class TestNotifyRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_label,
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_label,
         ):
             bodies = notify_recompute(
                 conflict,
@@ -118,9 +118,9 @@ class TestNotifyRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_label,
-            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_label,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             notify_recompute(
                 conflict,
@@ -140,9 +140,11 @@ class TestNotifyRecompute:
             blocked_subtask_id="task-b",
         )
         with (
-            patch("orchestune.forge.GitHubForge.add_comment"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch(
+                "fake_forge_proxy.active_fake_forge.remove_label"
+            ) as mock_remove_label,
         ):
             notify_recompute(
                 conflict,
@@ -166,13 +168,13 @@ class TestNotifyRecompute:
         )
         call_order: list[tuple[str, str]] = []
         with (
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
         ):
@@ -194,7 +196,7 @@ class TestNotifyForceSerial:
     """#200: リトライ上限超過時の強制直列化フォールバック通知。"""
 
     def test_dry_run_does_not_call_github(self):
-        with patch("orchestune.forge.GitHubForge.add_comment") as mock_comment:
+        with patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment:
             body = notify_force_serial(
                 "task-a",
                 issue_number=1,
@@ -206,7 +208,7 @@ class TestNotifyForceSerial:
         assert "task-a" in body
 
     def test_apply_posts_comment_to_parent_issue(self):
-        with patch("orchestune.forge.GitHubForge.add_comment") as mock_comment:
+        with patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment:
             notify_force_serial(
                 "task-a",
                 issue_number=1,
@@ -217,7 +219,7 @@ class TestNotifyForceSerial:
         mock_comment.assert_called_once_with(181, ANY)
 
     def test_apply_without_parent_issue_skips_comment(self):
-        with patch("orchestune.forge.GitHubForge.add_comment") as mock_comment:
+        with patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment:
             notify_force_serial(
                 "task-a",
                 issue_number=1,
@@ -266,13 +268,15 @@ class TestBranchStacking:
         parent_issue = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
+            ) as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -283,8 +287,10 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch(
+                "fake_forge_proxy.active_fake_forge.remove_label"
+            ) as mock_remove_label,
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
@@ -342,13 +348,15 @@ class TestBranchStacking:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
+            ) as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -359,8 +367,8 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
@@ -427,13 +435,15 @@ class TestBranchStacking:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
+            ) as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -448,8 +458,8 @@ class TestBranchStacking:
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
             # os.kill と Popen のモック（リブートプロセスのため）
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.Popen") as mock_popen,
@@ -522,7 +532,9 @@ class TestBranchStacking:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
+            ) as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=[
@@ -531,7 +543,7 @@ class TestBranchStacking:
                 ],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -549,8 +561,8 @@ class TestBranchStacking:
                     ),
                 ],
             ),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
@@ -607,7 +619,9 @@ class TestBranchStacking:
         save_run_state(run_state, config.run_state_path)
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label") as mock_list,
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
+            ) as mock_list,
             patch(
                 "orchestune.dispatch_phase_rebase.list_remote_branches",
                 return_value=[
@@ -616,7 +630,7 @@ class TestBranchStacking:
                 ],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=11,
@@ -630,8 +644,10 @@ class TestBranchStacking:
             # #292: このシナリオのラベル遷移はdispatch_cycleの
             # _promote_blocked_tasks（Forge注入経由）が行うため、
             # dispatch_rebase.github経由ではなくGitHubForge側をパッチする。
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch(
+                "fake_forge_proxy.active_fake_forge.remove_label"
+            ) as mock_remove_label,
             patch(
                 "orchestune.dispatch_launch.create_worktree_and_launch"
             ) as mock_launch,
@@ -639,7 +655,7 @@ class TestBranchStacking:
             patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
-            patch("orchestune.forge.GitHubForge.list_prs", return_value=[]),
+            patch("fake_forge_proxy.active_fake_forge.list_prs", return_value=[]),
             patch(
                 "orchestune.dispatch_gc._finalize_completed_worktree",
                 return_value={
@@ -716,7 +732,7 @@ class TestBranchStacking:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label",
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
                 side_effect=lambda label, **_: (
                     [issue_a, issue_b] if label == "status:in-progress" else []
                 ),
@@ -726,7 +742,7 @@ class TestBranchStacking:
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -738,7 +754,7 @@ class TestBranchStacking:
                 ],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_prs",
+                "fake_forge_proxy.active_fake_forge.list_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -749,14 +765,16 @@ class TestBranchStacking:
                     )
                 ],
             ),
-            patch("orchestune.forge.GitHubForge.list_comments", return_value=[]),
+            patch("fake_forge_proxy.active_fake_forge.list_comments", return_value=[]),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
             ),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch(
+                "fake_forge_proxy.active_fake_forge.remove_label"
+            ) as mock_remove_label,
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch(
@@ -832,7 +850,7 @@ class TestBranchStacking:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label",
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
                 side_effect=lambda label, **_: (
                     [issue_a, issue_b] if label == "status:in-progress" else []
                 ),
@@ -842,7 +860,7 @@ class TestBranchStacking:
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_open_prs",
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=[
                     PrRecord(
                         number=10,
@@ -860,9 +878,11 @@ class TestBranchStacking:
             # #292: CHANGES_REQUESTEDエスカレーションはdispatch_escalationの
             # apply_human_review_escalationがForge注入経由で呼ぶため、
             # dispatch_rebase.github経由ではなくGitHubForge側をパッチする。
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch(
+                "fake_forge_proxy.active_fake_forge.remove_label"
+            ) as mock_remove_label,
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
             patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch_worktree.subprocess.run"),
         ):

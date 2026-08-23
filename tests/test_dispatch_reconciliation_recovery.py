@@ -115,7 +115,7 @@ class TestSelfHealRunState:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label",
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
                 return_value=[],
             ),
             patch(
@@ -143,7 +143,7 @@ class TestSelfHealRunState:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label",
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
                 return_value=[],
             ),
             patch(
@@ -184,8 +184,14 @@ class TestReconcileRecoveryCounters:
         open_prs = [MagicMock()]
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=open_prs),
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
+                return_value=[],
+            ),
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
+                return_value=open_prs,
+            ),
             patch(
                 "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
                 return_value=True,
@@ -211,8 +217,11 @@ class TestReconcileRecoveryCounters:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.forge.GitHubForge.list_issues_by_label", return_value=[]),
-            patch("orchestune.forge.GitHubForge.list_open_prs") as mock_list_prs,
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
+                return_value=[],
+            ),
+            patch("fake_forge_proxy.active_fake_forge.list_open_prs") as mock_list_prs,
             patch(
                 "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
                 return_value=False,
@@ -237,7 +246,7 @@ class TestReconcileRecoveryCounters:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label"
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list_issues,
             patch(
                 "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters"
@@ -290,10 +299,10 @@ class TestReconcileRecoveryCounters:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.list_issues_by_label",
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label",
                 return_value=[issue],
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]),
         ):
             _reconcile_recovery_counters(run_state, config)
 
@@ -340,7 +349,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now - 60, now - 120])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             changed = _restore_launch_history(run_state, config, now=now)
 
         assert changed is True
@@ -353,7 +362,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now - 60, now - 7200])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         assert run_state.launch_history == [now - 60]
@@ -365,7 +374,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         assert sorted(run_state.launch_history) == [now - 60, now - 30]
@@ -381,7 +390,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now - 60, now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         assert run_state.launch_history == [now - 60, now - 60]
@@ -393,7 +402,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         assert run_state.launch_history == [now - 60, now - 60]
@@ -416,7 +425,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now - 60])  # 親Bの永続履歴
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         # 親Aのローカル分と親Bの復元分が両方残る（片方向マージ）
@@ -438,7 +447,7 @@ class TestRestoreLaunchHistory:
         run_state = RunState(active_worktrees={}, launch_history=[])
         config = self._config(tmp_path, parent_issue_number=None)
 
-        with patch("orchestune.forge.GitHubForge.get_issue") as mock_get:
+        with patch("fake_forge_proxy.active_fake_forge.get_issue") as mock_get:
             changed = _restore_launch_history(run_state, config, now=10_000.0)
 
         mock_get.assert_not_called()
@@ -460,7 +469,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path, apply=False)
         issue = self._parent_issue([now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             changed = _restore_launch_history(run_state, config, now=now)
 
         assert changed is True
@@ -475,7 +484,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([now + 5, now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         assert run_state.launch_history == [now - 60, now + 5]
@@ -497,7 +506,9 @@ class TestRestoreLaunchHistory:
         issue = self._parent_issue([launched_at])
 
         for now in (10_000.0, 10_001.0, 10_002.0, 10_010.0):
-            with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            with patch(
+                "fake_forge_proxy.active_fake_forge.get_issue", return_value=issue
+            ):
                 _restore_launch_history(run_state, config, now=now)
             assert run_state.launch_history == [launched_at]
 
@@ -516,7 +527,7 @@ class TestRestoreLaunchHistory:
         config = self._config(tmp_path)
         issue = self._parent_issue([999_999_999_999.0, now - 60])
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             _restore_launch_history(run_state, config, now=now)
 
         assert run_state.launch_history == [now - 60]
@@ -532,7 +543,9 @@ class TestRestoreLaunchHistory:
 
         for now in (10_000.0, 20_000.0):
             run_state.launch_history = []
-            with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+            with patch(
+                "fake_forge_proxy.active_fake_forge.get_issue", return_value=issue
+            ):
                 _restore_launch_history(run_state, config, now=now)
             assert run_state.launch_history == []
             assert (
@@ -558,7 +571,7 @@ class TestRestoreLaunchHistory:
             created_at="2026-01-01T00:00:00+00:00",
         )
 
-        with patch("orchestune.forge.GitHubForge.get_issue", return_value=issue):
+        with patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue):
             changed = _restore_launch_history(run_state, config, now=10_000.0)
 
         assert changed is False
@@ -590,7 +603,10 @@ class TestSelfHealLaunchHistory:
                 "orchestune.dispatch_reconciliation._restore_launch_history",
                 return_value=True,
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=open_prs),
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
+                return_value=open_prs,
+            ),
             patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
         ):
             _self_heal_launch_history(run_state, config, now=1000.0)
@@ -617,7 +633,7 @@ class TestSelfHealLaunchHistory:
                 "orchestune.dispatch_reconciliation._restore_launch_history",
                 return_value=False,
             ),
-            patch("orchestune.forge.GitHubForge.list_open_prs") as mock_list_prs,
+            patch("fake_forge_proxy.active_fake_forge.list_open_prs") as mock_list_prs,
             patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
         ):
             _self_heal_launch_history(run_state, config, now=1000.0)
@@ -652,8 +668,8 @@ class TestSelfHealLaunchHistory:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.get_issue", return_value=issue),
-            patch("orchestune.forge.GitHubForge.list_open_prs", return_value=[]),
+            patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue),
+            patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]),
             patch("orchestune.dispatch_reconciliation.save_run_state"),
         ):
             _self_heal_launch_history(run_state, config, now=now)
