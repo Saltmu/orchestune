@@ -1009,22 +1009,31 @@ def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
     return patch_references, github_forge_names
 
 
-def _bound_string_values(tree: ast.AST) -> dict[str, set[str]]:
+def _string_scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]]]:
+    assigned: set[str] = set()
+    rebound_outer: set[str] = set()
     values: dict[str, set[str]] = defaultdict(set)
-    for node in ast.walk(tree):
+    for node in _nodes_in_scope(scope):
+        if isinstance(node, _SCOPE_NODES):
+            continue
+        if isinstance(node, ast.Global | ast.Nonlocal):
+            rebound_outer.update(node.names)
+            continue
         targets, value = _assigned_names(node)
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            for target in targets:
-                if isinstance(target, ast.Name):
+        for target in targets:
+            if isinstance(target, ast.Name):
+                assigned.add(target.id)
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
                     values[target.id].add(value.value)
         if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            assigned.add(node.target.id)
             if isinstance(node.iter, ast.List | ast.Tuple | ast.Set):
                 values[node.target.id].update(
                     item.value
                     for item in node.iter.elts
                     if isinstance(item, ast.Constant) and isinstance(item.value, str)
                 )
-    return values
+    return assigned - rebound_outer, dict(values)
 
 
 def _call_argument(node: ast.Call, position: int, keyword: str) -> ast.expr | None:
@@ -1043,34 +1052,71 @@ def _is_github_forge_target(target: ast.expr | None, names: set[str]) -> bool:
     return bool(target_name and target_name.rsplit(".", 1)[-1] in names)
 
 
+def _is_github_forge_patch_call(
+    node: ast.Call,
+    patch_references: set[str],
+    github_forge_names: set[str],
+    bound_strings: dict[str, set[str]],
+) -> bool:
+    function_name = _dotted_name(node.func)
+    if function_name in patch_references:
+        target = _call_argument(node, 0, "target")
+        target_values = (
+            {target.value}
+            if isinstance(target, ast.Constant) and isinstance(target.value, str)
+            else bound_strings.get(target.id, set())
+            if isinstance(target, ast.Name)
+            else set()
+        )
+        return any(_GITHUB_FORGE_PATCH_TARGET.search(value) for value in target_values)
+    if function_name in {
+        f"{ref}.{method}"
+        for ref in patch_references
+        for method in ("object", "multiple")
+    }:
+        return _is_github_forge_target(
+            _call_argument(node, 0, "target"), github_forge_names
+        )
+    return False
+
+
+def _scan_github_forge_patch_scope(
+    scope: ast.AST,
+    inherited: dict[str, set[str]],
+    patch_references: set[str],
+    github_forge_names: set[str],
+    violations: list[int],
+) -> None:
+    assigned, candidates = _string_scope_bindings(scope)
+    bindings = {
+        name: set(values) for name, values in inherited.items() if name not in assigned
+    }
+    for name, values in candidates.items():
+        bindings[name] = bindings.get(name, set()) | values
+
+    for node in _nodes_in_scope(scope):
+        if isinstance(node, _SCOPE_NODES):
+            nested = inherited if isinstance(scope, ast.ClassDef) else bindings
+            _scan_github_forge_patch_scope(
+                node,
+                nested,
+                patch_references,
+                github_forge_names,
+                violations,
+            )
+        elif isinstance(node, ast.Call) and _is_github_forge_patch_call(
+            node, patch_references, github_forge_names, bindings
+        ):
+            violations.append(node.lineno)
+
+
 def _github_forge_patch_lines(source: str) -> list[int]:
     tree = ast.parse(source)
     patch_references, github_forge_names = _mock_patch_references(tree)
-    bound_strings = _bound_string_values(tree)
     violations: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        function_name = _dotted_name(node.func)
-        if function_name in patch_references:
-            target = _call_argument(node, 0, "target")
-            target_values = (
-                {target.value}
-                if isinstance(target, ast.Constant) and isinstance(target.value, str)
-                else bound_strings.get(target.id, set())
-                if isinstance(target, ast.Name)
-                else set()
-            )
-            if any(_GITHUB_FORGE_PATCH_TARGET.search(value) for value in target_values):
-                violations.append(node.lineno)
-        elif function_name in {
-            f"{ref}.{method}"
-            for ref in patch_references
-            for method in ("object", "multiple")
-        }:
-            target = _call_argument(node, 0, "target")
-            if _is_github_forge_target(target, github_forge_names):
-                violations.append(node.lineno)
+    _scan_github_forge_patch_scope(
+        tree, {}, patch_references, github_forge_names, violations
+    )
     return sorted(violations)
 
 
@@ -1173,6 +1219,23 @@ with patch.multiple(target=GitHubForge, list_prs=DEFAULT):
 """
 
     assert _github_forge_patch_lines(source) == [5]
+
+
+def test_github_forge_patch_detector_keeps_variable_bindings_scoped() -> None:
+    source = """
+from unittest.mock import patch
+
+def forge_helper():
+    target = "orchestune.forge.GitHubForge.list_prs"
+    return target
+
+def harmless_helper():
+    target = "orchestune.dispatch_gc.is_process_alive"
+    with patch(target):
+        pass
+"""
+
+    assert _github_forge_patch_lines(source) == []
 
 
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:
