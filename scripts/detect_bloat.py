@@ -199,16 +199,17 @@ def scan_project(
     return reports
 
 
-def _render_report(report: BloatReport, root_dir: Path) -> str:
+def _render_report(
+    report: BloatReport, root_dir: Path, previous_lines: int | None = None
+) -> str:
     path = report.path.relative_to(root_dir)
+    previous = f" (was {previous_lines}; " if previous_lines is not None else " ("
     if report.category == "function":
         return (
             f"[function] {path}:{report.symbol} has {report.lines} lines "
-            f"(limit: {report.limit})"
+            f"{previous}limit: {report.limit})"
         )
-    return (
-        f"[{report.category}] {path} has {report.lines} lines (limit: {report.limit})"
-    )
+    return f"[{report.category}] {path} has {report.lines} lines{previous}limit: {report.limit})"
 
 
 def _warning_snapshot(report: BloatReport, root_dir: Path) -> dict[str, object]:
@@ -237,11 +238,17 @@ def write_baseline(path: Path, reports: Sequence[BloatReport], root_dir: Path) -
 
     warnings = [_warning_snapshot(report, root_dir) for report in reports]
     warnings.sort(key=_warning_key)
-    path.write_text(
-        json.dumps({"version": 1, "warnings": warnings}, indent=2, sort_keys=True)
-        + "\n",
-        encoding="utf-8",
-    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    with temporary_path.open("w", encoding="utf-8") as baseline_file:
+        json.dump(
+            {"version": 1, "warnings": warnings},
+            baseline_file,
+            indent=2,
+            sort_keys=True,
+        )
+        baseline_file.write("\n")
+    temporary_path.replace(path)
 
 
 def load_baseline(path: Path) -> list[dict[str, object]]:
@@ -272,24 +279,40 @@ def find_regressions(
 ) -> list[BloatRegression]:
     """Return warnings absent from, or larger than, the recorded baseline."""
 
-    baseline_lines = {_warning_key(item): item["lines"] for item in baseline}
+    baseline_lines: dict[tuple[str, str, str | None], list[int]] = {}
+    for warning in baseline:
+        key = _warning_key(warning)
+        line_count = warning.get("lines")
+        if not isinstance(line_count, int):
+            raise ValueError("baseline warning lines must be an integer")
+        baseline_lines.setdefault(key, []).append(line_count)
+    for lines in baseline_lines.values():
+        lines.sort()
+
     regressions: list[BloatRegression] = []
-    for report in reports:
+    for report in sorted(
+        reports, key=lambda item: _warning_key(_warning_snapshot(item, root_dir))
+    ):
         snapshot = _warning_snapshot(report, root_dir)
-        previous_lines = baseline_lines.get(_warning_key(snapshot))
+        candidates = baseline_lines.get(_warning_key(snapshot), [])
+        previous_lines = next(
+            (line for line in candidates if line >= report.lines), None
+        )
+        if previous_lines is not None:
+            candidates.remove(previous_lines)
+            continue
+        if candidates:
+            previous_lines = candidates.pop()
         if previous_lines is None or report.lines > previous_lines:
             regressions.append(BloatRegression(report, previous_lines))
     return regressions
 
 
 def _render_regression(regression: BloatRegression, root_dir: Path) -> str:
-    rendered = _render_report(regression.report, root_dir)
     if regression.previous_lines is None:
-        return f"[new] {rendered}"
-    return "[worsened] " + rendered.replace(
-        f"has {regression.report.lines} lines (limit:",
-        f"has {regression.report.lines} lines (was {regression.previous_lines}; limit:",
-        1,
+        return f"[new] {_render_report(regression.report, root_dir)}"
+    return "[worsened] " + _render_report(
+        regression.report, root_dir, regression.previous_lines
     )
 
 
@@ -324,7 +347,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.record_baseline:
-        write_baseline(args.record_baseline, reports, root_dir)
+        try:
+            write_baseline(args.record_baseline, reports, root_dir)
+        except OSError as exc:
+            print(f"[detect-bloat] Baseline error: {exc}", file=sys.stderr)
+            return 2
         print(f"[detect-bloat] Recorded baseline: {args.record_baseline}")
         return 0
 

@@ -191,6 +191,46 @@ def test_baseline_comparison_fails_when_warning_grows(
     )
 
 
+def test_record_baseline_creates_parent_directory(tmp_path: Path) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    baseline = tmp_path / ".orchestune" / "bloat-baseline.json"
+
+    assert (
+        detect_bloat.main(["--root", str(tmp_path), "--record-baseline", str(baseline)])
+        == 0
+    )
+    assert json.loads(baseline.read_text(encoding="utf-8")) == {
+        "version": 1,
+        "warnings": [],
+    }
+
+
+def test_duplicate_warning_identities_are_compared_individually(tmp_path: Path) -> None:
+    detect_bloat = _load_script()
+    source = tmp_path / "orchestune" / "conditional.py"
+    source.parent.mkdir()
+    baseline_reports = [
+        detect_bloat.BloatReport("function", source, 11, 10, "too_long"),
+        detect_bloat.BloatReport("function", source, 12, 10, "too_long"),
+    ]
+    baseline = tmp_path / "bloat-baseline.json"
+    detect_bloat.write_baseline(baseline, baseline_reports, tmp_path)
+
+    regressions = detect_bloat.find_regressions(
+        [
+            detect_bloat.BloatReport("function", source, 11, 10, "too_long"),
+            detect_bloat.BloatReport("function", source, 13, 10, "too_long"),
+        ],
+        detect_bloat.load_baseline(baseline),
+        tmp_path,
+    )
+
+    assert [(item.report.lines, item.previous_lines) for item in regressions] == [
+        (13, 12)
+    ]
+
+
 @pytest.mark.parametrize(
     ("config", "error"),
     [
