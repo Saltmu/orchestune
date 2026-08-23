@@ -1,47 +1,4 @@
 {
   "version": 1,
-  "warnings": [
-    {
-      "category": "function",
-      "limit": 50,
-      "lines": 70,
-      "path": "orchestune/integration_coordinator.py",
-      "symbol": "process_pending_not_needed_reviews"
-    },
-    {
-      "category": "function",
-      "limit": 50,
-      "lines": 76,
-      "path": "orchestune/integrator_git_ops.py",
-      "symbol": "IntegrationMerger.merge_and_test_tasks"
-    },
-    {
-      "category": "function",
-      "limit": 50,
-      "lines": 86,
-      "path": "orchestune/integrator_steps.py",
-      "symbol": "AutoMergeChildIntegrationStep._handle_parent_branch_staleness"
-    },
-    {
-      "category": "function",
-      "limit": 50,
-      "lines": 61,
-      "path": "orchestune/integrator_steps.py",
-      "symbol": "AutoMergeChildIntegrationStep.execute"
-    },
-    {
-      "category": "function",
-      "limit": 50,
-      "lines": 51,
-      "path": "orchestune/integrator_steps.py",
-      "symbol": "SetupWorktreeStep.execute"
-    },
-    {
-      "category": "function",
-      "limit": 50,
-      "lines": 71,
-      "path": "orchestune/integrator_tasks.py",
-      "symbol": "get_sorted_done_tasks"
-    }
-  ]
+  "warnings": []
 }
