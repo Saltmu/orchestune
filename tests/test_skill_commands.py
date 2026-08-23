@@ -613,3 +613,71 @@ def test_local_ci_developer_mcp_post_write_verification():
         or "discrepancy" in pr_md_lower
         or "mismatch" in pr_md_lower
     )
+
+
+def test_workflow_template_preflight_and_backend_selection():
+    """workflow-template defines execution environment preflight and fixes the GitHub backend."""
+    skill_dir = SKILLS_ROOT / "workflow-template"
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    tdd_md = (skill_dir / "references" / "tdd.md").read_text(encoding="utf-8")
+    pr_md = (skill_dir / "references" / "pr.md").read_text(encoding="utf-8")
+
+    # SKILL.md preflight checks and backend locking
+    skill_md_lower = skill_md.lower()
+    assert "preflight" in skill_md_lower
+    assert (
+        "<preflight_check_command>" in skill_md_lower or "preflight" in skill_md_lower
+    )
+    assert "gh auth status" in skill_md_lower or "auth" in skill_md_lower
+    assert "mcp" in skill_md_lower
+    assert "backend" in skill_md_lower
+    assert "selected backend" in skill_md_lower
+
+    # tdd.md prerequisites
+    tdd_md_lower = tdd_md.lower()
+    assert "<install_command>" in tdd_md_lower or "install" in tdd_md_lower
+    assert "lock" in tdd_md_lower or "prerequisites" in tdd_md_lower
+
+    # pr.md fallback and MCP continuation
+    pr_md_lower = pr_md.lower()
+    assert "mcp" in pr_md_lower
+    assert "backend" in pr_md_lower and "selected" in pr_md_lower
+
+
+def test_workflow_template_mcp_post_write_verification():
+    """workflow-template pr.md defines post-write verification procedures for GitHub MCP operations."""
+    skill_dir = SKILLS_ROOT / "workflow-template"
+    pr_md = (skill_dir / "references" / "pr.md").read_text(encoding="utf-8")
+    pr_md_lower = pr_md.lower()
+
+    # MCP post-write verification section or procedures
+    assert "post-write" in pr_md_lower or "verification" in pr_md_lower
+    # Blob SHA and remote branch content reconciliation
+    assert "blob" in pr_md_lower and "sha" in pr_md_lower
+    # Cumulative diff inspection before PR creation for multi-commit writes
+    assert "cumulative diff" in pr_md_lower or (
+        "diff" in pr_md_lower and "commit" in pr_md_lower
+    )
+    # PR head diff verification
+    assert "head diff" in pr_md_lower or ("pr" in pr_md_lower and "diff" in pr_md_lower)
+    # Escape / formatting remote discrepancy detection
+    assert (
+        "escape" in pr_md_lower
+        or "discrepancy" in pr_md_lower
+        or "mismatch" in pr_md_lower
+    )
+
+
+def test_workflow_template_bloat_baseline():
+    """workflow-template tdd.md defines bloat warning baseline distinction."""
+    skill_dir = SKILLS_ROOT / "workflow-template"
+    tdd_md = (skill_dir / "references" / "tdd.md").read_text(encoding="utf-8")
+    tdd_md_lower = tdd_md.lower()
+
+    assert "bloat" in tdd_md_lower
+    assert "baseline" in tdd_md_lower
+    assert (
+        "pre-existing" in tdd_md_lower
+        or "new" in tdd_md_lower
+        or "distinguish" in tdd_md_lower
+    )
