@@ -45,11 +45,61 @@ class BloatRegression:
     previous_lines: int | None
 
 
-class FunctionLineCounter(ast.NodeVisitor):
-    """Collect Python functions that exceed the configured line limit."""
+def _collect_docstring_lines(tree: ast.AST) -> set[int]:
+    """Collect line numbers occupied by docstrings (module, class, function)."""
+    doc_lines: set[int] = set()
 
-    def __init__(self, limit: int) -> None:
+    def _add_docstring(body: list[ast.stmt]) -> None:
+        if body and isinstance(body[0], ast.Expr):
+            val = body[0].value
+            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                start = body[0].lineno
+                end = body[0].end_lineno or start
+                doc_lines.update(range(start, end + 1))
+
+    if isinstance(tree, ast.Module):
+        _add_docstring(tree.body)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            _add_docstring(node.body)
+
+    return doc_lines
+
+
+def _count_sloc(
+    source_lines: Sequence[str],
+    doc_lines: set[int],
+    start_line: int = 1,
+    end_line: int | None = None,
+) -> int:
+    """Count non-empty, non-comment, non-docstring lines in the specified range."""
+    end = len(source_lines) if end_line is None else min(end_line, len(source_lines))
+    sloc = 0
+    for line_no in range(start_line, end + 1):
+        if line_no in doc_lines:
+            continue
+        line_idx = line_no - 1
+        if 0 <= line_idx < len(source_lines):
+            stripped = source_lines[line_idx].strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            sloc += 1
+    return sloc
+
+
+class FunctionLineCounter(ast.NodeVisitor):
+    """Collect Python functions that exceed the configured SLOC limit."""
+
+    def __init__(
+        self,
+        limit: int,
+        source_lines: Sequence[str],
+        doc_lines: set[int],
+    ) -> None:
         self._limit = limit
+        self._source_lines = source_lines
+        self._doc_lines = doc_lines
         self._class_names: list[str] = []
         self.functions: list[tuple[str, int]] = []
 
@@ -67,13 +117,14 @@ class FunctionLineCounter(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _record_if_large(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        end_line = node.end_lineno or node.lineno
-        line_count = end_line - node.lineno + 1
-        if line_count <= self._limit:
+        start = node.lineno
+        end = node.end_lineno or start
+        sloc = _count_sloc(self._source_lines, self._doc_lines, start, end)
+        if sloc <= self._limit:
             return
         prefix = ".".join(self._class_names)
         name = f"{prefix}.{node.name}" if prefix else node.name
-        self.functions.append((name, line_count))
+        self.functions.append((name, sloc))
 
 
 def _read_required_int(config: dict[str, Any], name: str) -> int:
@@ -151,19 +202,56 @@ def _iter_python_files(
                 yield path
 
 
-def _function_reports(path: Path, limit: int) -> list[BloatReport]:
+def _scan_code_file(path: Path, config: BloatConfig) -> list[BloatReport]:
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source_text = path.read_text(encoding="utf-8")
+        tree = ast.parse(source_text, filename=str(path))
     except (OSError, SyntaxError, UnicodeDecodeError) as exc:
         print(f"[detect-bloat] Cannot parse {path}: {exc}", file=sys.stderr)
-        return []
+        lines = _line_count(path)
+        return (
+            [BloatReport("code", path, lines, config.code_file_lines)]
+            if lines > config.code_file_lines
+            else []
+        )
 
-    counter = FunctionLineCounter(limit)
+    source_lines = source_text.splitlines()
+    doc_lines = _collect_docstring_lines(tree)
+    file_sloc = _count_sloc(source_lines, doc_lines)
+
+    reports: list[BloatReport] = []
+    if file_sloc > config.code_file_lines:
+        reports.append(BloatReport("code", path, file_sloc, config.code_file_lines))
+
+    counter = FunctionLineCounter(config.function_lines, source_lines, doc_lines)
     counter.visit(tree)
-    return [
-        BloatReport("function", path, line_count, limit, symbol)
+    reports.extend(
+        BloatReport("function", path, line_count, config.function_lines, symbol)
         for symbol, line_count in counter.functions
-    ]
+    )
+    return reports
+
+
+def _scan_test_file(path: Path, config: BloatConfig) -> list[BloatReport]:
+    try:
+        source_text = path.read_text(encoding="utf-8")
+        tree = ast.parse(source_text, filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        print(f"[detect-bloat] Cannot parse {path}: {exc}", file=sys.stderr)
+        lines = _line_count(path)
+        return (
+            [BloatReport("test", path, lines, config.test_file_lines)]
+            if lines > config.test_file_lines
+            else []
+        )
+
+    source_lines = source_text.splitlines()
+    doc_lines = _collect_docstring_lines(tree)
+    file_sloc = _count_sloc(source_lines, doc_lines)
+
+    if file_sloc > config.test_file_lines:
+        return [BloatReport("test", path, file_sloc, config.test_file_lines)]
+    return []
 
 
 def scan_project(
@@ -175,16 +263,10 @@ def scan_project(
     reports: list[BloatReport] = []
 
     for path in _iter_python_files(root_dir, config.code_paths):
-        lines = _line_count(path)
-        if lines > config.code_file_lines:
-            reports.append(BloatReport("code", path, lines, config.code_file_lines))
-        # Function length is intentionally independent of file length.
-        reports.extend(_function_reports(path, config.function_lines))
+        reports.extend(_scan_code_file(path, config))
 
     for path in _iter_python_files(root_dir, config.test_paths):
-        lines = _line_count(path)
-        if lines > config.test_file_lines:
-            reports.append(BloatReport("test", path, lines, config.test_file_lines))
+        reports.extend(_scan_test_file(path, config))
 
     skills_dir = root_dir / config.skills_path
     if skills_dir.is_dir():
