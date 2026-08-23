@@ -15,24 +15,24 @@ Execute `scripts/wait_for_review.py` synchronously to request a review from a re
 
 ```text
 Loop (up to 5 rounds):
-  1. Execute wait command:
-     - Initial round: poetry run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
-     - Subsequent rounds: attach --body-file /tmp/review_reply.md to request re-review
-  2. Evaluate output and context:
-     - On timeout (exit 1):
-         -> Retry once with --no-post --timeout 300. If still unresolved, escalate.
-     - On review result obtained (exit 0):
-         -> LLM carefully reads latest summary and inline comments.
-         -> (a) Actionable findings exist:
-             Fix code and add tests according to feedback.
-             Verify with local CI (./scripts/local-ci.sh / .\\scripts\\local-ci.ps1), then commit & push.
-             Create /tmp/review_reply.md (with Round X/5 header) and return to start of loop (1).
-         -> (b) No actionable findings (LGTM / All checks passed / No blocking issues):
-             Terminate loop. Proceed to Step 12 (Outcome).
-     - On reaching round limit (Round 5):
-         -> Stop automated iteration. Summarize discussion and escalate on PR.
-     - On internal error (exit 2):
-         -> Terminate with error. Record error output and stop.
+  1. Acquire review state and execute the shared verdict evaluator:
+     - CLI/gh, initial round:
+       poetry run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
+     - CLI/gh, subsequent rounds: attach --body-file /tmp/review_reply.md.
+     - GitHub MCP / GitHub App: retrieve `issue_comments`, `reviews`, and
+       `inline_comments`, write the normalized JSON snapshot, then run:
+       poetry run python scripts/wait_for_review.py --bot-name <bot> --review-state-file <STATE.json>
+  2. Evaluate exit code, then carefully read the entire result:
+     - Exit 10: actionable findings are present. This includes **any Codex inline
+       comment**, even with a boilerplate summary such as "Here are some automated
+       review suggestions". Read every `Inline Finding` block (path, line, full body).
+     - Exit 0: clean pass / no findings. Exit 11: reviewer still in progress.
+     - Exit 20: timeout; retry once with --no-post --timeout 300, then escalate.
+     - Exit 30: ambiguous verdict; inspect summary and inline findings before
+       requesting another review or escalating. Exit 2 or 12: record and escalate.
+     - Exit 10: fix code and add tests, verify local CI, commit and push, then
+       create /tmp/review_reply.md (Round X/5) and return to step 1.
+     - Exit 0: terminate the loop and proceed to Step 12 (Outcome).
 ```
 
 ### Creating Review Reply File (`/tmp/review_reply.md`)

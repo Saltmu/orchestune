@@ -16,14 +16,42 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
-# Exit codes contract
-EXIT_NO_FINDINGS = 0  # No blocking findings / Clean (LGTM / All checks passed)
+from scripts.review_verdict import (
+    EXIT_FINDINGS_PRESENT as EXIT_FINDINGS_PRESENT,
+)
+from scripts.review_verdict import (
+    EXIT_IN_PROGRESS as EXIT_IN_PROGRESS,
+)
+from scripts.review_verdict import (
+    EXIT_NO_FINDINGS as EXIT_NO_FINDINGS,
+)
+from scripts.review_verdict import (
+    EXIT_UNDETERMINED as EXIT_UNDETERMINED,
+)
+from scripts.review_verdict import (
+    _build_snapshot,
+    _get_item_created_timestamp,
+    _is_explicitly_in_progress,
+    _latest_bot_activity_item,
+    _latest_bot_summary_item,
+    evaluate_review_state,
+    evaluate_review_verdict,
+    extract_review_result,
+    normalize_review_state,
+)
+from scripts.review_verdict import (
+    _filter_bot_items as _filter_bot_items,
+)
+from scripts.review_verdict import (
+    _get_item_timestamp as _get_item_timestamp,
+)
+from scripts.review_verdict import (
+    _is_bot_user as _is_bot_user,
+)
+
 EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
-EXIT_FINDINGS_PRESENT = 10  # Findings present / Blocking issues or inline comments
-EXIT_IN_PROGRESS = 11  # Review in progress / Working state
 EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded
 EXIT_TIMEOUT = 20  # Timeout waiting for review activity
-EXIT_UNDETERMINED = 30  # Undetermined / Ambiguous (Delegate to LLM context analysis)
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
 
@@ -185,24 +213,6 @@ def post_review_trigger(
     return cast(dict[str, Any], json.loads(stdout))
 
 
-def _filter_bot_items(
-    items: list[dict[str, Any]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
-    """Filter list of items to those posted by the specified bot, excluding ignored IDs."""
-    filtered: list[dict[str, Any]] = []
-    excluded = exclude_ids or set()
-    for item in items:
-        item_id = item.get("id")
-        if item_id in excluded or str(item_id) in excluded:
-            continue
-        user = (item.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            filtered.append(item)
-    return filtered
-
-
 def _get_pr_data(
     pr_number: int, executor: ThreadPoolExecutor | None = None
 ) -> dict[str, list[dict[str, Any]]]:
@@ -232,76 +242,6 @@ def _get_pr_data(
         }
 
 
-def _is_bot_user(user_login: str, bot_name: str) -> bool:
-    login = user_login.lower()
-    target = bot_name.lower()
-    if target == "claude":
-        return "claude" in login
-    if target == "codex":
-        return "codex" in login or "chatgpt-codex-connector" in login
-    return target in login
-
-
-def _get_item_timestamp(item: dict[str, Any]) -> str:
-    return (
-        item.get("updated_at")
-        or item.get("submitted_at")
-        or item.get("created_at")
-        or ""
-    )
-
-
-def _get_item_created_timestamp(item: dict[str, Any]) -> str:
-    return item.get("submitted_at") or item.get("created_at") or ""
-
-
-def _bot_candidate_items(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
-    return [
-        *_filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids),
-        *_filter_bot_items(data.get("reviews", []), bot_name, exclude_ids),
-    ]
-
-
-def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
-    body = (item.get("body") or "").lower()
-    return (
-        body.startswith(f"**{bot_name.lower()} finished")
-        and "view job" in body
-        and "\n---" not in body
-    )
-
-
-def _latest_bot_activity_item(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> dict[str, Any] | None:
-    candidate_items = _bot_candidate_items(data, bot_name, exclude_ids)
-    if not candidate_items:
-        return None
-    return sorted(candidate_items, key=_get_item_timestamp)[-1]
-
-
-def _latest_bot_summary_item(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> dict[str, Any] | None:
-    candidate_items = _bot_candidate_items(data, bot_name, exclude_ids)
-    if not candidate_items:
-        return None
-    summary_candidates = [
-        item
-        for item in candidate_items
-        if not _is_finished_progress_tracker(item, bot_name)
-    ]
-    return sorted(summary_candidates or candidate_items, key=_get_item_timestamp)[-1]
-
-
 def _latest_review_trigger_timestamp(
     data: dict[str, list[dict[str, Any]]], bot_name: str
 ) -> str:
@@ -313,83 +253,22 @@ def _latest_review_trigger_timestamp(
     return max(trigger_timestamps, default="")
 
 
-def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
-    body = item.get("body") or ""
-    status_lines = [
-        line.lstrip("#").strip().lower().split("<", maxsplit=1)[0].strip()
-        for line in body.splitlines()
-        if line.strip()
-    ]
-    markers = (
-        "claude is working…",
-        "claude is working...",
-        "claude code is working…",
-        "claude code is working...",
-        "codex is working…",
-        "codex is working...",
-        "review in progress",
-        "re-review in progress",
-        "claude is reviewing this pr",
-        "codex is reviewing this pr",
-        "レビュー進行中",
-        "再レビュー進行中",
-    )
-    is_task_progress = _has_unfinished_task_list(body)
-    has_marker = any(
-        line in markers or bool(re.match(r"^round\s+\d+\s+レビュー進行中$", line))
-        for line in status_lines
-    )
-    return is_task_progress or has_marker
-
-
-def _has_unfinished_task_list(body: str) -> bool:
-    in_completed_summary = "### review complete" in body.lower()
-    if in_completed_summary:
-        return False
-    if "view job run" in body.lower() and any(
-        line.strip().startswith("- [ ]") for line in body.splitlines()
-    ):
-        return True
-    in_tasks_section = False
-    for line in body.splitlines():
-        stripped_line = line.strip()
-        if stripped_line.startswith("#"):
-            heading = stripped_line.lstrip("#").strip().lower()
-            if in_tasks_section:
-                return False
-            in_tasks_section = (
-                heading == "tasks" or "進行中" in heading or "in progress" in heading
-            )
-        elif in_tasks_section and stripped_line.startswith("- [ ]"):
-            return True
-    return False
-
-
-def _build_snapshot(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> dict[str, str]:
-    """Record state of each bot item as id -> timestamp + body length."""
-    snapshot: dict[str, str] = {}
-    for c in _filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids):
-        cid = str(c.get("id"))
-        ts = _get_item_timestamp(c)
-        body = c.get("body") or ""
-        snapshot[f"comment_{cid}"] = f"{ts}:{len(body)}"
-
-    for r in _filter_bot_items(data.get("reviews", []), bot_name, exclude_ids):
-        rid = str(r.get("id"))
-        ts = _get_item_timestamp(r)
-        body = r.get("body") or ""
-        snapshot[f"review_{rid}"] = f"{ts}:{len(body)}"
-
-    for ic in _filter_bot_items(data.get("inline_comments", []), bot_name, exclude_ids):
-        icid = str(ic.get("id"))
-        ts = _get_item_timestamp(ic)
-        snapshot[f"inline_{icid}"] = ts
-
-    return snapshot
+def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
+    """Render review results so inline findings cannot be overlooked in agent output."""
+    inline_items = result.get("inline_comments", [])
+    print("\n" + "=" * 72)
+    print(f"[AI Review Update Detected - @{bot_name}]")
+    print(f"Timestamp: {result.get('timestamp', '')}")
+    if inline_items:
+        print(f"[ACTION REQUIRED] Inline Findings: {len(inline_items)} item(s)")
+        for index, item in enumerate(inline_items, start=1):
+            print(f"\n--- Inline Finding {index}: {item['path']}:{item['line']} ---")
+            print(item["body"] or "(No comment body provided)")
+        print("--- End Inline Findings ---")
+    else:
+        print("Inline Findings: none")
+    print("=" * 72 + "\n")
+    print(result.get("review_body", ""))
 
 
 def _extract_review_result(
@@ -398,46 +277,15 @@ def _extract_review_result(
     exclude_ids: set[int | str] | None = None,
     latest_item: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if latest_item is None:
-        latest_item = _latest_bot_summary_item(current_data, bot_name, exclude_ids)
-    if latest_item is None:
-        return None
-    latest_body = latest_item.get("body") or ""
-
-    # Collect bot inline comments
-    inline_items: list[dict[str, Any]] = []
-    for ic in _filter_bot_items(
-        current_data.get("inline_comments", []), bot_name, exclude_ids
-    ):
-        inline_items.append(
-            {
-                "path": ic.get("path", "unknown"),
-                "line": ic.get("line") or ic.get("original_line") or "N/A",
-                "body": ic.get("body") or "",
-            }
-        )
-
-    if not latest_body and inline_items:
-        latest_body = (
-            f"(No review summary body; see {len(inline_items)} inline comment(s) below)"
-        )
-
-    print("\n" + "=" * 60)
-    print(f"[AI Review Update Detected - @{bot_name}]")
-    print(f"Timestamp: {_get_item_timestamp(latest_item)}")
-    if inline_items:
-        print(f"Inline Comments: {len(inline_items)} item(s)")
-        for item in inline_items:
-            first_line = item["body"].strip().split("\n")[0] if item["body"] else ""
-            print(f"  * {item['path']}:{item['line']} — {first_line}")
-    print("=" * 60 + "\n")
-    print(latest_body)
-
-    return {
-        "review_body": latest_body,
-        "inline_comments": inline_items,
-        "timestamp": _get_item_timestamp(latest_item),
-    }
+    result = extract_review_result(
+        normalize_review_state(current_data),
+        bot_name,
+        exclude_ids=exclude_ids,
+        latest_item=latest_item,
+    )
+    if result is not None:
+        _print_review_result(result, bot_name)
+    return result
 
 
 def _get_initial_pr_data(
@@ -464,141 +312,6 @@ def _get_initial_pr_data(
                     f"after {timeout}s ({retries} retry attempts)."
                 ) from e
             time.sleep(interval)
-
-
-def _evaluate_marker_layer(body: str) -> int | None:
-    marker_match = re.search(
-        r"<!--\s*orchestune:verdict\s+(pass|fail)\s*-->", body, re.IGNORECASE
-    )
-    if marker_match:
-        verdict_str = marker_match.group(1).lower()
-        return EXIT_NO_FINDINGS if verdict_str == "pass" else EXIT_FINDINGS_PRESENT
-    return None
-
-
-def _evaluate_codex_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if len(inlines) > 0:
-        return EXIT_FINDINGS_PRESENT
-    if any(
-        signal in body_lower
-        for signal in (
-            "p1 badge",
-            "p2 badge",
-            "p1:",
-            "p2:",
-            "[p1]",
-            "[p2]",
-            "here are some automated review suggestions",
-        )
-    ):
-        return EXIT_FINDINGS_PRESENT
-    if any(
-        signal in body_lower
-        for signal in (
-            "didn't find any major issues",
-            "no major issues found",
-            "no issues found",
-            "nice work",
-            "lgtm",
-        )
-    ):
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def _evaluate_claude_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if len(inlines) > 0:
-        return EXIT_FINDINGS_PRESENT
-
-    clean_pass_patterns = (
-        r"\b(?:no|without)\b(?:\s+\w+){0,3}\s+blocking\s+(?:issues?|bugs?|problems?)",
-        r"\ball\s+checks\s+passed\b",
-        r"\blooks\s+good\b",
-        r"\blgtm\b",
-    )
-    has_clean_pass = any(re.search(pat, body_lower) for pat in clean_pass_patterns)
-
-    blocking_matches = list(
-        re.finditer(r"\bblocking\s+(?:bugs?|issues?)\b", body_lower)
-    )
-    has_blocking_keyword = False
-    for m in blocking_matches:
-        start = max(0, m.start() - 30)
-        prefix = body_lower[start : m.start()]
-        if not re.search(r"\b(?:no|without)\b(?:\s+\w+){0,3}\s*$", prefix):
-            has_blocking_keyword = True
-            break
-
-    blocking_other_patterns = (
-        r"marking\s+this\s+\*\*fail\*\*",
-        r"marking\s+this\s+fail\b",
-        r"verdict:\s*fail\b",
-        r"should\s+not\s+be\s+merged\b",
-    )
-    has_blocking = has_blocking_keyword or any(
-        re.search(pat, body_lower) for pat in blocking_other_patterns
-    )
-
-    if "### findings" in body_lower:
-        findings_part = body_lower.split("### findings", 1)[1]
-        if any(
-            mark in findings_part
-            for mark in ("- [ ]", "🔴", "⚠️", "bug:", "defect:", "vulnerability")
-        ):
-            has_blocking = True
-
-    if has_blocking:
-        return EXIT_FINDINGS_PRESENT
-    if has_clean_pass:
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def _evaluate_generic_bot_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if len(inlines) > 0:
-        return EXIT_FINDINGS_PRESENT
-    if any(
-        signal in body_lower
-        for signal in ("lgtm", "all checks passed", "no blocking issues")
-    ):
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def evaluate_review_verdict(
-    review_body: str,
-    inline_comments: list[dict[str, Any]] | None = None,
-    bot_name: str = "claude",
-) -> int:
-    """Evaluate 3-layer review verdict contract."""
-    inlines = inline_comments or []
-    body = review_body or ""
-    body_lower = body.lower()
-    bot = bot_name.lower()
-
-    if (marker_verdict := _evaluate_marker_layer(body)) is not None:
-        return marker_verdict
-
-    if _is_explicitly_in_progress({"body": body}):
-        return EXIT_IN_PROGRESS
-
-    if bot == "codex":
-        structural_verdict = _evaluate_codex_signals(body_lower, inlines)
-    elif bot == "claude":
-        structural_verdict = _evaluate_claude_signals(body_lower, inlines)
-    else:
-        structural_verdict = _evaluate_generic_bot_signals(body_lower, inlines)
-
-    if structural_verdict is not None:
-        return structural_verdict
-
-    return EXIT_UNDETERMINED
 
 
 def _handle_review_trigger(
@@ -821,8 +534,17 @@ def main() -> None:
     parser.add_argument(
         "--pr",
         type=int,
-        required=True,
-        help="Pull Request number to watch",
+        default=None,
+        help="Pull Request number to watch (required unless --review-state-file is used)",
+    )
+    parser.add_argument(
+        "--review-state-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a normalized JSON review-state snapshot from GitHub MCP or another "
+            "client; evaluates immediately without invoking gh"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -880,6 +602,13 @@ def main() -> None:
 
     args = parser.parse_args()
     try:
+        if args.review_state_file:
+            with open(args.review_state_file, encoding="utf-8") as state_file:
+                result = evaluate_review_state(json.load(state_file), args.bot_name)
+            _print_review_result(result, args.bot_name)
+            sys.exit(result["verdict"])
+        if args.pr is None:
+            parser.error("--pr is required unless --review-state-file is used")
         result = wait_for_review(
             args.pr,
             timeout=args.timeout,
