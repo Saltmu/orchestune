@@ -492,6 +492,51 @@ class TestFinalizeAbandonedCloudWorktree:
         assert event["action"] == "escalated_reclaim_limit_exceeded"
         assert callback_called is True
 
+    def test_requeue_triggers_on_label_applied_callback_and_tolerates_comment_failure(
+        self, tmp_path
+    ):
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=100.0)
+            },
+        )
+        callback_called = False
+
+        def _on_label():
+            nonlocal callback_called
+            callback_called = True
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch(
+                "orchestune.forge.GitHubForge.add_comment",
+                side_effect=RuntimeError("Comment API timeout"),
+            ),
+        ):
+            event = _finalize_abandoned_cloud_worktree(
+                active,
+                task,
+                config,
+                run_state=run_state,
+                on_label_applied=_on_label,
+            )
+
+        assert event["action"] == "abandoned_pr_requeued"
+        assert callback_called is True
+        assert run_state.task_reclaim_counts[280].count == 2
+
 
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""

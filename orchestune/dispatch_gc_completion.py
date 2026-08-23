@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -597,12 +598,21 @@ def _finalize_abandoned_cloud_worktree(
             "status:queued",
             stale_labels,
         )
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
-            "GCによりタスクを再キューイング（status:queued）しました"
-            f"（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
-        )
+        if on_label_applied is not None:
+            on_label_applied()
+        try:
+            config.resolved_forge.add_comment(
+                active.issue_number,
+                "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
+                "GCによりタスクを再キューイング（status:queued）しました"
+                f"（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
+            )
+        except Exception as e:  # noqa: BLE001 - 通知の失敗で回収をやり直さない
+            print(
+                f"Warning: requeued issue #{active.issue_number} but failed to post "
+                f"abandonment comment: {e}",
+                file=sys.stderr,
+            )
     event["action"] = "abandoned_pr_requeued"
     return event
 
