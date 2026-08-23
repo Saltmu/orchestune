@@ -82,7 +82,9 @@ Upon task completion, satisfaction, or escalation, post the appropriate machine-
 {
   "result": "blocked",
   "issue": 123,
-  "reason": "base-branch-red"
+  "reason": "base-branch-red",
+  "base_sha": "abc1234",
+  "attempt": 1
 }
 ```
 ```

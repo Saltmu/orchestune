@@ -554,6 +554,8 @@ def test_worker_skills_document_all_outcome_record_patterns(skill_name: str):
     )
     assert '"result": "blocked"' in skill_text or 'result: "blocked"' in skill_text
     assert "base-branch-red" in skill_text
+    assert "base_sha" in skill_text
+    assert "attempt" in skill_text
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
