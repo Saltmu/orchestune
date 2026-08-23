@@ -589,3 +589,27 @@ def test_local_ci_developer_preflight_and_backend_selection():
     # pr.md fallback and MCP continuation
     pr_md_lower = pr_md.lower()
     assert "mcp" in pr_md_lower
+
+
+def test_local_ci_developer_mcp_post_write_verification():
+    """pr.md defines post-write verification procedures for GitHub MCP operations."""
+    skill_dir = SKILLS_ROOT / "local-ci-developer"
+    pr_md = (skill_dir / "references" / "pr.md").read_text(encoding="utf-8")
+    pr_md_lower = pr_md.lower()
+
+    # MCP post-write verification section or procedures
+    assert "post-write" in pr_md_lower or "verification" in pr_md_lower
+    # Blob SHA and remote branch content reconciliation
+    assert "blob" in pr_md_lower and "sha" in pr_md_lower
+    # Cumulative diff inspection before PR creation for multi-commit writes
+    assert "cumulative diff" in pr_md_lower or (
+        "diff" in pr_md_lower and "commit" in pr_md_lower
+    )
+    # PR head diff verification
+    assert "head diff" in pr_md_lower or ("pr" in pr_md_lower and "diff" in pr_md_lower)
+    # Escape / formatting remote discrepancy detection
+    assert (
+        "escape" in pr_md_lower
+        or "discrepancy" in pr_md_lower
+        or "mismatch" in pr_md_lower
+    )
