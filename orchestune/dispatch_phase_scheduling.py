@@ -29,6 +29,25 @@ from orchestune.dispatch_scoring import Task, quota_available, select_next_tasks
 from orchestune.dispatch_state import save_run_state
 
 
+def _filter_queued_candidates(
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    lock_result: ExternalLockScanResult,
+) -> list[Task]:
+    newly_locked = {t.issue_number for t in lock_result.to_lock}
+    queued_candidates = [
+        ctx.tasks_by_issue[issue.number]
+        for issue in issues.queued
+        if issue.number not in newly_locked
+        and "status:done" not in ctx.tasks_by_issue[issue.number].status_labels
+        and "status:in-progress" not in ctx.tasks_by_issue[issue.number].status_labels
+    ]
+    actor_decisions = _decide_actor_verification(
+        queued_candidates, forge=ctx.config.resolved_forge
+    )
+    return _apply_actor_verification(actor_decisions, ctx.config)
+
+
 def _determine_candidate_tasks(
     ctx: CycleContext,
     issues: IssuesByStatus,
@@ -38,40 +57,7 @@ def _determine_candidate_tasks(
 ) -> tuple[list[Task], dict[int, str]]:
     """起動候補タスクを、外部ロック・actor権限・スタッキング可否・重複起動・
     強制直列化の各観点で絞り込んで確定させる。"""
-    newly_locked = {t.issue_number for t in lock_result.to_lock}
-    queued_candidates = [
-        ctx.tasks_by_issue[issue.number]
-        for issue in issues.queued
-        if issue.number not in newly_locked
-        # #254レビュー対応(#275 Codex P1): handle_merge_failureがadd(queued)
-        # 成功後にremove(done)で失敗すると、Issueがstatus:done/
-        # status:queuedを同時に持つ中断状態のまま残りうる。これを通常の
-        # 起動候補として扱うと、Integratorの通常のdoneタスク処理（再merge
-        # 試行等）と、新たに起動されるエージェントセッションが同じbranchへ
-        # 同時に作用しうる。dual-statusのタスクはstatus:doneの除去が
-        # 完了する（_reconcile_dual_status_tasksが対応する）まで起動候補
-        # から除外する。
-        and "status:done" not in ctx.tasks_by_issue[issue.number].status_labels
-        # #381レビュー対応(Codex P2): transition_status_labelはadd(新ラベル)を
-        # remove(旧ラベル)より先に行うため、removeが失敗/クラッシュすると
-        # Issueがstatus:queued/status:in-progressを同時に持つ中断状態のまま
-        # 残りうる（launch成功時・abandoned PR再キュー・GC回収の各経路）。
-        # status:in-progressは「実際にactive_worktreesへ実起動済み」の確定
-        # シグナルであり、この状態のIssueを新規の起動候補として扱うと、
-        # 稼働中セッションが既に開いたPRを重複起動と誤認し
-        # status:blocked-human-reviewへ誤ってエスカレーションしてしまう
-        # （#382: エスカレーション自体もrun_stateの後始末を伴わない）。
-        # status:in-progressの除去が完了するまで起動候補から除外する。
-        and "status:in-progress" not in ctx.tasks_by_issue[issue.number].status_labels
-    ]
-
-    # #119: status:queuedラベルを付与したactorのリポジトリ権限を検証し、
-    # 権限不足のタスクを起動候補から除外する（status:blockedからのスタッキング
-    # 起動であるstack_eligible_tasksは対象外）。
-    actor_decisions = _decide_actor_verification(
-        queued_candidates, forge=ctx.config.resolved_forge
-    )
-    queued_candidates = _apply_actor_verification(actor_decisions, ctx.config)
+    queued_candidates = _filter_queued_candidates(ctx, issues, lock_result)
 
     stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
         issues.blocked,
@@ -83,9 +69,6 @@ def _determine_candidate_tasks(
     )
 
     candidate_tasks = queued_candidates + stack_eligible_tasks
-
-    # 重複起動の防止: 既にオープンなPRが存在するcandidate_tasksを検知し、
-    # 起動対象から除外して status:blocked-human-review へ移行させる。
     duplicate_decisions = _decide_duplicate_candidates(candidate_tasks, ctx)
     candidate_tasks = _apply_duplicate_skip(duplicate_decisions, ctx)
 

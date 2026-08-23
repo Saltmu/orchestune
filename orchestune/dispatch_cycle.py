@@ -41,71 +41,72 @@ from orchestune.dispatch_worktree import file_lock
 __all__ = ["CycleReport", "run_dispatch_cycle"]
 
 
+def _prepare_cycle_issues(run_state, config: DispatcherConfig, now: float):
+    ensure_parent_branch_ready(config)
+    issues = _fetch_issues(config)
+    # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
+    # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
+    discard_reclaim_counts_for_closed_issues(run_state, issues, config)
+    run_self_heal_phase(run_state, config, now)
+    return issues.filtered_by_parent(config.parent_issue_number)
+
+
+def _execute_cycle_pipeline(
+    ctx, issues, run_state, config: DispatcherConfig, now: float
+) -> CycleReport:
+    (
+        completion_events,
+        deviation_events,
+        any_forced_serial,
+        completed_subtask_ids,
+    ) = _process_active_worktrees(ctx)
+
+    completion_events = run_gc_phase(
+        ctx.run_state,
+        ctx.tasks_by_issue,
+        config,
+        completion_events,
+        open_prs=ctx.prs,
+    )
+    promotion_events = run_blocked_promotion_phase(
+        issues, run_state, ctx, completed_subtask_ids, config
+    )
+    lock_result = _sync_external_locks(
+        ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
+    )
+    run_dual_status_reconciliation(ctx, config)
+    selected, quota_slots = run_scheduling_phase(
+        ctx,
+        issues,
+        lock_result,
+        completed_subtask_ids,
+        any_forced_serial,
+        deviation_events,
+        now,
+        config,
+    )
+    return CycleReport(
+        selected=selected,
+        quota_slots_available=quota_slots,
+        lock_changes={
+            "to_lock": lock_result.to_lock,
+            "to_unlock": lock_result.to_unlock,
+        },
+        deviation_events=deviation_events,
+        completion_events=completion_events,
+        promotion_events=promotion_events,
+        applied=config.apply,
+    )
+
+
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
     lock_path = Path(config.run_state_path).with_suffix(".lock")
     with file_lock(lock_path):
         run_state = load_run_state(config.run_state_path)
         now = time.time()
-
-        ensure_parent_branch_ready(config)
-
-        issues = _fetch_issues(config)
-        # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
-        # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
-        discard_reclaim_counts_for_closed_issues(run_state, issues, config)
-        run_self_heal_phase(run_state, config, now)
-        issues = issues.filtered_by_parent(config.parent_issue_number)
-
+        issues = _prepare_cycle_issues(run_state, config, now)
         ctx = _build_cycle_context(issues, run_state, config)
-
-        (
-            completion_events,
-            deviation_events,
-            any_forced_serial,
-            completed_subtask_ids,
-        ) = _process_active_worktrees(ctx)
-
-        completion_events = run_gc_phase(
-            ctx.run_state,
-            ctx.tasks_by_issue,
-            config,
-            completion_events,
-            open_prs=ctx.prs,
-        )
-
-        promotion_events = run_blocked_promotion_phase(
-            issues, run_state, ctx, completed_subtask_ids, config
-        )
-
-        lock_result = _sync_external_locks(
-            ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
-        )
-
-        run_dual_status_reconciliation(ctx, config)
-
-        selected, quota_slots = run_scheduling_phase(
-            ctx,
-            issues,
-            lock_result,
-            completed_subtask_ids,
-            any_forced_serial,
-            deviation_events,
-            now,
-            config,
-        )
-
-        report = CycleReport(
-            selected=selected,
-            quota_slots_available=quota_slots,
-            lock_changes={
-                "to_lock": lock_result.to_lock,
-                "to_unlock": lock_result.to_unlock,
-            },
-            deviation_events=deviation_events,
-            completion_events=completion_events,
-            promotion_events=promotion_events,
-            applied=config.apply,
-        )
+        report = _execute_cycle_pipeline(ctx, issues, run_state, config, now)
 
         if config.apply:
             append_event_log(build_event_log_entry(report, now), config.events_log_path)

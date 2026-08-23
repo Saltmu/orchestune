@@ -216,6 +216,63 @@ def _retained_task_reclaim_counts(state: RunState) -> dict[int, TaskReclaimRecor
     return dict(state.task_reclaim_counts)
 
 
+def _collect_protected_completed(
+    completed_worktrees: list[CompletedWorktree],
+    open_prs: Sequence[Any] | None,
+) -> set[int]:
+    if not open_prs:
+        return set()
+    open_pr_issues: set[int] = set()
+    open_pr_branches: set[str] = set()
+    for pr in open_prs:
+        closes = getattr(pr, "closes_issue_numbers", ())
+        if closes:
+            open_pr_issues.update(closes)
+        head_ref = getattr(pr, "head_ref", None)
+        if head_ref:
+            open_pr_branches.add(head_ref)
+
+    protected_latest: dict[int | str, CompletedWorktree] = {}
+    for cw in completed_worktrees:
+        is_open = cw.issue_number in open_pr_issues or cw.branch in open_pr_branches
+        if is_open:
+            key = cw.issue_number
+            existing = protected_latest.get(key)
+            if existing is None or cw.completed_at >= existing.completed_at:
+                protected_latest[key] = cw
+    return {id(cw) for cw in protected_latest.values()}
+
+
+def _prune_completed_worktrees(
+    completed_worktrees: list[CompletedWorktree],
+    min_completed_time: float,
+    open_prs: Sequence[Any] | None,
+    max_completed: int,
+) -> list[CompletedWorktree]:
+    protected_ids = _collect_protected_completed(completed_worktrees, open_prs)
+    protected_cw = [cw for cw in completed_worktrees if id(cw) in protected_ids]
+    unprotected_cw = [
+        cw
+        for cw in completed_worktrees
+        if cw.completed_at >= min_completed_time and id(cw) not in protected_ids
+    ]
+    if len(protected_cw) >= max_completed:
+        protected_selected = sorted(
+            protected_cw, key=lambda x: x.completed_at, reverse=True
+        )[:max_completed]
+        unprotected_selected = []
+    else:
+        protected_selected = protected_cw
+        remaining = max_completed - len(protected_selected)
+        unprotected_selected = sorted(
+            unprotected_cw, key=lambda x: x.completed_at, reverse=True
+        )[:remaining]
+
+    return sorted(
+        protected_selected + unprotected_selected, key=lambda x: x.completed_at
+    )
+
+
 def prune_run_state(
     state: RunState,
     now: float | None = None,
@@ -224,19 +281,7 @@ def prune_run_state(
     open_prs: Sequence[Any] | None = None,
     max_completed_worktrees: int = 500,
 ) -> RunState:
-    """#214: 長期運用による run_state.json の単調肥大化を防止するための有界刈り込み処理。
-
-    保持ポリシー:
-    - `launch_history`: `launch_window_seconds`（デフォルト24時間 / 設定の `window_seconds`）以内の起動タイムスタンプのみ保持。
-    - `completed_worktrees`: 直近30日間（デフォルト 2592000秒）以内の完了履歴のみ保持。
-      ただし、現在 open 状態にある PR (`open_prs`) の重複判定に必要な `last_completed` (commit_sha) を保護するため、
-      open PR に紐づく Issue / ブランチの最新 1 件の `CompletedWorktree` は経過時間に関わらず保護する。
-      さらに、全完了履歴の件数は `max_completed_worktrees` 件を超えないよう有界に保持する。
-    - `task_reclaim_counts` (#512): ここでは刈り込まない。未完了タスクのカウンタを失うと
-      `max_task_reclaims` による上限判定が0からやり直しになり、終端の無い経路が復活するため、
-      削除はタスクの完了・クローズ経路にのみ委ねる。詳細は
-      `_retained_task_reclaim_counts` のdocstringを参照。
-    """
+    """#214: 長期運用による run_state.json の単調肥大化を防止するための有界刈り込み処理。"""
     import time
 
     current_time = time.time() if now is None else now
@@ -244,64 +289,19 @@ def prune_run_state(
     min_completed_time = current_time - completed_retention_seconds
 
     pruned_launch_history = [t for t in state.launch_history if t >= min_launch_time]
-
-    open_pr_issues: set[int] = set()
-    open_pr_branches: set[str] = set()
-    if open_prs:
-        for pr in open_prs:
-            closes = getattr(pr, "closes_issue_numbers", ())
-            if closes:
-                open_pr_issues.update(closes)
-            head_ref = getattr(pr, "head_ref", None)
-            if head_ref:
-                open_pr_branches.add(head_ref)
-
-    protected_latest: dict[int | str, CompletedWorktree] = {}
-    if open_prs:
-        for cw in state.completed_worktrees:
-            is_open_target = (
-                cw.issue_number in open_pr_issues or cw.branch in open_pr_branches
-            )
-            if is_open_target:
-                key = cw.issue_number
-                existing = protected_latest.get(key)
-                if existing is None or cw.completed_at >= existing.completed_at:
-                    protected_latest[key] = cw
-
-    protected_ids = set(id(cw) for cw in protected_latest.values())
-
-    protected_cw = [cw for cw in state.completed_worktrees if id(cw) in protected_ids]
-    unprotected_cw = [
-        cw
-        for cw in state.completed_worktrees
-        if cw.completed_at >= min_completed_time and id(cw) not in protected_ids
-    ]
-
-    if len(protected_cw) >= max_completed_worktrees:
-        protected_selected = sorted(
-            protected_cw, key=lambda x: x.completed_at, reverse=True
-        )[:max_completed_worktrees]
-        unprotected_selected = []
-    else:
-        protected_selected = protected_cw
-        remaining_capacity = max_completed_worktrees - len(protected_selected)
-        unprotected_selected = sorted(
-            unprotected_cw, key=lambda x: x.completed_at, reverse=True
-        )[:remaining_capacity]
-
-    pruned_completed = sorted(
-        protected_selected + unprotected_selected, key=lambda x: x.completed_at
+    pruned_completed = _prune_completed_worktrees(
+        state.completed_worktrees,
+        min_completed_time,
+        open_prs,
+        max_completed_worktrees,
     )
-
-    # #512: 台帳は刈り込まない（理由は`_retained_task_reclaim_counts`のdocstring）。
-    retained_task_reclaim_counts = _retained_task_reclaim_counts(state)
 
     return RunState(
         active_worktrees=state.active_worktrees,
         launch_history=pruned_launch_history,
         completed_worktrees=pruned_completed,
         last_reconciled_at=state.last_reconciled_at,
-        task_reclaim_counts=retained_task_reclaim_counts,
+        task_reclaim_counts=_retained_task_reclaim_counts(state),
         task_reclaim_lookup_cursor=state.task_reclaim_lookup_cursor,
     )
 

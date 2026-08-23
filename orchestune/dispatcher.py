@@ -125,6 +125,17 @@ def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+_DISPATCH_TARGET_HELP = (
+    "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
+    "（GitHub Actions実行時は'cloud-routine'、ローカル実行時は'auto'）。"
+    "'auto'はPATH上のローカルCLIを検出し（claude優先、次点agy、codex）、"
+    "見つかったCLIへディスパッチする。未検出時は警告を出しダミー起動にフォールバック。"
+    "'local'はダミー起動（no-op）。'cloud-routine'はClaude Codeクラウドルーチンへディスパッチ。"
+    "'codex-cloud'はCodex Cloud CLIへディスパッチ。"
+    "'claude-cli'/'agy-cli'/'codex-cli'はローカルCLIへディスパッチする。"
+)
+
+
 def _add_dispatch_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dispatch-target",
@@ -138,31 +149,13 @@ def _add_dispatch_target_arguments(parser: argparse.ArgumentParser) -> None:
             "auto",
         ],
         default=None,
-        help="#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
-        "（GitHub Actions実行時（GITHUB_ACTIONS=true）は'cloud-routine'、"
-        "それ以外のローカル/対話実行時は'auto'）。"
-        "'auto'はPATH上にインストールされているローカルCLIを検出し"
-        "（'claude'優先、次点'agy'、'codex'）、見つかったCLIへ'claude-cli'/"
-        "'agy-cli'/'codex-cli'を指定した場合と同様にディスパッチする。"
-        "いずれも見つからない場合は警告を出し、後方互換のダミー起動（no-op）に"
-        "フォールバックする。"
-        "明示的に'local'を指定した場合のみ、後方互換のダミー起動（no-op、"
-        "テスト・dry-run用途）になる。'cloud-routine'はClaude Codeクラウド"
-        "ルーチンのfire APIへディスパッチする（要 --routine-id/--routine-token または"
-        "ORCHESTUNE_ROUTINE_ID/ORCHESTUNE_ROUTINE_TOKEN環境変数）。"
-        "'codex-cloud'はCodex Cloud CLIへディスパッチする（要 --codex-cloud-env または"
-        "ORCHESTUNE_CODEX_CLOUD_ENV環境変数）。"
-        "'claude-cli'/'agy-cli'/'codex-cli'はそれぞれローカルのclaude/agy/codex "
-        "CLIへ、許可プロンプトを毎回バイパスするプリセットのコマンドテンプレートで"
-        "ディスパッチする（--local-cmdで上書き可能）",
+        help=_DISPATCH_TARGET_HELP,
     )
     parser.add_argument(
         "--local-cmd",
         default=None,
-        help="ローカルのCLI（agyなど）にディスパッチする際のコマンドテンプレート。"
-        "例: 'agy --issue {issue_number}' や 'agy'。"
-        "使用可能な変数: {issue_number}, {subtask_id}, {branch_name}, {worktree_path}。"
-        "--dispatch-target claude-cli/agy-cli使用時は未指定ならプリセットが使われる。",
+        help="ローカルCLIにディスパッチする際のコマンドテンプレート。"
+        "使用可能な変数: {issue_number}, {subtask_id}, {branch_name}, {worktree_path}。",
     )
     parser.add_argument(
         "--routine-id",
@@ -277,19 +270,17 @@ def _is_non_dispatcher_config_key(raw_key: str) -> bool:
     return raw_key in _NON_DISPATCHER_CONFIG_KEYS
 
 
-def _config_defaults(
-    parser: argparse.ArgumentParser, config_data: dict[str, Any]
-) -> dict[str, Any]:
-    """Validate TOML values before using them as argparse defaults."""
-    actions = {action.dest: action for action in parser._actions}
-    path_keys = {
+_PATH_CONFIG_KEYS = frozenset(
+    {
         "run_state_path",
         "worktree_root",
         "log_dir",
         "events_log_path",
         "not_needed_review_state_path",
     }
-    non_negative_int_keys = {
+)
+_NON_NEGATIVE_INT_KEYS = frozenset(
+    {
         "max_concurrent",
         "max_launches_per_window",
         "deviation_buffer_lines",
@@ -298,7 +289,49 @@ def _config_defaults(
         "max_task_reclaims",
         "not_needed_review_timeout_seconds",
     }
-    positive_int_keys = {"window_seconds", "parent_issue"}
+)
+_POSITIVE_INT_KEYS = frozenset({"window_seconds", "parent_issue"})
+_BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc", "allow_unsafe_agent_execution"})
+
+
+def _validate_config_entry(
+    parser: argparse.ArgumentParser,
+    action: argparse.Action,
+    normalized_key: str,
+    key: str,
+    value: Any,
+) -> Any:
+    if normalized_key in _BOOLEAN_CONFIG_KEYS:
+        if not isinstance(value, bool):
+            _config_error(parser, f"{key!r} must be a boolean")
+        return value
+    if normalized_key in _PATH_CONFIG_KEYS:
+        if not isinstance(value, str):
+            _config_error(parser, f"{key!r} must be a string path")
+        return Path(value)
+    if normalized_key in _NON_NEGATIVE_INT_KEYS | _POSITIVE_INT_KEYS:
+        if not isinstance(value, int) or isinstance(value, bool):
+            _config_error(parser, f"{key!r} must be an integer")
+        if normalized_key in _NON_NEGATIVE_INT_KEYS and value < 0:
+            _config_error(parser, f"{key!r} must be greater than or equal to 0")
+        if normalized_key in _POSITIVE_INT_KEYS and value < 1:
+            _config_error(parser, f"{key!r} must be greater than or equal to 1")
+        return value
+    if action.choices is not None:
+        if not isinstance(value, str) or value not in action.choices:
+            choices = ", ".join(repr(choice) for choice in action.choices)
+            _config_error(parser, f"{key!r} must be one of: {choices}")
+        return value
+    if not isinstance(value, str):
+        _config_error(parser, f"{key!r} must be a string")
+    return value
+
+
+def _config_defaults(
+    parser: argparse.ArgumentParser, config_data: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate TOML values before using them as argparse defaults."""
+    actions = {action.dest: action for action in parser._actions}
     defaults: dict[str, Any] = {}
 
     for key, value in config_data.items():
@@ -309,28 +342,9 @@ def _config_defaults(
         if action is None or normalized_key == "help":
             _config_error(parser, f"unknown key {key!r}")
 
-        if normalized_key in {"apply", "zombie_gc", "allow_unsafe_agent_execution"}:
-            if not isinstance(value, bool):
-                _config_error(parser, f"{key!r} must be a boolean")
-        elif normalized_key in path_keys:
-            if not isinstance(value, str):
-                _config_error(parser, f"{key!r} must be a string path")
-            value = Path(value)
-        elif normalized_key in non_negative_int_keys | positive_int_keys:
-            if not isinstance(value, int) or isinstance(value, bool):
-                _config_error(parser, f"{key!r} must be an integer")
-            if normalized_key in non_negative_int_keys and value < 0:
-                _config_error(parser, f"{key!r} must be greater than or equal to 0")
-            if normalized_key in positive_int_keys and value < 1:
-                _config_error(parser, f"{key!r} must be greater than or equal to 1")
-        elif action.choices is not None:
-            if not isinstance(value, str) or value not in action.choices:
-                choices = ", ".join(repr(choice) for choice in action.choices)
-                _config_error(parser, f"{key!r} must be one of: {choices}")
-        elif not isinstance(value, str):
-            _config_error(parser, f"{key!r} must be a string")
-
-        defaults[normalized_key] = value
+        defaults[normalized_key] = _validate_config_entry(
+            parser, action, normalized_key, key, value
+        )
 
     return defaults
 

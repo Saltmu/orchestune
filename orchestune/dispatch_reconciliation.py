@@ -168,39 +168,7 @@ def _restore_launch_history(
     config: DispatcherConfig,
     now: float,
 ) -> bool:
-    """#514: 親Issue本文へ永続化された`launch_history`を復元する。
-    変更した場合`True`を返す（呼び出し元が保存要否を判断する）。
-
-    `run_state.json`が消えるステートレスCIランナーでは`launch_history`が
-    毎回空になり、`max_launches_per_window`（既定1回/3600秒）が実質無効に
-    なる。`orchestune dispatch`に常駐モードは無く毎回が別プロセスのため、
-    この上限は元々「実行をまたぐ」束縛として設計されており、永続状態を要する。
-
-    スコープ（Issue #514の決定）:
-    - `--parent-issue`未指定（フラットモード）では永続化先の親Issueが無いため
-      何もしない
-    - `--no-apply`（dry-run）でも**メモリ上の復元は行う**。dry-runは
-      「適用したら何が起きるか」のpreviewであり、永続履歴を無視すると
-      「起動する」と表示した直後の実適用では復元が効いて1件も起動しない、
-      という食い違いが起きる（#519レビュー7巡目 P2）。本文の読み取りは
-      副作用が無く、run_stateへの書き戻しは呼び出し元（
-      `_self_heal_launch_history`）がapply時のみに限定する
-    - **永続化ストアだけが親ごと**（親Issue本文が唯一の置き場所のため）。
-      実行時のクオータ判定（`quota_available`）は`run_state.launch_history`を
-      グローバルに数える既存挙動のままで、本PRはそこを変更しない
-      （#519レビュー指摘(P2)）。したがって永続ディスクで複数の親を運用する
-      場合、ここで復元した親Bの履歴は親Aのローカル履歴と合算されて数えられる。
-      逆にステートレス環境では現在の親の分しか復元されないため、実効的な束縛は
-      親ごとに近づく——この近似は意図的で、真の親ごとクオータには
-      `quota_available`側の変更（既存利用者の束縛を緩める挙動変更）が要る
-
-    復元は**片方向**（和集合）で行う: 本文側が古い場合にローカルの進捗
-    （より多くの起動）を巻き戻すと、上限が緩む方向へ壊れるため。
-    ウィンドウの帯（`now`の前後1ウィンドウ）の外は除外する
-    （`launch_history_in_window`）。帯の内側の値は変更しない: このマージは
-    タイムスタンプ値を同一性のキーにした多重集合なので、正規化で値が動くと
-    同じ1回の起動が毎サイクル別エントリとして増え続ける（#519レビュー8巡目 P2）。
-    """
+    """#514: 親Issue本文へ永続化されたlaunch_historyを多重集合として復元する。"""
     if config.parent_issue_number is None:
         return False
     issue = config.resolved_forge.get_issue(config.parent_issue_number)
@@ -210,10 +178,6 @@ def _restore_launch_history(
     if not persisted:
         return False
     in_window = launch_history_in_window(persisted, now, config.window_seconds)
-    # #519レビュー指摘(P1): 集合和ではなく**多重集合**として、各値の出現回数の
-    # 大きい方を採る。同一サイクルで複数タスクが起動するといずれもサイクル共通の
-    # `now`をappendするため、重複タイムスタンプは「別々の起動」を表す正当な
-    # データであり、畳むと起動数を過少に数えて上限に余剰スロットが生まれる。
     local_counts = Counter(run_state.launch_history)
     persisted_counts = Counter(in_window)
     merged_counts = Counter(
@@ -486,64 +450,90 @@ def _decide_base_branch_red_recovery(
     return decisions
 
 
+def _apply_base_branch_red_requeue(
+    decision: BaseBranchRedRecoveryDecision,
+    config: DispatcherConfig,
+    rec_sha: str,
+    cur_sha: str,
+) -> dict:
+    if config.apply:
+        config.resolved_forge.remove_label(decision.issue_number, "ci:base-branch-red")
+        transition_status_label(
+            config.resolved_forge,
+            decision.issue_number,
+            "status:queued",
+            ("status:blocked",),
+        )
+        config.resolved_forge.add_comment(
+            decision.issue_number,
+            f"ベースブランチのコミット前進（{rec_sha} → {cur_sha}）を検知したため、"
+            "`ci:base-branch-red`マーカーを解除して再キューイング（`status:queued`）しました。",
+        )
+    return {
+        "issue_number": decision.issue_number,
+        "subtask_id": decision.subtask_id,
+    }
+
+
+def _apply_base_branch_red_unmark(
+    decision: BaseBranchRedRecoveryDecision,
+    config: DispatcherConfig,
+    rec_sha: str,
+    cur_sha: str,
+) -> None:
+    if config.apply:
+        config.resolved_forge.remove_label(decision.issue_number, "ci:base-branch-red")
+        config.resolved_forge.add_comment(
+            decision.issue_number,
+            f"ベースブランチのコミット前進（{rec_sha} → {cur_sha}）を検知したため、"
+            "`ci:base-branch-red`マーカーを解除しました（未解決の依存関係があるため`status:blocked`を維持します）。",
+        )
+
+
+def _apply_base_branch_red_escalate(
+    decision: BaseBranchRedRecoveryDecision,
+    config: DispatcherConfig,
+) -> None:
+    if not config.apply:
+        return
+    apply_human_review_escalation(
+        decision.issue_number,
+        ("status:blocked",),
+        f"ベースブランチ由来のCI失敗（base-branch-red）が{decision.attempt}回連続で発生したため、"
+        "`status:blocked-human-review`へエスカレーションしました。",
+        forge=config.resolved_forge,
+    )
+    try:
+        config.resolved_forge.remove_label(decision.issue_number, "ci:base-branch-red")
+    except Exception:
+        pass
+
+
+def _apply_single_base_branch_red_decision(
+    decision: BaseBranchRedRecoveryDecision,
+    config: DispatcherConfig,
+) -> dict | None:
+    rec_sha = (decision.recorded_base_sha or "")[:7]
+    cur_sha = (decision.current_base_sha or "")[:7]
+    if decision.action == "requeue":
+        return _apply_base_branch_red_requeue(decision, config, rec_sha, cur_sha)
+    if decision.action == "unmark_only":
+        _apply_base_branch_red_unmark(decision, config, rec_sha, cur_sha)
+        return None
+    if decision.action == "escalate":
+        _apply_base_branch_red_escalate(decision, config)
+    return None
+
+
 def _apply_base_branch_red_recovery(
     decisions: list[BaseBranchRedRecoveryDecision],
     config: DispatcherConfig,
 ) -> list[dict]:
-    """#555: ci:base-branch-red の判定結果をGitHubおよびイベント一覧へ適用する。"""
     events: list[dict] = []
     for decision in decisions:
-        if decision.action == "requeue":
-            if config.apply:
-                config.resolved_forge.remove_label(
-                    decision.issue_number, "ci:base-branch-red"
-                )
-                transition_status_label(
-                    config.resolved_forge,
-                    decision.issue_number,
-                    "status:queued",
-                    ("status:blocked",),
-                )
-                rec_sha = (decision.recorded_base_sha or "")[:7]
-                cur_sha = (decision.current_base_sha or "")[:7]
-                config.resolved_forge.add_comment(
-                    decision.issue_number,
-                    f"ベースブランチのコミット前進（{rec_sha} → {cur_sha}）を検知したため、"
-                    "`ci:base-branch-red`マーカーを解除して再キューイング（`status:queued`）しました。",
-                )
-            events.append(
-                {
-                    "issue_number": decision.issue_number,
-                    "subtask_id": decision.subtask_id,
-                }
-            )
-        elif decision.action == "unmark_only":
-            if config.apply:
-                config.resolved_forge.remove_label(
-                    decision.issue_number, "ci:base-branch-red"
-                )
-                rec_sha = (decision.recorded_base_sha or "")[:7]
-                cur_sha = (decision.current_base_sha or "")[:7]
-                config.resolved_forge.add_comment(
-                    decision.issue_number,
-                    f"ベースブランチのコミット前進（{rec_sha} → {cur_sha}）を検知したため、"
-                    "`ci:base-branch-red`マーカーを解除しました（未解決の依存関係があるため`status:blocked`を維持します）。",
-                )
-        elif decision.action == "escalate":
-            if config.apply:
-                apply_human_review_escalation(
-                    decision.issue_number,
-                    ("status:blocked",),
-                    f"ベースブランチ由来のCI失敗（base-branch-red）が{decision.attempt}回連続で発生したため、"
-                    "`status:blocked-human-review`へエスカレーションしました。",
-                    forge=config.resolved_forge,
-                )
-                try:
-                    config.resolved_forge.remove_label(
-                        decision.issue_number, "ci:base-branch-red"
-                    )
-                except Exception:
-                    pass
+        event = _apply_single_base_branch_red_decision(decision, config)
+        if event is not None:
+            events.append(event)
     return events
 
 
