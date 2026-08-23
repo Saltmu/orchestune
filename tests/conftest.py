@@ -148,7 +148,7 @@ class FakeForge:
             state="OPEN",
         )
         self.issues[num] = record
-        self.issue_states[num] = "open"
+        self.issue_states[num] = "OPEN"
         return num
 
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
@@ -157,7 +157,7 @@ class FakeForge:
 
     def get_issue_state(self, issue_number: int | str) -> str:
         num = int(issue_number)
-        return self.issue_states.get(num, "open")
+        return self.issue_states.get(num, "OPEN")
 
     def update_issue_body(self, issue_number: int | str, body: str) -> None:
         num = int(issue_number)
@@ -193,7 +193,7 @@ class FakeForge:
         self, issue_number: int | str, reason: str, comment: str | None = None
     ) -> None:
         num = int(issue_number)
-        self.issue_states[num] = "closed"
+        self.issue_states[num] = "CLOSED"
         if num in self.issues:
             cur = self.issues[num]
             self.issues[num] = IssueRecord(
@@ -258,7 +258,7 @@ class FakeForge:
         results: list[IssueRecord] = []
         for issue in self.issues.values():
             issue_state = self.get_issue_state(issue.number)
-            if state != "all" and issue_state != state:
+            if state != "all" and issue_state.lower() != state.lower():
                 continue
             if label in issue.labels:
                 results.append(issue)
@@ -330,7 +330,7 @@ class FakeForge:
         return [
             issue
             for issue in self.issues.values()
-            if issue.title == title and self.get_issue_state(issue.number) == "open"
+            if issue.title == title and self.get_issue_state(issue.number) == "OPEN"
         ]
 
     def find_issues_by_parent_metadata(
@@ -347,7 +347,7 @@ class FakeForge:
         self.label_actors[(num, label)] = actor
 
     def get_actor_permission(self, username: str) -> str:
-        return self.actor_permissions.get(username, "write")
+        return self.actor_permissions.get(username, "none")
 
     def set_actor_permission(self, username: str, permission: str) -> None:
         self.actor_permissions[username] = permission
@@ -406,9 +406,23 @@ class FakeForge:
         num = int(pr_number)
         self.pr_states[num] = "merged"
         if num in self.prs:
-            pr = self.prs[num]
+            cur = self.prs[num]
             ts = datetime.now(UTC).isoformat()
-            self.merged_branches[(pr.head_ref, "main")] = ts
+            self.merged_branches[(cur.head_ref, cur.base_ref)] = ts
+            self.prs[num] = PrRecord(
+                number=cur.number,
+                head_ref=cur.head_ref,
+                base_ref=cur.base_ref,
+                changed_files=cur.changed_files,
+                created_at=cur.created_at,
+                closes_issue_numbers=cur.closes_issue_numbers,
+                review_decision=cur.review_decision,
+                is_ci_passing=cur.is_ci_passing,
+                state="MERGED",
+                closed_at=ts,
+                is_cross_repository=cur.is_cross_repository,
+                is_files_truncated=cur.is_files_truncated,
+            )
 
     def delete_branch(self, branch: str) -> None:
         self.branches.discard(branch)
@@ -434,7 +448,7 @@ class FakeForge:
         results: list[PrRecord] = []
         for num, pr in self.prs.items():
             pr_state = self.pr_states.get(num, "open")
-            if state != "all" and pr_state != state:
+            if state != "all" and pr_state.lower() != state.lower():
                 continue
             results.append(pr)
         return results[:limit]
@@ -447,7 +461,7 @@ class FakeForge:
     def seed_issue(self, issue: IssueRecord) -> None:
         self.issues[issue.number] = issue
         self.issue_states[issue.number] = (
-            "closed" if issue.state == "CLOSED" else "open"
+            "CLOSED" if issue.state == "CLOSED" else "OPEN"
         )
         if issue.number >= self._next_issue_number:
             self._next_issue_number = issue.number + 1
@@ -472,10 +486,10 @@ def fake_forge() -> MagicMock:
     forge.list_sub_issues.return_value = []
     forge.get_issue_labels.return_value = ()
     forge.get_issue.return_value = None
-    forge.get_issue_state.return_value = "open"
+    forge.get_issue_state.return_value = "OPEN"
     forge.get_issue_last_reopened_at.return_value = None
     forge.get_label_actor.return_value = ""
-    forge.get_actor_permission.return_value = "write"
+    forge.get_actor_permission.return_value = "none"
     forge.list_comments.return_value = []
     forge.find_open_issues_by_exact_title.return_value = []
     forge.find_issues_by_parent_metadata.return_value = []

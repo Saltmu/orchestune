@@ -24,10 +24,10 @@ class TestFakeForgeFixture:
         assert fake_forge.list_sub_issues(100) == []
         assert fake_forge.get_issue_labels(1) == ()
         assert fake_forge.get_issue(1) is None
-        assert fake_forge.get_issue_state(1) == "open"
+        assert fake_forge.get_issue_state(1) == "OPEN"
         assert fake_forge.get_issue_last_reopened_at(1) is None
         assert fake_forge.get_label_actor(1, "status:queued") == ""
-        assert fake_forge.get_actor_permission("user") == "write"
+        assert fake_forge.get_actor_permission("user") == "none"
         assert fake_forge.list_comments(1) == []
         assert fake_forge.find_open_issues_by_exact_title("Title") == []
         assert fake_forge.find_issues_by_parent_metadata(100) == []
@@ -63,7 +63,7 @@ class TestFakeForgeClass:
         assert issue.title == "Feature task"
         assert issue.body == "Task body"
         assert set(issue.labels) == {"status:queued", "priority:high"}
-        assert forge.get_issue_state(1) == "open"
+        assert forge.get_issue_state(1) == "OPEN"
 
         # Update body and title
         forge.update_issue_body(1, "New body")
@@ -75,7 +75,7 @@ class TestFakeForgeClass:
 
         # Close issue
         forge.close_issue(1, reason="completed", comment="All done")
-        assert forge.get_issue_state(1) == "closed"
+        assert forge.get_issue_state(1) == "CLOSED"
         comments = forge.list_comments(1)
         assert len(comments) == 1
         assert comments[0]["body"] == "All done"
@@ -118,14 +118,17 @@ class TestFakeForgeClass:
     def test_pull_request_operations(self):
         forge = FakeForge()
         pr_num = forge.create_pull_request(
-            head="feat/foo", base="main", title="Add foo", body="PR body"
+            head="feat/foo",
+            base="parent/issue-100",
+            title="Add foo",
+            body="PR body",
         )
         assert pr_num == 1
         open_prs = forge.list_open_prs()
         assert len(open_prs) == 1
         assert open_prs[0].number == 1
         assert open_prs[0].head_ref == "feat/foo"
-        assert open_prs[0].base_ref == "main"
+        assert open_prs[0].base_ref == "parent/issue-100"
 
         forge.update_pull_request(1, title="New PR title", body="New PR body")
         pr = forge.get_pr(1)
@@ -134,9 +137,14 @@ class TestFakeForgeClass:
 
         assert forge.branch_exists("feat/foo") is True
         forge.merge_pull_request(1)
-        assert forge.is_branch_merged_into("feat/foo", "main") is True
-        assert forge.get_merged_pr_timestamp("feat/foo", "main") is not None
+        assert forge.is_branch_merged_into("feat/foo", "parent/issue-100") is True
+        assert forge.get_merged_pr_timestamp("feat/foo", "parent/issue-100") is not None
         assert len(forge.list_open_prs()) == 0
+
+        all_prs = forge.list_prs(state="all")
+        assert len(all_prs) == 1
+        assert all_prs[0].state == "MERGED"
+        assert all_prs[0].closed_at != ""
 
         forge.delete_branch("feat/foo")
         assert forge.branch_exists("feat/foo") is False
@@ -145,7 +153,7 @@ class TestFakeForgeClass:
         forge = FakeForge()
         forge.set_actor_permission("charlie", "admin")
         assert forge.get_actor_permission("charlie") == "admin"
-        assert forge.get_actor_permission("unknown") == "write"
+        assert forge.get_actor_permission("unknown") == "none"
 
         forge.create_issue(title="Task", body="Body")
         forge.set_issue_last_reopened_at(1, "2026-08-23T10:00:00Z")
