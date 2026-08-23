@@ -26,6 +26,11 @@ Write-Host "========================================="
 Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="
 
+if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
+    Write-Error "Poetry is required for local CI. Install the version specified by poetry.lock."
+    exit 2
+}
+
 Write-Host "[1/6] Checking code format (ruff format)..."
 poetry run ruff format --check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -45,8 +50,8 @@ Write-Host "[4/6] Running tests with coverage (pytest)..."
 poetry run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[5/6] Detecting code and skill bloat (warn only)..."
-poetry run python scripts/detect_bloat.py --warn-only
+Write-Host "[5/6] Detecting new or worsened code and skill bloat..."
+poetry run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[6/6] Scanning for secrets and local paths (gitleaks)..."

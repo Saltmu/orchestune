@@ -73,7 +73,7 @@ if [ "$expected_checksum" != "$actual_checksum" ]; then
   exit 1
 fi
 
-tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}" gitleaks
+tar -xzf "${tmp_dir}/${archive}" --no-same-owner -C "${tmp_dir}" gitleaks
 mkdir -p "${INSTALL_DIR}"
 install -m 0755 "${tmp_dir}/gitleaks" "${INSTALL_DIR}/gitleaks"
 

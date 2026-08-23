@@ -11,6 +11,11 @@ echo "========================================="
 echo "Running Orchestune Local CI Check..."
 echo "========================================="
 
+if ! command -v poetry >/dev/null 2>&1; then
+  echo "ERROR: Poetry is required for local CI. Install the version specified by poetry.lock." >&2
+  exit 2
+fi
+
 echo "[1/6] Checking code format (ruff format)..."
 poetry run ruff format --check
 
@@ -23,8 +28,8 @@ poetry run mypy orchestune tests
 echo "[4/6] Running tests with coverage (pytest)..."
 poetry run pytest -n auto --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 
-echo "[5/6] Detecting code and skill bloat (warn only)..."
-poetry run python scripts/detect_bloat.py --warn-only
+echo "[5/6] Detecting new or worsened code and skill bloat..."
+poetry run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
 
 echo "[6/6] Scanning for secrets and local paths (gitleaks)..."
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
