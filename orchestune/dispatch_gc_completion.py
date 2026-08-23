@@ -220,6 +220,139 @@ def _apply_escalated_base_branch_red(
         pass
 
 
+def _apply_no_commits_escalation(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> None:
+    if not config.apply:
+        return
+    remove_worktree(active.worktree_path)
+    apply_human_review_escalation(
+        active.issue_number,
+        ("status:in-progress",),
+        "エージェントプロセスの終了を検知しましたが、ベースブランチ"
+        f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
+        "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
+        "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
+        "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
+        forge=config.resolved_forge,
+    )
+
+
+def _apply_without_outcome_escalation(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> None:
+    if not config.apply:
+        return
+    remove_worktree(active.worktree_path)
+    apply_human_review_escalation(
+        active.issue_number,
+        ("status:in-progress",),
+        "エージェントプロセスの終了とコミットを検知しましたが、"
+        "完了宣言レコード（orchestune:outcome）が検出できませんでした。"
+        "レビューサイクルが未完了または作業途中で終了した可能性があるため、"
+        "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
+        "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
+        forge=config.resolved_forge,
+    )
+
+
+def _apply_token_limit_escalation(
+    active: ActiveWorktree, config: DispatcherConfig, usage: Usage
+) -> None:
+    if not config.apply:
+        return
+    remove_worktree(active.worktree_path)
+    model_info = f"（モデル: {usage.model}）" if usage.model else ""
+    apply_human_review_escalation(
+        active.issue_number,
+        ("status:in-progress",),
+        f"サブタスクのトークン消費量が上限（{config.max_tokens_per_task:,} tokens）を超過しました"
+        f"{model_info}。\n実消費量: {usage.total_tokens:,} tokens "
+        f"(Input: {usage.input_tokens:,}, Output: {usage.output_tokens:,})。\n"
+        "タスクの分割粒度やモデルの適性を確認の上、必要であれば`status:queued`へ再設定してください。",
+        forge=config.resolved_forge,
+    )
+
+
+def _apply_done_worktree_cleanup(
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    active_task: Task | None,
+) -> str | None:
+    commit_sha = None
+    if active.external_id is None:
+        try:
+            commit_sha = run_git(
+                ["rev-parse", "HEAD"], cwd=active.worktree_path, check=True
+            ).stdout.strip()
+        except Exception:
+            pass
+    remove_worktree(active.worktree_path)
+    stale_labels = (
+        tuple(
+            label
+            for label in PRIMARY_STATUS_LABELS
+            if label in active_task.status_labels
+        )
+        if active_task is not None
+        else ("status:in-progress",)
+    )
+    transition_status_label(
+        config.resolved_forge,
+        active.issue_number,
+        "status:done",
+        stale_labels,
+    )
+    return commit_sha
+
+
+def _apply_special_completed_action(
+    active: ActiveWorktree,
+    decision: CompletedWorktreeDecision,
+    config: DispatcherConfig,
+    active_task: Task | None,
+    dispatch_not_needed_review: NotNeededReviewDispatcher | None,
+) -> dict | None:
+    action = decision.action
+    if action == "completed_no_commits":
+        _apply_no_commits_escalation(active, config)
+        return {"subtask_id": decision.subtask_id, "commit_sha": None}
+    if action == "completed_without_outcome":
+        _apply_without_outcome_escalation(active, config)
+        return {"subtask_id": decision.subtask_id, "commit_sha": decision.commit_sha}
+    if action == "blocked_base_branch_red":
+        _apply_blocked_base_branch_red(active, decision, config, active_task)
+        return {"subtask_id": decision.subtask_id, "commit_sha": decision.commit_sha}
+    if action == "escalated_base_branch_red":
+        _apply_escalated_base_branch_red(active, decision, config, active_task)
+        return {"subtask_id": decision.subtask_id, "commit_sha": decision.commit_sha}
+    if action == "not_needed":
+        return _finalize_not_needed_worktree(
+            active, active_task, config, dispatch_not_needed_review
+        )
+    return None
+
+
+def _check_token_limit_exceeded(
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    usage: Usage | None,
+    decision: CompletedWorktreeDecision,
+    event: dict,
+) -> bool:
+    if (
+        config.max_tokens_per_task is not None
+        and isinstance(usage, Usage)
+        and usage.total_tokens > config.max_tokens_per_task
+    ):
+        _apply_token_limit_escalation(active, config, usage)
+        event["action"] = "escalated_token_limit_exceeded"
+        event["subtask_id"] = decision.subtask_id
+        event["commit_sha"] = None
+        return True
+    return False
+
+
 def _apply_completed_worktree_outcome(
     active: ActiveWorktree,
     decision: CompletedWorktreeDecision,
@@ -244,109 +377,24 @@ def _apply_completed_worktree_outcome(
         "completion_skipped_forge_error",
     ):
         return event
-    if decision.action == "completed_no_commits":
-        if config.apply:
-            remove_worktree(active.worktree_path)
-            apply_human_review_escalation(
-                active.issue_number,
-                ("status:in-progress",),
-                "エージェントプロセスの終了を検知しましたが、ベースブランチ"
-                f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
-                "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
-                "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
-                "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
-                forge=config.resolved_forge,
-            )
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = None
+
+    special = _apply_special_completed_action(
+        active, decision, config, active_task, dispatch_not_needed_review
+    )
+    if special is not None:
+        if decision.action == "not_needed":
+            return special
+        event.update(special)
         return event
-    if decision.action == "completed_without_outcome":
-        if config.apply:
-            remove_worktree(active.worktree_path)
-            apply_human_review_escalation(
-                active.issue_number,
-                ("status:in-progress",),
-                "エージェントプロセスの終了とコミットを検知しましたが、"
-                "完了宣言レコード（orchestune:outcome）が検出できませんでした。"
-                "レビューサイクルが未完了または作業途中で終了した可能性があるため、"
-                "自動的な完了・依存タスクの昇格を見送り、`status:blocked-human-review`に"
-                "変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
-                forge=config.resolved_forge,
-            )
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = decision.commit_sha
+
+    if _check_token_limit_exceeded(active, config, usage, decision, event):
         return event
-    if decision.action == "blocked_base_branch_red":
-        _apply_blocked_base_branch_red(active, decision, config, active_task)
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = decision.commit_sha
-        return event
-    if decision.action == "escalated_base_branch_red":
-        _apply_escalated_base_branch_red(active, decision, config, active_task)
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = decision.commit_sha
-        return event
-    if decision.action == "not_needed":
-        return _finalize_not_needed_worktree(
-            active, active_task, config, dispatch_not_needed_review
-        )
-    if (
-        config.max_tokens_per_task is not None
-        and isinstance(usage, Usage)
-        and usage.total_tokens > config.max_tokens_per_task
-    ):
-        if config.apply:
-            remove_worktree(active.worktree_path)
-            model_info = f"（モデル: {usage.model}）" if usage.model else ""
-            apply_human_review_escalation(
-                active.issue_number,
-                ("status:in-progress",),
-                f"サブタスクのトークン消費量が上限（{config.max_tokens_per_task:,} tokens）を超過しました"
-                f"{model_info}。\n実消費量: {usage.total_tokens:,} tokens "
-                f"(Input: {usage.input_tokens:,}, Output: {usage.output_tokens:,})。\n"
-                "タスクの分割粒度やモデルの適性を確認の上、必要であれば`status:queued`へ再設定してください。",
-                forge=config.resolved_forge,
-            )
-        event["action"] = "escalated_token_limit_exceeded"
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = None
-        return event
+
     commit_sha = decision.commit_sha
     if config.apply:
-        if active.external_id is None:
-            try:
-                commit_sha = run_git(
-                    ["rev-parse", "HEAD"], cwd=active.worktree_path, check=True
-                ).stdout.strip()
-            except Exception:
-                pass
-        remove_worktree(active.worktree_path)
-        # #381レビュー対応(Codex P2): launch成功時のtransition_status_labelが
-        # add(status:in-progress)後のremove(status:queued/status:blocked)に
-        # 失敗すると、Issueにこれらの旧ラベルが取り残されたまま完了する
-        # ことがある。ここでstatus:in-progressだけを除去すると、Issueは
-        # status:done + 取り残されたstatus:queued（または status:blocked）
-        # を同時に持つことになる。前者の組み合わせは
-        # `_reconcile_dual_status_tasks`が「Integratorのロールバック
-        # (#254)」と誤認してstatus:doneを除去してしまい、完了済みタスクが
-        # 再キューイングされ二重実行されうる。完了確定時点で判明している
-        # 一次status:*ラベルはまとめて除去し、Issueをstatus:doneのみへ
-        # 確実に収束させる。
-        stale_labels = (
-            tuple(
-                label
-                for label in PRIMARY_STATUS_LABELS
-                if label in active_task.status_labels
-            )
-            if active_task is not None
-            else ("status:in-progress",)
-        )
-        transition_status_label(
-            config.resolved_forge,
-            active.issue_number,
-            "status:done",
-            stale_labels,
-        )
+        resolved_sha = _apply_done_worktree_cleanup(active, config, active_task)
+        if resolved_sha is not None:
+            commit_sha = resolved_sha
     event["subtask_id"] = decision.subtask_id
     event["commit_sha"] = commit_sha
     return event
@@ -448,6 +496,52 @@ def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
     return False
 
 
+def _collect_open_pr_comments(
+    active: ActiveWorktree,
+    handle: DispatchHandle,
+    open_prs: list[PrRecord],
+    config: DispatcherConfig,
+) -> tuple[list[dict], bool]:
+    all_comments: list[dict] = []
+    had_error = False
+    if handle.issue_number is not None:
+        try:
+            all_comments.extend(
+                config.resolved_forge.list_comments(handle.issue_number)
+            )
+        except Exception:
+            had_error = True
+    pr_numbers = {pr.number for pr in open_prs}
+    for pr_num in pr_numbers:
+        if handle.issue_number is None or pr_num != handle.issue_number:
+            try:
+                all_comments.extend(config.resolved_forge.list_comments(pr_num))
+            except Exception:
+                had_error = True
+    return all_comments, had_error
+
+
+def _eval_open_pr_status(
+    active: ActiveWorktree,
+    handle: DispatchHandle,
+    open_prs: list[PrRecord],
+    config: DispatcherConfig,
+) -> str:
+    all_comments, had_error = _collect_open_pr_comments(
+        active, handle, open_prs, config
+    )
+    outcome = parse_from_comments(all_comments, since=active.started_at)
+    if outcome is not None and outcome.result in (
+        RESULT_DONE,
+        RESULT_NOT_NEEDED,
+        RESULT_BLOCKED,
+    ):
+        return "completed"
+    if had_error and outcome is None:
+        return "unknown"
+    return "pending"
+
+
 def _local_pr_completion_status(
     active: ActiveWorktree, config: DispatcherConfig
 ) -> str:
@@ -472,33 +566,7 @@ def _local_pr_completion_status(
         return "completed"
     open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
     if open_prs:
-        all_comments: list[dict] = []
-        had_error = False
-        if handle.issue_number is not None:
-            try:
-                all_comments.extend(
-                    config.resolved_forge.list_comments(handle.issue_number)
-                )
-            except Exception:
-                had_error = True
-        pr_numbers = {pr.number for pr in open_prs}
-        for pr_num in pr_numbers:
-            if handle.issue_number is None or pr_num != handle.issue_number:
-                try:
-                    all_comments.extend(config.resolved_forge.list_comments(pr_num))
-                except Exception:
-                    had_error = True
-        outcome = parse_from_comments(all_comments, since=active.started_at)
-        if outcome is not None and outcome.result in (
-            RESULT_DONE,
-            RESULT_NOT_NEEDED,
-            RESULT_BLOCKED,
-        ):
-            return "completed"
-        if had_error and outcome is None:
-            return "unknown"
-        return "pending"
-
+        return _eval_open_pr_status(active, handle, open_prs, config)
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"
@@ -559,6 +627,68 @@ def _reserve_cloud_reclaim_record(
     return reclaim_count
 
 
+def _requeue_abandoned_cloud_worktree(
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    status_labels: tuple[str, ...],
+    reclaim_count: int,
+    on_settle_reclaim: Callable[[], None],
+) -> None:
+    stale_labels = tuple(
+        label for label in PRIMARY_STATUS_LABELS if label in status_labels
+    )
+    transition_status_label(
+        config.resolved_forge,
+        active.issue_number,
+        "status:queued",
+        stale_labels,
+        on_label_added=on_settle_reclaim,
+    )
+    try:
+        config.resolved_forge.add_comment(
+            active.issue_number,
+            "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
+            "GCによりタスクを再キューイング（status:queued）しました"
+            f"（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
+        )
+    except Exception as e:  # noqa: BLE001 - 通知の失敗で回収をやり直さない
+        print(
+            f"Warning: requeued issue #{active.issue_number} but failed to post "
+            f"abandonment comment: {e}",
+            file=sys.stderr,
+        )
+
+
+def _apply_abandoned_cloud_reclaim(
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    status_labels: tuple[str, ...],
+    reclaim_count: int,
+    on_settle_reclaim: Callable[[], None],
+) -> str:
+    remove_worktree(active.worktree_path)
+    if reclaim_count > config.max_task_reclaims:
+        apply_human_review_escalation(
+            active.issue_number,
+            status_labels,
+            "タスクのPRがクローズされたか、Cloudタスクの失敗により回収を行いました。\n"
+            f"回収・再投入の累計回数が上限（max_task_reclaims="
+            f"{config.max_task_reclaims}）を超えた"
+            f"（今回で{reclaim_count}回目）ため、"
+            "status:queuedへの再投入を打ち切り、"
+            "status:blocked-human-reviewへ遷移しました。\n"
+            "タスクの実装方針や実行環境を確認してください。",
+            forge=config.resolved_forge,
+            on_label_applied=on_settle_reclaim,
+        )
+        return "escalated_reclaim_limit_exceeded"
+
+    _requeue_abandoned_cloud_worktree(
+        active, config, status_labels, reclaim_count, on_settle_reclaim
+    )
+    return "abandoned_pr_requeued"
+
+
 def _finalize_abandoned_cloud_worktree(
     active: ActiveWorktree,
     active_task: Task | None,
@@ -575,79 +705,38 @@ def _finalize_abandoned_cloud_worktree(
     if worktree_has_uncommitted_changes(active.worktree_path):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
-    if config.apply:
-        status_labels = (
-            active_task.status_labels if active_task else ("status:in-progress",)
-        )
-        # #381レビュー対応(Codex P2): 中断した以前の遷移でstatus:blocked-human-review
-        # /status:manual-merge-requiredが既に付与されている場合、status:queuedへの
-        # 書き換えは人間の確認要求を握りつぶしてしまう。その場合はラベルに触れない。
-        if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
-            remove_worktree(active.worktree_path)
-            config.resolved_forge.add_comment(
-                active.issue_number,
-                "タスクのPRがマージされずにクローズされたためworktreeを回収しました。"
-                "既に人間の確認が必要な状態のため、status:*ラベルは変更していません。",
-            )
-            event["action"] = "abandoned_pr_requeued"
-            return event
+    if not config.apply:
+        event["action"] = "abandoned_pr_requeued"
+        return event
 
-        reclaim_count = _reserve_cloud_reclaim_record(
-            active.issue_number, run_state, on_reclaim_reserved=on_reclaim_reserved
-        )
-
-        def _settle_reclaim() -> None:
-            if run_state is not None:
-                rec = run_state.task_reclaim_counts.get(active.issue_number)
-                if rec is not None:
-                    rec.pending = False
-            if on_label_applied is not None:
-                on_label_applied()
-
+    status_labels = (
+        active_task.status_labels if active_task else ("status:in-progress",)
+    )
+    if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
         remove_worktree(active.worktree_path)
-        if reclaim_count > config.max_task_reclaims:
-            apply_human_review_escalation(
-                active.issue_number,
-                status_labels,
-                "タスクのPRがクローズされたか、Cloudタスクの失敗により回収を行いました。\n"
-                f"回収・再投入の累計回数が上限（max_task_reclaims="
-                f"{config.max_task_reclaims}）を超えた"
-                f"（今回で{reclaim_count}回目）ため、"
-                "status:queuedへの再投入を打ち切り、"
-                "status:blocked-human-reviewへ遷移しました。\n"
-                "タスクの実装方針や実行環境を確認してください。",
-                forge=config.resolved_forge,
-                on_label_applied=_settle_reclaim,
-            )
-            event["action"] = "escalated_reclaim_limit_exceeded"
-            return event
-
-        # stacked launch等の中断した遷移でstatus:blockedが取り残されている
-        # 場合も併せて除去し、status:queuedへ確実に収束させる。
-        stale_labels = tuple(
-            label for label in PRIMARY_STATUS_LABELS if label in status_labels
-        )
-        transition_status_label(
-            config.resolved_forge,
+        config.resolved_forge.add_comment(
             active.issue_number,
-            "status:queued",
-            stale_labels,
-            on_label_added=_settle_reclaim,
+            "タスクのPRがマージされずにクローズされたためworktreeを回収しました。"
+            "既に人間の確認が必要な状態のため、status:*ラベルは変更していません。",
         )
-        try:
-            config.resolved_forge.add_comment(
-                active.issue_number,
-                "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
-                "GCによりタスクを再キューイング（status:queued）しました"
-                f"（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
-            )
-        except Exception as e:  # noqa: BLE001 - 通知の失敗で回収をやり直さない
-            print(
-                f"Warning: requeued issue #{active.issue_number} but failed to post "
-                f"abandonment comment: {e}",
-                file=sys.stderr,
-            )
-    event["action"] = "abandoned_pr_requeued"
+        event["action"] = "abandoned_pr_requeued"
+        return event
+
+    reclaim_count = _reserve_cloud_reclaim_record(
+        active.issue_number, run_state, on_reclaim_reserved=on_reclaim_reserved
+    )
+
+    def _settle_reclaim() -> None:
+        if run_state is not None:
+            rec = run_state.task_reclaim_counts.get(active.issue_number)
+            if rec is not None:
+                rec.pending = False
+        if on_label_applied is not None:
+            on_label_applied()
+
+    event["action"] = _apply_abandoned_cloud_reclaim(
+        active, config, status_labels, reclaim_count, _settle_reclaim
+    )
     return event
 
 

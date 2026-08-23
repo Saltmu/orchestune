@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import replace
 
 from orchestune.dispatch_config import DispatcherConfig
@@ -139,34 +140,8 @@ def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
         print(f"Warning: failed to persist {what}: {e}", file=sys.stderr)
 
 
-def _apply_dirty_worktree_hold(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
-) -> str:
-    """#212のdirty worktree保留にも`max_task_reclaims`の上限を効かせる。
-
-    #512/PR#520レビュー11巡目対応(Codex P1): 未コミット変更の残るworktreeは、
-    人間の確認まで完了処理を保留する（#212）。ところが保留は毎サイクル黙って
-    繰り返されるだけで、対象タスクは`status:in-progress`のままクオータを占有し
-    続ける。しかも`run_gc_phase`が保留中のworktreeをGCの対象から外すため、
-    ゾンビ/タイムアウト回収による上限判定にも到達しない——本Issueが塞ごうとして
-    いる「終端の無い経路」そのものになっていた。
-
-    そこで保留も1回分として同じ台帳へ数え、上限を超えたら
-    `status:blocked-human-review`へ遷移させて帳簿エントリを解放する。未コミットの
-    作業データを保全するため、worktreeは削除せずに残す（回収時のバックアップ失敗と
-    同じ扱い）。
-
-    #512/PR#520レビュー12巡目対応(Codex P1): 回数はGitHubへ触れる前に永続化し、
-    エスカレーションの失敗は捕捉する。ここで例外を伝播させると、その1タスクの
-    ためにディスパッチサイクル全体が毎回中断し（＝他タスクのスケジューリングも
-    止まり）、しかも回数が保存されないまま同じ失敗を繰り返してしまう。
-    ラベル遷移が成功した時点で帳簿エントリを解放・永続化するため、後続の
-    コメント投稿だけが失敗しても再エスカレーションのループにはならない。
-
-    戻り値は確定後のイベントaction。
-    """
-    if not ctx.config.apply:
-        return "completion_skipped_dirty_worktree"
+def _update_hold_record(ctx: CycleContext, active: ActiveWorktree) -> int:
+    """dirty worktreeの保留回数を記録・永続化して返す。"""
     previous = ctx.run_state.task_reclaim_counts.get(active.issue_number)
     hold_count = (previous.count if previous else 0) + 1
     ctx.run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
@@ -175,9 +150,17 @@ def _apply_dirty_worktree_hold(
     _persist_run_state_best_effort(
         ctx, f"the dirty-worktree hold count for issue #{active.issue_number}"
     )
-    if hold_count <= ctx.config.max_task_reclaims:
-        return "completion_skipped_dirty_worktree"
+    return hold_count
 
+
+def _escalate_held_dirty_worktree(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+    hold_count: int,
+) -> str:
+    """保留上限を超えたdirty worktreeをエスカレーションする。"""
     released = False
 
     def _release_entry() -> None:
@@ -214,9 +197,20 @@ def _apply_dirty_worktree_hold(
             file=sys.stderr,
         )
         if not released:
-            # ラベルすら付けられていない。次サイクルで再試行する。
             return "completion_skipped_dirty_worktree"
     return "escalated_reclaim_limit_exceeded"
+
+
+def _apply_dirty_worktree_hold(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> str:
+    """#212のdirty worktree保留にも`max_task_reclaims`の上限を効かせる。"""
+    if not ctx.config.apply:
+        return "completion_skipped_dirty_worktree"
+    hold_count = _update_hold_record(ctx, active)
+    if hold_count <= ctx.config.max_task_reclaims:
+        return "completion_skipped_dirty_worktree"
+    return _escalate_held_dirty_worktree(ctx, key, active, active_task, hold_count)
 
 
 def _record_completed_worktree(
@@ -283,34 +277,10 @@ def _decide_stale_active_entry(
     return None
 
 
-def _apply_stale_active_entry_discard(
-    run_state: RunState,
-    key: str,
-    active: ActiveWorktree,
-    reason: str,
-    config: DispatcherConfig,
+def _cleanup_stale_active_worktree(
+    active: ActiveWorktree, reason: str, config: DispatcherConfig
 ) -> bool:
-    """#382: 帳簿(run_state)を破棄する前に、対応する物理worktree・プロセスの
-    状態を確認し、必要な後始末を行う。
-
-    GitHubラベルの更新がrun_state保存より後に行われる順序（#381の起動成功
-    パスのコメント参照）のため、この間でクラッシュすると、実際には
-    エージェントプロセスがまだ稼働しworktreeへ書き込みを続けているのに、
-    GitHubラベルだけがstatus:in-progress以外に変わっている（あるいは戻って
-    いる）ことがある。それを確認せず帳簿だけ破棄すると、後続サイクルで同じ
-    Issueが再度起動候補に選ばれた際、`create_worktree_and_launch`が生存中
-    プロセスの作業ディレクトリを無条件に強制削除・再作成してしまう。
-    ゾンビ/タイムアウト回収（`_apply_zombie_or_timeout_reclaim`）と同じ
-    安全策（WIPバックアップ→プロセス停止→worktree削除→帳簿削除の順）を
-    ここでも適用する。
-
-    WIPバックアップの作成に失敗した場合は、未コミットの作業データ消失を
-    防ぐため今回の破棄処理全体をスキップし、`False`を返す（run_stateは
-    変更せず、次サイクルでの再試行に委ねる）。
-    """
-    if not config.apply:
-        return True
-
+    """古い帳簿エントリに対応するworktreeのWIPバックアップとクリーンアップを行う。"""
     worktree_exists = os.path.exists(active.worktree_path)
     if worktree_exists:
         backup_error = backup_wip_commit(
@@ -336,7 +306,23 @@ def _apply_stale_active_entry_discard(
 
     if worktree_exists:
         remove_worktree(active.worktree_path)
+    return True
 
+
+def _apply_stale_active_entry_discard(
+    run_state: RunState,
+    key: str,
+    active: ActiveWorktree,
+    reason: str,
+    config: DispatcherConfig,
+) -> bool:
+    """#382: 帳簿(run_state)を破棄する前に、対応する物理worktree・プロセスの
+    状態を確認し、必要な後始末を行う。
+    """
+    if not config.apply:
+        return True
+    if not _cleanup_stale_active_worktree(active, reason, config):
+        return False
     del run_state.active_worktrees[key]
     record = run_state.task_reclaim_counts.get(active.issue_number)
     if record is not None and record.pending:
@@ -358,12 +344,10 @@ def _rule_stale_entry(
     return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
 
 
-def _abandoned_worktree_outcome(
-    ctx: CycleContext,
-    key: str,
-    active: ActiveWorktree,
-    active_task: Task | None,
-) -> ActiveWorktreeRuleOutcome:
+def _create_abandonment_callbacks(
+    ctx: CycleContext, key: str, active: ActiveWorktree
+) -> tuple[Callable[[], None], Callable[[], None], Callable[[], bool]]:
+    """放棄worktree処理時の永続化・解放コールバック群を生成する。"""
     released = False
 
     def _release_entry() -> None:
@@ -388,14 +372,29 @@ def _abandoned_worktree_outcome(
             open_prs=ctx.prs,
         )
 
+    def _is_released() -> bool:
+        return released
+
+    return _release_entry, _reserve_reclaim, _is_released
+
+
+def _abandoned_worktree_outcome(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> ActiveWorktreeRuleOutcome:
+    release_entry, reserve_reclaim, is_released = _create_abandonment_callbacks(
+        ctx, key, active
+    )
     try:
         completion_event = _finalize_abandoned_cloud_worktree(
             active,
             active_task,
             ctx.config,
             ctx.run_state,
-            on_label_applied=_release_entry,
-            on_reclaim_reserved=_reserve_reclaim,
+            on_label_applied=release_entry,
+            on_reclaim_reserved=reserve_reclaim,
         )
     except Exception as e:
         print(
@@ -417,7 +416,7 @@ def _abandoned_worktree_outcome(
         completion_event["action"]
         in ("abandoned_pr_requeued", "escalated_reclaim_limit_exceeded")
         and ctx.config.apply
-        and not released
+        and not is_released()
     ):
         ctx.run_state.active_worktrees.pop(key, None)
         _persist_run_state_best_effort(
@@ -442,43 +441,52 @@ def _find_recovery_pr(
     )
 
 
-def _rule_completed(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
-) -> ActiveWorktreeRuleOutcome | None:
-    completion_active = active
+def _resolve_completion_active_or_outcome(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> tuple[ActiveWorktree | None, ActiveWorktreeRuleOutcome | None]:
+    """完了判定を行う対象ActiveWorktreeまたは早期終端Outcomeを解決する。"""
     if active.started_at is None and active.external_id is None:
         recovery_pr = _find_recovery_pr(active, ctx.config)
         if recovery_pr is None:
-            return None
+            return None, None
         if recovery_pr.state.upper() == "CLOSED":
-            return _abandoned_worktree_outcome(ctx, key, active, active_task)
-        completion_active = replace(
+            return None, _abandoned_worktree_outcome(ctx, key, active, active_task)
+        return replace(
             active,
             branch=recovery_pr.head_ref,
             external_id=f"recovered-pr:{recovery_pr.number}",
             external_url=f"PR#{recovery_pr.number}",
-        )
-    elif active.external_id is not None:
-        completion_status = _cloud_worktree_completion_status(active, ctx.config)
-        if completion_status == "abandoned":
-            return _abandoned_worktree_outcome(ctx, key, active, active_task)
-        if completion_status != "completed":
-            return None
-    else:
-        if not _is_worktree_complete(active, ctx.config):
-            return None
-        local_pr_status = _local_pr_completion_status(active, ctx.config)
-        if local_pr_status == "abandoned":
-            return _abandoned_worktree_outcome(ctx, key, active, active_task)
-        if local_pr_status == "unknown":
-            return None
+        ), None
 
-    completion_event = _finalize_completed_worktree(
-        completion_active,
-        active_task,
-        ctx.config,
-        dispatch_not_needed_review=ctx.not_needed_review_dispatcher,
-    )
+    if active.external_id is not None:
+        status = _cloud_worktree_completion_status(active, ctx.config)
+        if status == "abandoned":
+            return None, _abandoned_worktree_outcome(ctx, key, active, active_task)
+        if status != "completed":
+            return None, None
+        return active, None
+
+    if not _is_worktree_complete(active, ctx.config):
+        return None, None
+    local_status = _local_pr_completion_status(active, ctx.config)
+    if local_status == "abandoned":
+        return None, _abandoned_worktree_outcome(ctx, key, active, active_task)
+    if local_status == "unknown":
+        return None, None
+    return active, None
+
+
+def _handle_completed_event_outcome(
+    ctx: CycleContext,
+    key: str,
+    completion_active: ActiveWorktree,
+    active_task: Task | None,
+    completion_event: dict,
+) -> ActiveWorktreeRuleOutcome | None:
+    """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
     action = completion_event["action"]
     if action == "completion_skipped_forge_error":
         return None
@@ -501,3 +509,25 @@ def _rule_completed(
             ctx, key, completion_active, active_task
         )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
+
+
+def _rule_completed(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    completion_active, early_outcome = _resolve_completion_active_or_outcome(
+        ctx, key, active, active_task
+    )
+    if early_outcome is not None:
+        return early_outcome
+    if completion_active is None:
+        return None
+
+    completion_event = _finalize_completed_worktree(
+        completion_active,
+        active_task,
+        ctx.config,
+        dispatch_not_needed_review=ctx.not_needed_review_dispatcher,
+    )
+    return _handle_completed_event_outcome(
+        ctx, key, completion_active, active_task, completion_event
+    )
