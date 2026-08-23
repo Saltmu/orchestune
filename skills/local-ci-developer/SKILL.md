@@ -27,7 +27,7 @@ For documentation updates or typo fixes that do not alter code logic, **Steps 3â
 ## Preflight & GitHub Backend Selection (Step 0)
 At session start, inspect and record the execution environment:
 1. **Tooling Availability**: Check `poetry --version`, `poetry check --lock`, and `gitleaks version`.
-2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all GitHub operations throughout the session, and record the choice in `implementation_plan.md`. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
+2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all downstream GitHub operations throughout the session (Step 2 Issue Creation, Step 10 PR Creation, Step 12 Outcome Declaration), and record the choice in `implementation_plan.md`. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
 
 ## Development Steps
 
