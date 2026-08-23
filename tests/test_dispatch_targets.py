@@ -1159,6 +1159,39 @@ class TestCodexCloudDispatchTarget:
             assert target.is_complete(handle) is False
             mock_fetch.assert_not_called()
 
+    def test_completion_status_when_comments_lookup_fails_returns_pending_and_does_not_abandon(
+        self,
+    ):
+        target = CodexCloudDispatchTarget("env_123")
+        handle = DispatchHandle(
+            external_id="task_fail_1",
+            branch_name="claude/issue-1-task-a",
+            issue_number=1,
+        )
+        with (
+            patch(
+                "orchestune.forge.GitHubForge.list_prs",
+                return_value=[
+                    PrRecord(
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        state="OPEN",
+                    )
+                ],
+            ),
+            patch(
+                "orchestune.forge.GitHubForge.list_comments",
+                side_effect=RuntimeError("GitHub comments outage"),
+            ),
+            patch.object(
+                target, "_fetch_task_status", return_value="failed"
+            ) as mock_fetch,
+        ):
+            assert target.completion_status(handle) == "pending"
+            assert target.is_complete(handle) is False
+            mock_fetch.assert_not_called()
+
     def test_is_complete_when_pr_is_open_for_task_branch(self):
         target = CodexCloudDispatchTarget("env_123")
         outcome = OutcomeRecord(result="done", issue=1, pr=1)

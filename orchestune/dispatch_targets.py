@@ -224,18 +224,19 @@ def _task_pr_completion_status(
     open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
     if open_prs:
         all_comments: list[Mapping[str, Any]] = []
+        had_error = False
         if handle.issue_number is not None:
             try:
                 all_comments.extend(forge.list_comments(handle.issue_number))
             except Exception:
-                pass
+                had_error = True
         pr_numbers = {pr.number for pr in open_prs}
         for pr_num in pr_numbers:
             if handle.issue_number is None or pr_num != handle.issue_number:
                 try:
                     all_comments.extend(forge.list_comments(pr_num))
                 except Exception:
-                    pass
+                    had_error = True
         outcome = parse_from_comments(all_comments, since=handle.started_at)
         if outcome is not None and outcome.result in (
             RESULT_DONE,
@@ -243,6 +244,8 @@ def _task_pr_completion_status(
             RESULT_BLOCKED,
         ):
             return "completed"
+        if had_error and outcome is None:
+            return "unknown"
         return "pending"
 
     if any(pr.state == "CLOSED" for pr in matching_prs):
@@ -574,12 +577,16 @@ def _parse_codex_cloud_exec_output(output: str) -> tuple[str | None, str | None]
 def _fetch_codex_cloud_task_status(
     environment_id: str,
     task_id: str,
-    *,
-    max_pages: int = 10,
 ) -> str | None:
-    """codex cloud list --env <env> --json をページング追従して実行し、該当タスクのstatusを返す。"""
+    """codex cloud list --env <env> --json をページネーション末尾まで追従して実行し、該当タスクのstatusを返す。"""
+    seen_cursors: set[str] = set()
     cursor: str | None = None
-    for _ in range(max_pages):
+    while True:
+        if cursor is not None and cursor in seen_cursors:
+            break
+        if cursor is not None:
+            seen_cursors.add(cursor)
+
         cmd = ["codex", "cloud", "list", "--env", environment_id, "--json"]
         if cursor:
             cmd.extend(["--cursor", cursor])
