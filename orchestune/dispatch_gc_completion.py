@@ -536,6 +536,7 @@ def _finalize_abandoned_cloud_worktree(
     config: DispatcherConfig,
     run_state: RunState | None = None,
     on_label_applied: Callable[[], None] | None = None,
+    on_reclaim_reserved: Callable[[], None] | None = None,
 ) -> dict:
     event = {
         "issue_number": active.issue_number,
@@ -569,6 +570,8 @@ def _finalize_abandoned_cloud_worktree(
             run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
                 count=reclaim_count, last_reclaimed_at=time.time()
             )
+            if on_reclaim_reserved is not None:
+                on_reclaim_reserved()
 
         if reclaim_count > config.max_task_reclaims:
             apply_human_review_escalation(

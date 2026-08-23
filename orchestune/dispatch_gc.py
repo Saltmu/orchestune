@@ -377,6 +377,9 @@ def _abandoned_worktree_outcome(
         ctx.config,
         ctx.run_state,
         on_label_applied=_release_entry,
+        on_reclaim_reserved=lambda: _persist_run_state_best_effort(
+            ctx, f"the reserved reclaim count for issue #{active.issue_number}"
+        ),
     )
     if (
         completion_event["action"]

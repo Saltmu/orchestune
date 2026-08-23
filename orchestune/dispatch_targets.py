@@ -691,11 +691,18 @@ class CodexCloudDispatchTarget(DispatchTarget):
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=True,
+            check=False,
         )
         combined_output = f"{proc.stdout or ''}{proc.stderr or ''}"
         with open(log_path, "a", encoding="utf-8") as log_fh:
             log_fh.write(combined_output)
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(
+                proc.returncode,
+                command,
+                output=proc.stdout,
+                stderr=proc.stderr,
+            )
         task_id, task_url = _parse_codex_cloud_exec_output(combined_output)
         external_id = task_id or f"codex-cloud:{branch_name}"
         return DispatchHandle(

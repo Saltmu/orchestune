@@ -979,18 +979,28 @@ class TestCodexCloudDispatchTarget:
 
     def test_launch_propagates_codex_cloud_submission_failure(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
-        submission_error = subprocess.CalledProcessError(1, ["codex", "cloud", "exec"])
         push_result = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
+        submission_result = subprocess.CompletedProcess(
+            args=["codex", "cloud", "exec"],
+            returncode=1,
+            stdout="error: unauthorized\n",
+            stderr="fatal error\n",
+        )
         with patch(
             "orchestune.dispatch_targets.subprocess.run",
-            side_effect=[push_result, submission_error],
+            side_effect=[push_result, submission_result],
         ):
             with pytest.raises(subprocess.CalledProcessError) as error:
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
-        assert error.value is submission_error
+        assert error.value.returncode == 1
+        log_file = tmp_path / "logs" / "claude-issue-1-task-a.log"
+        assert log_file.exists()
+        assert "error: unauthorized\nfatal error\n" in log_file.read_text(
+            encoding="utf-8"
+        )
 
     def test_fetch_codex_cloud_task_status(self):
         target = CodexCloudDispatchTarget("env_123")
