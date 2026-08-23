@@ -49,7 +49,9 @@ def _task(**overrides):
 
 
 class TestCollectZombiesAndTimeouts:
-    def test_unknown_start_time_without_worktree_is_reclaimed_as_zombie(self, tmp_path):
+    def test_unknown_start_time_without_worktree_is_reclaimed_as_zombie(
+        self, tmp_path, fake_forge
+    ):
         """#383: 対応PR未検出のまま自己修復されたエントリ（pid=None,
         started_at=None, 物理worktree不在）は、タイムアウト判定は発火しない
         ものの、ゾンビ相当として回収されクオータを解放すること。"""
@@ -65,13 +67,11 @@ class TestCollectZombiesAndTimeouts:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             task_timeout_seconds=60,
+            forge=fake_forge,
         )
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             events = _collect_zombies_and_timeouts(
                 run_state, {active.issue_number: task}, config
@@ -80,10 +80,12 @@ class TestCollectZombiesAndTimeouts:
         assert len(events) == 1
         assert events[0]["reason"] == "process disappeared"
         assert run_state.active_worktrees == {}
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
 
-    def test_timeout_without_physical_worktree_requeues_issue(self, tmp_path):
+    def test_timeout_without_physical_worktree_requeues_issue(
+        self, tmp_path, fake_forge
+    ):
         """#198: run_stateを削除するGC回収は、worktreeの有無にかかわらず
         GitHubのprimary stateもqueuedへ遷移させる。"""
         active = _active(
@@ -98,13 +100,11 @@ class TestCollectZombiesAndTimeouts:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             task_timeout_seconds=60,
+            forge=fake_forge,
         )
 
         with (
             patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             events = _collect_zombies_and_timeouts(
                 run_state, {active.issue_number: task}, config
@@ -112,10 +112,10 @@ class TestCollectZombiesAndTimeouts:
 
         assert events[0]["reason"] == "timeout exceeded"
         assert run_state.active_worktrees == {}
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
 
-    def test_held_worktree_is_not_reclaimed(self, tmp_path):
+    def test_held_worktree_is_not_reclaimed(self, tmp_path, fake_forge):
         """同一サイクルで人間確認待ちになったworktreeはGC対象から除外する。"""
         active = _active(pid=None)
         run_state = RunState(active_worktrees={"280": active})
@@ -124,25 +124,21 @@ class TestCollectZombiesAndTimeouts:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             zombie_gc=True,
+            forge=fake_forge,
         )
 
-        with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
-        ):
-            events = _collect_zombies_and_timeouts(
-                run_state,
-                {},
-                config,
-                held_worktree_paths={active.worktree_path},
-            )
+        events = _collect_zombies_and_timeouts(
+            run_state,
+            {},
+            config,
+            held_worktree_paths={active.worktree_path},
+        )
 
         assert events == []
         assert run_state.active_worktrees == {"280": active}
-        mock_remove_label.assert_not_called()
-        mock_add_label.assert_not_called()
-        mock_add_comment.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
+        fake_forge.add_comment.assert_not_called()
 
 
 class TestDecideZombieOrTimeoutReclaims:
@@ -392,7 +388,7 @@ class TestApplyZombieOrTimeoutReclaim:
         defaults.update(overrides)
         return ZombieOrTimeoutReclaim(**defaults)
 
-    def test_zombie_apply_removes_worktree_and_requeues(self, tmp_path):
+    def test_zombie_apply_removes_worktree_and_requeues(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
@@ -400,6 +396,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -410,9 +407,6 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -421,9 +415,9 @@ class TestApplyZombieOrTimeoutReclaim:
         )
         mock_kill.assert_not_called()
         mock_remove_worktree.assert_called_once_with(active.worktree_path)
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
-        mock_add_comment.assert_called_once()
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.add_comment.assert_called_once()
         assert run_state.active_worktrees == {}
         assert event == {
             "issue_number": 280,
@@ -434,7 +428,9 @@ class TestApplyZombieOrTimeoutReclaim:
             "reclaim_count": 1,
         }
 
-    def test_reclaim_adds_queued_before_removing_in_progress(self, tmp_path):
+    def test_reclaim_adds_queued_before_removing_in_progress(
+        self, tmp_path, fake_forge
+    ):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
         active = _active(worktree_path=str(tmp_path))
@@ -444,8 +440,15 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
         call_order: list[tuple[str, str]] = []
+        fake_forge.remove_label.side_effect = lambda issue, label: call_order.append(
+            ("remove", label)
+        )
+        fake_forge.add_label.side_effect = lambda issue, label: call_order.append(
+            ("add", label)
+        )
 
         with (
             patch(
@@ -453,15 +456,6 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill"),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=lambda issue, label: call_order.append(("remove", label)),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
-                side_effect=lambda issue, label: call_order.append(("add", label)),
-            ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -470,7 +464,9 @@ class TestApplyZombieOrTimeoutReclaim:
             ("remove", "status:in-progress"),
         ]
 
-    def test_removes_stale_blocked_label_alongside_in_progress(self, tmp_path):
+    def test_removes_stale_blocked_label_alongside_in_progress(
+        self, tmp_path, fake_forge
+    ):
         # #381レビュー対応(Codex P2): stacked launch中断で取り残された
         # status:blockedも併せて除去し、status:queuedへ確実に収束させる。
         active = _active(worktree_path=str(tmp_path))
@@ -482,6 +478,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -490,18 +487,15 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill"),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
-        mock_add_label.assert_called_once_with(280, "status:queued")
-        mock_remove_label.assert_any_call(280, "status:in-progress")
-        mock_remove_label.assert_any_call(280, "status:blocked")
-        assert mock_remove_label.call_count == 2
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_any_call(280, "status:in-progress")
+        fake_forge.remove_label.assert_any_call(280, "status:blocked")
+        assert fake_forge.remove_label.call_count == 2
 
-    def test_does_not_overwrite_terminal_escalation_label(self, tmp_path):
+    def test_does_not_overwrite_terminal_escalation_label(self, tmp_path, fake_forge):
         # 中断した以前の遷移でstatus:manual-merge-requiredが既に付与されている
         # 場合、status:queuedへの書き換えは人間の確認要求を握りつぶしてしまう
         # ため、ラベルには一切触れてはならない。
@@ -515,6 +509,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -523,19 +518,16 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill"),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
-        mock_add_label.assert_not_called()
-        mock_remove_label.assert_not_called()
-        mock_add_comment.assert_called_once()
+        fake_forge.add_label.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_comment.assert_called_once()
         assert event is not None
         assert event["action"] == "gc_reclaimed"
 
-    def test_timeout_apply_kills_alive_process(self, tmp_path):
+    def test_timeout_apply_kills_alive_process(self, tmp_path, fake_forge):
         active = _active(pid=111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
@@ -545,6 +537,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -553,15 +546,14 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_kill.assert_called_once_with(111, 9)
 
-    def test_timeout_apply_kills_process_before_backing_up_wip(self, tmp_path):
+    def test_timeout_apply_kills_process_before_backing_up_wip(
+        self, tmp_path, fake_forge
+    ):
         """#385: タイムアウトかつプロセス生存中のケースでは、対象プロセスが
         まだworktreeへ書き込み中である可能性があるため、WIPバックアップより
         先にプロセスを停止（os.kill）しなければならない。順序が逆だと、
@@ -575,6 +567,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         call_order: list[str] = []
@@ -593,15 +586,14 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill", side_effect=fake_kill),
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         assert call_order == ["kill", "backup"]
 
-    def test_timeout_apply_skips_kill_when_process_already_dead(self, tmp_path):
+    def test_timeout_apply_skips_kill_when_process_already_dead(
+        self, tmp_path, fake_forge
+    ):
         active = _active(pid=111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
@@ -611,6 +603,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -619,15 +612,12 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_kill.assert_not_called()
 
-    def test_timeout_apply_skips_kill_when_pid_is_none(self, tmp_path):
+    def test_timeout_apply_skips_kill_when_pid_is_none(self, tmp_path, fake_forge):
         active = _active(pid=None, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
@@ -637,6 +627,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -645,15 +636,12 @@ class TestApplyZombieOrTimeoutReclaim:
             ),
             patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
             patch("orchestune.dispatch_gc_zombies.remove_worktree"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_kill.assert_not_called()
 
-    def test_kill_exception_is_swallowed(self, tmp_path):
+    def test_kill_exception_is_swallowed(self, tmp_path, fake_forge):
         active = _active(pid=111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
@@ -663,6 +651,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -675,21 +664,18 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_remove_worktree.assert_called_once()
-        mock_remove_label.assert_called_once()
-        mock_add_label.assert_called_once()
-        mock_add_comment.assert_called_once()
+        fake_forge.remove_label.assert_called_once()
+        fake_forge.add_label.assert_called_once()
+        fake_forge.add_comment.assert_called_once()
         assert run_state.active_worktrees == {}
         assert event is not None
 
     def test_missing_worktree_skips_backup_and_remove_but_still_requeues(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         active = _active(worktree_path=str(tmp_path / "missing"))
         run_state = RunState(active_worktrees={"280": active})
@@ -698,6 +684,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -705,23 +692,21 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_backup.assert_not_called()
         mock_remove_worktree.assert_not_called()
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
         assert (
-            "物理worktreeが見つからなかったため" in mock_add_comment.call_args.args[1]
+            "物理worktreeが見つからなかったため"
+            in fake_forge.add_comment.call_args.args[1]
         )
         assert run_state.active_worktrees == {}
         assert event is not None
 
-    def test_backup_failure_skips_reclaim_and_returns_none(self, tmp_path):
+    def test_backup_failure_skips_reclaim_and_returns_none(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
@@ -729,6 +714,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -740,22 +726,19 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         assert event is None
-        mock_add_comment.assert_called_once()
-        assert "git commit failed" in mock_add_comment.call_args.args[1]
-        mock_remove_label.assert_not_called()
-        mock_add_label.assert_not_called()
+        fake_forge.add_comment.assert_called_once()
+        assert "git commit failed" in fake_forge.add_comment.call_args.args[1]
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
         mock_kill.assert_not_called()
         mock_remove_worktree.assert_not_called()
         assert run_state.active_worktrees == {"280": active}
 
-    def test_dry_run_returns_event_without_side_effects(self, tmp_path):
+    def test_dry_run_returns_event_without_side_effects(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
@@ -763,6 +746,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
+            forge=fake_forge,
         )
 
         with (
@@ -771,18 +755,15 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_backup.assert_not_called()
         mock_kill.assert_not_called()
         mock_remove_worktree.assert_not_called()
-        mock_remove_label.assert_not_called()
-        mock_add_label.assert_not_called()
-        mock_add_comment.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
+        fake_forge.add_comment.assert_not_called()
         assert run_state.active_worktrees == {"280": active}
         assert event == {
             "issue_number": 280,
@@ -814,7 +795,7 @@ class TestApplyZombieOrTimeoutReclaim:
             "reclaim_count",
         }
 
-    def test_apply_backs_up_worktree_created_after_decide(self, tmp_path):
+    def test_apply_backs_up_worktree_created_after_decide(self, tmp_path, fake_forge):
         """#236レビュー対応: decide時点では存在しなかったworktreeが、apply実行
         直前に作成された場合でも、apply側の再評価によりバックアップ・削除が
         正しく行われること（decide時点のスナップショットを固定して信用しない）。
@@ -826,6 +807,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
             task_timeout_seconds=60,
         )
 
@@ -847,9 +829,6 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaims[0], config)
 
@@ -859,7 +838,9 @@ class TestApplyZombieOrTimeoutReclaim:
         mock_remove_worktree.assert_called_once_with(str(worktree_dir))
         assert event is not None
 
-    def test_apply_skips_backup_when_worktree_removed_after_decide(self, tmp_path):
+    def test_apply_skips_backup_when_worktree_removed_after_decide(
+        self, tmp_path, fake_forge
+    ):
         """#236レビュー対応: decide時点では存在したworktreeが、apply実行直前に
         削除された場合でも、apply側の再評価によりバックアップ・削除処理を安全に
         スキップし、orphan worktreeの参照や不要な操作を残さないこと。
@@ -872,6 +853,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
+            forge=fake_forge,
             zombie_gc=True,
             task_timeout_seconds=0,
         )
@@ -898,18 +880,16 @@ class TestApplyZombieOrTimeoutReclaim:
             patch(
                 "orchestune.dispatch_gc_zombies.remove_worktree"
             ) as mock_remove_worktree,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaims[0], config)
 
         mock_backup.assert_not_called()
         mock_remove_worktree.assert_not_called()
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
         assert (
-            "物理worktreeが見つからなかったため" in mock_add_comment.call_args.args[1]
+            "物理worktreeが見つからなかったため"
+            in fake_forge.add_comment.call_args.args[1]
         )
         assert run_state.active_worktrees == {}
         assert event is not None
