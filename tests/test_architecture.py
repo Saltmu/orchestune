@@ -143,6 +143,8 @@ BOUNDED_RECOVERY_TERMINALS = {
         "apply_human_review_escalation",
     ),
 }
+GITHUB_FORGE_PATCH_EXEMPTIONS = frozenset({"test_forge.py"})
+_GITHUB_FORGE_PATCH_TARGET = re.compile(r"(?:^|\.)GitHubForge(?:\.|$)")
 
 
 def _module_name(path: Path) -> str:
@@ -957,6 +959,103 @@ def test_subprocess_text_mode_requires_explicit_encoding() -> None:
 
 def test_path_write_text_requires_explicit_encoding() -> None:
     assert _unencoded_write_text_calls() == []
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return None
+
+
+def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
+    patch_references: set[str] = set()
+    github_forge_names = {"GitHubForge"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "unittest.mock":
+            patch_references.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "patch"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "unittest":
+            patch_references.update(
+                f"{alias.asname or alias.name}.patch"
+                for alias in node.names
+                if alias.name == "mock"
+            )
+        elif isinstance(node, ast.Import):
+            patch_references.update(
+                f"{alias.asname or alias.name}.patch"
+                for alias in node.names
+                if alias.name == "unittest.mock"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "orchestune.forge":
+            github_forge_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "GitHubForge"
+            )
+    return patch_references, github_forge_names
+
+
+def _github_forge_patch_lines(source: str) -> list[int]:
+    tree = ast.parse(source)
+    patch_references, github_forge_names = _mock_patch_references(tree)
+    violations: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        function_name = _dotted_name(node.func)
+        if function_name in patch_references:
+            target = node.args[0]
+            if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                if _GITHUB_FORGE_PATCH_TARGET.search(target.value):
+                    violations.append(node.lineno)
+        elif function_name in {f"{ref}.object" for ref in patch_references}:
+            target_name = _dotted_name(node.args[0])
+            if target_name and target_name.rsplit(".", 1)[-1] in github_forge_names:
+                violations.append(node.lineno)
+    return sorted(violations)
+
+
+def _github_forge_patch_violations() -> list[str]:
+    violations: list[str] = []
+    for path in sorted(TESTS_ROOT.rglob("test_*.py")):
+        if path.name in GITHUB_FORGE_PATCH_EXEMPTIONS:
+            continue
+        for line in _github_forge_patch_lines(path.read_text(encoding="utf-8")):
+            violations.append(f"{path.relative_to(REPO_ROOT)}:{line}")
+    return violations
+
+
+def test_tests_do_not_patch_github_forge() -> None:
+    assert _github_forge_patch_violations() == []
+
+
+def test_github_forge_patch_detector_flags_aliased_direct_patch() -> None:
+    source = """
+from unittest.mock import patch as replace
+
+with replace("orchestune.forge.GitHubForge.list_prs"):
+    pass
+"""
+
+    assert _github_forge_patch_lines(source) == [4]
+
+
+def test_github_forge_patch_detector_flags_patch_object_alias() -> None:
+    source = """
+from unittest.mock import patch
+from orchestune.forge import GitHubForge as ProductionForge
+
+with patch.object(ProductionForge, "list_prs"):
+    pass
+"""
+
+    assert _github_forge_patch_lines(source) == [5]
 
 
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:

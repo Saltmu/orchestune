@@ -378,11 +378,10 @@ patching module attributes: `IntegratorConfig(forge=...)` and
 `DispatcherConfig(forge=...)` accept any object satisfying it, and the shared
 `fake_forge` fixture supplies one.
 
-That migration is partial. Roughly 490 call sites still reach for
-`patch("orchestune.forge.GitHubForge.<method>")` — heaviest in
-`test_dispatch_cycle.py` and `test_dispatch_gc.py` — because those suites
-predate the protocol. `test_parent_completion.py` and
-`test_integration_coordinator.py` have already migrated to `fake_forge`
-injection. Both styles stop `gh` from running, which is the invariant that
-matters; injection is the direction of travel for new tests, not a
-description of the whole suite today.
+That migration is complete for test modules. Tests inject `fake_forge` (or a
+purpose-built in-memory forge) through the configuration or function boundary;
+they no longer patch methods on the concrete `GitHubForge` class. The
+`test_tests_do_not_patch_github_forge` architecture invariant parses every
+`tests/test_*.py` module except `test_forge.py` and reports the file and line of
+any direct `unittest.mock.patch` or `patch.object` regression. `test_forge.py`
+is the explicit exception because it owns the concrete adapter contract.

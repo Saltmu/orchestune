@@ -384,10 +384,11 @@ L1の境界は、単一の具象クライアントではなく3つの `Protocol`
 `DispatcherConfig(forge=...)` はプロトコルを満たす任意のオブジェクトを
 受け付け、共有フィクスチャ `fake_forge` がその実体を提供します。
 
-ただしこの移行は途上です。`patch("orchestune.forge.GitHubForge.<メソッド>")` は
-現在も約490箇所残っています（特に `test_dispatch_cycle.py` /
-`test_dispatch_gc.py`）。これらはプロトコル導入以前から存在するテスト群です。
-`test_parent_completion.py` / `test_integration_coordinator.py` は`fake_forge`
-注入へ移行済みです。どちらの方式でも `gh` が実行されないという肝心の不変条件は
-守られており、注入は「新規テストが向かうべき方向」であって、スイート全体の
-現状を表したものではありません。
+テストモジュールの移行は完了しています。各テストは設定または関数の境界から
+`fake_forge`（あるいは用途別のインメモリForge）を注入し、具象
+`GitHubForge` クラスのメソッドを直接パッチしません。
+`test_tests_do_not_patch_github_forge` アーキテクチャ不変条件は、
+`test_forge.py` を除くすべての `tests/test_*.py` をASTで解析し、
+`unittest.mock.patch` または `patch.object` による直接patchが再導入された場合、
+そのファイルと行を報告します。具象アダプタ自身の契約を検証する
+`test_forge.py` だけが明示的な例外です。
