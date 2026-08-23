@@ -115,6 +115,16 @@ class TestFakeForgeClass:
         assert child is not None
         assert child.blocked_by == (999,)
 
+        # Metadata-only child discovery
+        metadata_child = forge.create_issue(
+            title="Metadata Child",
+            body="```yaml\nfootprint:\n  parent_issue_number: 1\n```",
+        )
+        found = forge.find_issues_by_parent_metadata(1)
+        found_numbers = {i.number for i in found}
+        assert child_num in found_numbers
+        assert metadata_child in found_numbers
+
     def test_pull_request_operations(self):
         forge = FakeForge()
         pr_num = forge.create_pull_request(
@@ -148,6 +158,22 @@ class TestFakeForgeClass:
 
         forge.delete_branch("feat/foo")
         assert forge.branch_exists("feat/foo") is False
+
+    def test_seed_pr_state_inference(self):
+        forge = FakeForge()
+        from orchestune.models import PrRecord
+
+        merged_pr = PrRecord(
+            number=42,
+            head_ref="feat/bar",
+            changed_files=(),
+            state="MERGED",
+        )
+        forge.seed_pr(merged_pr)
+        assert forge.list_open_prs() == []
+        all_prs = forge.list_prs(state="all")
+        assert len(all_prs) == 1
+        assert all_prs[0].number == 42
 
     def test_actor_permissions_and_reopen(self):
         forge = FakeForge()

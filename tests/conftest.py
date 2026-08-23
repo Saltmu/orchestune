@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 import subprocess
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -336,7 +337,18 @@ class FakeForge:
     def find_issues_by_parent_metadata(
         self, parent_issue_number: int | str
     ) -> list[IssueRecord]:
-        return self.list_sub_issues(parent_issue_number)
+        pnum = int(parent_issue_number)
+        results: list[IssueRecord] = []
+        pattern = re.compile(
+            rf"(?:parent_issue_number|parent_number):\s*['\"]?{pnum}['\"]?",
+            re.MULTILINE,
+        )
+        for issue in self.issues.values():
+            if issue.parent and issue.parent.get("number") == pnum:
+                results.append(issue)
+            elif pattern.search(issue.body):
+                results.append(issue)
+        return results
 
     def get_label_actor(self, issue_number: int | str, label: str) -> str:
         num = int(issue_number)
@@ -466,9 +478,10 @@ class FakeForge:
         if issue.number >= self._next_issue_number:
             self._next_issue_number = issue.number + 1
 
-    def seed_pr(self, pr: PrRecord, state: str = "open") -> None:
+    def seed_pr(self, pr: PrRecord, state: str | None = None) -> None:
         self.prs[pr.number] = pr
-        self.pr_states[pr.number] = state
+        resolved_state = (state if state is not None else pr.state or "open").lower()
+        self.pr_states[pr.number] = resolved_state
         self.branches.add(pr.head_ref)
         if pr.number >= self._next_pr_number:
             self._next_pr_number = pr.number + 1
