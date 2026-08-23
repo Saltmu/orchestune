@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import re
 import subprocess
+import sys
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -531,6 +532,45 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
     monkeypatch.setattr(DispatcherConfig, "__init__", init_with_fake_forge)
     return forge
+
+
+_FAKE_FORGE_MIGRATION_TESTS = frozenset(
+    {
+        "test_dispatch_reconciliation_recovery.py",
+        "test_dispatch_reconciliation_promotions.py",
+        "test_dispatch_rebase.py",
+        "test_dispatch_rebase_git.py",
+        "test_dispatch_recovery.py",
+        "test_dispatch_locks.py",
+        "test_dispatch_launch_basic.py",
+        "test_dispatch_launch_persistence.py",
+    }
+)
+_FAKE_FORGE_MIGRATION_MODULES = (
+    "orchestune.dispatch_actor_verification",
+    "orchestune.dispatch_config",
+    "orchestune.dispatch_escalation",
+    "orchestune.dispatch_rebase",
+)
+
+
+@pytest.fixture(autouse=True)
+def inject_fake_forge_for_dispatch_migration(
+    request: pytest.FixtureRequest,
+    fake_forge: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route Issue #625 tests' default forge construction to their shared fake."""
+    if request.path.name not in _FAKE_FORGE_MIGRATION_TESTS:
+        return
+
+    from fake_forge_proxy import active_fake_forge
+
+    active_fake_forge.forge = fake_forge
+    for module_name in _FAKE_FORGE_MIGRATION_MODULES:
+        module = sys.modules.get(module_name)
+        if module is not None:
+            monkeypatch.setattr(module, "GitHubForge", lambda: fake_forge)
 
 
 @pytest.fixture

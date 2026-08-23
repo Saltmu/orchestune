@@ -1,6 +1,5 @@
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import (
@@ -70,77 +69,59 @@ class TestApplyHumanReviewEscalation:
     """空コミット完了・重複起動検知・CHANGES_REQUESTEDエスカレーションの
     3箇所で共有される、status:blocked-human-reviewへの遷移処理。"""
 
-    def test_removes_in_progress_and_adds_human_review_label(self):
-        with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
-        ):
-            apply_human_review_escalation(1, ("status:in-progress",), "理由")
+    def test_removes_in_progress_and_adds_human_review_label(self, fake_forge):
+        apply_human_review_escalation(
+            1, ("status:in-progress",), "理由", forge=fake_forge
+        )
 
-        mock_remove.assert_called_once_with(1, "status:in-progress")
-        mock_add.assert_called_once_with(1, "status:blocked-human-review")
-        mock_comment.assert_called_once_with(1, "理由")
+        fake_forge.remove_label.assert_called_once_with(1, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(1, "status:blocked-human-review")
+        fake_forge.add_comment.assert_called_once_with(1, "理由")
 
-    def test_adds_human_review_label_before_removing_old_labels(self):
+    def test_adds_human_review_label_before_removing_old_labels(self, fake_forge):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
         call_order: list[tuple[str, str]] = []
-        with (
-            patch(
-                "orchestune.forge.GitHubForge.remove_label",
-                side_effect=lambda issue, label: call_order.append(("remove", label)),
-            ),
-            patch(
-                "orchestune.forge.GitHubForge.add_label",
-                side_effect=lambda issue, label: call_order.append(("add", label)),
-            ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
-        ):
-            apply_human_review_escalation(1, ("status:in-progress",), "理由")
+        fake_forge.remove_label.side_effect = lambda issue, label: call_order.append(
+            ("remove", label)
+        )
+        fake_forge.add_label.side_effect = lambda issue, label: call_order.append(
+            ("add", label)
+        )
+        apply_human_review_escalation(
+            1, ("status:in-progress",), "理由", forge=fake_forge
+        )
 
         assert call_order == [
             ("add", "status:blocked-human-review"),
             ("remove", "status:in-progress"),
         ]
 
-    def test_removes_both_queued_and_blocked_when_both_present(self):
-        with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
-        ):
-            apply_human_review_escalation(
-                2, ("status:queued", "status:blocked"), "理由"
-            )
+    def test_removes_both_queued_and_blocked_when_both_present(self, fake_forge):
+        apply_human_review_escalation(
+            2, ("status:queued", "status:blocked"), "理由", forge=fake_forge
+        )
 
-        mock_remove.assert_any_call(2, "status:queued")
-        mock_remove.assert_any_call(2, "status:blocked")
-        assert mock_remove.call_count == 2
+        fake_forge.remove_label.assert_any_call(2, "status:queued")
+        fake_forge.remove_label.assert_any_call(2, "status:blocked")
+        assert fake_forge.remove_label.call_count == 2
 
-    def test_ignores_unrelated_labels(self):
-        with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
-        ):
-            apply_human_review_escalation(
-                3, ("status:in-progress", "priority:high"), "理由"
-            )
+    def test_ignores_unrelated_labels(self, fake_forge):
+        apply_human_review_escalation(
+            3,
+            ("status:in-progress", "priority:high"),
+            "理由",
+            forge=fake_forge,
+        )
 
-        mock_remove.assert_called_once_with(3, "status:in-progress")
+        fake_forge.remove_label.assert_called_once_with(3, "status:in-progress")
 
-    def test_no_removable_labels_still_adds_human_review_and_comment(self):
-        with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
-        ):
-            apply_human_review_escalation(4, (), "理由")
+    def test_no_removable_labels_still_adds_human_review_and_comment(self, fake_forge):
+        apply_human_review_escalation(4, (), "理由", forge=fake_forge)
 
-        mock_remove.assert_not_called()
-        mock_add.assert_called_once_with(4, "status:blocked-human-review")
-        mock_comment.assert_called_once_with(4, "理由")
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_called_once_with(4, "status:blocked-human-review")
+        fake_forge.add_comment.assert_called_once_with(4, "理由")
 
 
 class TestDecideChangesRequestedEscalation:

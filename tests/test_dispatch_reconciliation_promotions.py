@@ -392,8 +392,8 @@ class TestApplyBlockedPromotions:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             events = _apply_blocked_promotions([task], config)
 
@@ -411,8 +411,8 @@ class TestApplyBlockedPromotions:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             events = _apply_blocked_promotions([task], config)
 
@@ -434,11 +434,11 @@ class TestApplyBlockedPromotions:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
         ):
@@ -458,8 +458,8 @@ class TestPromoteBlockedTasks:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             events = _promote_blocked_tasks(
                 [_issue(1)], [], {"task-x"}, {1: task}, config
@@ -496,7 +496,7 @@ class TestDualStatusReconciliationMultipleTasks:
             apply=True,
         )
 
-        with patch("orchestune.forge.GitHubForge.remove_label") as mock_remove:
+        with patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove:
             events = _reconcile_dual_status_tasks(
                 {1: dual_a, 2: dual_b, 3: queued_only}, config
             )
@@ -542,8 +542,8 @@ class TestHandleBlockedRecomputeRecovery:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             result = _handle_blocked_recompute_recovery(
                 _IssuesStub(
@@ -573,8 +573,8 @@ class TestHandleBlockedRecomputeRecovery:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             result = _handle_blocked_recompute_recovery(
                 _IssuesStub(
@@ -607,8 +607,8 @@ class TestHandleBlockedRecomputeRecovery:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             result = _handle_blocked_recompute_recovery(
                 _IssuesStub(
@@ -650,11 +650,11 @@ class TestHandleBlockedRecomputeRecovery:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
         ):
@@ -691,8 +691,8 @@ class TestHandleBlockedRecomputeRecovery:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             result = _handle_blocked_recompute_recovery(
                 _IssuesStub(
@@ -727,8 +727,8 @@ class TestHandleBlockedRecomputeRecovery:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
         ):
             result = _handle_blocked_recompute_recovery(
                 _IssuesStub(

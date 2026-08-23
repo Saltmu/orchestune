@@ -196,9 +196,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -240,9 +240,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -283,14 +283,14 @@ class TestApplyAutoRebase:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -362,9 +362,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -426,9 +426,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -487,9 +487,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label"),
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -574,9 +574,9 @@ class TestApplyAutoRebase:
         )
 
         with (
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_comment,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"
@@ -626,14 +626,14 @@ class TestApplyAutoRebase:
 
         with (
             patch(
-                "orchestune.forge.GitHubForge.remove_label",
+                "fake_forge_proxy.active_fake_forge.remove_label",
                 side_effect=lambda issue, label: call_order.append(("remove", label)),
             ),
             patch(
-                "orchestune.forge.GitHubForge.add_label",
+                "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
             ),
-            patch("orchestune.forge.GitHubForge.add_comment"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             _apply_auto_rebase(
                 _context(active, task, run_state, config), "parent-branch"

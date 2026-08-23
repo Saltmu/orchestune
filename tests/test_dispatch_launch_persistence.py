@@ -98,8 +98,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -148,8 +148,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
             patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
-            patch("orchestune.forge.GitHubForge.add_label"),
-            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
