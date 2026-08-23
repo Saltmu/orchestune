@@ -75,6 +75,46 @@ class ZombieOrTimeoutReclaim:
     now: float = 0.0
 
 
+def _resolve_reclaim_count(run_state: RunState, issue_number: int) -> int:
+    """台帳から累計回収回数（または予約分）を解決する。"""
+    previous_record = run_state.task_reclaim_counts.get(issue_number)
+    if previous_record is None:
+        return 1
+    if previous_record.pending:
+        return previous_record.count
+    return previous_record.count + 1
+
+
+def _build_reclaim_candidate(
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+    is_zombie: bool,
+    is_timeout: bool,
+    process_alive: bool,
+    reclaim_count: int,
+    max_task_reclaims: int,
+    now: float,
+) -> ZombieOrTimeoutReclaim:
+    """判定結果からZombieOrTimeoutReclaimインスタンスを構築する。"""
+    return ZombieOrTimeoutReclaim(
+        key=key,
+        active=active,
+        subtask_id=active_task.subtask_id if active_task else "",
+        reason="process disappeared" if is_zombie else "timeout exceeded",
+        is_timeout=is_timeout,
+        process_alive=process_alive,
+        status_labels=(
+            active_task.status_labels
+            if active_task is not None
+            else ("status:in-progress",)
+        ),
+        reclaim_count=reclaim_count,
+        escalate=reclaim_count > max_task_reclaims,
+        now=now,
+    )
+
+
 def _decide_zombie_or_timeout_reclaims(
     run_state: RunState,
     tasks_by_issue: dict[int, Task],
@@ -101,35 +141,17 @@ def _decide_zombie_or_timeout_reclaims(
         if not (is_zombie or is_timeout):
             continue
         active_task = tasks_by_issue.get(active.issue_number)
-        # #512: 台帳の累計回数＋今回分が上限を超えるかを判定する。台帳への
-        # 書き戻しはapply層の責務（decide層は副作用を持たない）。
-        #
-        # PR#520レビュー9巡目対応(Codex P2): 前回の回収がGitHubへ反映できないまま
-        # 終わっていた場合（`pending`）は、その予約分を再利用して回数を進めない。
-        # 一時的なAPI障害の再試行で`status:queued`への差し戻しが一度も起きないまま
-        # 上限に達してしまうのを防ぐ（＝上限は「再投入の回数」を拘束する）。
-        previous_record = run_state.task_reclaim_counts.get(active.issue_number)
-        if previous_record is None:
-            reclaim_count = 1
-        elif previous_record.pending:
-            reclaim_count = previous_record.count
-        else:
-            reclaim_count = previous_record.count + 1
+        reclaim_count = _resolve_reclaim_count(run_state, active.issue_number)
         reclaims.append(
-            ZombieOrTimeoutReclaim(
+            _build_reclaim_candidate(
                 key=key,
                 active=active,
-                subtask_id=active_task.subtask_id if active_task else "",
-                reason="process disappeared" if is_zombie else "timeout exceeded",
+                active_task=active_task,
+                is_zombie=is_zombie,
                 is_timeout=is_timeout,
                 process_alive=process_alive,
-                status_labels=(
-                    active_task.status_labels
-                    if active_task is not None
-                    else ("status:in-progress",)
-                ),
                 reclaim_count=reclaim_count,
-                escalate=reclaim_count > max_task_reclaims,
+                max_task_reclaims=max_task_reclaims,
                 now=now,
             )
         )
@@ -203,72 +225,54 @@ def _reclaim_event(reclaim: ZombieOrTimeoutReclaim, action: str, counted: bool) 
     }
 
 
-def _apply_backup_failure(
+def _escalate_backup_failure(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
-    escalating: bool,
     backup_error: str,
-    open_prs: Sequence[PrRecord] | None = None,
+    open_prs: Sequence[PrRecord] | None,
 ) -> dict | None:
-    """WIPバックアップコミットの作成に失敗した場合の後始末。
+    released = False
 
-    未コミットの作業データ消失を防ぐため、worktreeは削除せずに残す。
+    def _release_entry() -> None:
+        nonlocal released
+        released = True
+        _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
 
-    #512/PR#520レビュー3巡目対応(Codex P1): 回収回数が上限を超えている場合は、
-    毎サイクル「スキップした」とコメントし続ける代わりに
-    `status:blocked-human-review`へ遷移させ、帳簿エントリも解放する。
-    バックアップが恒常的に失敗するタスク（ディスク枯渇・破損したworktree等）は、
-    この分岐が無いと`status:in-progress`のままクオータを占有し続け、回収回数と
-    失敗コメントだけが無限に積み上がる——本Issueが塞ごうとしている終端の無い
-    経路そのものになってしまう。worktreeは残したまま人間へ引き渡す。
+    try:
+        apply_human_review_escalation(
+            reclaim.active.issue_number,
+            reclaim.status_labels,
+            f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
+            "WIPバックアップコミットの作成に失敗しました。\n"
+            f"回収の累計回数が上限（max_task_reclaims={config.max_task_reclaims}）"
+            f"を超えた（今回で{reclaim.reclaim_count}回目）ため、自動回収を打ち切り、"
+            "status:blocked-human-reviewへ遷移しました。\n"
+            "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
+            f"{reclaim.active.worktree_path}\n"
+            f"エラー詳細:\n```\n{backup_error}\n```",
+            forge=config.resolved_forge,
+            on_label_applied=_release_entry,
+        )
+    except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
+        print(
+            f"Warning: failed to escalate the GC reclaim of issue "
+            f"#{reclaim.active.issue_number} after a WIP backup failure: {e}",
+            file=sys.stderr,
+        )
+        if not released:
+            _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=False)
+            return None
+    return _reclaim_event(reclaim, "escalated_reclaim_limit_exceeded", True)
 
-    #512/PR#520レビュー13巡目対応(Codex P1): 「バックアップに失敗して1回分を
-    使い切った」という事実の確定（`_settle_reclaim`）は、Issueへの通知が成功したか
-    どうかとは独立に行う。コメント投稿が失敗し続ける環境（権限不足等）で予約を
-    `pending`のまま残すと、次サイクルが同じ回数を再利用して上限に到達できず、
-    dirty worktreeを抱えたタスクがクオータを占有し続けてしまう。
-    """
-    if escalating:
-        released = False
 
-        def _release_entry() -> None:
-            nonlocal released
-            released = True
-            _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
-
-        try:
-            apply_human_review_escalation(
-                reclaim.active.issue_number,
-                reclaim.status_labels,
-                f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
-                "WIPバックアップコミットの作成に失敗しました。\n"
-                f"回収の累計回数が上限（max_task_reclaims={config.max_task_reclaims}）"
-                f"を超えた（今回で{reclaim.reclaim_count}回目）ため、自動回収を打ち切り、"
-                "status:blocked-human-reviewへ遷移しました。\n"
-                "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
-                f"{reclaim.active.worktree_path}\n"
-                f"エラー詳細:\n```\n{backup_error}\n```",
-                forge=config.resolved_forge,
-                # ラベルが付いた時点で確定させる（コメント失敗で再試行し続けない）
-                on_label_applied=_release_entry,
-            )
-        except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
-            print(
-                f"Warning: failed to escalate the GC reclaim of issue "
-                f"#{reclaim.active.issue_number} after a WIP backup failure: {e}",
-                file=sys.stderr,
-            )
-            if not released:
-                # ラベルすら付けられていない。回数だけ確定させ、次サイクルで再試行する。
-                _settle_reclaim(
-                    run_state, reclaim, config, open_prs, release_entry=False
-                )
-                return None
-        return _reclaim_event(reclaim, "escalated_reclaim_limit_exceeded", True)
-
-    # スキップした回収も1回分として、通知より先に確定させる（予約のまま残すと、
-    # バックアップが失敗し続けるタスクが上限に到達できず終端しなくなる）。
+def _skip_backup_failure(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    backup_error: str,
+    open_prs: Sequence[PrRecord] | None,
+) -> None:
     _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=False)
     try:
         config.resolved_forge.add_comment(
@@ -285,76 +289,58 @@ def _apply_backup_failure(
             f"#{reclaim.active.issue_number} but failed to post the reason: {e}",
             file=sys.stderr,
         )
+
+
+def _apply_backup_failure(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    escalating: bool,
+    backup_error: str,
+    open_prs: Sequence[PrRecord] | None = None,
+) -> dict | None:
+    """WIPバックアップコミットの作成に失敗した場合の後始末。"""
+    if escalating:
+        return _escalate_backup_failure(
+            run_state, reclaim, config, backup_error, open_prs
+        )
+    _skip_backup_failure(run_state, reclaim, config, backup_error, open_prs)
     return None
 
 
-def _notify_reclaim(
+def _notify_escalated_reclaim(
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
     worktree_note: str,
-    already_escalated: bool,
-    escalating: bool,
     settle: Callable[[], None],
 ) -> None:
-    """回収結果をGitHubへ反映する（ラベル遷移とコメント）。
-
-    #512/PR#520レビュー10巡目対応(Codex P2): 再キューイングでは、`status:queued`が
-    見えた時点で`settle`（予約の確定と帳簿エントリの解放・永続化）を呼ぶ。
-    後続のコメント投稿が失敗しても、再投入自体は既に成立しているためである。
-    ここで予約を`pending`のまま残すと、次サイクルで`_rule_stale_entry`が
-    エントリを破棄してタスクが再起動されたあと、その回収が同じ回数を再利用して
-    しまい、コメント投稿の失敗1回につき起動枠が1回増えてしまう。
-
-    #512/PR#520レビュー12巡目対応(Codex P1): エスカレーションも同様に、
-    `apply_human_review_escalation`の`on_label_applied`フックで
-    `status:blocked-human-review`が付いた時点で`settle`する。ここを確定させないと、
-    コメント投稿だけが失敗した場合に帳簿エントリが残り、次サイクルでは当該Issueが
-    `_fetch_issues`の取得対象外（＝`status_labels`が既定の`status:in-progress`に
-    なる）ため`already_escalated`にも該当せず、エスカレーションを延々と再試行しながら
-    クオータを占有し続けてしまう。
-    """
     active = reclaim.active
     reason = reclaim.reason
-    if already_escalated:
-        # 中断した以前の遷移でstatus:blocked-human-review/
-        # status:manual-merge-requiredが既に付与されている場合、
-        # status:queuedへ書き換えると人間の確認要求を握りつぶして
-        # 自動的に再起動してしまう。物理的な後始末のみ行い、
-        # ラベルには一切触れない。
-        config.resolved_forge.add_comment(
-            active.issue_number,
-            f"タスク実行が {reason} のため、GCにより{worktree_note}"
-            "後始末しました。既に人間の確認が必要な状態のため、"
-            "status:*ラベルは変更していません。",
-        )
-        settle()
-        return
-    if escalating:
-        # #512: 回収・再投入の累計が上限を超えたタスクは、status:queuedへ
-        # 戻さずstatus:blocked-human-reviewで停止させる（台帳の更新・永続化は
-        # 呼び出し側でラベル遷移より先に済ませている）。
-        apply_human_review_escalation(
-            active.issue_number,
-            reclaim.status_labels,
-            f"タスク実行が {reason} のため、GCにより{worktree_note}"
-            "後始末しました。\n"
-            f"回収・再投入の累計回数が上限（max_task_reclaims="
-            f"{config.max_task_reclaims}）を超えた"
-            f"（今回で{reclaim.reclaim_count}回目）ため、"
-            "status:queuedへの再投入を打ち切り、"
-            "status:blocked-human-reviewへ遷移しました。\n"
-            f"最後の回収理由: {reason}\n"
-            "タイムアウト設定やサブタスクの粒度、実行環境を確認してください。",
-            forge=config.resolved_forge,
-            # status:blocked-human-reviewが付いた時点で予約を確定させる
-            # （コメント投稿だけが失敗しても、次サイクルで再エスカレーションを
-            # 繰り返さない）。
-            on_label_applied=settle,
-        )
-        return
-    # #381レビュー対応(Codex P2): stacked launch等の中断した遷移で
-    # status:blockedが取り残されている場合も併せて除去し、
-    # status:queuedへ確実に収束させる。
+    apply_human_review_escalation(
+        active.issue_number,
+        reclaim.status_labels,
+        f"タスク実行が {reason} のため、GCにより{worktree_note}"
+        "後始末しました。\n"
+        f"回収・再投入の累計回数が上限（max_task_reclaims="
+        f"{config.max_task_reclaims}）を超えた"
+        f"（今回で{reclaim.reclaim_count}回目）ため、"
+        "status:queuedへの再投入を打ち切り、"
+        "status:blocked-human-reviewへ遷移しました。\n"
+        f"最後の回収理由: {reason}\n"
+        "タイムアウト設定やサブタスクの粒度、実行環境を確認してください。",
+        forge=config.resolved_forge,
+        on_label_applied=settle,
+    )
+
+
+def _notify_requeued_reclaim(
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    worktree_note: str,
+    settle: Callable[[], None],
+) -> None:
+    active = reclaim.active
+    reason = reclaim.reason
     stale_labels = tuple(
         label
         for label in ("status:in-progress", "status:blocked")
@@ -366,7 +352,6 @@ def _notify_reclaim(
         "status:queued",
         stale_labels,
     )
-    # status:queuedが見えた時点で再投入は成立している。コメントより先に確定させる。
     settle()
     try:
         config.resolved_forge.add_comment(
@@ -383,6 +368,32 @@ def _notify_reclaim(
         )
 
 
+def _notify_reclaim(
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    worktree_note: str,
+    already_escalated: bool,
+    escalating: bool,
+    settle: Callable[[], None],
+) -> None:
+    """回収結果をGitHubへ反映する（ラベル遷移とコメント）。"""
+    active = reclaim.active
+    reason = reclaim.reason
+    if already_escalated:
+        config.resolved_forge.add_comment(
+            active.issue_number,
+            f"タスク実行が {reason} のため、GCにより{worktree_note}"
+            "後始末しました。既に人間の確認が必要な状態のため、"
+            "status:*ラベルは変更していません。",
+        )
+        settle()
+        return
+    if escalating:
+        _notify_escalated_reclaim(reclaim, config, worktree_note, settle)
+        return
+    _notify_requeued_reclaim(reclaim, config, worktree_note, settle)
+
+
 def _mark_reclaim_for_retry(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
@@ -392,31 +403,6 @@ def _mark_reclaim_for_retry(
 ) -> None:
     """#512/PR#520レビュー7巡目対応(Codex P1): GitHubへの反映に失敗した回収を、
     次サイクルで必ず拾い直せる状態にして残す。
-
-    ここへ来た時点でworktreeは削除済みだが、GitHub側のラベルは
-    `status:in-progress`のまま、`active_worktrees`のエントリも残る。この状態を
-    そのまま次サイクルへ渡すと、対象プロセスが停止していることもあって
-    次の2つの困った挙動になる:
-
-    - タイムアウト判定が無効（`--task-timeout-seconds 0`、既定）なら、
-      `_check_zombie_and_timeout`は「worktree不在 + started_at既知」を回収対象と
-      判定せず、この帳簿エントリが同時実行スロットを永久に占有する。
-    - タイムアウト判定が有効でも、GCフェーズより先に走る`_rule_completed`が
-      「プロセス停止 + worktree不在」を完了とみなし、新規コミット無しの完了
-      （`completed_no_commits`）として即座にエスカレーションしてしまう
-      （PR#520レビュー8巡目対応(Codex P2)）——記録済みの回収の再試行にならない。
-
-    そこで`started_at`を未知（None）へ落とし、#383のゾンビ復旧経路
-    （プロセス不在 + worktree不在 + 開始時刻不明）へ載せる。`started_at`が未知の
-    エントリは`_is_worktree_complete`が完了と判定しないため、完了処理にも
-    さらわれない。
-
-    ただし対象プロセスがまだ生きている場合（killに失敗した場合）は`started_at`を
-    保つ: ゾンビ判定はプロセス停止が前提で拾えず、`started_at`を消すと
-    タイムアウト判定まで無効化してしまうため、タイムアウト判定に委ねる方が安全。
-
-    回収回数は既に永続化済みのため、次サイクルの再回収でも二重には数えない
-    （増えるのは上限に対して厳しくなる方向のみ）。
     """
     print(
         f"Warning: failed to apply the GC reclaim of issue "
@@ -424,9 +410,7 @@ def _mark_reclaim_for_retry(
         file=sys.stderr,
     )
     active = run_state.active_worktrees.get(reclaim.key)
-    if active is None or active.started_at is None:
-        return
-    if is_process_alive(active.pid):
+    if active is None or active.started_at is None or is_process_alive(active.pid):
         return
     active.started_at = None
     try:
@@ -453,22 +437,7 @@ def _settle_reclaim(
     *,
     release_entry: bool,
 ) -> None:
-    """今サイクル分の回収を確定させ、その場でディスクへ書く。
-
-    #512/PR#520レビュー9巡目対応(Codex P1): `active_worktrees`からの削除を
-    サイクル終端の`save_run_state`任せにすると、`status:blocked-human-review`を
-    付与した直後にプロセスが止まった場合、次サイクルではそのIssueが
-    `_fetch_issues`の取得対象（open な status:queued/in-progress/blocked/…）に
-    含まれないため`tasks_by_issue`にも現れず、staleエントリ破棄ルールが
-    働かない。タイムアウト判定が無効な既定構成では「worktree不在 +
-    started_at既知」もゾンビ判定に該当しないため、この帳簿エントリが同時実行
-    スロットを永久に占有しかねない。
-
-    同(Codex P2): 併せて、予約中（`pending`）の回収回数を確定済みへ落とす。
-    ここまで到達した回収は、再キューイング・エスカレーション・バックアップ失敗に
-    よるスキップのいずれであれ「1回分を使い切った」ものとして扱う
-    （バックアップが失敗し続けるタスクも上限で終端させるため）。
-    """
+    """今サイクル分の回収を確定させ、その場でディスクへ書く。"""
     record = run_state.task_reclaim_counts.get(reclaim.active.issue_number)
     if record is not None and record.pending:
         record.pending = False
@@ -490,114 +459,106 @@ def _settle_reclaim(
         )
 
 
+def _kill_timeout_process(reclaim: ZombieOrTimeoutReclaim) -> None:
+    if reclaim.is_timeout and reclaim.active.pid and reclaim.process_alive:
+        try:
+            os.kill(reclaim.active.pid, 9)
+        except Exception:
+            pass
+
+
+def _execute_reclaim_lifecycle(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+    escalating: bool,
+    already_escalated: bool,
+    settle_once: Callable[[], None],
+    is_settled: Callable[[], bool],
+) -> dict | None:
+    active = reclaim.active
+    worktree_exists = os.path.exists(active.worktree_path)
+    try:
+        if worktree_exists:
+            backup_error = backup_wip_commit(
+                active.worktree_path, f"WIP: backup by Orchestune GC ({reclaim.reason})"
+            )
+            if backup_error is not None:
+                return _apply_backup_failure(
+                    run_state, reclaim, config, escalating, backup_error, open_prs
+                )
+            remove_worktree(active.worktree_path)
+        worktree_note = (
+            "作業ブランチにWIPコミットを退避した上で、"
+            if worktree_exists
+            else "物理worktreeが見つからなかったため、"
+        )
+        _notify_reclaim(
+            reclaim,
+            config,
+            worktree_note,
+            already_escalated,
+            escalating,
+            settle_once,
+        )
+    except Exception as e:  # noqa: BLE001 - 次サイクルでの再回収へ委ねる
+        if not is_settled():
+            _mark_reclaim_for_retry(run_state, reclaim, config, open_prs, e)
+            return None
+        print(
+            f"Warning: applied the GC reclaim of issue "
+            f"#{active.issue_number} but a later step failed: {e}",
+            file=sys.stderr,
+        )
+    settle_once()
+    return _reclaim_event(
+        reclaim,
+        "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
+        not already_escalated,
+    )
+
+
 def _apply_zombie_or_timeout_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
 ) -> dict | None:
-    """decide層が判定した回収対象に基づき、安全に副作用を適用する。
-
-    worktreeの存在確認は、decide時点のスナップショットを信用せず、副作用を
-    実行する直前にこの関数内で再評価する。全回収対象の判定（decide）を先に
-    まとめて行ってから1件ずつapplyする都合上、decideからこの関数の実行までの
-    間にworktreeの状態（削除・再作成）が変化し得るため、古いスナップショットを
-    そのまま使うとバックアップ・削除・orphan worktree残存に関する安全策を
-    迂回しかねない。
-
-    WIPバックアップコミットの作成に失敗した場合は、未コミットの作業データ
-    消失を防ぐため今回のGC回収処理全体をスキップし、Noneを返す
-    （active_worktreesは変更せず、次サイクルでの再試行に委ねる）。ただし回収回数が
-    上限を超えている場合は、そのスキップ自体が終端の無いループになるため、
-    worktreeを残したまま`status:blocked-human-review`へ遷移させる
-    （`_apply_backup_failure`）。
-
-    #512/PR#520レビュー2巡目対応(Codex P2): 回収回数の記録・永続化は、
-    プロセスkill・worktree削除・ラベル遷移といったあらゆる副作用より**先**に行う。
-    永続化に失敗した場合はfail-closedで、何も壊さずにNoneを返して次サイクルへ
-    委ねる。この順序では、上記のWIPバックアップ失敗でスキップした回収も1回として
-    数えられる（＝上限に対して厳しくなる方向の非対称）が、バックアップ失敗が
-    毎サイクル続くようなタスクこそ人間の確認へ回すべきであり、副作用を先に
-    実行して回数だけ失う（次サイクルで数えられないまま再起動できてしまう）よりも
-    安全側である。
-
-    #512/PR#520レビュー7巡目対応(Codex P1): GitHubへの反映（コメント・ラベル遷移・
-    エスカレーション）が例外で失敗した場合は、帳簿エントリを消さずに
-    `_mark_reclaim_for_retry`で次サイクルが拾い直せる状態にしてからNoneを返す。
-    一時的なAPI障害でスロットを占有したままになるのを防ぐ。
-    """
-    active = reclaim.active
-    reason = reclaim.reason
+    """decide層が判定した回収対象に基づき、安全に副作用を適用する。"""
     already_escalated = any(
         label in reclaim.status_labels for label in TERMINAL_ESCALATION_LABELS
     )
-    # #512: 既に人間の確認待ちなら再投入は起きないため、回収回数にも数えない
-    # （数えると、人間が対処して再度キューへ戻した際に、実際の再投入回数より
-    # 進んだカウンタで即座に再エスカレーションしてしまう）。
     counted = not already_escalated
     escalating = counted and reclaim.escalate
-    if config.apply:
-        # #512: 破壊的な副作用より先に回数を確定・永続化する（ローカル先行）。
-        if counted and not _record_reclaim(run_state, reclaim, config, open_prs):
-            return None
-        # #385: タイムアウトかつプロセス生存中の場合、対象プロセスがまだ
-        # worktreeへ書き込み中の可能性がある。WIPバックアップより先に停止させ
-        # ないと、書き込み途中の不整合なスナップショットやgit操作のロック
-        # 競合を招きうる（ゾンビ判定はプロセスが既に停止済みのため無関係）。
-        if reclaim.is_timeout and active.pid and reclaim.process_alive:
-            try:
-                os.kill(active.pid, 9)
-            except Exception:
-                pass
-        worktree_exists = os.path.exists(active.worktree_path)
-        settled = False
+    if not config.apply:
+        return _reclaim_event(
+            reclaim,
+            "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
+            counted,
+        )
 
-        def _settle_once() -> None:
-            nonlocal settled
-            if settled:
-                return
+    if counted and not _record_reclaim(run_state, reclaim, config, open_prs):
+        return None
+    _kill_timeout_process(reclaim)
+
+    settled = False
+
+    def _settle_once() -> None:
+        nonlocal settled
+        if not settled:
             settled = True
             _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
 
-        try:
-            if worktree_exists:
-                backup_error = backup_wip_commit(
-                    active.worktree_path, f"WIP: backup by Orchestune GC ({reason})"
-                )
-                if backup_error is not None:
-                    return _apply_backup_failure(
-                        run_state, reclaim, config, escalating, backup_error, open_prs
-                    )
-                remove_worktree(active.worktree_path)
-            worktree_note = (
-                "作業ブランチにWIPコミットを退避した上で、"
-                if worktree_exists
-                else "物理worktreeが見つからなかったため、"
-            )
-            _notify_reclaim(
-                reclaim,
-                config,
-                worktree_note,
-                already_escalated,
-                escalating,
-                _settle_once,
-            )
-        except Exception as e:  # noqa: BLE001 - 次サイクルでの再回収へ委ねる
-            if not settled:
-                _mark_reclaim_for_retry(run_state, reclaim, config, open_prs, e)
-                return None
-            # GitHub側は適用済み（＝回収は成立）。以降の失敗は警告に留める。
-            print(
-                f"Warning: applied the GC reclaim of issue "
-                f"#{active.issue_number} but a later step failed: {e}",
-                file=sys.stderr,
-            )
-        _settle_once()
-
-    return _reclaim_event(
+    return _execute_reclaim_lifecycle(
+        run_state,
         reclaim,
-        "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
-        counted,
+        config,
+        open_prs,
+        escalating,
+        already_escalated,
+        _settle_once,
+        lambda: settled,
     )
 
 

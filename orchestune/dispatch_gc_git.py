@@ -138,20 +138,8 @@ def remove_worktree(worktree_path: str | Path) -> None:
         pass
 
 
-def prune_stale_integration_temp_branches(
-    repository_root: str | Path,
-    *,
-    forge: Forge | None = None,
-    now: float | None = None,
-    max_age_seconds: float = 24 * 60 * 60,
-) -> list[str]:
-    """PRに紐づかない古い ``integration/temp-*`` remote branchを回収する。
-
-    作成直後の並行runを削除しないよう、指定時間より古く、かつopen PRのhead
-    ではないbranchだけを対象にする。列挙に失敗した場合は何も削除しない。
-    """
-    forge = forge or GitHubForge()
-    root = Path(repository_root)
+def _list_remote_temp_refs(root: Path, forge: Forge) -> tuple[str, set[str]] | None:
+    """remoteのintegration/temp-* refsとopen PRの保護head一覧を取得する。"""
     try:
         run_git(
             [
@@ -173,26 +161,55 @@ def prune_stale_integration_temp_branches(
             check=True,
         )
         protected_heads = {pr.head_ref for pr in forge.list_open_prs()}
+        return refs.stdout, protected_heads
     except Exception as error:
         print(
             f"Warning: Failed to enumerate stale integration temp branches: {error}",
             file=sys.stderr,
         )
+        return None
+
+
+def _is_stale_temp_branch(
+    line: str, protected_heads: set[str], cutoff: float
+) -> str | None:
+    """refs出力行が削除対象のstale integration branchであればbranch名を返す。"""
+    try:
+        remote_name, timestamp = line.rsplit(maxsplit=1)
+        branch = remote_name.removeprefix("origin/")
+        if not branch.startswith("integration/temp-"):
+            return None
+        if branch in protected_heads or float(timestamp) > cutoff:
+            return None
+        return branch
+    except (TypeError, ValueError):
+        return None
+
+
+def prune_stale_integration_temp_branches(
+    repository_root: str | Path,
+    *,
+    forge: Forge | None = None,
+    now: float | None = None,
+    max_age_seconds: float = 24 * 60 * 60,
+) -> list[str]:
+    """PRに紐づかない古い ``integration/temp-*`` remote branchを回収する。
+
+    作成直後の並行runを削除しないよう、指定時間より古く、かつopen PRのhead
+    ではないbranchだけを対象にする。列挙に失敗した場合は何も削除しない。
+    """
+    forge = forge or GitHubForge()
+    ref_info = _list_remote_temp_refs(Path(repository_root), forge)
+    if ref_info is None:
         return []
 
+    refs_stdout, protected_heads = ref_info
     cutoff = (time.time() if now is None else now) - max_age_seconds
     deleted: list[str] = []
-    for line in refs.stdout.splitlines():
-        try:
-            remote_name, timestamp = line.rsplit(maxsplit=1)
-            branch = remote_name.removeprefix("origin/")
-            if not branch.startswith("integration/temp-"):
-                continue
-            if branch in protected_heads or float(timestamp) > cutoff:
-                continue
-        except (TypeError, ValueError):
+    for line in refs_stdout.splitlines():
+        branch = _is_stale_temp_branch(line, protected_heads, cutoff)
+        if branch is None:
             continue
-
         try:
             forge.delete_branch(branch)
             deleted.append(branch)
