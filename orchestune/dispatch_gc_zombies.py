@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_git import (
@@ -54,7 +55,7 @@ def _check_zombie_and_timeout(
             is_zombie = True
 
     if not is_zombie and active.started_at is not None:
-        if timeout_limit > 0 and now - active.started_at > timeout_limit:
+        if timeout_limit > 0 and exceeds_limit(now - active.started_at, timeout_limit):
             is_timeout = True
 
     return is_zombie, is_timeout, process_alive
@@ -110,7 +111,7 @@ def _build_reclaim_candidate(
             else ("status:in-progress",)
         ),
         reclaim_count=reclaim_count,
-        escalate=reclaim_count > max_task_reclaims,
+        escalate=exceeds_limit(reclaim_count, max_task_reclaims),
         now=now,
     )
 

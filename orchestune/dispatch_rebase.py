@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune import dispatch_gc
+from orchestune.bounded_limit import exceeds_limit
 from orchestune.dag_graph import recompute_dag_for_footprint_change
 from orchestune.dag_models import FootprintConflict, SubTask
 from orchestune.dispatch_config import DispatcherConfig
@@ -177,7 +178,8 @@ def _decide_footprint_deviation_outcome(
     if active_task is None or not active_task.subtask_id:
         return FootprintDeviationDecision(action="skipped_unknown_subtask")
 
-    if active.recompute_count >= config.max_recompute_retries:
+    # The next recomputation would exceed the allowed retry count.
+    if exceeds_limit(active.recompute_count + 1, config.max_recompute_retries):
         return FootprintDeviationDecision(
             action="forced_serial",
             subtask_id=active_task.subtask_id,

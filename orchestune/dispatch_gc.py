@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
+from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_completion import (
@@ -208,7 +209,7 @@ def _apply_dirty_worktree_hold(
     if not ctx.config.apply:
         return "completion_skipped_dirty_worktree"
     hold_count = _update_hold_record(ctx, active)
-    if hold_count <= ctx.config.max_task_reclaims:
+    if not exceeds_limit(hold_count, ctx.config.max_task_reclaims):
         return "completion_skipped_dirty_worktree"
     return _escalate_held_dirty_worktree(ctx, key, active, active_task, hold_count)
 
