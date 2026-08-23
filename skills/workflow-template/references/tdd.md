@@ -12,6 +12,7 @@ test, commit, or push from the primary checkout.
 - **For new features**: Skip this step and proceed to Step 4.
 
 ## 4. Baseline Recording (Baseline Record)
+- **Prerequisites**: Confirm that the worktree environment is ready before recording the baseline (e.g. check lockfile consistency and execute `<INSTALL_COMMAND>`).
 - Record the baseline status on unmodified code.
 - **When using Orchestune / dedicated baseline scripts**:
   ```bash
@@ -19,6 +20,7 @@ test, commit, or push from the primary checkout.
   ```
 - **Fallback procedure (when no baseline script exists)**:
   Run `<TEST_COMMAND>` on unmodified code and note existing test failures (failures or flaky tests unrelated to this issue) in a temporary note. Use this record in Step 9 to distinguish new regressions.
+- This record enables Step 9 to automatically distinguish between new regressions and pre-existing failures on the base branch.
 
 ## 5. Pre-Implementation Test Creation (Test-First)
 - Write tests covering new features or revised specifications (happy path and major scenarios).
@@ -49,4 +51,4 @@ test, commit, or push from the primary checkout.
 1. **Format/Lint**: Run `<FORMAT_LINT_COMMAND>` and fix any unresolved errors.
 2. **Type Checking**: Run `<TYPE_CHECK_COMMAND>` and resolve type mismatches.
 3. **Test Failures**: Identify and fix `<TEST_COMMAND>` failures. Qualification is Baseline-aware (zero new failures introduced beyond baseline failures).
-4. **Bloat Warnings**: If file size or complexity warnings are detected, pause work and present a modular refactoring plan.
+4. **Bloat Warnings**: If file size or complexity warnings are detected, distinguish between pre-existing baseline warnings and newly introduced/worsened warnings. If new bloat warnings are detected, pause code modification and present a modular refactoring plan to the user for approval.

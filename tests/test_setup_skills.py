@@ -988,3 +988,65 @@ def test_create_skill_link_copies_subdirectories_on_windows_privilege_error(tmp_
     assert (destination / "references" / "tdd.md").read_text(
         encoding="utf-8"
     ) == "tdd ref contents"
+
+
+def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedures(
+    tmp_path,
+):
+    """`--with-workflow-skill` で配布される workflow-template が、
+    preflight、selected backend固定、GitHub MCP post-write検証、bloat baselineの手順を含み、
+    旧来のghコマンド固定や旧bloatルールが配布されないことを検証する。"""
+    from orchestune.setup_skills import setup_skills
+
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    # Orchestuneリポジトリ実体の skills/ ディレクトリを使用
+    real_skills_dir = Path(__file__).parents[1] / "skills"
+    mock_project = tmp_path / "target_project"
+    mock_project.mkdir()
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_project),
+        patch(
+            "orchestune.setup_skills.get_skills_source_dir",
+            return_value=real_skills_dir,
+        ),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    assert exit_code == 0
+    target_skill = mock_project / ".claude" / "skills" / "workflow-template"
+    assert target_skill.is_dir()
+
+    skill_md = (target_skill / "SKILL.md").read_text(encoding="utf-8")
+    tdd_md = (target_skill / "references" / "tdd.md").read_text(encoding="utf-8")
+    pr_md = (target_skill / "references" / "pr.md").read_text(encoding="utf-8")
+
+    # SKILL.md preflight & backend selection
+    assert "Preflight" in skill_md or "preflight" in skill_md
+    assert "selected backend" in skill_md.lower()
+    # gh固定ではなくselected backend経由になっていること
+    assert "selected backend" in skill_md
+    assert (
+        "<PREFLIGHT_CHECK_COMMAND>" in skill_md
+        or "<preflight_check_command>" in skill_md.lower()
+    )
+
+    # tdd.md bloat baseline
+    assert "baseline" in tdd_md.lower()
+    assert "bloat" in tdd_md.lower()
+    assert "pre-existing" in tdd_md.lower() or "newly introduced" in tdd_md.lower()
+
+    # pr.md MCP post-write verification & selected backend
+    assert "blob" in pr_md.lower()
+    assert "sha" in pr_md.lower()
+    assert "backend" in pr_md.lower() and "selected" in pr_md.lower()
+    assert "cumulative diff" in pr_md.lower()
+    assert "head diff" in pr_md.lower()
+
+    # references completeness
+    assert (target_skill / "references" / "worktree.md").is_file()
+    assert (target_skill / "references" / "review-loop.md").is_file()
