@@ -178,6 +178,7 @@ def _decide_footprint_deviation_outcome(
     if active_task is None or not active_task.subtask_id:
         return FootprintDeviationDecision(action="skipped_unknown_subtask")
 
+    # The next recomputation would exceed the allowed retry count.
     if exceeds_limit(active.recompute_count + 1, config.max_recompute_retries):
         return FootprintDeviationDecision(
             action="forced_serial",

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_git import (
@@ -667,7 +668,7 @@ def _apply_abandoned_cloud_reclaim(
     on_settle_reclaim: Callable[[], None],
 ) -> str:
     remove_worktree(active.worktree_path)
-    if reclaim_count > config.max_task_reclaims:
+    if exceeds_limit(reclaim_count, config.max_task_reclaims):
         apply_human_review_escalation(
             active.issue_number,
             status_labels,
