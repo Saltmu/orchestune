@@ -14,10 +14,12 @@ from tests.dispatch_gc_test_support import _active, _ctx, _task
 
 
 class TestRuleCompleted:
-    def test_closed_unmerged_local_pr_is_requeued_without_completing_dependency(self):
+    def test_closed_unmerged_local_pr_is_requeued_without_completing_dependency(
+        self, fake_forge
+    ):
         active = _active(pid=123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx()
+        ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
         ctx.run_state.active_worktrees["1"] = active
         ctx.prs = [
@@ -29,22 +31,16 @@ class TestRuleCompleted:
                 state="CLOSED",
             )
         ]
+        fake_forge.list_prs.return_value = ctx.prs
         with (
             patch(
                 "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.forge.GitHubForge.list_prs",
-                return_value=ctx.prs,
-            ) as mock_list_prs,
-            patch(
                 "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_remove,
-            patch("orchestune.forge.GitHubForge.remove_label") as mock_remove_label,
-            patch("orchestune.forge.GitHubForge.add_label") as mock_add_label,
-            patch("orchestune.forge.GitHubForge.add_comment") as mock_add_comment,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -53,11 +49,11 @@ class TestRuleCompleted:
         assert outcome.completed_subtask_id is None
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
-        mock_list_prs.assert_called_once_with(state="all")
+        fake_forge.list_prs.assert_called_once_with(state="all")
         mock_remove.assert_called_once_with(active.worktree_path)
-        mock_remove_label.assert_called_once_with(280, "status:in-progress")
-        mock_add_label.assert_called_once_with(280, "status:queued")
-        mock_add_comment.assert_called_once()
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        fake_forge.add_comment.assert_called_once()
 
     def test_abandoned_requeue_adds_queued_before_removing_in_progress(self):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
