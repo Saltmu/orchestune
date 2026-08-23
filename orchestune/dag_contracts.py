@@ -138,38 +138,12 @@ def _format_warning(label: str, entries: list[tuple[str, str]], hint: str) -> st
     )
 
 
-def find_unowned_shared_contract_hotspots(
+def _check_explicit_contract_warnings(
     subtasks: list[SubTask],
-    edges: list[DagEdge],
-) -> list[str]:
-    """所有者不明の共有拡張ポイントに対する警告メッセージ一覧を返す。
-
-    2段階で検出する:
-    1. 明示的な`shared_contract`タグ（プラン作成者が同一の未確立コントラクトだと
-       明示したサブタスク群）のうち、実際に共有ファイルへ「書き込む」サブタスク
-       同士（`_is_contract_writer`参照）。同じタグを持っていても、契約に
-       depends_onするだけで自身は共有ファイルに触れない消費者サブタスクは
-       比較対象から除外する（消費者同士・書き込み者と消費者の組み合わせは、
-       共有ファイルへの同時書き込みが発生しないため安全）。
-    2. カテゴリ(registry/cli-wiring/public-api/dependency-manifest)とディレクトリ
-       スコープに基づくヒューリスティックなフォールバック。`shared_contract`が
-       付与されているかどうかに関わらず、footprintがカテゴリに一致する全サブ
-       タスクを対象とする — タグ付けが一部のサブタスクにしか行われなかった
-       場合（例: 片方だけタグ付けを忘れた）でも、同じ共有ファイルへの並列書き込み
-       を見逃さないため（#175再レビュー指摘）。ディレクトリが異なる場合は同一
-       ホットスポットとみなさないため、レジストリのように想定パスのディレクトリ
-       ごと異なるケースまでは捕捉できない — そうしたケースは明示的な
-       `shared_contract`タグの付与が推奨される。
-       段階1で既に警告済みのペアは、段階2で重複して警告しない。
-
-    いずれの段階でも、判定は連結性ではなく有向の到達可能性（一方が他方の祖先か）
-    で行う。ブロッキングエラーにはしない。
-    """
-    reachable = _forward_reachable((subtask.id for subtask in subtasks), edges)
-
-    warnings: list[str] = []
-    warned_pairs: set[frozenset[str]] = set()
-
+    reachable: dict[str, set[str]],
+    warned_pairs: set[frozenset[str]],
+    warnings: list[str],
+) -> None:
     explicit_groups: dict[str, list[tuple[str, str]]] = {}
     for subtask in subtasks:
         if not subtask.shared_contract or not _is_contract_writer(subtask):
@@ -192,6 +166,13 @@ def find_unowned_shared_contract_hotspots(
             )
         )
 
+
+def _check_heuristic_contract_warnings(
+    subtasks: list[SubTask],
+    reachable: dict[str, set[str]],
+    warned_pairs: set[frozenset[str]],
+    warnings: list[str],
+) -> None:
     heuristic_touches: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for subtask in subtasks:
         seen_keys: set[tuple[str, str]] = set()
@@ -222,5 +203,25 @@ def find_unowned_shared_contract_hotspots(
                 "integration-scaffoldタスクの導入を検討してください",
             )
         )
+
+
+def find_unowned_shared_contract_hotspots(
+    subtasks: list[SubTask],
+    edges: list[DagEdge],
+) -> list[str]:
+    """所有者不明の共有拡張ポイントに対する警告メッセージ一覧を返す。
+
+    2段階で検出する:
+    1. 明示的な`shared_contract`タグ（プラン作成者が同一の未確立コントラクトだと
+       明示したサブタスク群）のうち、実際に共有ファイルへ「書き込む」サブタスク
+       同士（`_is_contract_writer`参照）。
+    2. カテゴリとディレクトリスコープに基づくヒューリスティックなフォールバック。
+    """
+    reachable = _forward_reachable((subtask.id for subtask in subtasks), edges)
+    warnings: list[str] = []
+    warned_pairs: set[frozenset[str]] = set()
+
+    _check_explicit_contract_warnings(subtasks, reachable, warned_pairs, warnings)
+    _check_heuristic_contract_warnings(subtasks, reachable, warned_pairs, warnings)
 
     return warnings

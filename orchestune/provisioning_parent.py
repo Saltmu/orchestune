@@ -57,42 +57,41 @@ def _resolve_explicit_parent_issue(
     )
 
 
-def _resolve_parent_issue(
+def _resolve_adopted_parent_metadata(
     forge: IssueForge,
     metadata: PlanMetadata,
     plan_path: str | Path,
-    *,
-    explicit_parent_issue: int | None = None,
 ) -> tuple[int, bool]:
-    if explicit_parent_issue is not None:
-        return _resolve_explicit_parent_issue(
-            forge, explicit_parent_issue, plan_path, metadata
+    if metadata.parent_issue_number is None:
+        raise ValueError(
+            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+            "'parent_issue_number' が設定されていません"
         )
-    if metadata.parent_issue_source == "adopted":
-        if metadata.parent_issue_number is None:
-            raise ValueError(
-                "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-                "'parent_issue_number' が設定されていません"
-            )
-        candidate = forge.get_issue(metadata.parent_issue_number)
-        if candidate is None:
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} does not exist; refusing to provision subtasks under it."
-            )
-        if candidate.state.upper() == "CLOSED":
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
-            )
-        if not is_epic_issue(candidate):
-            raise RuntimeError(
-                f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
-                "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
-                f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
-            )
-        return _resolve_explicit_parent_issue(
-            forge, metadata.parent_issue_number, plan_path, metadata
+    candidate = forge.get_issue(metadata.parent_issue_number)
+    if candidate is None:
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} does not exist; refusing to provision subtasks under it."
         )
+    if candidate.state.upper() == "CLOSED":
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
+        )
+    if not is_epic_issue(candidate):
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
+            "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
+            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
+        )
+    return _resolve_explicit_parent_issue(
+        forge, metadata.parent_issue_number, plan_path, metadata
+    )
 
+
+def _resolve_derived_parent_issue(
+    forge: IssueForge,
+    metadata: PlanMetadata,
+    plan_path: str | Path,
+) -> tuple[int, bool]:
     parent_issue_number = metadata.parent_issue_number
     parent_title = f"[EPIC] {metadata.title}"
     if parent_issue_number is not None:
@@ -127,3 +126,19 @@ def _resolve_parent_issue(
     return parent_issue_number, sync_parent_decomposition_plan(
         forge, parent_issue_number, plan_path
     )
+
+
+def _resolve_parent_issue(
+    forge: IssueForge,
+    metadata: PlanMetadata,
+    plan_path: str | Path,
+    *,
+    explicit_parent_issue: int | None = None,
+) -> tuple[int, bool]:
+    if explicit_parent_issue is not None:
+        return _resolve_explicit_parent_issue(
+            forge, explicit_parent_issue, plan_path, metadata
+        )
+    if metadata.parent_issue_source == "adopted":
+        return _resolve_adopted_parent_metadata(forge, metadata, plan_path)
+    return _resolve_derived_parent_issue(forge, metadata, plan_path)

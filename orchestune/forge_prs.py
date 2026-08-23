@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 import sys
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 from orchestune.models import PrRecord
@@ -221,6 +221,44 @@ class GitHubPullRequestMixin:
             return tuple(paths), True
         return tuple(paths), False
 
+    def _parse_pr_record(
+        self, raw: dict[str, Any], state: str, paginate_files: bool
+    ) -> PrRecord:
+        number = raw["number"]
+        files = raw.get("files", [])
+        closing_refs = raw.get("closingIssuesReferences", [])
+        is_truncated = False
+        if paginate_files and state == "open" and len(files) >= 100:
+            all_files, is_truncated = self._fetch_all_pr_files(number)
+            changed_files = (
+                all_files
+                if not is_truncated or all_files
+                else tuple(file["path"] for file in files)
+            )
+        else:
+            changed_files = tuple(file["path"] for file in files)
+        rollup = self._status_check_contexts(raw.get("statusCheckRollup"))
+        is_ci_passing = bool(rollup) and all(
+            self._is_check_passing(check) for check in rollup
+        )
+        raw_is_cross = raw.get("isCrossRepository")
+        return PrRecord(
+            number=number,
+            head_ref=raw["headRefName"],
+            changed_files=changed_files,
+            created_at=raw.get("createdAt") or "",
+            closed_at=raw.get("closedAt") or "",
+            closes_issue_numbers=tuple(sorted(ref["number"] for ref in closing_refs)),
+            review_decision=raw.get("reviewDecision") or "",
+            is_ci_passing=is_ci_passing,
+            state=(raw.get("state") or "OPEN").upper(),
+            base_ref=raw.get("baseRefName") or "",
+            is_cross_repository=(
+                raw_is_cross if isinstance(raw_is_cross, bool) else None
+            ),
+            is_files_truncated=is_truncated,
+        )
+
     def list_prs(
         self, state: str = "open", limit: int = 1000, paginate_files: bool = False
     ) -> list[PrRecord]:
@@ -239,47 +277,10 @@ class GitHubPullRequestMixin:
                 "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
             ]
         )
-        prs: list[PrRecord] = []
-        for raw in json.loads(stdout):
-            number = raw["number"]
-            files = raw.get("files", [])
-            closing_refs = raw.get("closingIssuesReferences", [])
-            is_truncated = False
-            if paginate_files and state == "open" and len(files) >= 100:
-                all_files, is_truncated = self._fetch_all_pr_files(number)
-                changed_files = (
-                    all_files
-                    if not is_truncated or all_files
-                    else tuple(file["path"] for file in files)
-                )
-            else:
-                changed_files = tuple(file["path"] for file in files)
-            rollup = self._status_check_contexts(raw.get("statusCheckRollup"))
-            is_ci_passing = bool(rollup) and all(
-                self._is_check_passing(check) for check in rollup
-            )
-            raw_is_cross = raw.get("isCrossRepository")
-            prs.append(
-                PrRecord(
-                    number=number,
-                    head_ref=raw["headRefName"],
-                    changed_files=changed_files,
-                    created_at=raw.get("createdAt") or "",
-                    closed_at=raw.get("closedAt") or "",
-                    closes_issue_numbers=tuple(
-                        sorted(ref["number"] for ref in closing_refs)
-                    ),
-                    review_decision=raw.get("reviewDecision") or "",
-                    is_ci_passing=is_ci_passing,
-                    state=(raw.get("state") or "OPEN").upper(),
-                    base_ref=raw.get("baseRefName") or "",
-                    is_cross_repository=(
-                        raw_is_cross if isinstance(raw_is_cross, bool) else None
-                    ),
-                    is_files_truncated=is_truncated,
-                )
-            )
-        return prs
+        return [
+            self._parse_pr_record(raw, state, paginate_files)
+            for raw in json.loads(stdout)
+        ]
 
     def list_open_prs(
         self, limit: int = 1000, paginate_files: bool = False
