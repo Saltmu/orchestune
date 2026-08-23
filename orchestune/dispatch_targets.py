@@ -192,12 +192,12 @@ def _is_stale_pr_for_handle(pr: PrRecord, handle: DispatchHandle) -> bool:
 def _task_pr_completion_status(
     handle: DispatchHandle,
     forge: Forge | None = None,
-) -> Literal["pending", "completed", "abandoned"]:
+) -> Literal["pending", "completed", "abandoned", "unknown"]:
     """Classify matching cloud-task PRs without treating rejected PRs as done.
 
     #552: PRがOPENの場合でも、完了宣言レコード（orchestune:outcome）が
     確認できるまでcompletedとは判定せずpendingとする。
-    forge例外発生時も安全にpendingへ倒す（fail-closed）。
+    forgeのPR一覧取得失敗時はunknownを返し、呼び出し元での誤判定を防ぐ。
     """
     if handle.branch_name is None and handle.issue_number is None:
         return "pending"
@@ -205,7 +205,7 @@ def _task_pr_completion_status(
     try:
         prs = forge.list_prs(state="all")
     except Exception:
-        return "pending"
+        return "unknown"
     matching_prs = [
         pr
         for pr in prs
@@ -543,7 +543,8 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
         """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
-        return _task_pr_completion_status(handle, forge=forge)
+        status = _task_pr_completion_status(handle, forge=forge)
+        return "pending" if status == "unknown" else status
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
@@ -570,34 +571,55 @@ def _parse_codex_cloud_exec_output(output: str) -> tuple[str | None, str | None]
     return None, None
 
 
-def _fetch_codex_cloud_task_status(environment_id: str, task_id: str) -> str | None:
-    """codex cloud list --env <env> --json を実行し、該当タスクのstatusを返す。"""
-    try:
-        proc = subprocess.run(
-            ["codex", "cloud", "list", "--env", environment_id, "--json"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=30,
-        )
-        if proc.returncode != 0:
+def _fetch_codex_cloud_task_status(
+    environment_id: str,
+    task_id: str,
+    *,
+    max_pages: int = 10,
+) -> str | None:
+    """codex cloud list --env <env> --json をページング追従して実行し、該当タスクのstatusを返す。"""
+    cursor: str | None = None
+    for _ in range(max_pages):
+        cmd = ["codex", "cloud", "list", "--env", environment_id, "--json"]
+        if cursor:
+            cmd.extend(["--cursor", cursor])
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=30,
+            )
+            if proc.returncode != 0:
+                return None
+            data = json.loads(proc.stdout)
+            items: list[Any] = []
+            next_cursor: str | None = None
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                raw_items = data.get("items")
+                if raw_items is None:
+                    raw_items = data.get("tasks")
+                if isinstance(raw_items, list):
+                    items = raw_items
+                raw_cursor = data.get("cursor")
+                if isinstance(raw_cursor, str) and raw_cursor.strip():
+                    next_cursor = raw_cursor.strip()
+
+            for item in items:
+                if isinstance(item, dict) and item.get("id") == task_id:
+                    status = item.get("status")
+                    return str(status).lower() if status is not None else None
+
+            if not next_cursor:
+                break
+            cursor = next_cursor
+        except Exception:
             return None
-        data = json.loads(proc.stdout)
-        items: list[Any] = (
-            data
-            if isinstance(data, list)
-            else data.get("tasks", [])
-            if isinstance(data, dict)
-            else []
-        )
-        for item in items:
-            if isinstance(item, dict) and item.get("id") == task_id:
-                status = item.get("status")
-                return str(status).lower() if status is not None else None
-    except Exception:
-        return None
     return None
 
 
@@ -680,6 +702,9 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
         pr_status = _task_pr_completion_status(handle, forge=forge)
+        if pr_status == "unknown":
+            # PRの取得失敗時はCloud障害を誤ってabandoned扱いにしない
+            return "pending"
         if pr_status != "pending":
             return pr_status
         if handle.external_id is not None and not handle.external_id.startswith(
