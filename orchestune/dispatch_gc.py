@@ -365,11 +365,14 @@ def _abandoned_worktree_outcome(
 
     def _release_entry() -> None:
         nonlocal released
-        released = True
         ctx.run_state.active_worktrees.pop(key, None)
-        _persist_run_state_best_effort(
-            ctx, f"the released ledger entry for issue #{active.issue_number}"
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
         )
+        released = True
 
     def _reserve_reclaim() -> None:
         save_run_state(

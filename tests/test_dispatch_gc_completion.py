@@ -655,6 +655,51 @@ class TestFinalizeAbandonedCloudWorktree:
         mock_rm.assert_not_called()
         mock_label.assert_not_called()
 
+    def test_reclaim_settles_even_if_old_label_removal_fails(self, tmp_path):
+        import pytest
+
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=100.0, pending=False)
+            },
+        )
+        settled = False
+
+        def _on_label():
+            nonlocal settled
+            settled = True
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch(
+                "orchestune.forge.GitHubForge.remove_label",
+                side_effect=RuntimeError("Failed to remove old label"),
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="Failed to remove old label"):
+                _finalize_abandoned_cloud_worktree(
+                    active,
+                    task,
+                    config,
+                    run_state=run_state,
+                    on_label_applied=_on_label,
+                )
+
+        assert settled is True
+        assert run_state.task_reclaim_counts[280].pending is False
+        assert run_state.task_reclaim_counts[280].count == 2
+
 
 class TestFinalizeNotNeededWorktree:
     """#280: status:not-neededラベル検知による完全自動クローズ。"""

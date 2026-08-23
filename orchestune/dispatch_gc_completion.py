@@ -632,8 +632,8 @@ def _finalize_abandoned_cloud_worktree(
             active.issue_number,
             "status:queued",
             stale_labels,
+            on_label_added=_settle_reclaim,
         )
-        _settle_reclaim()
         try:
             config.resolved_forge.add_comment(
                 active.issue_number,
