@@ -79,6 +79,7 @@ def test_powershell_local_ci_auto_installs_gitleaks_when_missing():
     )
     assert "--baseline .orchestune/bloat-baseline.json" in content
     assert "Get-Command poetry" in content
+    assert "exit 2" in content
 
 
 def test_gitleaks_installers_support_restricted_environments():

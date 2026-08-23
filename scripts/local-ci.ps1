@@ -27,7 +27,7 @@ Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="
 
 if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
-    Write-Error "Poetry is required for local CI. Install the version specified by poetry.lock."
+    Write-Host "ERROR: Poetry is required for local CI. Install the version specified by poetry.lock." -ForegroundColor Red
     exit 2
 }
 
