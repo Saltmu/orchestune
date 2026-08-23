@@ -1,5 +1,9 @@
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
+from orchestune.dispatch_config import DispatcherConfig
 from orchestune.forge import (
     BootstrapResult,
     Forge,
@@ -9,6 +13,33 @@ from orchestune.forge import (
     RepoAdminForge,
 )
 from tests.conftest import FakeForge
+
+
+def test_guard_events_log_path_fails_on_default_init():
+    """`DispatcherConfig` initialized with default `Path('events.jsonl')` should fail immediately in tests."""
+    with pytest.raises(pytest.fail.Exception) as exc_info:
+        DispatcherConfig()
+
+    assert (
+        "DispatcherConfig initialized with default events_log_path ('events.jsonl')"
+        in str(exc_info.value)
+    )
+
+
+def test_guard_events_log_path_succeeds_with_explicit_tmp_path(tmp_path: Path):
+    """`DispatcherConfig` initialized with explicit isolated `events_log_path` should succeed."""
+    config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl")
+    assert config.events_log_path == tmp_path / "events.jsonl"
+
+
+def test_guard_dispatch_cycle_ensure_parent_branch_fails_when_unmocked():
+    """`ensure_parent_branch` inside dispatch_cycle should fail in unit tests when unmocked."""
+    import orchestune.dispatch_phase_rebase
+
+    with pytest.raises(pytest.fail.Exception) as exc_info:
+        orchestune.dispatch_phase_rebase.ensure_parent_branch(181)
+
+    assert "called unmocked `ensure_parent_branch(181)`" in str(exc_info.value)
 
 
 class TestFakeForgeFixture:
@@ -166,14 +197,21 @@ class TestFakeForgeClass:
         merged_pr = PrRecord(
             number=42,
             head_ref="feat/bar",
+            base_ref="parent/issue-10",
             changed_files=(),
             state="MERGED",
+            closed_at="2026-08-23T12:00:00Z",
         )
         forge.seed_pr(merged_pr)
         assert forge.list_open_prs() == []
         all_prs = forge.list_prs(state="all")
         assert len(all_prs) == 1
         assert all_prs[0].number == 42
+        assert forge.is_branch_merged_into("feat/bar", "parent/issue-10") is True
+        assert (
+            forge.get_merged_pr_timestamp("feat/bar", "parent/issue-10")
+            == "2026-08-23T12:00:00Z"
+        )
 
     def test_actor_permissions_and_reopen(self):
         forge = FakeForge()

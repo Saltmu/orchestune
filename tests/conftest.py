@@ -483,6 +483,10 @@ class FakeForge:
         resolved_state = (state if state is not None else pr.state or "open").lower()
         self.pr_states[pr.number] = resolved_state
         self.branches.add(pr.head_ref)
+        if resolved_state == "merged":
+            ts = pr.closed_at or datetime.now(UTC).isoformat()
+            base = pr.base_ref or "main"
+            self.merged_branches[(pr.head_ref, base)] = ts
         if pr.number >= self._next_pr_number:
             self._next_pr_number = pr.number + 1
 
