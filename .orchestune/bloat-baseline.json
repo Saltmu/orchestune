@@ -1,0 +1,502 @@
+{
+  "version": 1,
+  "warnings": [
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 57,
+      "path": "orchestune/dag_cli.py",
+      "symbol": "main"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 86,
+      "path": "orchestune/dag_contracts.py",
+      "symbol": "find_unowned_shared_contract_hotspots"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 66,
+      "path": "orchestune/dag_graph.py",
+      "symbol": "recompute_dag_for_footprint_change"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 70,
+      "path": "orchestune/dispatch_cycle.py",
+      "symbol": "run_dispatch_cycle"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 64,
+      "path": "orchestune/dispatch_cycle_context.py",
+      "symbol": "_build_cycle_context"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 61,
+      "path": "orchestune/dispatch_cycle_context.py",
+      "symbol": "_resolve_ledger_issue_states"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 66,
+      "path": "orchestune/dispatch_gc.py",
+      "symbol": "_abandoned_worktree_outcome"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 78,
+      "path": "orchestune/dispatch_gc.py",
+      "symbol": "_apply_dirty_worktree_hold"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 59,
+      "path": "orchestune/dispatch_gc.py",
+      "symbol": "_apply_stale_active_entry_discard"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 59,
+      "path": "orchestune/dispatch_gc.py",
+      "symbol": "_rule_completed"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 130,
+      "path": "orchestune/dispatch_gc_completion.py",
+      "symbol": "_apply_completed_worktree_outcome"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 90,
+      "path": "orchestune/dispatch_gc_completion.py",
+      "symbol": "_finalize_abandoned_cloud_worktree"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 54,
+      "path": "orchestune/dispatch_gc_completion.py",
+      "symbol": "_local_pr_completion_status"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 64,
+      "path": "orchestune/dispatch_gc_git.py",
+      "symbol": "prune_stale_integration_temp_branches"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 83,
+      "path": "orchestune/dispatch_gc_zombies.py",
+      "symbol": "_apply_backup_failure"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 109,
+      "path": "orchestune/dispatch_gc_zombies.py",
+      "symbol": "_apply_zombie_or_timeout_reclaim"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 59,
+      "path": "orchestune/dispatch_gc_zombies.py",
+      "symbol": "_decide_zombie_or_timeout_reclaims"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 60,
+      "path": "orchestune/dispatch_gc_zombies.py",
+      "symbol": "_mark_reclaim_for_retry"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 93,
+      "path": "orchestune/dispatch_gc_zombies.py",
+      "symbol": "_notify_reclaim"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 144,
+      "path": "orchestune/dispatch_launch.py",
+      "symbol": "_apply_task_launches"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 67,
+      "path": "orchestune/dispatch_launch.py",
+      "symbol": "_decide_duplicate_candidates"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 64,
+      "path": "orchestune/dispatch_launch.py",
+      "symbol": "_get_stack_eligible_tasks"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 63,
+      "path": "orchestune/dispatch_launch.py",
+      "symbol": "_persist_launch_history"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 54,
+      "path": "orchestune/dispatch_locks.py",
+      "symbol": "check_footprint_deviation"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 77,
+      "path": "orchestune/dispatch_locks.py",
+      "symbol": "scan_external_locks"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 68,
+      "path": "orchestune/dispatch_phase_scheduling.py",
+      "symbol": "_determine_candidate_tasks"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 52,
+      "path": "orchestune/dispatch_postcycle.py",
+      "symbol": "_run_semantic_integrator"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 114,
+      "path": "orchestune/dispatch_rebase.py",
+      "symbol": "_apply_auto_rebase"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 55,
+      "path": "orchestune/dispatch_rebase.py",
+      "symbol": "_apply_footprint_deviation_outcome"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 59,
+      "path": "orchestune/dispatch_reconciliation.py",
+      "symbol": "_apply_base_branch_red_recovery"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 64,
+      "path": "orchestune/dispatch_reconciliation.py",
+      "symbol": "_restore_launch_history"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 94,
+      "path": "orchestune/dispatch_recovery.py",
+      "symbol": "_decide_missing_active_worktrees"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 105,
+      "path": "orchestune/dispatch_report.py",
+      "symbol": "write_github_step_summary"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 88,
+      "path": "orchestune/dispatch_state.py",
+      "symbol": "prune_run_state"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 54,
+      "path": "orchestune/dispatch_targets.py",
+      "symbol": "CodexCloudDispatchTarget.launch"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 54,
+      "path": "orchestune/dispatch_targets.py",
+      "symbol": "_fetch_codex_cloud_task_status"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 62,
+      "path": "orchestune/dispatch_targets.py",
+      "symbol": "_task_pr_completion_status"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 71,
+      "path": "orchestune/dispatch_targets.py",
+      "symbol": "build_dispatch_target"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 91,
+      "path": "orchestune/dispatch_worktree.py",
+      "symbol": "create_worktree_and_launch"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 54,
+      "path": "orchestune/dispatcher.py",
+      "symbol": "_add_dispatch_target_arguments"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 56,
+      "path": "orchestune/dispatcher.py",
+      "symbol": "_config_defaults"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 59,
+      "path": "orchestune/forge_prs.py",
+      "symbol": "GitHubPullRequestMixin.list_prs"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 51,
+      "path": "orchestune/git_cli.py",
+      "symbol": "ensure_parent_branch"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 128,
+      "path": "orchestune/integration_coordinator.py",
+      "symbol": "process_pending_not_needed_reviews"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 66,
+      "path": "orchestune/integrator.py",
+      "symbol": "IntegrationPipeline.execute"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 51,
+      "path": "orchestune/integrator_git_ops.py",
+      "symbol": "IntegrationMerger._prepare_ci_environment"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 93,
+      "path": "orchestune/integrator_git_ops.py",
+      "symbol": "IntegrationMerger.merge_and_test_tasks"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 58,
+      "path": "orchestune/integrator_pr.py",
+      "symbol": "ensure_integration_pr"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 115,
+      "path": "orchestune/integrator_steps.py",
+      "symbol": "AutoMergeChildIntegrationStep._handle_parent_branch_staleness"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 86,
+      "path": "orchestune/integrator_steps.py",
+      "symbol": "AutoMergeChildIntegrationStep.execute"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 53,
+      "path": "orchestune/integrator_steps.py",
+      "symbol": "MergeAndTestStep.execute"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 57,
+      "path": "orchestune/integrator_steps.py",
+      "symbol": "SetupWorktreeStep.execute"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 105,
+      "path": "orchestune/integrator_tasks.py",
+      "symbol": "get_sorted_done_tasks"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 77,
+      "path": "orchestune/issue_parsing.py",
+      "symbol": "parse_task_from_issue"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 53,
+      "path": "orchestune/outcome_record.py",
+      "symbol": "_record_from_dict"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 79,
+      "path": "orchestune/parent_completion.py",
+      "symbol": "_is_current_parent_branch_merged"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 60,
+      "path": "orchestune/plan_writer.py",
+      "symbol": "_write_flow_style_issue_number"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 89,
+      "path": "orchestune/provisioning_flow.py",
+      "symbol": "provision_issues"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 70,
+      "path": "orchestune/provisioning_parent.py",
+      "symbol": "_resolve_parent_issue"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 55,
+      "path": "orchestune/setup_skills.py",
+      "symbol": "_link_one_skill"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 128,
+      "path": "orchestune/setup_skills.py",
+      "symbol": "setup_skills"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 53,
+      "path": "orchestune/status_snapshot.py",
+      "symbol": "build_status_snapshot"
+    },
+    {
+      "category": "function",
+      "limit": 50,
+      "lines": 54,
+      "path": "orchestune/symbol_verification.py",
+      "symbol": "find_missing_symbols"
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1086,
+      "path": "tests/test_dispatch_cycle_reconciliation.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1432,
+      "path": "tests/test_dispatch_gc_completion.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1319,
+      "path": "tests/test_dispatch_gc_reclaim_limit.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1455,
+      "path": "tests/test_dispatch_launch.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1568,
+      "path": "tests/test_dispatch_reconciliation.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1789,
+      "path": "tests/test_dispatch_targets.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 1212,
+      "path": "tests/test_dispatcher_cli.py",
+      "symbol": null
+    },
+    {
+      "category": "test",
+      "limit": 1000,
+      "lines": 2165,
+      "path": "tests/test_provisioning.py",
+      "symbol": null
+    }
+  ]
+}

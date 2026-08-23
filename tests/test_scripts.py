@@ -65,6 +65,8 @@ def test_local_ci_auto_installs_gitleaks_when_missing():
     assert (
         "gitleaks is not installed locally and automatic installation failed" in content
     )
+    assert "--baseline .orchestune/bloat-baseline.json" in content
+    assert "command -v poetry" in content
 
 
 def test_powershell_local_ci_auto_installs_gitleaks_when_missing():
@@ -75,6 +77,22 @@ def test_powershell_local_ci_auto_installs_gitleaks_when_missing():
     assert (
         "gitleaks is not installed locally and automatic installation failed" in content
     )
+    assert "--baseline .orchestune/bloat-baseline.json" in content
+    assert "Get-Command poetry" in content
+    assert "exit 2" in content
+
+
+def test_gitleaks_installers_support_restricted_environments():
+    install_sh = (PROJECT_ROOT / "scripts" / "install-gitleaks.sh").read_text(
+        encoding="utf-8"
+    )
+    install_ps1 = (PROJECT_ROOT / "scripts" / "install-gitleaks.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "GITLEAKS_INSTALL_DIR" in install_sh
+    assert "--no-same-owner" in install_sh
+    assert "GITLEAKS_INSTALL_DIR" in install_ps1
 
 
 def test_setup_git_hooks_proactively_installs_gitleaks():
