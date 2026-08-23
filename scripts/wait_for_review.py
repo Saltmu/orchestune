@@ -29,8 +29,24 @@ from scripts.review_verdict import (
     EXIT_UNDETERMINED as EXIT_UNDETERMINED,
 )
 from scripts.review_verdict import (
+    _build_snapshot,
+    _get_item_created_timestamp,
+    _is_explicitly_in_progress,
+    _latest_bot_activity_item,
+    _latest_bot_summary_item,
     evaluate_review_state,
     evaluate_review_verdict,
+    extract_review_result,
+    normalize_review_state,
+)
+from scripts.review_verdict import (
+    _filter_bot_items as _filter_bot_items,
+)
+from scripts.review_verdict import (
+    _get_item_timestamp as _get_item_timestamp,
+)
+from scripts.review_verdict import (
+    _is_bot_user as _is_bot_user,
 )
 
 EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
@@ -197,24 +213,6 @@ def post_review_trigger(
     return cast(dict[str, Any], json.loads(stdout))
 
 
-def _filter_bot_items(
-    items: list[dict[str, Any]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
-    """Filter list of items to those posted by the specified bot, excluding ignored IDs."""
-    filtered: list[dict[str, Any]] = []
-    excluded = exclude_ids or set()
-    for item in items:
-        item_id = item.get("id")
-        if item_id in excluded or str(item_id) in excluded:
-            continue
-        user = (item.get("user") or {}).get("login", "")
-        if _is_bot_user(user, bot_name):
-            filtered.append(item)
-    return filtered
-
-
 def _get_pr_data(
     pr_number: int, executor: ThreadPoolExecutor | None = None
 ) -> dict[str, list[dict[str, Any]]]:
@@ -244,76 +242,6 @@ def _get_pr_data(
         }
 
 
-def _is_bot_user(user_login: str, bot_name: str) -> bool:
-    login = user_login.lower()
-    target = bot_name.lower()
-    if target == "claude":
-        return "claude" in login
-    if target == "codex":
-        return "codex" in login or "chatgpt-codex-connector" in login
-    return target in login
-
-
-def _get_item_timestamp(item: dict[str, Any]) -> str:
-    return (
-        item.get("updated_at")
-        or item.get("submitted_at")
-        or item.get("created_at")
-        or ""
-    )
-
-
-def _get_item_created_timestamp(item: dict[str, Any]) -> str:
-    return item.get("submitted_at") or item.get("created_at") or ""
-
-
-def _bot_candidate_items(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
-    return [
-        *_filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids),
-        *_filter_bot_items(data.get("reviews", []), bot_name, exclude_ids),
-    ]
-
-
-def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
-    body = (item.get("body") or "").lower()
-    return (
-        body.startswith(f"**{bot_name.lower()} finished")
-        and "view job" in body
-        and "\n---" not in body
-    )
-
-
-def _latest_bot_activity_item(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> dict[str, Any] | None:
-    candidate_items = _bot_candidate_items(data, bot_name, exclude_ids)
-    if not candidate_items:
-        return None
-    return sorted(candidate_items, key=_get_item_timestamp)[-1]
-
-
-def _latest_bot_summary_item(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> dict[str, Any] | None:
-    candidate_items = _bot_candidate_items(data, bot_name, exclude_ids)
-    if not candidate_items:
-        return None
-    summary_candidates = [
-        item
-        for item in candidate_items
-        if not _is_finished_progress_tracker(item, bot_name)
-    ]
-    return sorted(summary_candidates or candidate_items, key=_get_item_timestamp)[-1]
-
-
 def _latest_review_trigger_timestamp(
     data: dict[str, list[dict[str, Any]]], bot_name: str
 ) -> str:
@@ -323,85 +251,6 @@ def _latest_review_trigger_timestamp(
         if _is_trigger_comment(item, bot_name)
     ]
     return max(trigger_timestamps, default="")
-
-
-def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
-    body = item.get("body") or ""
-    status_lines = [
-        line.lstrip("#").strip().lower().split("<", maxsplit=1)[0].strip()
-        for line in body.splitlines()
-        if line.strip()
-    ]
-    markers = (
-        "claude is working…",
-        "claude is working...",
-        "claude code is working…",
-        "claude code is working...",
-        "codex is working…",
-        "codex is working...",
-        "review in progress",
-        "re-review in progress",
-        "claude is reviewing this pr",
-        "codex is reviewing this pr",
-        "レビュー進行中",
-        "再レビュー進行中",
-    )
-    is_task_progress = _has_unfinished_task_list(body)
-    has_marker = any(
-        line in markers or bool(re.match(r"^round\s+\d+\s+レビュー進行中$", line))
-        for line in status_lines
-    )
-    return is_task_progress or has_marker
-
-
-def _has_unfinished_task_list(body: str) -> bool:
-    in_completed_summary = "### review complete" in body.lower()
-    if in_completed_summary:
-        return False
-    if "view job run" in body.lower() and any(
-        line.strip().startswith("- [ ]") for line in body.splitlines()
-    ):
-        return True
-    in_tasks_section = False
-    for line in body.splitlines():
-        stripped_line = line.strip()
-        if stripped_line.startswith("#"):
-            heading = stripped_line.lstrip("#").strip().lower()
-            if in_tasks_section:
-                return False
-            in_tasks_section = (
-                heading == "tasks" or "進行中" in heading or "in progress" in heading
-            )
-        elif in_tasks_section and stripped_line.startswith("- [ ]"):
-            return True
-    return False
-
-
-def _build_snapshot(
-    data: dict[str, list[dict[str, Any]]],
-    bot_name: str,
-    exclude_ids: set[int | str] | None = None,
-) -> dict[str, str]:
-    """Record state of each bot item as id -> timestamp + body length."""
-    snapshot: dict[str, str] = {}
-    for c in _filter_bot_items(data.get("issue_comments", []), bot_name, exclude_ids):
-        cid = str(c.get("id"))
-        ts = _get_item_timestamp(c)
-        body = c.get("body") or ""
-        snapshot[f"comment_{cid}"] = f"{ts}:{len(body)}"
-
-    for r in _filter_bot_items(data.get("reviews", []), bot_name, exclude_ids):
-        rid = str(r.get("id"))
-        ts = _get_item_timestamp(r)
-        body = r.get("body") or ""
-        snapshot[f"review_{rid}"] = f"{ts}:{len(body)}"
-
-    for ic in _filter_bot_items(data.get("inline_comments", []), bot_name, exclude_ids):
-        icid = str(ic.get("id"))
-        ts = _get_item_timestamp(ic)
-        snapshot[f"inline_{icid}"] = ts
-
-    return snapshot
 
 
 def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
@@ -428,36 +277,14 @@ def _extract_review_result(
     exclude_ids: set[int | str] | None = None,
     latest_item: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if latest_item is None:
-        latest_item = _latest_bot_summary_item(current_data, bot_name, exclude_ids)
-    if latest_item is None:
-        return None
-    latest_body = latest_item.get("body") or ""
-
-    # Collect bot inline comments
-    inline_items: list[dict[str, Any]] = []
-    for ic in _filter_bot_items(
-        current_data.get("inline_comments", []), bot_name, exclude_ids
-    ):
-        inline_items.append(
-            {
-                "path": ic.get("path", "unknown"),
-                "line": ic.get("line") or ic.get("original_line") or "N/A",
-                "body": ic.get("body") or "",
-            }
-        )
-
-    if not latest_body and inline_items:
-        latest_body = (
-            f"(No review summary body; see {len(inline_items)} inline comment(s) below)"
-        )
-
-    result = {
-        "review_body": latest_body,
-        "inline_comments": inline_items,
-        "timestamp": _get_item_timestamp(latest_item),
-    }
-    _print_review_result(result, bot_name)
+    result = extract_review_result(
+        normalize_review_state(current_data),
+        bot_name,
+        exclude_ids=exclude_ids,
+        latest_item=latest_item,
+    )
+    if result is not None:
+        _print_review_result(result, bot_name)
     return result
 
 

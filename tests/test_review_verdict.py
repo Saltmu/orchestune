@@ -98,6 +98,38 @@ def test_external_state_uses_the_same_verdict_contract_as_direct_evaluation():
     assert result["verdict"] == EXIT_NO_FINDINGS
 
 
+def test_external_state_uses_the_same_latest_item_tiebreak_as_gh_polling(capsys):
+    from scripts.wait_for_review import _extract_review_result
+
+    state = {
+        "issue_comments": [
+            {
+                "id": 1,
+                "user": {"login": "claude[bot]"},
+                "created_at": "2026-08-20T10:00:00Z",
+                "body": "LGTM",
+            }
+        ],
+        "reviews": [
+            {
+                "id": 2,
+                "user": {"login": "claude[bot]"},
+                "submitted_at": "2026-08-20T10:00:00Z",
+                "body": "### Findings\n- [ ] Bug: validate the input.",
+            }
+        ],
+        "inline_comments": [],
+    }
+
+    result = evaluate_review_state(state)
+    gh_result = _extract_review_result(state, "claude")
+
+    assert gh_result is not None
+    assert result["review_body"] == gh_result["review_body"]
+    assert result["verdict"] == EXIT_FINDINGS_PRESENT
+    capsys.readouterr()
+
+
 def test_empty_external_state_is_undetermined():
     assert evaluate_review_state({}, bot_name="codex") == {
         "review_body": "",

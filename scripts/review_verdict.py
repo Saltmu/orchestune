@@ -91,7 +91,7 @@ def _latest_bot_activity_item(
     data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None = None
 ) -> dict[str, Any] | None:
     candidates = _bot_candidate_items(data, bot_name, exclude_ids)
-    return max(candidates, key=_get_item_timestamp, default=None)
+    return sorted(candidates, key=_get_item_timestamp)[-1] if candidates else None
 
 
 def _latest_bot_summary_item(
@@ -101,7 +101,11 @@ def _latest_bot_summary_item(
     summaries = [
         item for item in candidates if not _is_finished_progress_tracker(item, bot_name)
     ]
-    return max(summaries or candidates, key=_get_item_timestamp, default=None)
+    return (
+        sorted(summaries or candidates, key=_get_item_timestamp)[-1]
+        if candidates
+        else None
+    )
 
 
 def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
