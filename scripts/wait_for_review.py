@@ -16,14 +16,26 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
-# Exit codes contract
-EXIT_NO_FINDINGS = 0  # No blocking findings / Clean (LGTM / All checks passed)
+from scripts.review_verdict import (
+    EXIT_FINDINGS_PRESENT as EXIT_FINDINGS_PRESENT,
+)
+from scripts.review_verdict import (
+    EXIT_IN_PROGRESS as EXIT_IN_PROGRESS,
+)
+from scripts.review_verdict import (
+    EXIT_NO_FINDINGS as EXIT_NO_FINDINGS,
+)
+from scripts.review_verdict import (
+    EXIT_UNDETERMINED as EXIT_UNDETERMINED,
+)
+from scripts.review_verdict import (
+    evaluate_review_state,
+    evaluate_review_verdict,
+)
+
 EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
-EXIT_FINDINGS_PRESENT = 10  # Findings present / Blocking issues or inline comments
-EXIT_IN_PROGRESS = 11  # Review in progress / Working state
 EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded
 EXIT_TIMEOUT = 20  # Timeout waiting for review activity
-EXIT_UNDETERMINED = 30  # Undetermined / Ambiguous (Delegate to LLM context analysis)
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
 
@@ -392,6 +404,24 @@ def _build_snapshot(
     return snapshot
 
 
+def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
+    """Render review results so inline findings cannot be overlooked in agent output."""
+    inline_items = result.get("inline_comments", [])
+    print("\n" + "=" * 72)
+    print(f"[AI Review Update Detected - @{bot_name}]")
+    print(f"Timestamp: {result.get('timestamp', '')}")
+    if inline_items:
+        print(f"[ACTION REQUIRED] Inline Findings: {len(inline_items)} item(s)")
+        for index, item in enumerate(inline_items, start=1):
+            print(f"\n--- Inline Finding {index}: {item['path']}:{item['line']} ---")
+            print(item["body"] or "(No comment body provided)")
+        print("--- End Inline Findings ---")
+    else:
+        print("Inline Findings: none")
+    print("=" * 72 + "\n")
+    print(result.get("review_body", ""))
+
+
 def _extract_review_result(
     current_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
@@ -422,22 +452,13 @@ def _extract_review_result(
             f"(No review summary body; see {len(inline_items)} inline comment(s) below)"
         )
 
-    print("\n" + "=" * 60)
-    print(f"[AI Review Update Detected - @{bot_name}]")
-    print(f"Timestamp: {_get_item_timestamp(latest_item)}")
-    if inline_items:
-        print(f"Inline Comments: {len(inline_items)} item(s)")
-        for item in inline_items:
-            first_line = item["body"].strip().split("\n")[0] if item["body"] else ""
-            print(f"  * {item['path']}:{item['line']} — {first_line}")
-    print("=" * 60 + "\n")
-    print(latest_body)
-
-    return {
+    result = {
         "review_body": latest_body,
         "inline_comments": inline_items,
         "timestamp": _get_item_timestamp(latest_item),
     }
+    _print_review_result(result, bot_name)
+    return result
 
 
 def _get_initial_pr_data(
@@ -464,141 +485,6 @@ def _get_initial_pr_data(
                     f"after {timeout}s ({retries} retry attempts)."
                 ) from e
             time.sleep(interval)
-
-
-def _evaluate_marker_layer(body: str) -> int | None:
-    marker_match = re.search(
-        r"<!--\s*orchestune:verdict\s+(pass|fail)\s*-->", body, re.IGNORECASE
-    )
-    if marker_match:
-        verdict_str = marker_match.group(1).lower()
-        return EXIT_NO_FINDINGS if verdict_str == "pass" else EXIT_FINDINGS_PRESENT
-    return None
-
-
-def _evaluate_codex_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if len(inlines) > 0:
-        return EXIT_FINDINGS_PRESENT
-    if any(
-        signal in body_lower
-        for signal in (
-            "p1 badge",
-            "p2 badge",
-            "p1:",
-            "p2:",
-            "[p1]",
-            "[p2]",
-            "here are some automated review suggestions",
-        )
-    ):
-        return EXIT_FINDINGS_PRESENT
-    if any(
-        signal in body_lower
-        for signal in (
-            "didn't find any major issues",
-            "no major issues found",
-            "no issues found",
-            "nice work",
-            "lgtm",
-        )
-    ):
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def _evaluate_claude_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if len(inlines) > 0:
-        return EXIT_FINDINGS_PRESENT
-
-    clean_pass_patterns = (
-        r"\b(?:no|without)\b(?:\s+\w+){0,3}\s+blocking\s+(?:issues?|bugs?|problems?)",
-        r"\ball\s+checks\s+passed\b",
-        r"\blooks\s+good\b",
-        r"\blgtm\b",
-    )
-    has_clean_pass = any(re.search(pat, body_lower) for pat in clean_pass_patterns)
-
-    blocking_matches = list(
-        re.finditer(r"\bblocking\s+(?:bugs?|issues?)\b", body_lower)
-    )
-    has_blocking_keyword = False
-    for m in blocking_matches:
-        start = max(0, m.start() - 30)
-        prefix = body_lower[start : m.start()]
-        if not re.search(r"\b(?:no|without)\b(?:\s+\w+){0,3}\s*$", prefix):
-            has_blocking_keyword = True
-            break
-
-    blocking_other_patterns = (
-        r"marking\s+this\s+\*\*fail\*\*",
-        r"marking\s+this\s+fail\b",
-        r"verdict:\s*fail\b",
-        r"should\s+not\s+be\s+merged\b",
-    )
-    has_blocking = has_blocking_keyword or any(
-        re.search(pat, body_lower) for pat in blocking_other_patterns
-    )
-
-    if "### findings" in body_lower:
-        findings_part = body_lower.split("### findings", 1)[1]
-        if any(
-            mark in findings_part
-            for mark in ("- [ ]", "🔴", "⚠️", "bug:", "defect:", "vulnerability")
-        ):
-            has_blocking = True
-
-    if has_blocking:
-        return EXIT_FINDINGS_PRESENT
-    if has_clean_pass:
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def _evaluate_generic_bot_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if len(inlines) > 0:
-        return EXIT_FINDINGS_PRESENT
-    if any(
-        signal in body_lower
-        for signal in ("lgtm", "all checks passed", "no blocking issues")
-    ):
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def evaluate_review_verdict(
-    review_body: str,
-    inline_comments: list[dict[str, Any]] | None = None,
-    bot_name: str = "claude",
-) -> int:
-    """Evaluate 3-layer review verdict contract."""
-    inlines = inline_comments or []
-    body = review_body or ""
-    body_lower = body.lower()
-    bot = bot_name.lower()
-
-    if (marker_verdict := _evaluate_marker_layer(body)) is not None:
-        return marker_verdict
-
-    if _is_explicitly_in_progress({"body": body}):
-        return EXIT_IN_PROGRESS
-
-    if bot == "codex":
-        structural_verdict = _evaluate_codex_signals(body_lower, inlines)
-    elif bot == "claude":
-        structural_verdict = _evaluate_claude_signals(body_lower, inlines)
-    else:
-        structural_verdict = _evaluate_generic_bot_signals(body_lower, inlines)
-
-    if structural_verdict is not None:
-        return structural_verdict
-
-    return EXIT_UNDETERMINED
 
 
 def _handle_review_trigger(
@@ -821,8 +707,17 @@ def main() -> None:
     parser.add_argument(
         "--pr",
         type=int,
-        required=True,
-        help="Pull Request number to watch",
+        default=None,
+        help="Pull Request number to watch (required unless --review-state-file is used)",
+    )
+    parser.add_argument(
+        "--review-state-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a normalized JSON review-state snapshot from GitHub MCP or another "
+            "client; evaluates immediately without invoking gh"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -880,6 +775,13 @@ def main() -> None:
 
     args = parser.parse_args()
     try:
+        if args.review_state_file:
+            with open(args.review_state_file, encoding="utf-8") as state_file:
+                result = evaluate_review_state(json.load(state_file), args.bot_name)
+            _print_review_result(result, args.bot_name)
+            sys.exit(result["verdict"])
+        if args.pr is None:
+            parser.error("--pr is required unless --review-state-file is used")
         result = wait_for_review(
             args.pr,
             timeout=args.timeout,
