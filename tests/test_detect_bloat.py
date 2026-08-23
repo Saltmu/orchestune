@@ -231,6 +231,36 @@ def test_duplicate_warning_identities_are_compared_individually(tmp_path: Path) 
     ]
 
 
+def test_duplicate_warning_comparison_is_independent_of_report_order(
+    tmp_path: Path,
+) -> None:
+    detect_bloat = _load_script()
+    source = tmp_path / "orchestune" / "conditional.py"
+    source.parent.mkdir()
+    baseline = tmp_path / "bloat-baseline.json"
+    detect_bloat.write_baseline(
+        baseline,
+        [
+            detect_bloat.BloatReport("function", source, 5, 4, "too_long"),
+            detect_bloat.BloatReport("function", source, 6, 4, "too_long"),
+        ],
+        tmp_path,
+    )
+
+    regressions = detect_bloat.find_regressions(
+        [
+            detect_bloat.BloatReport("function", source, 7, 4, "too_long"),
+            detect_bloat.BloatReport("function", source, 6, 4, "too_long"),
+        ],
+        detect_bloat.load_baseline(baseline),
+        tmp_path,
+    )
+
+    assert [(item.report.lines, item.previous_lines) for item in regressions] == [
+        (7, 5)
+    ]
+
+
 @pytest.mark.parametrize(
     ("config", "error"),
     [

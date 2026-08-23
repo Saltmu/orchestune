@@ -291,7 +291,8 @@ def find_regressions(
 
     regressions: list[BloatRegression] = []
     for report in sorted(
-        reports, key=lambda item: _warning_key(_warning_snapshot(item, root_dir))
+        reports,
+        key=lambda item: (_warning_key(_warning_snapshot(item, root_dir)), item.lines),
     ):
         snapshot = _warning_snapshot(report, root_dir)
         candidates = baseline_lines.get(_warning_key(snapshot), [])
