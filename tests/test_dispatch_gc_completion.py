@@ -578,6 +578,82 @@ class TestFinalizeAbandonedCloudWorktree:
 
         assert event["action"] == "abandoned_pr_requeued"
         assert order == ["reserved", "label_applied"]
+        assert run_state.task_reclaim_counts[280].pending is False
+
+    def test_reclaim_reuses_existing_pending_reservation_on_retry(self, tmp_path):
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=2, last_reclaimed_at=100.0, pending=True)
+            },
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.forge.GitHubForge.add_label"),
+            patch("orchestune.forge.GitHubForge.remove_label"),
+            patch("orchestune.forge.GitHubForge.add_comment"),
+        ):
+            event = _finalize_abandoned_cloud_worktree(
+                active,
+                task,
+                config,
+                run_state=run_state,
+            )
+
+        assert event["action"] == "abandoned_pr_requeued"
+        # Should stay 2, not increment to 3
+        assert run_state.task_reclaim_counts[280].count == 2
+        assert run_state.task_reclaim_counts[280].pending is False
+
+    def test_reservation_failure_rolls_back_and_raises(self, tmp_path):
+        import pytest
+
+        active = _active()
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+        )
+        run_state = RunState(
+            active_worktrees={"w1": active},
+            task_reclaim_counts={
+                280: TaskReclaimRecord(count=1, last_reclaimed_at=100.0, pending=False)
+            },
+        )
+
+        def _fail_reserved():
+            raise OSError("Disk full")
+
+        with (
+            patch(
+                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_rm,
+            patch("orchestune.forge.GitHubForge.add_label") as mock_label,
+        ):
+            with pytest.raises(OSError, match="Disk full"):
+                _finalize_abandoned_cloud_worktree(
+                    active,
+                    task,
+                    config,
+                    run_state=run_state,
+                    on_reclaim_reserved=_fail_reserved,
+                )
+
+        assert run_state.task_reclaim_counts[280].count == 1
+        assert run_state.task_reclaim_counts[280].pending is False
+        mock_rm.assert_not_called()
+        mock_label.assert_not_called()
 
 
 class TestFinalizeNotNeededWorktree:

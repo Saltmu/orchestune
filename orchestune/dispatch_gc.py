@@ -371,16 +371,39 @@ def _abandoned_worktree_outcome(
             ctx, f"the released ledger entry for issue #{active.issue_number}"
         )
 
-    completion_event = _finalize_abandoned_cloud_worktree(
-        active,
-        active_task,
-        ctx.config,
-        ctx.run_state,
-        on_label_applied=_release_entry,
-        on_reclaim_reserved=lambda: _persist_run_state_best_effort(
-            ctx, f"the reserved reclaim count for issue #{active.issue_number}"
-        ),
-    )
+    def _reserve_reclaim() -> None:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+
+    try:
+        completion_event = _finalize_abandoned_cloud_worktree(
+            active,
+            active_task,
+            ctx.config,
+            ctx.run_state,
+            on_label_applied=_release_entry,
+            on_reclaim_reserved=_reserve_reclaim,
+        )
+    except Exception as e:
+        print(
+            f"Warning: skipping abandonment of issue #{active.issue_number}: "
+            f"failed to persist the reclaim count: {e}",
+            file=sys.stderr,
+        )
+        return ActiveWorktreeRuleOutcome(
+            completion_event={
+                "issue_number": active.issue_number,
+                "subtask_id": active_task.subtask_id if active_task else "",
+                "worktree_path": active.worktree_path,
+                "action": "abandonment_skipped_persistence_failure",
+            },
+            terminal=True,
+        )
+
     if (
         completion_event["action"]
         in ("abandoned_pr_requeued", "escalated_reclaim_limit_exceeded")

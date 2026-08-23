@@ -530,6 +530,35 @@ def _cloud_worktree_completion_status(
     return "completed" if _call_is_complete(config, handle) else "pending"
 
 
+def _reserve_cloud_reclaim_record(
+    issue_number: int,
+    run_state: RunState | None,
+    on_reclaim_reserved: Callable[[], None] | None = None,
+) -> int:
+    if run_state is None:
+        return 1
+    previous_record = run_state.task_reclaim_counts.get(issue_number)
+    if previous_record is None:
+        reclaim_count = 1
+    elif previous_record.pending:
+        reclaim_count = previous_record.count
+    else:
+        reclaim_count = previous_record.count + 1
+    run_state.task_reclaim_counts[issue_number] = TaskReclaimRecord(
+        count=reclaim_count, last_reclaimed_at=time.time(), pending=True
+    )
+    if on_reclaim_reserved is not None:
+        try:
+            on_reclaim_reserved()
+        except Exception:
+            if previous_record is None:
+                run_state.task_reclaim_counts.pop(issue_number, None)
+            else:
+                run_state.task_reclaim_counts[issue_number] = previous_record
+            raise
+    return reclaim_count
+
+
 def _finalize_abandoned_cloud_worktree(
     active: ActiveWorktree,
     active_task: Task | None,
@@ -547,7 +576,6 @@ def _finalize_abandoned_cloud_worktree(
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if config.apply:
-        remove_worktree(active.worktree_path)
         status_labels = (
             active_task.status_labels if active_task else ("status:in-progress",)
         )
@@ -555,6 +583,7 @@ def _finalize_abandoned_cloud_worktree(
         # /status:manual-merge-requiredが既に付与されている場合、status:queuedへの
         # 書き換えは人間の確認要求を握りつぶしてしまう。その場合はラベルに触れない。
         if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
+            remove_worktree(active.worktree_path)
             config.resolved_forge.add_comment(
                 active.issue_number,
                 "タスクのPRがマージされずにクローズされたためworktreeを回収しました。"
@@ -563,16 +592,19 @@ def _finalize_abandoned_cloud_worktree(
             event["action"] = "abandoned_pr_requeued"
             return event
 
-        reclaim_count = 1
-        if run_state is not None:
-            previous = run_state.task_reclaim_counts.get(active.issue_number)
-            reclaim_count = (previous.count if previous else 0) + 1
-            run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
-                count=reclaim_count, last_reclaimed_at=time.time()
-            )
-            if on_reclaim_reserved is not None:
-                on_reclaim_reserved()
+        reclaim_count = _reserve_cloud_reclaim_record(
+            active.issue_number, run_state, on_reclaim_reserved=on_reclaim_reserved
+        )
 
+        def _settle_reclaim() -> None:
+            if run_state is not None:
+                rec = run_state.task_reclaim_counts.get(active.issue_number)
+                if rec is not None:
+                    rec.pending = False
+            if on_label_applied is not None:
+                on_label_applied()
+
+        remove_worktree(active.worktree_path)
         if reclaim_count > config.max_task_reclaims:
             apply_human_review_escalation(
                 active.issue_number,
@@ -585,7 +617,7 @@ def _finalize_abandoned_cloud_worktree(
                 "status:blocked-human-reviewへ遷移しました。\n"
                 "タスクの実装方針や実行環境を確認してください。",
                 forge=config.resolved_forge,
-                on_label_applied=on_label_applied,
+                on_label_applied=_settle_reclaim,
             )
             event["action"] = "escalated_reclaim_limit_exceeded"
             return event
@@ -601,8 +633,7 @@ def _finalize_abandoned_cloud_worktree(
             "status:queued",
             stale_labels,
         )
-        if on_label_applied is not None:
-            on_label_applied()
+        _settle_reclaim()
         try:
             config.resolved_forge.add_comment(
                 active.issue_number,
