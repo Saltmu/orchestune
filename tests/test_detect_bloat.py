@@ -56,6 +56,64 @@ def test_large_function_is_reported_even_when_its_file_is_small(tmp_path: Path) 
     ]
 
 
+def test_function_sloc_excludes_docstrings_comments_and_blank_lines(
+    tmp_path: Path,
+) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    # 18 lines total, but only 4 executable lines (def + 3 pass)
+    code = (
+        "def with_doc_and_comments():\n"
+        '    """This is a docstring.\n'
+        "    It spans multiple lines.\n"
+        "    Explaining the architecture.\n"
+        '    """\n'
+        "    # Line 1 comment\n"
+        "    # Line 2 comment\n"
+        "    # Line 3 comment\n"
+        "\n"
+        "    pass\n"
+        "\n"
+        "    # Another comment\n"
+        "    pass\n"
+        "\n"
+        "    pass\n"
+    )
+    source_dir.joinpath("documented.py").write_text(code, encoding="utf-8")
+
+    reports = detect_bloat.scan_project(tmp_path)
+
+    # Function has 4 SLOC (limit is 10), so no function warning should be emitted
+    assert [report for report in reports if report.category == "function"] == []
+
+
+def test_function_sloc_reports_when_executable_lines_exceed_limit(
+    tmp_path: Path,
+) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    # 25 lines total, 12 executable lines (def + 11 pass) with docstring and comments
+    code = (
+        "def large_with_doc():\n"
+        '    """Long docstring.\n'
+        "    Line 2.\n"
+        '    """\n'
+        "    # Some comment\n"
+        "\n" + "    pass\n" * 11
+    )
+    source_dir.joinpath("large_doc.py").write_text(code, encoding="utf-8")
+
+    reports = detect_bloat.scan_project(tmp_path)
+
+    assert [(report.category, report.symbol, report.lines) for report in reports] == [
+        ("function", "large_with_doc", 12)
+    ]
+
+
 def test_skill_directory_counts_all_markdown_including_references(
     tmp_path: Path,
 ) -> None:
@@ -89,6 +147,53 @@ def test_tests_are_reported_as_warnings(tmp_path: Path) -> None:
         (report.category, report.path.name, report.lines) for report in reports
     ]
     assert report_summary == [("test", "test_large.py", 101)]
+
+
+def test_code_file_sloc_excludes_docstrings_comments_and_blank_lines(
+    tmp_path: Path,
+) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    source_dir = tmp_path / "orchestune"
+    source_dir.mkdir()
+    # 150 total lines, but only 20 executable lines (limit is 100)
+    code = (
+        '"""Module docstring.\n'
+        + "Docstring line.\n" * 50
+        + '"""\n'
+        + "# Comment line\n" * 50
+        + "\n" * 30
+        + "pass\n" * 20
+    )
+    source_dir.joinpath("module_with_docs.py").write_text(code, encoding="utf-8")
+
+    reports = detect_bloat.scan_project(tmp_path)
+
+    assert [report for report in reports if report.category == "code"] == []
+
+
+def test_test_file_sloc_excludes_docstrings_comments_and_blank_lines(
+    tmp_path: Path,
+) -> None:
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    # 150 total lines, but only 20 executable lines (limit is 100)
+    code = (
+        '"""Test module docstring.\n'
+        + "Docstring line.\n" * 50
+        + '"""\n'
+        + "# Comment line\n" * 50
+        + "\n" * 30
+        + "def test_something():\n"
+        + "    pass\n" * 19
+    )
+    tests_dir.joinpath("test_with_docs.py").write_text(code, encoding="utf-8")
+
+    reports = detect_bloat.scan_project(tmp_path)
+
+    assert [report for report in reports if report.category == "test"] == []
 
 
 def test_warn_only_returns_zero_when_bloat_is_detected(tmp_path: Path) -> None:
