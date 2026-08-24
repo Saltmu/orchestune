@@ -8,10 +8,10 @@ from pathlib import Path
 
 from orchestune.dispatch_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
-from orchestune.git_cli import fetch_remote_branch, run_git
+from orchestune.infra.git_cli import fetch_remote_branch, run_git
+from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator_pr import handle_merge_failure
 from orchestune.models import Task
-from orchestune.process_utils import default_ci_command
 
 
 class IntegrationMerger:

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from orchestune.forge import Forge, GitHubForge
-from orchestune.git_cli import (
+from orchestune.infra.git_cli import (
     fetch_remote_branch,
     normalize_remote_branch_name,
     resolve_local_or_remote_branch,

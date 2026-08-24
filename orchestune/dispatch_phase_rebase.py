@@ -14,7 +14,7 @@ from orchestune.dispatch_locks import (
 )
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import RunState
-from orchestune.git_cli import (
+from orchestune.infra.git_cli import (
     branch_changed_files,
     ensure_parent_branch,
     list_remote_branches,

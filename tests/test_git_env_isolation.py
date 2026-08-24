@@ -88,7 +88,7 @@ def test_run_git_automatically_isolates_polluted_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """Verify run_git automatically strips polluted GIT_DIR from ambient environment."""
-    from orchestune.git_cli import run_git
+    from orchestune.infra.git_cli import run_git
 
     host_repo_dir = tmp_path / "host_repo_git_cli"
     host_repo_dir.mkdir()
@@ -129,7 +129,7 @@ def test_dummy_git_repo_sees_dynamic_env_changes(
 
 def test_run_git_strips_dangerous_vars_from_explicit_env(tmp_path: Path):
     """Verify run_git strips dangerous variables even when passed via explicit env dict."""
-    from orchestune.git_cli import run_git
+    from orchestune.infra.git_cli import run_git
 
     host_repo_dir = tmp_path / "host_repo_explicit_env"
     host_repo_dir.mkdir()
@@ -155,7 +155,7 @@ def test_run_git_strips_dangerous_vars_from_explicit_env(tmp_path: Path):
 
 def test_run_git_honors_isolate_git_env_false(tmp_path: Path):
     """Verify run_git does not strip variables when isolate_git_env=False is explicitly requested."""
-    from orchestune.git_cli import run_git
+    from orchestune.infra.git_cli import run_git
 
     host_repo_dir = tmp_path / "host_repo_no_isolate"
     host_repo_dir.mkdir()

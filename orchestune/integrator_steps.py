@@ -17,7 +17,8 @@ from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
 from orchestune.dispatch_worktree import file_lock
 from orchestune.forge import REQUIRED_LABELS
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
+from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.integrator_pr import ensure_integration_pr
 from orchestune.integrator_tasks import get_sorted_done_tasks
@@ -28,7 +29,6 @@ from orchestune.integrator_types import (
     IntegrationStatus,
 )
 from orchestune.integrator_worktree import IntegrationWorktree
-from orchestune.process_utils import default_ci_command
 
 
 @contextmanager

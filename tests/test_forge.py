@@ -20,9 +20,9 @@ from orchestune.forge import (
     PullRequestForge,
     RepoAdminForge,
 )
-from orchestune.forge_admin import GitHubRepoAdminMixin
-from orchestune.forge_issues import GitHubIssueMixin
-from orchestune.forge_prs import GitHubPullRequestMixin
+from orchestune.forge.admin import GitHubRepoAdminMixin
+from orchestune.forge.issues import GitHubIssueMixin
+from orchestune.forge.prs import GitHubPullRequestMixin
 from orchestune.models import IssueRecord
 from orchestune.validation import validate_label as _validate_label
 
@@ -374,10 +374,10 @@ class TestForgeProtocols:
         ]
 
     def test_gh_command_literals_exist_only_in_focused_forge_modules(self):
-        package_root = Path(__file__).parents[1] / "orchestune"
+        forge_root = Path(__file__).parents[1] / "orchestune" / "forge"
         modules_with_gh_commands: set[str] = set()
 
-        for path in package_root.glob("*.py"):
+        for path in forge_root.glob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.List | ast.Tuple) or not node.elts:
@@ -387,9 +387,9 @@ class TestForgeProtocols:
                     modules_with_gh_commands.add(path.name)
 
         assert modules_with_gh_commands == {
-            "forge_admin.py",
-            "forge_issues.py",
-            "forge_prs.py",
+            "admin.py",
+            "issues.py",
+            "prs.py",
         }
 
 

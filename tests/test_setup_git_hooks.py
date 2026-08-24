@@ -44,7 +44,7 @@ def test_local_ci_scripts_unset_git_env():
 
 def test_scripts_contain_all_dangerous_git_env_vars():
     """Verify local-ci shell/powershell scripts contain every variable from DANGEROUS_GIT_ENV_VARS (SSOT)."""
-    from orchestune.git_cli import DANGEROUS_GIT_ENV_VARS
+    from orchestune.infra.git_cli import DANGEROUS_GIT_ENV_VARS
 
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     target_scripts = [

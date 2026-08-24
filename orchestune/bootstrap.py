@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from orchestune.forge import REQUIRED_LABELS, ForgeError, GitHubForge, RepoAdminForge
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
 
 
 def _is_git_repo_empty(cwd: Path) -> bool:

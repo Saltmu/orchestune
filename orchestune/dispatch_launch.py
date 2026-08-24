@@ -13,7 +13,7 @@ from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_scoring import Task, parse_task_from_issue
 from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch_worktree import create_worktree_and_launch
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     backfill_launch_history,
     launch_history_from_body,

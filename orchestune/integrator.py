@@ -4,7 +4,8 @@ import copy
 import subprocess as subprocess  # compatibility patch surface
 from pathlib import Path
 
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
+from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator_steps import (
     AutoMergeChildIntegrationStep,
     EnsureIntegrationPrStep,
@@ -27,7 +28,6 @@ from orchestune.integrator_types import (
 )
 from orchestune.integrator_worktree import IntegrationWorktree
 from orchestune.models import Task
-from orchestune.process_utils import default_ci_command
 
 
 class IntegrationPipeline(IntegrationComponent):

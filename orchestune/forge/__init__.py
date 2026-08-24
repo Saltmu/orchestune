@@ -7,8 +7,10 @@ import subprocess
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from orchestune.forge_admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
-from orchestune.forge_admin import (
+from orchestune.models import IssueRecord, PrRecord
+
+from .admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
+from .admin import (
     REQUIRED_LABELS,
     BootstrapResult,
     ForgeAuthError,
@@ -16,9 +18,8 @@ from orchestune.forge_admin import (
     GitHubRepoAdminMixin,
     LabelSpec,
 )
-from orchestune.forge_issues import GitHubIssueMixin
-from orchestune.forge_prs import GitHubPullRequestMixin
-from orchestune.models import IssueRecord, PrRecord
+from .issues import GitHubIssueMixin
+from .prs import GitHubPullRequestMixin
 
 
 class RelationshipUnavailableError(ForgeError):

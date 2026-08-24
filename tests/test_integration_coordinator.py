@@ -8,6 +8,12 @@ from orchestune.dispatch_targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )
+from orchestune.infra.not_needed_review_state import (
+    NotNeededReviewState,
+    PendingNotNeededReview,
+    load_not_needed_review_state,
+    save_not_needed_review_state,
+)
 from orchestune.integration_coordinator import (
     DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
     NOT_NEEDED_REJECTED_LABEL,
@@ -18,12 +24,6 @@ from orchestune.integration_coordinator import (
     build_review_routine_prompt,
     process_pending_not_needed_reviews,
     record_pending_not_needed_review,
-)
-from orchestune.not_needed_review_state import (
-    NotNeededReviewState,
-    PendingNotNeededReview,
-    load_not_needed_review_state,
-    save_not_needed_review_state,
 )
 
 

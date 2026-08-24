@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune.dispatch_state import ActiveWorktree, RunState
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parse_task_from_issue,

@@ -34,7 +34,8 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
 )
 from orchestune.forge import Forge
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import (
     REASON_BASE_BRANCH_RED,
@@ -44,7 +45,6 @@ from orchestune.outcome_record import (
     OutcomeRecord,
     parse_from_comments,
 )
-from orchestune.process_utils import is_process_alive
 
 
 @dataclass

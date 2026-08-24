@@ -21,9 +21,9 @@ from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
-from orchestune.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
-from orchestune.process_utils import default_ci_command, is_process_alive
 
 logger = logging.getLogger(__name__)
 

@@ -14,8 +14,8 @@ from orchestune.dispatch_targets import (
     DispatchHandle,
     DispatchTarget,
 )
-from orchestune.git_cli import resolve_local_or_remote_branch, run_git
-from orchestune.process_utils import file_lock as file_lock
+from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.infra.process_utils import file_lock as file_lock
 from orchestune.validation import validate_ref_name
 
 

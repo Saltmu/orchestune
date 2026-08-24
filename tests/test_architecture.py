@@ -76,12 +76,12 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch_state",
             "dispatch_targets",
             "dispatch_worktree",
+            "infra.not_needed_review_state",
             "integrator_git_ops",
             "integrator_pr",
             "integrator_tasks",
             "integrator_worktree",
             "issue_parsing",
-            "not_needed_review_state",
             "status_snapshot",
             "symbol_verification",
             "provisioning_parent",
@@ -90,17 +90,20 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "provisioning_subtasks",
         }
     ),
-    1: frozenset({"forge", "forge_admin", "forge_issues", "forge_prs", "git_cli"}),
+    1: frozenset(
+        {"forge", "forge.admin", "forge.issues", "forge.prs", "infra.git_cli"}
+    ),
     0: frozenset(
         {
             "bounded_limit",
             "dag_models",
             "dispatch_result",
-            "json_state",
+            "infra",
+            "infra.json_state",
+            "infra.process_utils",
             "models",
             "outcome_record",
             "plan_writer",
-            "process_utils",
             "setup_skills",
             "validation",
             "version",
@@ -116,8 +119,8 @@ ALLOWED_L4_DEPENDENTS = {
     "provisioning": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
-    "gh": {"forge_admin"},
-    "git": {"git_cli"},
+    "gh": {"forge.admin"},
+    "git": {"infra.git_cli"},
 }
 _SUBPROCESS_CALLS = frozenset({"run", "call", "Popen", "check_call", "check_output"})
 _COMMANDS = frozenset({"git", "gh"})

@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
 
 
 class IntegrationWorktree:

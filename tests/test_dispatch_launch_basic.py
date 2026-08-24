@@ -192,7 +192,7 @@ class TestDecideDuplicateCandidates:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "orchestune.git_cli.subprocess.run",
+            "orchestune.infra.git_cli.subprocess.run",
             _raise,
         )
         ctx = _ctx(
