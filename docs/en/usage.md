@@ -167,7 +167,7 @@ orchestune dag --plan decomposition_plan.md
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
-| `--threshold <float>` | - | Similarity edge threshold in `[0, 1]`. When omitted, falls back to the `dag_similarity_threshold` config-file setting (see below) if set, otherwise to `0.2` (`orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD`). Values outside `[0, 1]` (including `nan`/`inf`) are rejected with an error. |
+| `--threshold <float>` | - | Similarity edge threshold in `[0, 1]`. When omitted, falls back to the `dag_similarity_threshold` config-file setting (see below) if set, otherwise to `0.2` (`orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD`). Values outside `[0, 1]` (including `nan`/`inf`) are rejected with an error. |
 
 ### Configuration File Options
 
