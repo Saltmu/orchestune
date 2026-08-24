@@ -8,14 +8,14 @@ test_dispatch_gc_integration.py を参照。
 
 from unittest.mock import patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc import (
     _apply_stale_active_entry_discard,
     _decide_stale_active_entry,
     _rule_not_needed,
     _rule_stale_entry,
 )
-from orchestune.dispatch_state import RunState
+from orchestune.dispatch.state import RunState
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
 
@@ -48,11 +48,11 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch_gc.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.backup_wip_commit", return_value=None
             ) as mock_backup,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state, "280", active, "test reason", config
@@ -72,10 +72,10 @@ class TestApplyStaleActiveEntryDiscard:
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit", return_value=None),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=False),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch.gc.is_process_alive", return_value=False),
+            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state, "280", active, "test reason", config
@@ -92,10 +92,10 @@ class TestApplyStaleActiveEntryDiscard:
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch.gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state, "280", active, "test reason", config
@@ -119,12 +119,12 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch_gc.backup_wip_commit",
+                "orchestune.dispatch.gc.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state, "280", active, "test reason", config
@@ -146,9 +146,9 @@ class TestApplyStaleActiveEntryDiscard:
         )
 
         with (
-            patch("orchestune.dispatch_gc.backup_wip_commit") as mock_backup,
-            patch("orchestune.dispatch_gc.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state, "280", active, "test reason", config
@@ -176,10 +176,10 @@ class TestRuleStaleEntry:
 
         with (
             patch(
-                "orchestune.dispatch_gc.backup_wip_commit",
+                "orchestune.dispatch.gc.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
-            patch("orchestune.dispatch_gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.is_process_alive", return_value=True),
         ):
             outcome = _rule_stale_entry(ctx, "280", active, task)
 
@@ -216,7 +216,7 @@ class TestRuleNotNeededOutcomeStaleness:
         ]
 
         with patch(
-            "orchestune.dispatch_gc._finalize_not_needed_worktree",
+            "orchestune.dispatch.gc._finalize_not_needed_worktree",
             return_value={"action": "not_needed", "issue_number": 280},
         ):
             outcome = _rule_not_needed(ctx, "280", active, task)

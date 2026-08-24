@@ -12,7 +12,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.monitor import main
 
 

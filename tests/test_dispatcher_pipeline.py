@@ -17,14 +17,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import (
     CycleReport,
     append_event_log,
     build_event_log_entry,
     run_dispatch_cycle,
 )
-from orchestune.dispatch_state import (
+from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,
@@ -183,14 +183,14 @@ class TestRecoveredActiveTask:
         fake_forge.add_comment.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             patch(
                 "orchestune.infra.git_cli.subprocess.run",
                 return_value=MagicMock(stdout=""),
             ),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -248,17 +248,17 @@ class TestRecoveredActiveTask:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remote_branch_commit_sha_if_ahead",
+                "orchestune.dispatch.gc.completion.remote_branch_commit_sha_if_ahead",
                 return_value="recovered-commit",
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:in-progress" else []
@@ -286,7 +286,7 @@ class TestDispatcherLocking:
         lock_path = Path(config.run_state_path).with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-        from orchestune.dispatch_worktree import file_lock
+        from orchestune.dispatch.worktree import file_lock
 
         with file_lock(lock_path):
             with pytest.raises(RuntimeError) as exc_info:
@@ -296,7 +296,7 @@ class TestDispatcherLocking:
                 fake_forge.list_open_prs.return_value = []
                 with (
                     patch(
-                        "orchestune.dispatch_phase_rebase.list_remote_branches",
+                        "orchestune.dispatch.phase_rebase.list_remote_branches",
                         return_value=[],
                     ),
                 ):
@@ -336,12 +336,12 @@ class TestLaunchOrderingCrashSafety:
         fake_forge.remove_label.reset_mock(side_effect=True)
         fake_forge.remove_label.side_effect = remove_label_side_effect
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_subproc_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
@@ -417,7 +417,7 @@ class TestStaleActiveEntryReconciliation:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -440,9 +440,9 @@ class TestStaleActiveEntryReconciliation:
 
 
 class TestPreventDuplicateSessions:
-    @patch("orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[])
-    @patch("orchestune.dispatch_worktree.subprocess.run")
-    @patch("orchestune.dispatch_targets.subprocess.Popen")
+    @patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[])
+    @patch("orchestune.dispatch.worktree.subprocess.run")
+    @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
         self,
         mock_popen,
@@ -496,9 +496,9 @@ class TestPreventDuplicateSessions:
         mock_add_comment.assert_called_once()
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
-    @patch("orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[])
-    @patch("orchestune.dispatch_worktree.subprocess.run")
-    @patch("orchestune.dispatch_targets.subprocess.Popen")
+    @patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[])
+    @patch("orchestune.dispatch.worktree.subprocess.run")
+    @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
         self,
         mock_popen,
@@ -618,13 +618,13 @@ class TestPreventDuplicateSessions:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             patch(
                 "orchestune.infra.git_cli.subprocess.run",
                 side_effect=ls_remote_result,
             ) as mock_subprocess_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_popen.return_value.pid = 12345
             mock_list.side_effect = lambda label, **_: (
@@ -704,10 +704,10 @@ class TestPreventDuplicateSessions:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             patch(
-                "orchestune.dispatch_worktree.subprocess.run",
+                "orchestune.dispatch.worktree.subprocess.run",
                 side_effect=subprocess.CalledProcessError(
                     returncode=128, cmd="git ls-remote"
                 ),

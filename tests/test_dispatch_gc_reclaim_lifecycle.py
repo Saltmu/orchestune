@@ -8,17 +8,17 @@
 
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle_context import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_context import (
     IssuesByStatus,
     discard_reclaim_counts_for_closed_issues,
 )
-from orchestune.dispatch_gc import _rule_completed, _rule_not_needed
-from orchestune.dispatch_gc_zombies import (
+from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
+from orchestune.dispatch.gc.zombies import (
     _collect_zombies_and_timeouts,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     TaskReclaimRecord,
@@ -86,7 +86,7 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
         run_state.active_worktrees["280"] = _active(
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
-        with patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW):
+        with patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW):
             cycle_events = _collect_zombies_and_timeouts(run_state, {280: task}, config)
         assert len(cycle_events) == 1
         events.append(cycle_events[0])
@@ -112,9 +112,9 @@ class TestReclaimCounterLifecycle:
         )
         task = _task(status_labels=("status:in-progress",))
         with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={"action": action, "commit_sha": "abc123d"},
             ),
         ):
@@ -158,7 +158,7 @@ class TestReclaimCounterLifecycle:
         task = _task(status_labels=("status:not-needed",))
 
         with patch(
-            "orchestune.dispatch_gc._finalize_not_needed_worktree",
+            "orchestune.dispatch.gc._finalize_not_needed_worktree",
             return_value={"action": "not_needed", "issue_number": 280},
         ):
             outcome = _rule_not_needed(ctx, "1", active, task)
@@ -177,9 +177,9 @@ class TestDirtyWorktreeHoldLimit:
 
     def _hold_cycle(self, ctx, active, task):
         with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
@@ -258,9 +258,9 @@ class TestDirtyWorktreeHoldLimit:
         task = _task(status_labels=("status:in-progress",))
 
         with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
@@ -294,9 +294,9 @@ class TestDirtyWorktreeHoldLimit:
         task = _task(status_labels=("status:in-progress",))
 
         with (
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,

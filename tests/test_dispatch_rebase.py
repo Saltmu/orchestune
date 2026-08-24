@@ -13,10 +13,10 @@ from inspect import signature
 from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.dag.models import FootprintConflict
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import run_dispatch_cycle
-from orchestune.dispatch_rebase import notify_force_serial, notify_recompute
-from orchestune.dispatch_state import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.rebase import notify_force_serial, notify_recompute
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     load_run_state,
@@ -31,9 +31,9 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
-            "orchestune.dispatch_gc.is_process_alive",
-            "orchestune.dispatch_gc_completion.is_process_alive",
-            "orchestune.dispatch_gc_zombies.is_process_alive",
+            "orchestune.dispatch.gc.is_process_alive",
+            "orchestune.dispatch.gc.completion.is_process_alive",
+            "orchestune.dispatch.gc.zombies.is_process_alive",
         ):
             stack.enter_context(patch(target, return_value=return_value))
         yield
@@ -67,7 +67,7 @@ def _issue(
 
 class TestRebaseContext:
     def test_context_carries_auto_rebase_dependencies(self):
-        from orchestune.dispatch_rebase import RebaseContext
+        from orchestune.dispatch.rebase import RebaseContext
 
         assert {field.name for field in fields(RebaseContext)} == {
             "active",
@@ -81,7 +81,7 @@ class TestRebaseContext:
         }
 
     def test_rebase_functions_accept_context_instead_of_many_arguments(self):
-        from orchestune.dispatch_rebase import _apply_auto_rebase, _try_auto_rebase
+        from orchestune.dispatch.rebase import _apply_auto_rebase, _try_auto_rebase
 
         assert len(signature(_try_auto_rebase).parameters) <= 3
         assert len(signature(_apply_auto_rebase).parameters) <= 3
@@ -272,7 +272,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -293,7 +293,7 @@ class TestBranchStacking:
             ) as mock_remove_label,
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_launch.create_worktree_and_launch"
+                "orchestune.dispatch.launch.create_worktree_and_launch"
             ) as mock_launch,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -352,7 +352,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -371,7 +371,7 @@ class TestBranchStacking:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_launch.create_worktree_and_launch"
+                "orchestune.dispatch.launch.create_worktree_and_launch"
             ) as mock_launch,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -439,7 +439,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -456,17 +456,17 @@ class TestBranchStacking:
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
             ),
             patch("fake_forge_proxy.active_fake_forge.add_label"),
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
             # os.kill と Popen のモック（リブートプロセスのため）
-            patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatch_worktree.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.rebase.os.kill") as mock_kill,
+            patch("orchestune.dispatch.worktree.subprocess.Popen") as mock_popen,
             # git コマンド実行のモック
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 return_value="claude/issue-1-task-1",
             ),
         ):
@@ -536,7 +536,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=[
                     "origin/claude/issue-1-task-1",
                     "origin/claude/issue-2-task-2",
@@ -565,7 +565,7 @@ class TestBranchStacking:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_launch.create_worktree_and_launch"
+                "orchestune.dispatch.launch.create_worktree_and_launch"
             ) as mock_launch,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -623,7 +623,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=[
                     "origin/claude/issue-1-task-1",
                     "origin/claude/issue-2-task-2",
@@ -649,15 +649,15 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.remove_label"
             ) as mock_remove_label,
             patch(
-                "orchestune.dispatch_launch.create_worktree_and_launch"
+                "orchestune.dispatch.launch.create_worktree_and_launch"
             ) as mock_launch,
             # タスクAの完了判定とGC処理のためのモック
-            patch("orchestune.dispatch_gc._is_worktree_complete", return_value=True),
+            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch("fake_forge_proxy.active_fake_forge.list_prs", return_value=[]),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={
                     "action": "completed",
                     "issue_number": 1,
@@ -738,7 +738,7 @@ class TestBranchStacking:
                 ),
             ),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -768,17 +768,17 @@ class TestBranchStacking:
             patch("fake_forge_proxy.active_fake_forge.list_comments", return_value=[]),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
             ),
             patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
             patch(
                 "fake_forge_proxy.active_fake_forge.remove_label"
             ) as mock_remove_label,
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.rebase.os.kill") as mock_kill,
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 return_value="claude/issue-1-task-1",
             ),
         ):
@@ -856,7 +856,7 @@ class TestBranchStacking:
                 ),
             ),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-1"],
             ),
             patch(
@@ -873,7 +873,7 @@ class TestBranchStacking:
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
             ),
             # #292: CHANGES_REQUESTEDエスカレーションはdispatch_escalationの
             # apply_human_review_escalationがForge注入経由で呼ぶため、
@@ -883,8 +883,8 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.remove_label"
             ) as mock_remove_label,
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
-            patch("orchestune.dispatch_rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatch_worktree.subprocess.run"),
+            patch("orchestune.dispatch.rebase.os.kill") as mock_kill,
+            patch("orchestune.dispatch.worktree.subprocess.run"),
         ):
             run_dispatch_cycle(config)
 

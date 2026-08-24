@@ -6,18 +6,18 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.dag.graph import recompute_dag_for_footprint_change
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_labels import transition_status_label
-from orchestune.dispatch_locks import check_footprint_deviation
-from orchestune.dispatch_rebase import SubTask, _build_subtasks_for_recompute
-from orchestune.dispatch_recovery import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.locks import check_footprint_deviation
+from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute
+from orchestune.dispatch.recovery import (
     _reconcile_stale_recovery_counters,
     recover_run_state,
 )
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import RunState, save_run_state
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import RunState, save_run_state
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.issue_parsing import (
     launch_history_from_body,

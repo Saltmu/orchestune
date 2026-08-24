@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_locks import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.locks import (
     ExternalLockScanResult,
     _strip_remote_prefix,
     scan_external_locks,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import RunState
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import RunState
 from orchestune.infra.git_cli import (
     branch_changed_files,
     ensure_parent_branch,

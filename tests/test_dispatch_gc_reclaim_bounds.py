@@ -8,15 +8,15 @@
 
 from unittest.mock import patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc_zombies import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
     _collect_zombies_and_timeouts,
     _decide_zombie_or_timeout_reclaims,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     TaskReclaimRecord,
@@ -80,7 +80,7 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(
                 forge,
                 "add_label",
@@ -238,7 +238,7 @@ class TestReclaimRetryBound:
         )
         config = _config(tmp_path, apply=False)
 
-        with patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW):
+        with patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         assert events[0]["action"] == "escalated_reclaim_limit_exceeded"
@@ -265,7 +265,7 @@ class TestReclaimRetryBound:
             persisted.append(load_run_state(config.run_state_path).task_reclaim_counts)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(
                 config.resolved_forge, "add_label", side_effect=_record_persisted
             ),
@@ -296,16 +296,16 @@ class TestReclaimRetryBound:
         config = _config(tmp_path)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.is_process_alive", return_value=True),
             patch(
-                "orchestune.dispatch_gc_zombies.save_run_state",
+                "orchestune.dispatch.gc.zombies.save_run_state",
                 side_effect=OSError("no space left on device"),
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.backup_wip_commit") as mock_backup,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
             patch.object(config.resolved_forge, "add_label") as mock_add_label,
             patch.object(config.resolved_forge, "remove_label") as mock_remove_label,
@@ -336,9 +336,9 @@ class TestReclaimRetryBound:
         config = _config(tmp_path)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.save_run_state",
+                "orchestune.dispatch.gc.zombies.save_run_state",
                 side_effect=OSError("boom"),
             ),
             patch.object(config.resolved_forge, "add_label"),
@@ -355,13 +355,13 @@ class TestReclaimRetryBound:
         run_state.active_worktrees["280"] = _active(worktree_path=str(worktree))
         comments: list[str] = []
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
             patch.object(config.resolved_forge, "add_label") as mock_add_label,
             patch.object(config.resolved_forge, "remove_label"),
@@ -420,18 +420,18 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, task_timeout_seconds=0, max_task_reclaims=0)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
             patch.object(
                 config.resolved_forge,
                 "add_label",
@@ -465,11 +465,11 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, task_timeout_seconds=60, max_task_reclaims=0)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
             patch.object(
                 config.resolved_forge,
                 "add_label",
@@ -496,13 +496,13 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, task_timeout_seconds=60, max_task_reclaims=0)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
-            patch("orchestune.dispatch_gc_zombies.is_process_alive", return_value=True),
-            patch("orchestune.dispatch_gc_zombies.os.kill"),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.zombies.os.kill"),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
             patch.object(
                 config.resolved_forge,
                 "add_label",
@@ -529,7 +529,7 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, max_task_reclaims=0)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(config.resolved_forge, "add_label"),
             patch.object(config.resolved_forge, "remove_label"),
             patch.object(config.resolved_forge, "add_comment"),
@@ -562,7 +562,7 @@ class TestReclaimRetryBound:
                 worktree_path=str(tmp_path / "missing-280")
             )
             with (
-                patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+                patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
                 failing,
                 patch.object(config.resolved_forge, "remove_label"),
                 patch.object(config.resolved_forge, "add_comment"),
@@ -581,7 +581,7 @@ class TestReclaimRetryBound:
         )
         labels: list[tuple[str, str]] = []
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(
                 config.resolved_forge,
                 "add_label",
@@ -611,7 +611,7 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, max_task_reclaims=0)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(config.resolved_forge, "add_label"),
             patch.object(
                 config.resolved_forge,
@@ -644,7 +644,7 @@ class TestReclaimRetryBound:
         labels: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(
                 config.resolved_forge,
                 "add_label",
@@ -682,7 +682,7 @@ class TestReclaimRetryBound:
         labels: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch.object(
                 config.resolved_forge,
                 "add_label",
@@ -722,9 +722,9 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, max_task_reclaims=3)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
             patch.object(
@@ -759,9 +759,9 @@ class TestReclaimRetryBound:
         labels: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
             patch.object(
@@ -795,9 +795,9 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, max_task_reclaims=0)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
             patch.object(
@@ -824,9 +824,9 @@ class TestReclaimRetryBound:
         config = _config(tmp_path, max_task_reclaims=3)
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 return_value="fatal: unable to write new index file",
             ),
             patch.object(config.resolved_forge, "add_comment"),

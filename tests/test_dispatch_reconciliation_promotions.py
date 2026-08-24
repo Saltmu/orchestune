@@ -14,8 +14,8 @@ from orchestune.dag.models import (
     SubTask,
     compile_extra_ignore_patterns,
 )
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_reconciliation import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.reconciliation import (
     _apply_blocked_promotions,
     _collect_active_conflict_subtask_ids,
     _decide_blocked_promotions,
@@ -23,9 +23,9 @@ from orchestune.dispatch_reconciliation import (
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
 )
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-reconciliation-"))
@@ -115,7 +115,7 @@ class TestCollectActiveConflictSubtaskIds:
         )
 
         with patch(
-            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
             side_effect=AssertionError("タスク未対応のactiveは検査すべきではない"),
         ):
             result = _collect_active_conflict_subtask_ids(run_state, ctx, {}, config)
@@ -134,7 +134,7 @@ class TestCollectActiveConflictSubtaskIds:
         )
 
         with patch(
-            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
             side_effect=AssertionError("subtask_id未設定のactiveは検査すべきではない"),
         ):
             result = _collect_active_conflict_subtask_ids(run_state, ctx, {}, config)
@@ -155,7 +155,7 @@ class TestCollectActiveConflictSubtaskIds:
         )
 
         with patch(
-            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
             return_value=None,
         ):
             result = _collect_active_conflict_subtask_ids(
@@ -190,11 +190,11 @@ class TestCollectActiveConflictSubtaskIds:
 
         with (
             patch(
-                "orchestune.dispatch_reconciliation.check_footprint_deviation",
+                "orchestune.dispatch.reconciliation.check_footprint_deviation",
                 return_value=["b.py"],
             ),
             patch(
-                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
+                "orchestune.dispatch.reconciliation.recompute_dag_for_footprint_change",
                 return_value=(MagicMock(), conflicts),
             ) as mock_recompute,
         ):
@@ -232,11 +232,11 @@ class TestCollectActiveConflictSubtaskIds:
 
         with (
             patch(
-                "orchestune.dispatch_reconciliation.check_footprint_deviation",
+                "orchestune.dispatch.reconciliation.check_footprint_deviation",
                 return_value=["c.py"],
             ),
             patch(
-                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
+                "orchestune.dispatch.reconciliation.recompute_dag_for_footprint_change",
                 return_value=(MagicMock(), conflicts),
             ),
         ):
@@ -258,11 +258,11 @@ class TestCollectActiveConflictSubtaskIds:
 
         with (
             patch(
-                "orchestune.dispatch_reconciliation.check_footprint_deviation",
+                "orchestune.dispatch.reconciliation.check_footprint_deviation",
                 return_value=["b.py"],
             ),
             patch(
-                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
+                "orchestune.dispatch.reconciliation.recompute_dag_for_footprint_change",
                 side_effect=RuntimeError("DAG再計算エラー"),
             ),
         ):
@@ -302,7 +302,7 @@ class TestCollectActiveConflictSubtaskIds:
             worktree_root=tmp_path / "worktrees",
         )
         with patch(
-            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
             return_value=["package.json"],
         ):
             result_without_ignore = _collect_active_conflict_subtask_ids(
@@ -317,7 +317,7 @@ class TestCollectActiveConflictSubtaskIds:
             dag_ignore_patterns=compile_extra_ignore_patterns([r"(^|/)package\.json$"]),
         )
         with patch(
-            "orchestune.dispatch_reconciliation.check_footprint_deviation",
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
             return_value=["package.json"],
         ):
             result_with_ignore = _collect_active_conflict_subtask_ids(
@@ -342,11 +342,11 @@ class TestCollectActiveConflictSubtaskIds:
 
         with (
             patch(
-                "orchestune.dispatch_reconciliation.check_footprint_deviation",
+                "orchestune.dispatch.reconciliation.check_footprint_deviation",
                 return_value=["package.json"],
             ),
             patch(
-                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
+                "orchestune.dispatch.reconciliation.recompute_dag_for_footprint_change",
                 return_value=(MagicMock(), []),
             ) as mock_recompute,
         ):

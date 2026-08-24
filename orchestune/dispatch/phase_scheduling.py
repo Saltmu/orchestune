@@ -6,27 +6,27 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch_actor_verification import (
+from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
 )
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle_context import IssuesByStatus
-from orchestune.dispatch_filters import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
     _filter_deviation_blocked_candidates,
 )
-from orchestune.dispatch_launch import (
+from orchestune.dispatch.launch import (
     LaunchContext,
     _apply_duplicate_skip,
     _decide_duplicate_candidates,
     _get_stack_eligible_tasks,
     _launch_selected_tasks,
 )
-from orchestune.dispatch_locks import ExternalLockScanResult
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task, quota_available, select_next_tasks
-from orchestune.dispatch_state import save_run_state
+from orchestune.dispatch.locks import ExternalLockScanResult
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task, quota_available, select_next_tasks
+from orchestune.dispatch.state import save_run_state
 
 
 def _filter_queued_candidates(

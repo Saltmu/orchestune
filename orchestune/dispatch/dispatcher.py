@@ -18,18 +18,18 @@ from orchestune.dag.models import (
     load_orchestune_config,
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import run_dispatch_cycle
-from orchestune.dispatch_postcycle import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
     _post_event_log_comment,
     _process_parent_completion,
     _run_semantic_integrator,
 )
-from orchestune.dispatch_report import _report_to_dict, write_github_step_summary
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.targets import (
     TargetBuildConfig,
     build_dispatch_target,
     resolve_default_dispatch_target_name,

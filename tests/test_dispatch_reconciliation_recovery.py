@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_reconciliation import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.reconciliation import (
     BaseBranchRedRecoveryDecision,
     _apply_base_branch_red_recovery,
     _decide_base_branch_red_recovery,
@@ -21,9 +21,9 @@ from orchestune.dispatch_reconciliation import (
     _self_heal_launch_history,
     _self_heal_run_state,
 )
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord
 from orchestune.outcome_record import OutcomeRecord
 
@@ -119,10 +119,10 @@ class TestSelfHealRunState:
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch_reconciliation.recover_run_state",
+                "orchestune.dispatch.reconciliation.recover_run_state",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _self_heal_run_state(run_state, config)
 
@@ -147,10 +147,10 @@ class TestSelfHealRunState:
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch_reconciliation.recover_run_state",
+                "orchestune.dispatch.reconciliation.recover_run_state",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _self_heal_run_state(run_state, config)
 
@@ -193,10 +193,10 @@ class TestReconcileRecoveryCounters:
                 return_value=open_prs,
             ),
             patch(
-                "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
+                "orchestune.dispatch.reconciliation._reconcile_stale_recovery_counters",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _reconcile_recovery_counters(run_state, config)
 
@@ -223,10 +223,10 @@ class TestReconcileRecoveryCounters:
             ),
             patch("fake_forge_proxy.active_fake_forge.list_open_prs") as mock_list_prs,
             patch(
-                "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters",
+                "orchestune.dispatch.reconciliation._reconcile_stale_recovery_counters",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _reconcile_recovery_counters(run_state, config)
 
@@ -249,9 +249,9 @@ class TestReconcileRecoveryCounters:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list_issues,
             patch(
-                "orchestune.dispatch_reconciliation._reconcile_stale_recovery_counters"
+                "orchestune.dispatch.reconciliation._reconcile_stale_recovery_counters"
             ) as mock_reconcile,
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _reconcile_recovery_counters(run_state, config)
 
@@ -417,7 +417,7 @@ class TestRestoreLaunchHistory:
         ローカル履歴と合算されて数えられる。マージは和集合の最大回数を採る
         片方向なので、上限は緩む方向へは壊れない（安全側）。
         """
-        from orchestune.dispatch_scoring import quota_available
+        from orchestune.dispatch.scoring import quota_available
 
         now = 10_000.0
         parent_a_launch = now - 30.0
@@ -535,7 +535,7 @@ class TestRestoreLaunchHistory:
     def test_an_implausible_timestamp_does_not_block_dispatch_forever(self, tmp_path):
         """破棄の要点: 本文を修正しなくても、次サイクル以降ディスパッチが
         止まらないこと（クランプのみだと毎サイクル復活してしまう）。"""
-        from orchestune.dispatch_scoring import quota_available
+        from orchestune.dispatch.scoring import quota_available
 
         run_state = RunState(active_worktrees={}, launch_history=[])
         config = self._config(tmp_path)
@@ -600,14 +600,14 @@ class TestSelfHealLaunchHistory:
 
         with (
             patch(
-                "orchestune.dispatch_reconciliation._restore_launch_history",
+                "orchestune.dispatch.reconciliation._restore_launch_history",
                 return_value=True,
             ),
             patch(
                 "fake_forge_proxy.active_fake_forge.list_open_prs",
                 return_value=open_prs,
             ),
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _self_heal_launch_history(run_state, config, now=1000.0)
 
@@ -630,11 +630,11 @@ class TestSelfHealLaunchHistory:
 
         with (
             patch(
-                "orchestune.dispatch_reconciliation._restore_launch_history",
+                "orchestune.dispatch.reconciliation._restore_launch_history",
                 return_value=False,
             ),
             patch("fake_forge_proxy.active_fake_forge.list_open_prs") as mock_list_prs,
-            patch("orchestune.dispatch_reconciliation.save_run_state") as mock_save,
+            patch("orchestune.dispatch.reconciliation.save_run_state") as mock_save,
         ):
             _self_heal_launch_history(run_state, config, now=1000.0)
 
@@ -670,7 +670,7 @@ class TestSelfHealLaunchHistory:
         with (
             patch("fake_forge_proxy.active_fake_forge.get_issue", return_value=issue),
             patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]),
-            patch("orchestune.dispatch_reconciliation.save_run_state"),
+            patch("orchestune.dispatch.reconciliation.save_run_state"),
         ):
             _self_heal_launch_history(run_state, config, now=now)
 
@@ -845,7 +845,7 @@ class TestBaseBranchRedRecovery:
         ctx.subtask_branch_map = {}
 
         with patch(
-            "orchestune.dispatch_reconciliation._get_branch_commit_sha",
+            "orchestune.dispatch.reconciliation._get_branch_commit_sha",
             return_value="2222222222222222222222222222222222222222",
         ):
             events = _handle_base_branch_red_recovery(issues_mock, ctx, set(), config)

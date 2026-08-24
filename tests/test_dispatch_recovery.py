@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_recovery import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.recovery import (
     _apply_restore_missing_active_worktrees,
     _decide_missing_active_worktrees,
     _decide_stale_recovery_counters,
@@ -9,7 +9,7 @@ from orchestune.dispatch_recovery import (
     _parse_subtask_info_from_issue,
     recover_run_state,
 )
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 
 

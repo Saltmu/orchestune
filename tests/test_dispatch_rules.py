@@ -1,14 +1,14 @@
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_rules import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.rules import (
     ActiveWorktreeRuleOutcome,
     CycleContext,
     RuleChain,
     _ActiveWorktreeAggregates,
 )
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 

@@ -2,18 +2,18 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc_completion import _apply_completed_worktree_outcome
-from orchestune.dispatch_postcycle import _format_event_log_comment
-from orchestune.dispatch_scoring import quota_available
-from orchestune.dispatch_state import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.completion import _apply_completed_worktree_outcome
+from orchestune.dispatch.postcycle import _format_event_log_comment
+from orchestune.dispatch.scoring import quota_available
+from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,
     load_run_state,
     save_run_state,
 )
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.targets import (
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
     DispatchHandle,
     DispatchTarget,
@@ -370,7 +370,7 @@ class TestTaskTokenLimitEscalation:
             max_tokens_per_task=10000,
         )
 
-        from orchestune.dispatch_gc_completion import CompletedWorktreeDecision
+        from orchestune.dispatch.gc.completion import CompletedWorktreeDecision
 
         decision = CompletedWorktreeDecision(
             action="completed", subtask_id="task-x", commit_sha="abcdef"
@@ -390,8 +390,8 @@ class TestTaskTokenLimitEscalation:
     def test_escalated_worktree_is_recorded_in_completed_worktrees_and_throttles_window_quota(
         self, tmp_path
     ):
-        from orchestune.dispatch_gc import _rule_completed
-        from orchestune.dispatch_rules import CycleContext
+        from orchestune.dispatch.gc import _rule_completed
+        from orchestune.dispatch.rules import CycleContext
 
         active = ActiveWorktree(
             issue_number=42,
@@ -457,14 +457,14 @@ class TestTaskTokenLimitEscalation:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=(True, "abcdef123456"),
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             outcome = _rule_completed(ctx, "42", active, task)
 
@@ -494,7 +494,7 @@ class TestTaskTokenLimitEscalation:
 
 class TestPostcycleCycleReportFormatting:
     def test_format_cycle_report_renders_model_and_tokens(self):
-        from orchestune.dispatch_cycle import CycleReport
+        from orchestune.dispatch.cycle import CycleReport
 
         report = CycleReport(
             selected=[],

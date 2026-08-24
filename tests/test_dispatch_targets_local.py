@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.targets import (
     AGY_CLI_LOCAL_CMD_TEMPLATE,
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
     CODEX_CLI_LOCAL_CMD_TEMPLATE,
@@ -89,7 +89,7 @@ class TestLocalProcessDispatchTarget:
         target = LocalProcessDispatchTarget(
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
-        with patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen:
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
             mock_popen.return_value.pid = 4242
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
@@ -103,19 +103,19 @@ class TestLocalProcessDispatchTarget:
         target = LocalProcessDispatchTarget(
             default_dry_run_command_builder, log_dir=log_dir
         )
-        with patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen:
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
             mock_popen.return_value.pid = 1
             target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
         assert (log_dir / "claude-issue-1-task-a.log").exists()
 
     def test_is_complete_true_when_pid_not_alive(self):
         target = LocalProcessDispatchTarget()
-        with patch("orchestune.dispatch_targets._is_pid_alive", return_value=False):
+        with patch("orchestune.dispatch.targets._is_pid_alive", return_value=False):
             assert target.is_complete(DispatchHandle(pid=123)) is True
 
     def test_is_complete_false_when_pid_alive(self):
         target = LocalProcessDispatchTarget()
-        with patch("orchestune.dispatch_targets._is_pid_alive", return_value=True):
+        with patch("orchestune.dispatch.targets._is_pid_alive", return_value=True):
             assert target.is_complete(DispatchHandle(pid=123)) is False
 
     def test_launch_with_local_cmd_templates(self, tmp_path):
@@ -123,7 +123,7 @@ class TestLocalProcessDispatchTarget:
             log_dir=tmp_path / "logs",
             local_cmd="agy --issue {issue_number} --subtask '{subtask_id}' --branch {branch_name} --path {worktree_path}",
         )
-        with patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen:
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
             mock_popen.return_value.pid = 9999
             target.launch(
                 _task(issue_number=42, subtask_id="sub-x"),
@@ -150,35 +150,35 @@ class TestLocalProcessDispatchTarget:
 class TestDetectInstalledLocalCli:
     def test_returns_claude_when_only_claude_installed(self):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             assert detect_installed_local_cli() == "claude"
 
     def test_returns_agy_when_only_agy_installed(self):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/agy" if name == "agy" else None,
         ):
             assert detect_installed_local_cli() == "agy"
 
     def test_returns_codex_when_only_codex_installed(self):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/codex" if name == "codex" else None,
         ):
             assert detect_installed_local_cli() == "codex"
 
     def test_prefers_claude_when_all_three_installed(self):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: f"/usr/bin/{name}",
         ):
             assert detect_installed_local_cli() == "claude"
 
     def test_prefers_claude_over_codex_when_both_installed(self):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: f"/usr/bin/{name}"
             if name in ("claude", "codex")
             else None,
@@ -187,7 +187,7 @@ class TestDetectInstalledLocalCli:
 
     def test_prefers_agy_over_codex_when_both_installed(self):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: f"/usr/bin/{name}"
             if name in ("agy", "codex")
             else None,
@@ -195,7 +195,7 @@ class TestDetectInstalledLocalCli:
             assert detect_installed_local_cli() == "agy"
 
     def test_returns_none_when_none_installed(self):
-        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+        with patch("orchestune.dispatch.targets.shutil.which", return_value=None):
             assert detect_installed_local_cli() is None
 
 
@@ -427,7 +427,7 @@ class TestBuildDispatchTarget:
 
     def test_auto_resolves_to_claude_cli_when_claude_installed(self, tmp_path):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             target = build_dispatch_target(
@@ -444,7 +444,7 @@ class TestBuildDispatchTarget:
 
     def test_auto_prefers_claude_when_all_installed(self, tmp_path):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: f"/usr/bin/{name}",
         ):
             target = build_dispatch_target(
@@ -460,7 +460,7 @@ class TestBuildDispatchTarget:
 
     def test_auto_falls_back_to_agy_cli_when_only_agy_installed(self, tmp_path):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/agy" if name == "agy" else None,
         ):
             target = build_dispatch_target(
@@ -477,7 +477,7 @@ class TestBuildDispatchTarget:
 
     def test_auto_falls_back_to_codex_cli_when_only_codex_installed(self, tmp_path):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/codex" if name == "codex" else None,
         ):
             target = build_dispatch_target(
@@ -495,7 +495,7 @@ class TestBuildDispatchTarget:
     def test_auto_warns_and_falls_back_to_dummy_when_none_installed(
         self, tmp_path, capsys
     ):
-        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+        with patch("orchestune.dispatch.targets.shutil.which", return_value=None):
             target = build_dispatch_target(
                 TargetBuildConfig("auto", None, None, tmp_path / "logs")
             )
@@ -508,7 +508,7 @@ class TestBuildDispatchTarget:
 
     def test_auto_with_explicit_local_cmd_overrides_detected_preset(self, tmp_path):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             target = build_dispatch_target(
@@ -524,7 +524,7 @@ class TestBuildDispatchTarget:
         assert target._local_cmd == "claude -p 'custom {issue_number}'"
 
     def test_auto_with_explicit_local_cmd_used_even_when_none_detected(self, tmp_path):
-        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+        with patch("orchestune.dispatch.targets.shutil.which", return_value=None):
             target = build_dispatch_target(
                 TargetBuildConfig(
                     "auto", None, None, tmp_path / "logs", local_cmd="custom-cmd"
@@ -546,7 +546,7 @@ class TestBuildDispatchTarget:
         self, tmp_path
     ):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             with pytest.raises(ValueError) as excinfo:
@@ -570,7 +570,7 @@ class TestBuildDispatchTarget:
 
     def test_auto_with_detected_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
         with patch(
-            "orchestune.dispatch_targets.shutil.which",
+            "orchestune.dispatch.targets.shutil.which",
             side_effect=lambda name: "/usr/bin/claude" if name == "claude" else None,
         ):
             target = build_dispatch_target(
@@ -588,7 +588,7 @@ class TestBuildDispatchTarget:
     def test_auto_without_detected_cli_and_without_allow_unsafe_flag_succeeds_with_dummy(
         self, tmp_path
     ):
-        with patch("orchestune.dispatch_targets.shutil.which", return_value=None):
+        with patch("orchestune.dispatch.targets.shutil.which", return_value=None):
             target = build_dispatch_target(
                 TargetBuildConfig("auto", None, None, tmp_path / "logs")
             )

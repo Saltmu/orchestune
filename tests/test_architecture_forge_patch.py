@@ -269,7 +269,7 @@ def test_github_forge_patch_detector_resolves_loop_target() -> None:
     source = """
 from unittest.mock import patch
 for target in (
-    "orchestune.dispatch_gc.is_process_alive",
+    "orchestune.dispatch.gc.is_process_alive",
     "orchestune.forge.GitHubForge.list_prs",
 ):
     with patch(target):
@@ -337,7 +337,7 @@ def forge_helper():
     return target
 
 def harmless_helper():
-    target = "orchestune.dispatch_gc.is_process_alive"
+    target = "orchestune.dispatch.gc.is_process_alive"
     with patch(target):
         pass
 """

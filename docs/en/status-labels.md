@@ -71,26 +71,26 @@ independently of the lifecycle above (see "External lock" below).
   (`depends_on`); `status:queued` if there are none or all are already resolved.
 
 ### 2. `status:blocked` → `status:queued` (promotion on dependency resolution)
-- Source: `_promote_blocked_tasks` in `orchestune/dispatch_cycle.py`
+- Source: `_promote_blocked_tasks` in `orchestune/dispatch/cycle.py`
   (`_decide_blocked_promotions` / `_apply_blocked_promotions`)
 - Condition: every entry in `depends_on` is resolved, i.e. `status:done` or
   `status:not-needed` (subtasks completed earlier in the same cycle are also
   counted via `completed_subtask_ids`).
 
 ### 3. `status:queued` / `status:blocked` → `status:in-progress` (launch)
-- Source: `_apply_task_launches` in `orchestune/dispatch_launch.py`
+- Source: `_apply_task_launches` in `orchestune/dispatch/launch.py`
 - Condition: the task was selected within quota and
   `create_worktree_and_launch` (worktree creation + agent launch) succeeded.
 
 ### 4. `status:in-progress` → `status:done` (completion)
-- Source: `_finalize_completed_worktree` in `orchestune/dispatch_gc.py`
+- Source: `_finalize_completed_worktree` in `orchestune/dispatch/gc/__init__.py`
 - Condition: the agent process exited, the worktree has no uncommitted
   changes, there is at least one real commit ahead of `base_branch`, and
   a valid outcome record (`orchestune:outcome` with `result: done`) was
   confirmed on the PR or Issue comments.
 
 ### 5. `status:in-progress` → `status:blocked-human-review` (empty-commit completion or missing outcome)
-- Source: `_finalize_completed_worktree` in `orchestune/dispatch_gc.py`
+- Source: `_finalize_completed_worktree` in `orchestune/dispatch/gc/__init__.py`
 - Condition: the process exited and the worktree is clean, but either there are zero
   new commits against `base_branch` (empty-commit completion, likely nothing was actually implemented,
   e.g. due to a permission denial), or new commits exist but no valid outcome record
@@ -98,19 +98,19 @@ independently of the lifecycle above (see "External lock" below).
   In either case, automatic completion and dependent promotion are withheld, and the task fail-closes to `status:blocked-human-review`.
 
 ### 6. `status:in-progress` → `status:blocked-human-review` (duplicate launch detected)
-- Source: `_apply_duplicate_skip` in `orchestune/dispatch_launch.py`
+- Source: `_apply_duplicate_skip` in `orchestune/dispatch/launch.py`
 - Condition: an open PR already exists for the candidate's expected branch,
   and it has been updated to a commit different from the last recorded
   completion (likely human intervention). The same transition can also occur
   from `status:queued` / `status:blocked`.
 
 ### 7. `status:in-progress` → `status:blocked-human-review` (CHANGES_REQUESTED)
-- Source: `_apply_changes_requested_escalation` in `orchestune/dispatch_cycle.py`
+- Source: `_apply_changes_requested_escalation` in `orchestune/dispatch/cycle.py`
 - Condition: an upstream PR received a CHANGES_REQUESTED review on GitHub,
   pausing the stacked task.
 
 > **Note (#109)**: transitions 5-7 above all delegate to
-> `apply_human_review_escalation` in `orchestune/dispatch_escalation.py` (the
+> `apply_human_review_escalation` in `orchestune/dispatch/escalation.py` (the
 > shared logic: remove the current `status:*` label, add
 > `status:blocked-human-review`, then post the reason as a comment). Each
 > caller (`_finalize_completed_worktree` / `_apply_duplicate_skip` /
@@ -118,13 +118,13 @@ independently of the lifecycle above (see "External lock" below).
 > *why* to escalate before calling this shared function.
 
 ### 8. `status:in-progress` → `status:manual-merge-required` (automatic rebase failed)
-- Source: `_apply_auto_rebase` in `orchestune/dispatch_rebase.py`
+- Source: `_apply_auto_rebase` in `orchestune/dispatch/rebase.py`
 - Condition: an automatic rebase was attempted after detecting that an
   upstream dependency's PR passed CI, but it hit a conflict or the local CI
   run after rebasing failed.
 
 ### 9. `status:in-progress` → `status:queued` (GC reclaim)
-- Source: `_collect_zombies_and_timeouts` in `orchestune/dispatch_gc.py`
+- Source: `_collect_zombies_and_timeouts` in `orchestune/dispatch/gc/__init__.py`
 - Condition: the process disappeared while uncommitted changes remain
   (zombie), or the task timed out. Uncommitted work is stashed as a WIP
   commit before requeuing.
@@ -135,7 +135,7 @@ independently of the lifecycle above (see "External lock" below).
   the label transition (exposing `status:queued` first and stopping before the
   save would let a relaunch happen without counting the reclaim). The record is
   discarded when a dispatch cycle observes on GitHub that the Issue is **closed**
-  (`discard_reclaim_counts_for_closed_issues` in `dispatch_cycle_context`).
+  (`discard_reclaim_counts_for_closed_issues` in `dispatch.cycle_context`).
   Neither `status:done` (the worker finished) nor dispatching the independent
   `status:not-needed` review clears it: the former can still be returned to
   `status:queued` by an Integrator provisional-merge CI failure, the latter by a
@@ -147,7 +147,7 @@ independently of the lifecycle above (see "External lock" below).
   is on the safe side: it stops earlier rather than looping).
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review` (GC reclaim limit exceeded)
-- Source: `_apply_zombie_or_timeout_reclaim` in `orchestune/dispatch_gc_zombies.py`
+- Source: `_apply_zombie_or_timeout_reclaim` in `orchestune/dispatch/gc/zombies.py`
 - Condition: the cumulative number of zombie/timeout reclaims for a task exceeds
   `max_task_reclaims`. Instead of returning it to `status:queued`, the task stops
   for human review with the reclaim count and the last reason posted as a
@@ -161,7 +161,7 @@ independently of the lifecycle above (see "External lock" below).
   the uncommitted work, and its path is named in the comment.
 
 ### 10. `status:in-progress` → closed, or pending `not-needed-review:*`
-- Source: `_finalize_not_needed_worktree` / `_rule_not_needed` in `orchestune/dispatch_gc.py`
+- Source: `_finalize_not_needed_worktree` / `_rule_not_needed` in `orchestune/dispatch/gc/__init__.py`
 - Condition: the session produced an outcome record (`orchestune:outcome` with `result: not-needed`) or the `status:not-needed` label was set by external automation (workers themselves must not modify labels directly). If a cloud
   routine is available, the Issue is not closed immediately; an independent
   verification review is dispatched (`orchestune/integration_coordinator.py`)
@@ -169,7 +169,7 @@ independently of the lifecycle above (see "External lock" below).
   In local environments it is closed immediately as before.
 
 ### 10-b. `status:in-progress` → `status:blocked` + `ci:base-branch-red` (CI failed due to base branch) / Requeued on base_sha advance (#555)
-- Source: `_finalize_completed_worktree` in `orchestune/dispatch_gc.py` (holding), `_handle_base_branch_red_recovery` in `orchestune/dispatch_reconciliation.py` (requeue)
+- Source: `_finalize_completed_worktree` in `orchestune/dispatch/gc/__init__.py` (holding), `_handle_base_branch_red_recovery` in `orchestune/dispatch/reconciliation.py` (requeue)
 - Condition:
   - **Hold**: When an agent session completes with an outcome record declaring `result: blocked` and `reason: base-branch-red`, the task transitions to `status:blocked` and receives the marker label `ci:base-branch-red` to be held without being promoted by normal dependency resolution (`_decide_blocked_promotions`).
   - **Requeue**: When the base branch commit (`base_sha`) advances, the `ci:base-branch-red` marker is removed, and if dependencies are satisfied, the task is moved back to `status:queued`.
@@ -183,7 +183,7 @@ independently of the lifecycle above (see "External lock" below).
   reverted and the task is sent back to the queue.
 
 ### 12. DAG recompute from footprint deviation (`status:blocked-recompute` / `status:force-serial`)
-- Source: `_apply_footprint_deviation_outcome` in `orchestune/dispatch_rebase.py`
+- Source: `_apply_footprint_deviation_outcome` in `orchestune/dispatch/rebase.py`
   (`notify_recompute` / `notify_force_serial`)
 - Condition: an active worktree's actual changed files deviated from its
   declared `footprint`, triggering a DAG recompute; any dependent Issue with a
@@ -195,8 +195,8 @@ independently of the lifecycle above (see "External lock" below).
   that this also blocks unrelated tasks from launching).
 
 ### 13. External lock (`status:external-lock`)
-- Source: `_apply_external_lock_sync` in `orchestune/dispatch_cycle.py`
-  (decided by `scan_external_locks` in `orchestune/dispatch_locks.py`)
+- Source: `_apply_external_lock_sync` in `orchestune/dispatch/cycle.py`
+  (decided by `scan_external_locks` in `orchestune/dispatch/locks.py`)
 - Applied when: a task's footprint overlaps with the changed files of a
   remote branch or PR that Orchestune does not manage (tasks already
   `status:done` are excluded).

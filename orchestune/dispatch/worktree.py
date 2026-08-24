@@ -7,9 +7,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune import dispatch_gc
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_targets import (
+from orchestune.dispatch import gc as dispatch_gc
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.targets import (
     BranchReachabilityError,
     DispatchHandle,
     DispatchTarget,

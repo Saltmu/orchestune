@@ -91,7 +91,7 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 |---|---|---|
 | Bad decomposition (an unestablished shared extension point) | Shared-contract gate (Section 1) | Warning |
 | Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
-| Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch_locks.check_footprint_deviation`) | DAG recomputation (with exclusion rules and a retry cap) |
+| Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch.locks.check_footprint_deviation`) | DAG recomputation (with exclusion rules and a retry cap) |
 | Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
 | The agent's own report (`result: not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by the outcome record and status label |
 
@@ -294,13 +294,13 @@ from its own layer or from any layer below it, never from a layer above.
 
 | Layer | Role | Modules |
 | --- | --- | --- |
-| **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatcher`, `monitor`, `provisioning` |
-| **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch_cycle`, `dispatch_cycle_context`, `dispatch_cycle_report`, `dispatch_phase_gc`, `dispatch_phase_reconciliation`, `dispatch_phase_rebase`, `dispatch_phase_scheduling`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_labels`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
+| **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning` |
+| **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **Adapters**<br/>the only modules that run `git` or `gh` | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
-| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag`, `dag.models`, `dispatch_result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
+| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
 
-Pure data-transfer modules (`models`, `dag.models`, `dispatch_result`) sit at
+Pure data-transfer modules (`models`, `dag.models`, `dispatch.result`) sit at
 **L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and
 `PrRecord`. Putting the DTOs above the adapter that produces them would make
 that dependency point upward.
@@ -312,7 +312,7 @@ the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
 All code that predated this boundary has since been resolved. Three modules used to carry such code:
 
 * `dag`: a compatibility facade re-exporting the whole `dag_*` package. Callers now import the concrete `dag_*` module directly, and `dag.cli` — the module that actually owns `main()` — is the real L4 entrypoint.
-* `dispatcher`: held the dispatch cycle's best-effort post-cycle orchestration directly. That has moved to `dispatch_postcycle` (L3), leaving only argument parsing, config loading, and `main()`.
+* `dispatcher`: held the dispatch cycle's best-effort post-cycle orchestration directly. That has moved to `dispatch.postcycle` (L3), leaving only argument parsing, config loading, and `main()`.
 * `monitor`: built its own status snapshots (`MonitorState`/`build_status_snapshot`/`format_status_report` and friends) directly. That has moved to `status_snapshot` (L2), leaving only argument parsing, the `--watch` loop, and `main()`.
 
 This is not a licence to skip the layering going forward. New code still belongs in the layer that owns the behaviour, and this section and `tests/test_architecture.py` keep enforcing it mechanically.
@@ -335,8 +335,8 @@ table above cannot silently drift from the code:
    | `git` | `infra.git_cli` |
 
    This covers the VCS and GitHub client surface only. Other external processes
-   are deliberately outside it and are not guarded: `dispatch_targets` launches
-   the agent CLIs, and `dispatch_rebase` and `integrator_git_ops` shell out to
+   are deliberately outside it and are not guarded: `dispatch.targets` launches
+   the agent CLIs, and `dispatch.rebase` and `integrator_git_ops` shell out to
    the CI script and to `poetry`. Those are one-off process launches rather
    than a client that callers need to fake, so they stay where they are used.
 

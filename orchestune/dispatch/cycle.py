@@ -12,31 +12,31 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle_context import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_context import (
     _build_cycle_context,
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
-from orchestune.dispatch_cycle_report import (
+from orchestune.dispatch.cycle_report import (
     CycleReport,
     append_event_log,
     build_event_log_entry,
 )
-from orchestune.dispatch_phase_gc import run_gc_phase
-from orchestune.dispatch_phase_rebase import (
+from orchestune.dispatch.phase_gc import run_gc_phase
+from orchestune.dispatch.phase_rebase import (
     _sync_external_locks,
     ensure_parent_branch_ready,
 )
-from orchestune.dispatch_phase_reconciliation import (
+from orchestune.dispatch.phase_reconciliation import (
     _process_active_worktrees,
     run_blocked_promotion_phase,
     run_dual_status_reconciliation,
     run_self_heal_phase,
 )
-from orchestune.dispatch_phase_scheduling import run_scheduling_phase
-from orchestune.dispatch_state import load_run_state
-from orchestune.dispatch_worktree import file_lock
+from orchestune.dispatch.phase_scheduling import run_scheduling_phase
+from orchestune.dispatch.state import load_run_state
+from orchestune.dispatch.worktree import file_lock
 
 __all__ = ["CycleReport", "run_dispatch_cycle"]
 

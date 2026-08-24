@@ -9,10 +9,10 @@ test_dispatch_gc.py (1418行) を、ルール別・クリーンアップ別
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))

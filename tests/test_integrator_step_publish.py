@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from unittest.mock import Mock
 
-from orchestune.dispatch_targets import DispatchHandle
+from orchestune.dispatch.targets import DispatchHandle
 from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.models import PrRecord

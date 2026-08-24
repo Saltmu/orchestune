@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
@@ -18,7 +18,7 @@ from orchestune.issue_parsing import (
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
-    from orchestune.dispatch_config import DispatcherConfig
+    from orchestune.dispatch.config import DispatcherConfig
 
 _FORCE_SERIAL_LABEL = "status:force-serial"
 

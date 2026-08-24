@@ -21,7 +21,7 @@ def main() -> None:
 
         dag_main()
     elif cmd == "dispatch":
-        from orchestune.dispatcher import main as dispatcher_main
+        from orchestune.dispatch.dispatcher import main as dispatcher_main
 
         dispatcher_main()
     elif cmd == "status":

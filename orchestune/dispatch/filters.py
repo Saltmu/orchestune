@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord
 

@@ -12,13 +12,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dag.models import FootprintConflict
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch_filters import _filter_deviation_blocked_candidates
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.filters import _filter_deviation_blocked_candidates
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     save_run_state,
@@ -93,9 +93,9 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
-            "orchestune.dispatch_gc.is_process_alive",
-            "orchestune.dispatch_gc_completion.is_process_alive",
-            "orchestune.dispatch_gc_zombies.is_process_alive",
+            "orchestune.dispatch.gc.is_process_alive",
+            "orchestune.dispatch.gc.completion.is_process_alive",
+            "orchestune.dispatch.gc.zombies.is_process_alive",
         ):
             stack.enter_context(patch(target, return_value=return_value))
         yield
@@ -238,21 +238,21 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
-            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
+            patch("orchestune.dispatch.phase_rebase.ensure_parent_branch"),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
-            patch("orchestune.dispatch_targets.subprocess.Popen"),
+            patch("orchestune.dispatch.targets.subprocess.Popen"),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation",
+                "orchestune.dispatch.rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ) as mock_check_deviation,
             patch(
-                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+                "orchestune.dispatch.rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
             patch(
-                "orchestune.dispatch_rebase.notify_recompute", return_value=["body"]
+                "orchestune.dispatch.rebase.notify_recompute", return_value=["body"]
             ) as mock_notify,
         ):
             mock_list.return_value = [in_progress_issue]
@@ -321,18 +321,18 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation",
+                "orchestune.dispatch.rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
-                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+                "orchestune.dispatch.rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
             patch(
-                "orchestune.dispatch_rebase.notify_recompute", return_value=["dry body"]
+                "orchestune.dispatch.rebase.notify_recompute", return_value=["dry body"]
             ) as mock_notify,
         ):
             mock_list.return_value = [in_progress_issue]
@@ -408,21 +408,21 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.add_comment.reset_mock(side_effect=True)
         mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
+            patch("orchestune.dispatch.phase_rebase.ensure_parent_branch"),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
+                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
                 side_effect=_launch_stub,
             ),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation",
+                "orchestune.dispatch.rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
-                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+                "orchestune.dispatch.rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
         ):
             mock_list.return_value = [other_queued_issue, in_progress_issue]
@@ -502,17 +502,17 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)
         fake_forge.list_issues_by_label.return_value = []
         with (
-            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
+            patch("orchestune.dispatch.phase_rebase.ensure_parent_branch"),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_phase_scheduling._launch_selected_tasks",
+                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
                 side_effect=_launch_stub,
             ),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation",
+                "orchestune.dispatch.rebase.check_footprint_deviation",
                 return_value=[],
             ),
         ):
@@ -567,17 +567,17 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.add_comment.reset_mock(side_effect=True)
         mock_add_comment = fake_forge.add_comment
         with (
-            patch("orchestune.dispatch_phase_rebase.ensure_parent_branch"),
+            patch("orchestune.dispatch.phase_rebase.ensure_parent_branch"),
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation",
+                "orchestune.dispatch.rebase.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),
             patch(
-                "orchestune.dispatch_rebase.recompute_dag_for_footprint_change"
+                "orchestune.dispatch.rebase.recompute_dag_for_footprint_change"
             ) as mock_recompute,
         ):
             mock_list.return_value = [in_progress_issue]

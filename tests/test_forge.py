@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.forge import (
     REQUIRED_LABELS,
     BootstrapResult,

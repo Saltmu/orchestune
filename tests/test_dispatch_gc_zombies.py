@@ -8,15 +8,15 @@
 
 from unittest.mock import patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc_zombies import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
     _collect_zombies_and_timeouts,
     _decide_zombie_or_timeout_reclaims,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 
 
 def _active(**overrides):
@@ -71,7 +71,7 @@ class TestCollectZombiesAndTimeouts:
         )
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
         ):
             events = _collect_zombies_and_timeouts(
                 run_state, {active.issue_number: task}, config
@@ -104,7 +104,7 @@ class TestCollectZombiesAndTimeouts:
         )
 
         with (
-            patch("orchestune.dispatch_gc_zombies.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
         ):
             events = _collect_zombies_and_timeouts(
                 run_state, {active.issue_number: task}, config
@@ -157,10 +157,10 @@ class TestDecideZombieOrTimeoutReclaims:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
         ):
@@ -187,10 +187,10 @@ class TestDecideZombieOrTimeoutReclaims:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
         ):
@@ -211,7 +211,7 @@ class TestDecideZombieOrTimeoutReclaims:
         )
 
         with patch(
-            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+            "orchestune.dispatch.gc.zombies.is_process_alive", return_value=True
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -234,7 +234,7 @@ class TestDecideZombieOrTimeoutReclaims:
         )
 
         with patch(
-            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+            "orchestune.dispatch.gc.zombies.is_process_alive", return_value=True
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -287,10 +287,10 @@ class TestDecideZombieOrTimeoutReclaims:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
         ):
@@ -315,7 +315,7 @@ class TestDecideZombieOrTimeoutReclaims:
             task_timeout_seconds=0,
         )
 
-        with patch("orchestune.dispatch_gc_zombies.is_process_alive") as mock_is_alive:
+        with patch("orchestune.dispatch.gc.zombies.is_process_alive") as mock_is_alive:
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
@@ -335,7 +335,7 @@ class TestDecideZombieOrTimeoutReclaims:
         )
 
         with patch(
-            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+            "orchestune.dispatch.gc.zombies.is_process_alive", return_value=True
         ):
             reclaims_with_task = _decide_zombie_or_timeout_reclaims(
                 run_state, {active.issue_number: task}, config, None, now=2_000.0
@@ -358,7 +358,7 @@ class TestDecideZombieOrTimeoutReclaims:
         )
 
         with patch(
-            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+            "orchestune.dispatch.gc.zombies.is_process_alive", return_value=True
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -401,11 +401,11 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ) as mock_backup,
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
@@ -452,10 +452,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill"),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill"),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -483,10 +483,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill"),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill"),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -514,10 +514,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill"),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill"),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -542,10 +542,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -581,11 +581,11 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 side_effect=fake_backup,
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill", side_effect=fake_kill),
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill", side_effect=fake_kill),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -608,10 +608,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -632,10 +632,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
-            patch("orchestune.dispatch_gc_zombies.remove_worktree"),
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.remove_worktree"),
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
@@ -656,13 +656,13 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.os.kill", side_effect=Exception("boom")
+                "orchestune.dispatch.gc.zombies.os.kill", side_effect=Exception("boom")
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
@@ -688,9 +688,9 @@ class TestApplyZombieOrTimeoutReclaim:
         )
 
         with (
-            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch.gc.zombies.backup_wip_commit") as mock_backup,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
@@ -719,12 +719,12 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit",
+                "orchestune.dispatch.gc.zombies.backup_wip_commit",
                 return_value="git commit failed",
             ),
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
@@ -750,10 +750,10 @@ class TestApplyZombieOrTimeoutReclaim:
         )
 
         with (
-            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
-            patch("orchestune.dispatch_gc_zombies.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.zombies.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch.gc.zombies.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
@@ -812,7 +812,7 @@ class TestApplyZombieOrTimeoutReclaim:
         )
 
         with patch(
-            "orchestune.dispatch_gc_zombies.is_process_alive", return_value=True
+            "orchestune.dispatch.gc.zombies.is_process_alive", return_value=True
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -824,10 +824,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.backup_wip_commit", return_value=None
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ) as mock_backup,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaims[0], config)
@@ -860,10 +860,10 @@ class TestApplyZombieOrTimeoutReclaim:
 
         with (
             patch(
-                "orchestune.dispatch_gc_zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_zombies.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
         ):
@@ -876,9 +876,9 @@ class TestApplyZombieOrTimeoutReclaim:
         worktree_dir.rmdir()
 
         with (
-            patch("orchestune.dispatch_gc_zombies.backup_wip_commit") as mock_backup,
+            patch("orchestune.dispatch.gc.zombies.backup_wip_commit") as mock_backup,
             patch(
-                "orchestune.dispatch_gc_zombies.remove_worktree"
+                "orchestune.dispatch.gc.zombies.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaims[0], config)

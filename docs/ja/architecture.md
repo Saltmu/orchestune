@@ -91,7 +91,7 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 |---|---|---|
 | 分解の誤り（未確立の共有拡張ポイント） | 共有コントラクトゲート（セクション1） | 警告 |
 | 計画の陳腐化（`symbols`が実在しない） | ASTによるシンボル検証（セクション1） | Issue本文へ中立な注記 |
-| 宣言の誤り（footprint外への変更） | 実行時の逸脱検知（`dispatch_locks.check_footprint_deviation`） | DAG再計算（除外規則と回数上限つき） |
+| 宣言の誤り（footprint外への変更） | 実行時の逸脱検知（`dispatch.locks.check_footprint_deviation`） | DAG再計算（除外規則と回数上限つき） |
 | インフラの失敗（ローカル状態の消失） | — | GitHubを真実とする再構築（セクション2） |
 | エージェントの自己申告（`result: not-needed`） | 記憶を持たない独立セッションによる再検証（Cloud Routineターゲット使用時のみ） | Outcome Recordとラベル遷移経由でPython側が決定論的にクローズ |
 
@@ -256,7 +256,7 @@ sequenceDiagram
 3. **子レベルの自動マージ・自動クローズ（Integratorの責務、人間の確認なし）**:
    CI通過後、Integratorは一時統合ブランチのPRを**人間の確認を待たずに**`parent/issue-{N}`へ自動マージし、対象の子Issueを`completed`理由で自動的にクローズします。このレベルには人間のレビューゲートは存在せず、CIそのものが品質ゲートとして機能します（詳細は「4. 人間の承認ポイント」）。
 4. **自動リベース（Dispatcherの責務）**:
-   先行タスクのブランチが`parent/issue-{N}`へマージされると、その成果物に依存している（または関連ファイルに触れる）下流の仕掛かり中ブランチに対し、`orchestune/dispatch_rebase.py`が自動的に`git rebase`またはマージを行い、最新の`parent/issue-{N}`の変更を取り込ませます。
+   先行タスクのブランチが`parent/issue-{N}`へマージされると、その成果物に依存している（または関連ファイルに触れる）下流の仕掛かり中ブランチに対し、`orchestune/dispatch/rebase.py`が自動的に`git rebase`またはマージを行い、最新の`parent/issue-{N}`の変更を取り込ませます。
 5. **親Issue配下の全完了検知と最終PR作成（Integratorの責務）**:
    親Issue配下の全子Issueがクローズされたことを検知すると、`orchestune/parent_completion.py`が`parent/issue-{N}` → `main`の最終PRを作成します。このPRは自動マージされません。
 6. **検収マージと親Issueクローズ**:
@@ -314,13 +314,13 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 | 層 | 役割 | モジュール |
 | --- | --- | --- |
-| **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag.cli`, `dispatcher`, `monitor`, `provisioning` |
-| **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_cycle_context`, `dispatch_cycle_report`, `dispatch_phase_gc`, `dispatch_phase_reconciliation`, `dispatch_phase_rebase`, `dispatch_phase_scheduling`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
-| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_labels`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
+| **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning` |
+| **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
+| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **アダプタ**<br/>`git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
-| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `dag`, `dag.models`, `dispatch_result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
+| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
 
-純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch_result`）を
+純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch.result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
 `PrRecord` を返すためです。DTOを、それを生成するアダプタより上位に置くと、
 この依存が上向きになってしまいます。
@@ -330,7 +330,7 @@ L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」
 境界を定める前から存在するコードは、現時点ではすべて解消済みです。かつては`dag`・`dispatcher`・`monitor`の3つに残滓がありました。
 
 * `dag`: `dag_*`パッケージ全体を再エクスポートする互換ファサードでした。呼び出し側が具体的な`dag_*`モジュールを直接importするようになり、実際に`main()`を持つ`dag.cli`が本来のL4エントリポイントとして扱われています。
-* `dispatcher`: dispatch cycle後のベストエフォート後処理オーケストレーションを直接抱えていました。これは`dispatch_postcycle`（L3）へ切り出し済みで、現在は引数解析・設定読み込み・`main()`のみが残っています。
+* `dispatcher`: dispatch cycle後のベストエフォート後処理オーケストレーションを直接抱えていました。これは`dispatch.postcycle`（L3）へ切り出し済みで、現在は引数解析・設定読み込み・`main()`のみが残っています。
 * `monitor`: 自前のステータススナップショット構築（`MonitorState`/`build_status_snapshot`/`format_status_report`等）を直接抱えていました。これは`status_snapshot`（L2）へ切り出し済みで、現在は引数解析・`--watch`ループ・`main()`のみが残っています。
 
 これは新規のコードをその振る舞いを所有する層に置かなくてよいという意味ではありません。境界は引き続きこの節と`tests/test_architecture.py`で機械的に検証されます。
@@ -350,7 +350,7 @@ L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」
    | `gh` | `forge.admin` |
    | `git` | `infra.git_cli` |
 
-   対象はVCS・GitHubクライアントの表面のみです。それ以外の外部プロセス起動は意図的に対象外としており、ガードもしていません。具体的には、`dispatch_targets` はエージェントのCLIを起動し、`dispatch_rebase` と `integrator_git_ops` はCIスクリプトや `poetry` を実行します。これらは呼び出し側がフェイクを用意すべきクライアントではなく単発のプロセス起動であるため、使用箇所に置いたままにしています。
+   対象はVCS・GitHubクライアントの表面のみです。それ以外の外部プロセス起動は意図的に対象外としており、ガードもしていません。具体的には、`dispatch.targets` はエージェントのCLIを起動し、`dispatch.rebase` と `integrator_git_ops` はCIスクリプトや `poetry` を実行します。これらは呼び出し側がフェイクを用意すべきクライアントではなく単発のプロセス起動であるため、使用箇所に置いたままにしています。
 
    **この検査の範囲**:
    ガードはソースからコマンドを読み取るため、検出できるのはリテラルのリストに限られます（直接渡す場合と、スコープ内のいずれかの代入がリテラルを束縛した変数を渡す場合です）。通常のコードに対して信頼できる程度にはPythonのスコープ規則を模しており、分岐とループを追い、クラス本体をメソッドから切り離し、`global` / `nonlocal` を尊重し、第1位置引数だけでなく `args=` キーワードも読みます。

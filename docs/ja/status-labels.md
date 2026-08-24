@@ -69,33 +69,33 @@ stateDiagram-v2
   依存が無い/全て解決済みの場合は`status:queued`。
 - **actor権限検証（#119）**: `status:queued`が起動候補として実際に採用されるには、
   そのラベルを付与したユーザーのリポジトリ権限がtriage以上である必要がある
-  （`orchestune/dispatch_actor_verification.py`）。権限不足の場合は自動起動を
+  （`orchestune/dispatch/actor_verification.py`）。権限不足の場合は自動起動を
   スキップし、`status:blocked-human-review`へ遷移させる（Issue作成時に付与された
   ラベルは`labeled`イベントを残さないため、付与者が特定できない場合はIssue
   作成者を実質的な付与者とみなす）。`status:blocked`からのスタッキング起動
   （セクション「3. 起動」参照）はこの検証の対象外。
 
 ### 2. `status:blocked` → `status:queued`（依存解決による昇格）
-- 発生元: `orchestune/dispatch_cycle.py`の`_promote_blocked_tasks`
+- 発生元: `orchestune/dispatch/cycle.py`の`_promote_blocked_tasks`
   （`_decide_blocked_promotions`/`_apply_blocked_promotions`）
 - 条件: `depends_on`の全てが`status:done`または`status:not-needed`の
   Issueで解決済みになった場合（このサイクルで新規に完了したタスクも
   `completed_subtask_ids`として加味される）。
 
 ### 3. `status:queued` / `status:blocked` → `status:in-progress`（起動）
-- 発生元: `orchestune/dispatch_launch.py`の`_apply_task_launches`
+- 発生元: `orchestune/dispatch/launch.py`の`_apply_task_launches`
 - 条件: クオータに空きがあり選出され、`create_worktree_and_launch`
   （worktree作成・エージェント起動）が成功した場合。
 
 ### 4. `status:in-progress` → `status:done`（完了）
-- 発生元: `orchestune/dispatch_gc.py`の`_finalize_completed_worktree`
+- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_completed_worktree`
 - 条件: エージェントプロセスが終了し、worktreeに未コミットの変更が無く、
   base_branchに対して実コミットが1件以上あり、かつ完了宣言レコード
   （`orchestune:outcome`、`result: done`）がPRまたはIssueコメントから
   確認できた場合。
 
 ### 5. `status:in-progress` → `status:blocked-human-review`（空コミット完了またはoutcome不在）
-- 発生元: `orchestune/dispatch_gc.py`の`_finalize_completed_worktree`
+- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_completed_worktree`
 - 条件: プロセスは終了しworktreeもcleanだが、base_branchに対する新規コミットが
   0件の場合（空コミット完了、権限拒否等で実際には何も作業されなかった可能性があるため）、
   または新規コミットが存在しても完了宣言レコード（`orchestune:outcome`）が
@@ -104,30 +104,30 @@ stateDiagram-v2
   フェイルクローズに倒す。
 
 ### 6. `status:in-progress` → `status:blocked-human-review`（重複起動検知）
-- 発生元: `orchestune/dispatch_launch.py`の`_apply_duplicate_skip`
+- 発生元: `orchestune/dispatch/launch.py`の`_apply_duplicate_skip`
 - 条件: 起動候補のブランチに対応する既存のオープンPRが検出され、そのPRが
   過去の完了履歴と異なるコミットへ更新されている（人間が介入した可能性が
   高い）場合。`status:queued`/`status:blocked`からも同様に遷移し得る。
 
 ### 7. `status:in-progress` → `status:blocked-human-review`（CHANGES_REQUESTED）
-- 発生元: `orchestune/dispatch_cycle.py`の`_apply_changes_requested_escalation`
+- 発生元: `orchestune/dispatch/cycle.py`の`_apply_changes_requested_escalation`
 - 条件: 依存元PRがGitHub上でCHANGES_REQUESTEDを受けた場合、スタックされた
   タスクを一時停止する。
 
 > **注記（#109）**: 上記3つの遷移（5〜7）は、いずれも
-> `orchestune/dispatch_escalation.py`の`apply_human_review_escalation`
+> `orchestune/dispatch/escalation.py`の`apply_human_review_escalation`
 > （現在のstatus:*ラベルを除去→`status:blocked-human-review`付与→理由コメント、
 > という共通処理）へ実装を集約している。各呼び出し元（`_finalize_completed_worktree`
 > /`_apply_duplicate_skip`/`_apply_changes_requested_escalation`）は、どの理由で
 > エスカレーションするかを判断し、この共通関数を呼ぶだけの薄い層になっている。
 
 ### 8. `status:in-progress` → `status:manual-merge-required`（自動リベース失敗）
-- 発生元: `orchestune/dispatch_rebase.py`の`_apply_auto_rebase`
+- 発生元: `orchestune/dispatch/rebase.py`の`_apply_auto_rebase`
 - 条件: 依存先PRのCI通過を検知し自動リベースを試みたが、コンフリクトまたは
   リベース後のローカルCI失敗が発生した場合。
 
 ### 9. `status:in-progress` → `status:queued`（GC回収）
-- 発生元: `orchestune/dispatch_gc.py`の`_collect_zombies_and_timeouts`
+- 発生元: `orchestune/dispatch/gc/__init__.py`の`_collect_zombies_and_timeouts`
 - 条件: プロセス消失かつ未コミット変更あり（ゾンビ）、またはタイムアウト
   超過の場合。未コミット変更はWIPコミットとして退避した上で再キューイングする。
 - 回数上限（[#512](https://github.com/Saltmu/orchestune/issues/512)）: 同一タスクを
@@ -136,7 +136,7 @@ stateDiagram-v2
   台帳へ、ラベル遷移より先に永続化される（ラベルだけ先に`status:queued`へ戻して
   保存前に停止すると、回数が数えられないまま再起動できてしまうため）。
   台帳の記録は、ディスパッチサイクルがGitHub上で**Issueのクローズを確認した
-  時点**で破棄する（`dispatch_cycle_context.discard_reclaim_counts_for_closed_issues`）。
+  時点**で破棄する（`dispatch.cycle_context.discard_reclaim_counts_for_closed_issues`）。
   `status:done`（ワーカーの完了）や`status:not-needed`の独立検証レビューへの
   送り出しでは破棄しない——前者はIntegratorの仮マージCI失敗で、後者はレビュー
   不合格で、それぞれ`status:queued`へ差し戻され得るため。クローズ済みのIssueが
@@ -147,7 +147,7 @@ stateDiagram-v2
   ループせずに早く停止する方向の誤差）。
 
 ### 9-b. `status:in-progress` → `status:blocked-human-review`（GC回収の上限超過）
-- 発生元: `orchestune/dispatch_gc_zombies.py`の`_apply_zombie_or_timeout_reclaim`
+- 発生元: `orchestune/dispatch/gc/zombies.py`の`_apply_zombie_or_timeout_reclaim`
 - 条件: ゾンビ／タイムアウト回収による再投入の累計回数が`max_task_reclaims`を
   超えた場合。`status:queued`への差し戻しを打ち切り、回収回数と最終理由を
   コメントした上で人間の確認待ちで停止する（構造的に必ずタイムアウトする
@@ -162,14 +162,14 @@ stateDiagram-v2
     （`_apply_dirty_worktree_hold`。#212で導入された保留）
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
-- 発生元: `orchestune/dispatch_gc.py`の`_finalize_not_needed_worktree` / `_rule_not_needed`
+- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_not_needed_worktree` / `_rule_not_needed`
 - 条件: セッションが完了宣言レコード（`orchestune:outcome`、`result: not-needed`）を残したか、外部自動化等により`status:not-needed`ラベルが付与された場合（ワーカー自身による直接のラベル操作は禁止）。クラウド
   ルーチンが利用可能なら即座にクローズせず独立検証レビューを起動し
   （`orchestune/integration_coordinator.py`）、レビュー結果に応じて後続
   サイクルでクローズする。ローカル環境では従来通り即座にクローズする。
 
 ### 10-b. `status:in-progress` → `status:blocked` + `ci:base-branch-red`（ベースブランチ由来のCI失敗） / base_sha前進による再キュー（#555）
-- 発生元: `orchestune/dispatch_gc.py`の`_finalize_completed_worktree`（保留）、`orchestune/dispatch_reconciliation.py`の`_handle_base_branch_red_recovery`（再キュー）
+- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_completed_worktree`（保留）、`orchestune/dispatch/reconciliation.py`の`_handle_base_branch_red_recovery`（再キュー）
 - 条件:
   - **保留**: エージェントが完了宣言レコード（`orchestune:outcome`、`result: blocked` / `reason: base-branch-red`）を残して終了した場合、`status:blocked`へ遷移させ、マーカーラベル`ci:base-branch-red`を付与して保留する。通常の依存解決による昇格（`_decide_blocked_promotions`）からは除外される。
   - **再キュー**: 対象ブランチのベースコミット（`base_sha`）の前進を検知した時点で`ci:base-branch-red`マーカーを除去し、依存関係が解決済みであれば`status:queued`へ戻す。
@@ -183,7 +183,7 @@ stateDiagram-v2
   取り消しタスクを差し戻す。
 
 ### 12. footprint逸脱によるDAG再計算（`status:blocked-recompute` / `status:force-serial`）
-- 発生元: `orchestune/dispatch_rebase.py`の`_apply_footprint_deviation_outcome`
+- 発生元: `orchestune/dispatch/rebase.py`の`_apply_footprint_deviation_outcome`
   （`notify_recompute`/`notify_force_serial`）
 - 条件: active worktreeの実際の変更ファイルが宣言済み`footprint`から逸脱した
   場合、DAG再計算を行い、競合が検出された依存先Issueに`status:blocked-recompute`
@@ -194,8 +194,8 @@ stateDiagram-v2
   起動まで妨げる点が課題として指摘されている）。
 
 ### 13. 外部ロック（`status:external-lock`）
-- 発生元: `orchestune/dispatch_cycle.py`の`_apply_external_lock_sync`
-  （判定は`orchestune/dispatch_locks.py`の`scan_external_locks`）
+- 発生元: `orchestune/dispatch/cycle.py`の`_apply_external_lock_sync`
+  （判定は`orchestune/dispatch/locks.py`の`scan_external_locks`）
 - 付与条件: タスクのfootprintが、Orchestune管理外のリモートブランチ・PRの
   変更ファイルと重なる場合（`status:done`のタスクは対象外）。
 - 解除条件: 重なりが解消された場合。`status:done`に到達したタスクが

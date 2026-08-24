@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.dispatch_targets import DispatchTarget, LocalProcessDispatchTarget
+from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
 
 

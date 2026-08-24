@@ -8,8 +8,8 @@
 from unittest.mock import MagicMock, patch
 
 from orchestune.dag.models import compile_extra_ignore_patterns
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_rebase import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.rebase import (
     FootprintDeviationDecision,
     RebaseContext,
     _apply_footprint_deviation_outcome,
@@ -18,8 +18,8 @@ from orchestune.dispatch_rebase import (
     _decide_rebase_target,
     _try_auto_rebase,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 
 
 def _task(**overrides):
@@ -173,7 +173,7 @@ class TestDecideFootprintDeviationOutcome:
         )
 
         with patch(
-            "orchestune.dispatch_rebase.recompute_dag_for_footprint_change",
+            "orchestune.dispatch.rebase.recompute_dag_for_footprint_change",
             return_value=(MagicMock(), []),
         ) as mock_recompute:
             _decide_footprint_deviation_outcome(
@@ -242,9 +242,9 @@ class TestDecideRebaseTarget:
 class TestDecideRebaseNeeded:
     def test_ancestor_means_no_rebase_needed(self):
         with (
-            patch("orchestune.dispatch_rebase.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.rebase.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 return_value="main",
             ),
         ):
@@ -253,9 +253,9 @@ class TestDecideRebaseNeeded:
 
     def test_not_ancestor_means_rebase_needed(self):
         with (
-            patch("orchestune.dispatch_rebase.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.rebase.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 return_value="main",
             ),
         ):
@@ -264,12 +264,12 @@ class TestDecideRebaseNeeded:
 
     def test_returncode_128_logs_warning_and_returns_false(self):
         with (
-            patch("orchestune.dispatch_rebase.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.rebase.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 return_value="nonexistent-branch",
             ),
-            patch("orchestune.dispatch_rebase.logger.warning") as mock_warn,
+            patch("orchestune.dispatch.rebase.logger.warning") as mock_warn,
         ):
             mock_run.return_value.returncode = 128
             mock_run.return_value.stderr = (
@@ -285,10 +285,10 @@ class TestDecideRebaseNeeded:
     def test_missing_ref_resolution_failure_logs_warning_and_returns_false(self):
         with (
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 side_effect=ValueError("Invalid ref name"),
             ),
-            patch("orchestune.dispatch_rebase.logger.warning") as mock_warn,
+            patch("orchestune.dispatch.rebase.logger.warning") as mock_warn,
         ):
             assert (
                 _decide_rebase_needed("invalid..ref", "feature", "worktrees/w1")
@@ -300,14 +300,14 @@ class TestDecideRebaseNeeded:
     def test_os_error_logs_warning_and_returns_false(self):
         with (
             patch(
-                "orchestune.dispatch_rebase.subprocess.run",
+                "orchestune.dispatch.rebase.subprocess.run",
                 side_effect=OSError("command not found"),
             ),
             patch(
-                "orchestune.dispatch_rebase.resolve_local_or_remote_branch",
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 return_value="main",
             ),
-            patch("orchestune.dispatch_rebase.logger.warning") as mock_warn,
+            patch("orchestune.dispatch.rebase.logger.warning") as mock_warn,
         ):
             assert _decide_rebase_needed("main", "feature", "worktrees/w1") is False
             mock_warn.assert_called_once()
@@ -331,10 +331,10 @@ class TestTryAutoRebase:
 
         with (
             patch(
-                "orchestune.dispatch_rebase._decide_rebase_needed",
+                "orchestune.dispatch.rebase._decide_rebase_needed",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_rebase._apply_auto_rebase") as mock_apply,
+            patch("orchestune.dispatch.rebase._apply_auto_rebase") as mock_apply,
         ):
             result = _try_auto_rebase(
                 _context(
@@ -366,10 +366,10 @@ class TestTryAutoRebase:
 
         with (
             patch(
-                "orchestune.dispatch_rebase._decide_rebase_needed",
+                "orchestune.dispatch.rebase._decide_rebase_needed",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_rebase._apply_auto_rebase") as mock_apply,
+            patch("orchestune.dispatch.rebase._apply_auto_rebase") as mock_apply,
         ):
             context = _context(
                 active,

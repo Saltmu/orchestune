@@ -13,9 +13,9 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_gc_git import prune_stale_integration_temp_branches
-from orchestune.dispatch_worktree import file_lock
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
+from orchestune.dispatch.worktree import file_lock
 from orchestune.forge import REQUIRED_LABELS
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import default_ci_command

@@ -6,10 +6,10 @@
 本ファイルで単体テストとして完結させる。
 """
 
-from orchestune.dispatch_cycle import CycleReport
-from orchestune.dispatch_report import write_github_step_summary
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatch_scoring import Task
+from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.scoring import Task
 
 
 def _task(**overrides):

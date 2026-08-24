@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_labels import transition_status_label
-from orchestune.dispatch_scoring import Task, parse_task_from_issue
-from orchestune.dispatch_state import ActiveWorktree, RunState, save_run_state
-from orchestune.dispatch_worktree import create_worktree_and_launch
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.scoring import Task, parse_task_from_issue
+from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.worktree import create_worktree_and_launch
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     backfill_launch_history,
@@ -22,8 +22,8 @@ from orchestune.issue_parsing import (
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
-    from orchestune.dispatch_config import DispatcherConfig
-    from orchestune.dispatch_rules import CycleContext
+    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.rules import CycleContext
 
 
 def _is_task_stack_eligible(

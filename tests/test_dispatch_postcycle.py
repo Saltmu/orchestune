@@ -12,9 +12,9 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from orchestune.dag.models import compile_extra_ignore_patterns
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import CycleReport
-from orchestune.dispatch_postcycle import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
     _post_event_log_comment,
@@ -22,8 +22,8 @@ from orchestune.dispatch_postcycle import (
     _run_best_effort_phase,
     _run_semantic_integrator,
 )
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     LocalProcessDispatchTarget,
 )
@@ -127,7 +127,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_report_on_success(self, tmp_path):
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
             return_value={"processed": 1},
         ) as mock_poll:
             result = _poll_pending_not_needed_reviews(state_path)
@@ -143,7 +143,7 @@ class TestPollPendingNotNeededReviews:
         `process_pending_not_needed_reviews`へ伝播する。"""
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
             return_value={"processed": 1},
         ) as mock_poll:
             _poll_pending_not_needed_reviews(state_path, timeout_seconds=1800.0)
@@ -157,7 +157,7 @@ class TestPollPendingNotNeededReviews:
 
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
             return_value={"processed": 1},
         ) as mock_poll:
             _poll_pending_not_needed_reviews(state_path)
@@ -171,7 +171,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch_postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
             side_effect=RuntimeError("boom"),
         ):
             result = _poll_pending_not_needed_reviews(state_path)
@@ -210,10 +210,10 @@ class TestRunSemanticIntegrator:
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with (
             patch(
-                "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+                "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
             ) as mock_integrator_cls,
             patch(
-                "orchestune.dispatch_postcycle.IntegrationCoordinator"
+                "orchestune.dispatch.postcycle.IntegrationCoordinator"
             ) as mock_coordinator_cls,
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=True)
@@ -235,7 +235,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -254,7 +254,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             result = _run_semantic_integrator(config, semantic_review_enabled=True)
 
@@ -276,7 +276,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -300,7 +300,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -319,7 +319,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -339,7 +339,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -361,7 +361,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -382,7 +382,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ) as mock_integrator_cls:
             _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -396,7 +396,7 @@ class TestRunSemanticIntegrator:
             worktree_root=tmp_path / "worktrees",
         )
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", side_effect=RuntimeError("boom")
+            "orchestune.dispatch.postcycle.Integrator", side_effect=RuntimeError("boom")
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -415,7 +415,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "failure", "failed": ["task-1"]}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -448,7 +448,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": error_status, "error": "boom"}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -467,7 +467,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": success_status}
         with patch(
-            "orchestune.dispatch_postcycle.Integrator", return_value=mock_instance
+            "orchestune.dispatch.postcycle.Integrator", return_value=mock_instance
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=False)
 
@@ -506,7 +506,7 @@ class TestProcessParentCompletion:
             apply=True,
         )
         with patch(
-            "orchestune.dispatch_postcycle.process_parent_completion",
+            "orchestune.dispatch.postcycle.process_parent_completion",
             return_value={"status": "waiting_on_children", "open_children": [101]},
         ) as mock_process:
             result = _process_parent_completion(config)
@@ -528,7 +528,7 @@ class TestProcessParentCompletion:
             apply=True,
         )
         with patch(
-            "orchestune.dispatch_postcycle.process_parent_completion",
+            "orchestune.dispatch.postcycle.process_parent_completion",
             side_effect=RuntimeError("boom"),
         ):
             result = _process_parent_completion(config)

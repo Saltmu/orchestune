@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.dispatch_scoring import Task
+from orchestune.dispatch.scoring import Task
 
 
 @dataclass
