@@ -2,13 +2,13 @@
 
 import textwrap
 
-from orchestune.dag_contracts import (
+from orchestune.dag.contracts import (
     _categorize,
     _scope,
     find_unowned_shared_contract_hotspots,
 )
-from orchestune.dag_graph import build_dag, build_dag_from_plan
-from orchestune.dag_models import DagEdge, SubTask
+from orchestune.dag.graph import build_dag, build_dag_from_plan
+from orchestune.dag.models import DagEdge, SubTask
 
 
 def _subtask(
@@ -424,7 +424,7 @@ class TestDagCliWarnings:
     def test_cli_prints_warnings_without_failing(self, tmp_path, capsys):
         import sys
 
-        from orchestune.dag_cli import main
+        from orchestune.dag.cli import main
 
         plan_content = """\
         ---

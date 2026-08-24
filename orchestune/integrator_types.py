@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TypedDict
 
-from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
 from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.models import Task

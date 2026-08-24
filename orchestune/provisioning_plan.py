@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from orchestune.dag_models import SubTask
-from orchestune.dag_parsing import (
+from orchestune.dag.models import SubTask
+from orchestune.dag.parsing import (
     extract_frontmatter_and_body,
     parse_decomposition_plan,
 )

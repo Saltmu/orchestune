@@ -9,16 +9,16 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from orchestune.dag_contracts import find_unowned_shared_contract_hotspots
-from orchestune.dag_models import (
+from orchestune.dag.contracts import find_unowned_shared_contract_hotspots
+from orchestune.dag.models import (
     DagCycleError,
     DagEdge,
     DagResult,
     FootprintConflict,
     SubTask,
 )
-from orchestune.dag_parsing import detect_risk_from_values, parse_decomposition_plan
-from orchestune.dag_similarity import (
+from orchestune.dag.parsing import detect_risk_from_values, parse_decomposition_plan
+from orchestune.dag.similarity import (
     DEFAULT_SIMILARITY_THRESHOLD,
     build_similarity_edges,
 )

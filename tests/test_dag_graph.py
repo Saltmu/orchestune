@@ -10,18 +10,18 @@ import textwrap
 
 import pytest
 
-from orchestune.dag_graph import (
+from orchestune.dag.graph import (
     build_dag,
     build_dag_from_plan,
     recompute_dag_for_footprint_change,
 )
-from orchestune.dag_models import (
+from orchestune.dag.models import (
     DagCycleError,
     SubTask,
     compile_extra_ignore_patterns,
     normalize_footprint_path,
 )
-from orchestune.dag_parsing import parse_decomposition_plan
+from orchestune.dag.parsing import parse_decomposition_plan
 from tests.dag_test_support import _subtask, _write_plan
 
 

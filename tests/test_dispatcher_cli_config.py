@@ -186,7 +186,7 @@ class TestDispatcherConfigLoading:
     def test_dag_similarity_threshold_defaults_when_unset(self, tmp_path):
         """#407/#415: 設定ファイル未指定時はDEFAULT_SIMILARITY_THRESHOLDのまま
         （既定挙動を変えない）。"""
-        from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+        from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 
         with (
             patch("orchestune.dispatcher.build_dispatch_target"),

@@ -13,8 +13,8 @@ import textwrap
 
 import pytest
 
-from orchestune.dag_graph import build_dag
-from orchestune.dag_models import SubTask
+from orchestune.dag.graph import build_dag
+from orchestune.dag.models import SubTask
 
 
 def _subtask(id_, footprint, symbols=(), depends_on=()):
@@ -98,7 +98,7 @@ class TestCliSurfacesFootprintWarnings:
     def test_cli_text_output_includes_warnings_section(
         self, tmp_path, capsys, monkeypatch
     ):
-        from orchestune.dag_cli import main
+        from orchestune.dag.cli import main
 
         plan_content = """\
         ---
@@ -127,7 +127,7 @@ class TestCliSurfacesFootprintWarnings:
     def test_cli_json_output_includes_warnings_array(
         self, tmp_path, capsys, monkeypatch
     ):
-        from orchestune.dag_cli import main
+        from orchestune.dag.cli import main
 
         plan_content = """\
         ---
@@ -158,7 +158,7 @@ class TestCliSurfacesFootprintWarnings:
     ):
         """存在しないfootprintパスはエラーではなく警告であり、CLIをブロック
         しないこと（受け入れ基準）。"""
-        from orchestune.dag_cli import main
+        from orchestune.dag.cli import main
 
         plan_content = """\
         ---
@@ -186,7 +186,7 @@ class TestCliSurfacesFootprintWarnings:
         footprintはplanの置き場所（=リポジトリルート）を基点に解決される
         こと。cwdを基点にすると、実在するファイルまで「見つからない」と
         誤検出してしまう（コードレビュー指摘）。"""
-        from orchestune.dag_cli import main
+        from orchestune.dag.cli import main
 
         project_dir = tmp_path / "project"
         (project_dir / "src").mkdir(parents=True)

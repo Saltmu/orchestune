@@ -131,7 +131,7 @@ def test_ignore_patterns_are_forwarded_to_build_dag():
 def test_threshold_defaults_to_default_similarity_threshold_when_unspecified():
     """#407/#415レビュー指摘: `threshold`省略時は
     `DEFAULT_SIMILARITY_THRESHOLD`が`build_dag`へ渡る（既定挙動を変えない）。"""
-    from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+    from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 
     done_issue = _done_issue(1, "task-1")
     fake_forge = MagicMock()

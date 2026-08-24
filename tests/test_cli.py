@@ -10,7 +10,7 @@ def test_cli_delegates_to_dag():
     test_args = ["orchestune", "dag", "--plan", "plan.md"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.dag_cli.main") as mock_dag_main,
+        patch("orchestune.dag.cli.main") as mock_dag_main,
     ):
         main()
         mock_dag_main.assert_called_once()

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.dag_graph import build_dag
-from orchestune.dag_models import (
+from orchestune.dag.graph import build_dag
+from orchestune.dag.models import (
     DagResult,
     SubTask,
     compile_extra_ignore_patterns,
@@ -14,7 +14,7 @@ from orchestune.dag_models import (
     extract_dag_similarity_threshold,
     load_orchestune_config,
 )
-from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestune.dag_parsing import extract_frontmatter_and_body
+from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.forge import IssueForge
 from orchestune.issue_parsing import PARENT_MARKER, ensure_parent_marker, is_epic_issue
 from orchestune.plan_writer import write_issue_numbers

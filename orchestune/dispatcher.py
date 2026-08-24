@@ -10,14 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from orchestune.dag_models import (
+from orchestune.dag.models import (
     DAG_TOOL_CONFIG_KEYS,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
     load_orchestune_config,
 )
-from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import run_dispatch_cycle
 from orchestune.dispatch_postcycle import (

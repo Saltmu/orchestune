@@ -6,8 +6,8 @@ import textwrap
 
 import pytest
 
-from orchestune.dag_cli import main
-from orchestune.dag_models import (
+from orchestune.dag.cli import main
+from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
     load_orchestune_config,

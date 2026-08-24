@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from orchestune.dag_parsing import parse_decomposition_plan
+from orchestune.dag.parsing import parse_decomposition_plan
 from tests.dag_test_support import BASIC_PLAN, _write_plan
 
 
@@ -58,7 +58,7 @@ class TestParseDecompositionPlan:
         assert subtasks[1].acceptance_criteria == ()
 
         # to_dictのテスト
-        from orchestune.dag_models import DagResult
+        from orchestune.dag.models import DagResult
 
         res = DagResult(
             subtasks={subtasks[0].id: subtasks[0]},
@@ -97,7 +97,7 @@ class TestParseDecompositionPlan:
         assert subtasks[1].verification_plan == ()
 
         # to_dictのテスト
-        from orchestune.dag_models import DagResult
+        from orchestune.dag.models import DagResult
 
         res = DagResult(
             subtasks={subtasks[0].id: subtasks[0]},

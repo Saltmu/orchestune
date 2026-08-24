@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dag_models import FootprintConflict
+from orchestune.dag.models import FootprintConflict
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import (
     run_dispatch_cycle,

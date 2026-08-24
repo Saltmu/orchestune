@@ -11,7 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
-from orchestune.dag_models import compile_extra_ignore_patterns
+from orchestune.dag.models import compile_extra_ignore_patterns
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_cycle import CycleReport
 from orchestune.dispatch_postcycle import (
@@ -350,7 +350,7 @@ class TestRunSemanticIntegrator:
         """#407/#415: `DispatcherConfig.dag_similarity_threshold`未設定時は
         `IntegratorConfig`側もそのデフォルト（`DEFAULT_SIMILARITY_THRESHOLD`）
         のまま。"""
-        from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+        from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",

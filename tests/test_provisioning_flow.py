@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dag_models import SubTask
+from orchestune.dag.models import SubTask
 from orchestune.forge import (
     RelationshipUnavailableError,
 )

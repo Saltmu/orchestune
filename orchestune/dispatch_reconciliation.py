@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orchestune.dag_graph import recompute_dag_for_footprint_change
+from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_escalation import apply_human_review_escalation
 from orchestune.dispatch_labels import transition_status_label

@@ -13,7 +13,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from orchestune.dag_models import SubTask
+from orchestune.dag.models import SubTask
 
 
 def _flatten_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
