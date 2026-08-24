@@ -407,3 +407,27 @@ def test_load_config_rejects_invalid_values(
     with pytest.raises(ValueError) as exc_info:
         detect_bloat.load_config(tmp_path)
     assert error in str(exc_info.value)
+
+
+def test_detect_bloat_scans_nested_subpackages(tmp_path: Path) -> None:
+    """#614: サブパッケージ配下のコードおよびテストファイルが再帰的に検出されること。"""
+    detect_bloat = _load_script()
+    _write_config(tmp_path)
+    nested_dir = tmp_path / "orchestune" / "forge" / "nested"
+    nested_dir.mkdir(parents=True)
+    nested_dir.joinpath("large.py").write_text("pass\n" * 101, encoding="utf-8")
+
+    nested_test_dir = tmp_path / "tests" / "unit" / "sub"
+    nested_test_dir.mkdir(parents=True)
+    nested_test_dir.joinpath("test_nested.py").write_text(
+        "pass\n" * 101, encoding="utf-8"
+    )
+
+    reports = detect_bloat.scan_project(tmp_path)
+
+    report_summary = [
+        (report.category, report.path.relative_to(tmp_path).as_posix(), report.lines)
+        for report in reports
+    ]
+    assert ("code", "orchestune/forge/nested/large.py", 101) in report_summary
+    assert ("test", "tests/unit/sub/test_nested.py", 101) in report_summary

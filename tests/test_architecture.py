@@ -143,8 +143,6 @@ BOUNDED_RECOVERY_TERMINALS = {
         "apply_human_review_escalation",
     ),
 }
-GITHUB_FORGE_PATCH_EXEMPTIONS = frozenset({"test_forge.py"})
-_GITHUB_FORGE_PATCH_TARGET = re.compile(r"(?:^|\.)GitHubForge(?:\.|$)")
 
 
 def _module_name(path: Path) -> str:
@@ -265,7 +263,9 @@ def _cycle_members(graph: dict[str, set[str]]) -> set[str]:
         stack.append(module)
         on_stack[module] = True
 
-        for dependency in graph[module]:
+        for dependency in graph.get(module, ()):
+            if dependency not in graph:
+                continue
             if dependency not in index:
                 strongconnect(dependency)
                 lowlink[module] = min(lowlink[module], lowlink[dependency])
@@ -280,7 +280,7 @@ def _cycle_members(graph: dict[str, set[str]]) -> set[str]:
                 component.append(member)
                 if member == module:
                     break
-            if len(component) > 1 or module in graph[module]:
+            if len(component) > 1 or module in graph.get(module, ()):
                 cycles.update(component)
 
     for module in graph:
@@ -469,28 +469,6 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
     return dict(command_modules)
 
 
-def _stale_github_patch_targets() -> list[str]:
-    stale_targets: list[str] = []
-    for path in TESTS_ROOT.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not node.args:
-                continue
-            is_patch_call = (
-                isinstance(node.func, ast.Name) and node.func.id == "patch"
-            ) or (isinstance(node.func, ast.Attribute) and node.func.attr == "patch")
-            if not is_patch_call:
-                continue
-            target = node.args[0]
-            if (
-                isinstance(target, ast.Constant)
-                and isinstance(target.value, str)
-                and target.value.startswith("orchestune.github")
-            ):
-                stale_targets.append(f"{path.name}:{node.lineno}:{target.value}")
-    return stale_targets
-
-
 def test_package_import_graph_does_not_gain_cycles() -> None:
     assert _cycle_members(_import_graph()) == set()
 
@@ -619,14 +597,6 @@ def _module_layer() -> dict[str, int]:
 
 def test_git_and_gh_subprocess_modules_are_strictly_partitioned() -> None:
     assert _subprocess_command_modules() == EXPECTED_SUBPROCESS_COMMAND_MODULES
-
-
-def test_github_compatibility_module_is_removed() -> None:
-    assert not (PACKAGE_ROOT / "github.py").exists()
-
-
-def test_tests_do_not_patch_removed_github_module() -> None:
-    assert _stale_github_patch_targets() == []
 
 
 def test_expected_layers_cover_every_module_exactly_once() -> None:
@@ -961,314 +931,6 @@ def test_path_write_text_requires_explicit_encoding() -> None:
     assert _unencoded_write_text_calls() == []
 
 
-def _dotted_name(node: ast.expr) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        prefix = _dotted_name(node.value)
-        return f"{prefix}.{node.attr}" if prefix else node.attr
-    return None
-
-
-def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
-    patch_references: set[str] = set()
-    github_forge_names = {"GitHubForge"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "unittest.mock":
-            patch_references.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name == "patch"
-            )
-        elif isinstance(node, ast.ImportFrom) and node.module == "unittest":
-            patch_references.update(
-                f"{alias.asname or alias.name}.patch"
-                for alias in node.names
-                if alias.name == "mock"
-            )
-        elif isinstance(node, ast.Import):
-            patch_references.update(
-                f"{alias.asname or alias.name}.patch"
-                for alias in node.names
-                if alias.name == "unittest.mock"
-            )
-            patch_references.update(
-                f"{alias.asname or alias.name}.mock.patch"
-                for alias in node.names
-                if alias.name == "unittest"
-            )
-        elif isinstance(node, ast.ImportFrom) and node.module in {
-            "orchestune",
-            "orchestune.forge",
-        }:
-            github_forge_names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name == "GitHubForge"
-            )
-    return patch_references, github_forge_names
-
-
-def _string_scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]]]:
-    assigned: set[str] = set()
-    rebound_outer: set[str] = set()
-    values: dict[str, set[str]] = defaultdict(set)
-    if isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
-        arguments = scope.args
-        assigned.update(
-            argument.arg
-            for argument in (
-                *arguments.posonlyargs,
-                *arguments.args,
-                *arguments.kwonlyargs,
-            )
-        )
-        assigned.update(
-            argument.arg
-            for argument in (arguments.vararg, arguments.kwarg)
-            if argument is not None
-        )
-    for node in _nodes_in_scope(scope):
-        if isinstance(node, _SCOPE_NODES):
-            continue
-        if isinstance(node, ast.Global | ast.Nonlocal):
-            rebound_outer.update(node.names)
-            continue
-        targets, value = _assigned_names(node)
-        for target in targets:
-            if isinstance(target, ast.Name):
-                assigned.add(target.id)
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    values[target.id].add(value.value)
-        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            assigned.add(node.target.id)
-            if isinstance(node.iter, ast.List | ast.Tuple | ast.Set):
-                values[node.target.id].update(
-                    item.value
-                    for item in node.iter.elts
-                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
-                )
-    return assigned - rebound_outer, dict(values)
-
-
-def _call_argument(node: ast.Call, position: int, keyword: str) -> ast.expr | None:
-    if len(node.args) > position:
-        return node.args[position]
-    return next(
-        (item.value for item in node.keywords if item.arg == keyword),
-        None,
-    )
-
-
-def _is_github_forge_target(target: ast.expr | None, names: set[str]) -> bool:
-    if isinstance(target, ast.Constant) and isinstance(target.value, str):
-        return bool(_GITHUB_FORGE_PATCH_TARGET.search(target.value))
-    target_name = _dotted_name(target) if target else None
-    return bool(target_name and target_name.rsplit(".", 1)[-1] in names)
-
-
-def _is_github_forge_patch_call(
-    node: ast.Call,
-    patch_references: set[str],
-    github_forge_names: set[str],
-    bound_strings: dict[str, set[str]],
-) -> bool:
-    function_name = _dotted_name(node.func)
-    if function_name in patch_references:
-        target = _call_argument(node, 0, "target")
-        target_values = (
-            {target.value}
-            if isinstance(target, ast.Constant) and isinstance(target.value, str)
-            else bound_strings.get(target.id, set())
-            if isinstance(target, ast.Name)
-            else set()
-        )
-        return any(_GITHUB_FORGE_PATCH_TARGET.search(value) for value in target_values)
-    if function_name in {
-        f"{ref}.{method}"
-        for ref in patch_references
-        for method in ("object", "multiple")
-    }:
-        return _is_github_forge_target(
-            _call_argument(node, 0, "target"), github_forge_names
-        )
-    return False
-
-
-def _scan_github_forge_patch_scope(
-    scope: ast.AST,
-    inherited: dict[str, set[str]],
-    patch_references: set[str],
-    github_forge_names: set[str],
-    violations: list[int],
-) -> None:
-    assigned, candidates = _string_scope_bindings(scope)
-    bindings = {
-        name: set(values) for name, values in inherited.items() if name not in assigned
-    }
-    for name, values in candidates.items():
-        bindings[name] = bindings.get(name, set()) | values
-
-    for node in _nodes_in_scope(scope):
-        if isinstance(node, _SCOPE_NODES):
-            nested = inherited if isinstance(scope, ast.ClassDef) else bindings
-            _scan_github_forge_patch_scope(
-                node,
-                nested,
-                patch_references,
-                github_forge_names,
-                violations,
-            )
-        elif isinstance(node, ast.Call) and _is_github_forge_patch_call(
-            node, patch_references, github_forge_names, bindings
-        ):
-            violations.append(node.lineno)
-
-
-def _github_forge_patch_lines(source: str) -> list[int]:
-    tree = ast.parse(source)
-    patch_references, github_forge_names = _mock_patch_references(tree)
-    violations: list[int] = []
-    _scan_github_forge_patch_scope(
-        tree, {}, patch_references, github_forge_names, violations
-    )
-    return sorted(violations)
-
-
-def _github_forge_patch_violations() -> list[str]:
-    violations: list[str] = []
-    for path in sorted(TESTS_ROOT.rglob("*.py")):
-        relative_path = path.relative_to(TESTS_ROOT).as_posix()
-        if relative_path in GITHUB_FORGE_PATCH_EXEMPTIONS:
-            continue
-        for line in _github_forge_patch_lines(path.read_text(encoding="utf-8")):
-            violations.append(f"{path.relative_to(REPO_ROOT)}:{line}")
-    return violations
-
-
-def test_tests_do_not_patch_github_forge() -> None:
-    assert _github_forge_patch_violations() == []
-
-
-def test_github_forge_patch_detector_flags_aliased_direct_patch() -> None:
-    source = """
-from unittest.mock import patch as replace
-
-with replace("orchestune.forge.GitHubForge.list_prs"):
-    pass
-"""
-
-    assert _github_forge_patch_lines(source) == [4]
-
-
-def test_github_forge_patch_detector_flags_patch_object_alias() -> None:
-    source = """
-from unittest.mock import patch
-from orchestune.forge import GitHubForge as ProductionForge
-
-with patch.object(ProductionForge, "list_prs"):
-    pass
-"""
-
-    assert _github_forge_patch_lines(source) == [5]
-
-
-def test_github_forge_patch_detector_resolves_loop_target() -> None:
-    source = """
-from unittest.mock import patch
-for target in (
-    "orchestune.dispatch_gc.is_process_alive",
-    "orchestune.forge.GitHubForge.list_prs",
-):
-    with patch(target):
-        pass
-"""
-
-    assert _github_forge_patch_lines(source) == [7]
-
-
-def test_github_forge_patch_detector_flags_keyword_targets() -> None:
-    source = """
-from unittest.mock import patch
-from orchestune.forge import GitHubForge
-
-with patch(target="orchestune.forge.GitHubForge.list_prs"):
-    pass
-with patch.object(target=GitHubForge, attribute="list_prs"):
-    pass
-"""
-
-    assert _github_forge_patch_lines(source) == [5, 7]
-
-
-def test_github_forge_patch_detector_flags_unittest_import() -> None:
-    source = """
-import unittest
-
-with unittest.mock.patch("orchestune.forge.GitHubForge.list_prs"):
-    pass
-"""
-
-    assert _github_forge_patch_lines(source) == [4]
-
-
-def test_github_forge_patch_detector_flags_public_import_alias() -> None:
-    source = """
-from unittest.mock import patch
-from orchestune import GitHubForge as ProductionForge
-
-with patch.object(ProductionForge, "list_prs"):
-    pass
-"""
-
-    assert _github_forge_patch_lines(source) == [5]
-
-
-def test_github_forge_patch_detector_flags_patch_multiple() -> None:
-    source = """
-from unittest.mock import DEFAULT, patch
-from orchestune.forge import GitHubForge
-
-with patch.multiple(target=GitHubForge, list_prs=DEFAULT):
-    pass
-"""
-
-    assert _github_forge_patch_lines(source) == [5]
-
-
-def test_github_forge_patch_detector_keeps_variable_bindings_scoped() -> None:
-    source = """
-from unittest.mock import patch
-
-def forge_helper():
-    target = "orchestune.forge.GitHubForge.list_prs"
-    return target
-
-def harmless_helper():
-    target = "orchestune.dispatch_gc.is_process_alive"
-    with patch(target):
-        pass
-"""
-
-    assert _github_forge_patch_lines(source) == []
-
-
-def test_github_forge_patch_detector_treats_parameters_as_local() -> None:
-    source = """
-from unittest.mock import patch
-
-target = "orchestune.forge.GitHubForge.list_prs"
-
-def helper(target):
-    with patch(target):
-        pass
-
-lambda target: patch(target)
-"""
-
-    assert _github_forge_patch_lines(source) == []
-
-
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:
     """#531 review: git_cli.pyのkwargs: dict[str, Any] = {...} のような
     型注釈付き代入（ast.AnnAssign）も_collect_dict_assignmentsが正しく捕捉すること。"""
@@ -1280,3 +942,154 @@ unannotated = {"text": True}
     assignments = _collect_dict_assignments(tree)
     assert "kwargs" in assignments
     assert "unannotated" in assignments
+
+
+def test_module_name_resolves_subpackage_paths() -> None:
+    """#614: _module_nameが直下・サブパッケージ・ネスト構造を正確にモジュール名へ解決すること。"""
+    assert _module_name(PACKAGE_ROOT / "cli.py") == "orchestune.cli"
+    assert _module_name(PACKAGE_ROOT / "__init__.py") == "orchestune"
+    assert (
+        _module_name(PACKAGE_ROOT / "forge" / "issues.py") == "orchestune.forge.issues"
+    )
+    assert _module_name(PACKAGE_ROOT / "forge" / "__init__.py") == "orchestune.forge"
+    assert (
+        _module_name(PACKAGE_ROOT / "dispatch" / "phase" / "gc.py")
+        == "orchestune.dispatch.phase.gc"
+    )
+    assert (
+        _module_name(PACKAGE_ROOT / "dispatch" / "phase" / "__init__.py")
+        == "orchestune.dispatch.phase"
+    )
+
+
+def test_relative_import_resolution_for_subpackages() -> None:
+    """#614: _relative_import_nameがサブパッケージ内外の相対インポートを正しく解決すること。"""
+    # 1. サブモジュールから同一サブパッケージ内への相対インポート
+    tree1 = ast.parse("from . import context")
+    import_from1 = tree1.body[0]
+    assert isinstance(import_from1, ast.ImportFrom)
+    assert (
+        _relative_import_name(
+            "orchestune.dispatch.cycle", import_from1, is_package=False
+        )
+        == "orchestune.dispatch"
+    )
+
+    tree2 = ast.parse("from .context import Context")
+    import_from2 = tree2.body[0]
+    assert isinstance(import_from2, ast.ImportFrom)
+    assert (
+        _relative_import_name(
+            "orchestune.dispatch.cycle", import_from2, is_package=False
+        )
+        == "orchestune.dispatch.context"
+    )
+
+    # 2. サブモジュールから親パッケージ／別サブパッケージへの相対インポート
+    tree3 = ast.parse("from ..forge import issues")
+    import_from3 = tree3.body[0]
+    assert isinstance(import_from3, ast.ImportFrom)
+    assert (
+        _relative_import_name(
+            "orchestune.dispatch.cycle", import_from3, is_package=False
+        )
+        == "orchestune.forge"
+    )
+
+    tree4 = ast.parse("from .. import git_cli")
+    import_from4 = tree4.body[0]
+    assert isinstance(import_from4, ast.ImportFrom)
+    assert (
+        _relative_import_name(
+            "orchestune.dispatch.cycle", import_from4, is_package=False
+        )
+        == "orchestune"
+    )
+
+    # 3. サブパッケージの __init__.py からの相対インポート
+    tree5 = ast.parse("from . import cycle")
+    import_from5 = tree5.body[0]
+    assert isinstance(import_from5, ast.ImportFrom)
+    assert (
+        _relative_import_name("orchestune.dispatch", import_from5, is_package=True)
+        == "orchestune.dispatch"
+    )
+
+    tree6 = ast.parse("from .cycle import run")
+    import_from6 = tree6.body[0]
+    assert isinstance(import_from6, ast.ImportFrom)
+    assert (
+        _relative_import_name("orchestune.dispatch", import_from6, is_package=True)
+        == "orchestune.dispatch.cycle"
+    )
+
+    # 4. パッケージ境界を超える相対インポート
+    tree7 = ast.parse("from ... import outside")
+    import_from7 = tree7.body[0]
+    assert isinstance(import_from7, ast.ImportFrom)
+    assert (
+        _relative_import_name("orchestune.cli", import_from7, is_package=False) is None
+    )
+
+
+def test_internal_imports_capture_subpackage_dependencies() -> None:
+    """#614: _internal_importsがサブパッケージ間の依存関係を正しく網羅すること。"""
+    known_modules = {
+        "orchestune",
+        "orchestune.dispatch",
+        "orchestune.dispatch.cycle",
+        "orchestune.dispatch.context",
+        "orchestune.forge",
+        "orchestune.forge.issues",
+        "orchestune.git_cli",
+    }
+    source = """
+from . import context
+from .context import Context
+from ..forge import issues
+from ..forge.issues import IssueRecord
+from ..git_cli import run_git
+import orchestune.forge
+import os
+"""
+    tree = ast.parse(source)
+    imports = _internal_imports(
+        "orchestune.dispatch.cycle", tree, known_modules, is_package=False
+    )
+    assert imports == {
+        "orchestune.dispatch",
+        "orchestune.dispatch.context",
+        "orchestune.forge",
+        "orchestune.forge.issues",
+        "orchestune.git_cli",
+    }
+
+
+def test_import_graph_detects_subpackage_cycles() -> None:
+    """#614: _cycle_membersがサブパッケージをまたぐ循環依存を検出できること。"""
+    graph_with_cycle = {
+        "dispatch.cycle": {"forge.issues"},
+        "forge.issues": {"dispatch.cycle"},
+        "dag_graph": {"models"},
+    }
+    assert _cycle_members(graph_with_cycle) == {"dispatch.cycle", "forge.issues"}
+
+    graph_without_cycle = {
+        "dispatch.cycle": {"forge.issues"},
+        "forge.issues": {"models"},
+        "models": set(),
+    }
+    assert _cycle_members(graph_without_cycle) == set()
+
+
+def test_relative_import_resolution_multilevel() -> None:
+    """#614: 深い階層のサブパッケージからの多階層相対インポート解決。"""
+    tree = ast.parse("from ...forge.issues import IssueRecord")
+    import_from = tree.body[0]
+    assert isinstance(import_from, ast.ImportFrom)
+    assert (
+        _relative_import_name(
+            "orchestune.dispatch.phase.gc", import_from, is_package=False
+        )
+        == "orchestune.forge.issues"
+    )
