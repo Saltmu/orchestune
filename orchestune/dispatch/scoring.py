@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from orchestune.dag.models import ConflictGraph
 from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
@@ -99,6 +100,8 @@ def select_next_tasks(
     max_launches_per_window: int,
     window_seconds: int,
     max_tokens_per_window: int | None = None,
+    conflict_graph: ConflictGraph | None = None,
+    active_subtask_ids: set[str] | None = None,
 ) -> list[Task]:
     active_issue_numbers = {int(k) for k in run_state.active_worktrees}
     eligible = [
@@ -124,4 +127,15 @@ def select_next_tasks(
             t.issue_number,
         ),
     )
-    return scored[:slots]
+    selected: list[Task] = []
+    unavailable = set(active_subtask_ids or ())
+    for task in scored:
+        if len(selected) >= slots:
+            break
+        if conflict_graph is not None and any(
+            conflict_graph.has_conflict(task.subtask_id, other) for other in unavailable
+        ):
+            continue
+        selected.append(task)
+        unavailable.add(task.subtask_id)
+    return selected

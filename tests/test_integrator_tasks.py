@@ -110,8 +110,8 @@ def test_ignore_patterns_default_to_empty_tuple_when_unspecified():
 def test_ignore_patterns_are_forwarded_to_build_dag():
     """#407: `orchestune-dag`向けの`dag_ignore_patterns`と同じく、
     `get_sorted_done_tasks`に渡された`ignore_patterns`が`build_dag`へ
-    そのまま伝搬されること。無視されるべきfootprint衝突が明示的な依存関係と
-    組み合わさってDagCycleErrorを誘発する（#404と同様の）回帰を防ぐ。"""
+    そのまま伝搬されること。#659以降、統合順序は明示依存だけで決まるが、
+    Conflict Graph設定の再現性とAPI互換は維持する。"""
     done_issue = _done_issue(1, "task-1")
     fake_forge = MagicMock()
     fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
@@ -153,9 +153,8 @@ def test_threshold_defaults_to_default_similarity_threshold_when_unspecified():
 def test_threshold_is_forwarded_to_build_dag():
     """#407/#415レビュー指摘: `orchestune-dag --threshold`向けの
     `dag_similarity_threshold`と同じく、`get_sorted_done_tasks`に渡された
-    `threshold`が`build_dag`へそのまま伝搬されること。伝搬しないと、
-    低い閾値で意図的に作った類似度エッジがintegrator側の既定閾値再計算で
-    消え、統合順序（topological_order）が食い違いうる。"""
+    `threshold`が`build_dag`へそのまま伝搬されること。#659以降はConflict
+    Graphだけに影響し、Precedence DAGの統合順序は変えない。"""
     done_issue = _done_issue(1, "task-1")
     fake_forge = MagicMock()
     fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (

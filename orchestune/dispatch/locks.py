@@ -126,7 +126,8 @@ def _parse_numstat_line(
         return None
     if _is_hotspot(path):
         print(
-            f"Warning: Footprint deviation detected on hotspot file '{path}', skipping DAG recompute.",
+            f"Warning: Footprint deviation detected on hotspot file '{path}', "
+            "skipping Conflict Graph recompute.",
             file=sys.stderr,
         )
         return None

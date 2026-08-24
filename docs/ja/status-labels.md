@@ -19,8 +19,8 @@ bootstrap`実行時にGitHub上へ自動作成される）を正としていま�
 | `status:done` | サブタスクの作業が完了 |
 | `status:not-needed` | 対応不要と判定された（既にmainに実装済み等） |
 | `status:blocked-human-review` | 人間の確認待ちで一時停止 |
-| `status:blocked-recompute` | footprint逸脱によるDAG再計算の影響でブロック |
-| `status:force-serial` | DAG再計算のリトライ上限超過により強制直列化 |
+| `status:blocked-recompute` | footprint逸脱によるConflict Graph再計算の影響でブロック |
+| `status:force-serial` | Conflict Graph再計算のリトライ上限超過により強制直列化 |
 | `status:manual-merge-required` | 自動リベース失敗により手動マージが必要 |
 
 ## 状態遷移図
@@ -31,7 +31,7 @@ stateDiagram-v2
     [*] --> blocked: Issue起票時\n(未解決の依存あり)
 
     blocked --> queued: 依存解決\n(_promote_blocked_tasks)
-    blocked --> blocked_recompute: footprint逸脱によるDAG再計算\n(notify_recompute)
+    blocked --> blocked_recompute: footprint逸脱によるConflict Graph再計算\n(notify_recompute)
 
     queued --> in_progress: 起動成功\n(_apply_task_launches)
     queued --> blocked: YAMLパースエラー\n(_apply_yaml_error_blocking)
@@ -182,11 +182,11 @@ stateDiagram-v2
 - 条件: Integratorによる仮マージ後のローカルCIが失敗した場合、マージを
   取り消しタスクを差し戻す。
 
-### 12. footprint逸脱によるDAG再計算（`status:blocked-recompute` / `status:force-serial`）
+### 12. footprint逸脱によるConflict Graph再計算（`status:blocked-recompute` / `status:force-serial`）
 - 発生元: `orchestune/dispatch/rebase.py`の`_apply_footprint_deviation_outcome`
   （`notify_recompute`/`notify_force_serial`）
 - 条件: active worktreeの実際の変更ファイルが宣言済み`footprint`から逸脱した
-  場合、DAG再計算を行い、競合が検出された依存先Issueに`status:blocked-recompute`
+  場合、Conflict Graph再計算を行い、競合が検出されたIssueに`status:blocked-recompute`
   を付与する。再計算のリトライが上限（`max_recompute_retries`）に達した場合は、
   そのタスク自身に`status:force-serial`を付与し、以降のサイクルでは新規タスクの
   クオータを0にして単独直列実行にフォールバックする

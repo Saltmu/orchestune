@@ -75,7 +75,7 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         "--max-recompute-retries",
         type=int,
         default=2,
-        help="DAG再計算のリトライ上限。超過時は強制直列化にフォールバックする（#200）",
+        help="Conflict Graph再計算のリトライ上限。超過時は強制直列化にフォールバックする（#200）",
     )
     parser.add_argument(
         "--task-timeout-seconds",

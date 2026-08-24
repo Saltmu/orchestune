@@ -23,7 +23,7 @@ graph TD
     subgraph ENG ["Orchestune Engine (決定論的Python)"]
         L1["Forge / git_cli (L1)<br/>gh・git を実行する唯一の境界"]
         REC["State Recovery (L2)<br/>GitHubからの状態再構築"]
-        DAG["DAG Engine (L2)<br/>類似度分析・競合検知・トポロジカルソート"]
+        DAG["DAG Engine (L2)<br/>Precedence DAG・Conflict Graph"]
         DP["Dispatcher (L4/L3)<br/>スケジューリング・worktree作成・リベース"]
         IG["Integrator (L3)<br/>マージ前CI・自動統合・最終PR作成"]
     end
@@ -37,7 +37,7 @@ graph TD
     GI -->|ラベル・PR状態の読み取り| L1
     L1 -->|状態復元| REC
     REC -->|実行状態の再構築| DP
-    DAG -->|実行順序| DP
+    DAG -->|Ready集合・排他制約| DP
     DP -->|footprint / symbols| DAG
     DP -->|worktree作成・タスク起動| AG
     AG -->|隔離領域で作業| WT
@@ -91,13 +91,13 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 |---|---|---|
 | 分解の誤り（未確立の共有拡張ポイント） | 共有コントラクトゲート（セクション1） | 警告 |
 | 計画の陳腐化（`symbols`が実在しない） | ASTによるシンボル検証（セクション1） | Issue本文へ中立な注記 |
-| 宣言の誤り（footprint外への変更） | 実行時の逸脱検知（`dispatch.locks.check_footprint_deviation`） | DAG再計算（除外規則と回数上限つき） |
+| 宣言の誤り（footprint外への変更） | 実行時の逸脱検知（`dispatch.locks.check_footprint_deviation`） | Conflict Graph再計算（除外規則と回数上限つき） |
 | インフラの失敗（ローカル状態の消失） | — | GitHubを真実とする再構築（セクション2） |
 | エージェントの自己申告（`result: not-needed`） | 記憶を持たない独立セッションによる再検証（Cloud Routineターゲット使用時のみ） | Outcome Recordとラベル遷移経由でPython側が決定論的にクローズ |
 
 各機構の詳細な挙動——除外規則、スキップ条件、ディスパッチターゲット別の差——は、それぞれの節と実装のdocstringが持ちます。ここで述べるのは、どれも同じ原則から導かれているという点だけです。
 
-そして、**ループには上限があり、終端があります**——ただし現状では全経路ではありません。DAG再計算の回数、ウィンドウあたりの起動数、そしてゾンビ／タイムアウト回収による再投入回数（`--max-task-reclaims`、既定3回）は既定で有界ですが、タスクのタイムアウトとトークン消費の上限は**既定では無効**で、無人で長時間走らせる場合は明示的な設定が要ります（[使い方とコマンドリファレンス](usage.md)参照）。自動的に収束できない場合、対象Issueは`status:blocked-human-review`へ遷移して停止します。`tests/test_architecture.py`は、有限なリトライ／回収／レビュータイムアウト設定と宣言済み終端動作の対応を機械的に検証します。この検査は意図的に明示的なレジストリ方式です。回収ループの命名規約に一致する新設定に終端対応がなければ失敗させる一方、無関係な有界制御は個別機能のテストに委ねます。
+そして、**ループには上限があり、終端があります**——ただし現状では全経路ではありません。実行時Conflict Graph再計算の回数、ウィンドウあたりの起動数、そしてゾンビ／タイムアウト回収による再投入回数（`--max-task-reclaims`、既定3回）は既定で有界ですが、タスクのタイムアウトとトークン消費の上限は**既定では無効**で、無人で長時間走らせる場合は明示的な設定が要ります（[使い方とコマンドリファレンス](usage.md)参照）。自動的に収束できない場合、対象Issueは`status:blocked-human-review`へ遷移して停止します。`tests/test_architecture.py`は、有限なリトライ／回収／レビュータイムアウト設定と宣言済み終端動作の対応を機械的に検証します。この検査は意図的に明示的なレジストリ方式です。回収ループの命名規約に一致する新設定に終端対応がなければ失敗させる一方、無関係な有界制御は個別機能のテストに委ねます。
 
 > **既知の欠落**: 現時点で、終端へ到達しない経路が1つあります。
 > - **トークン消費の観測不可**。`max_tokens_per_window`は、クラウドのディスパッチターゲット（`ClaudeCodeCloudRoutineDispatchTarget`・`CodexCloudDispatchTarget`）では発火しません。`collect_usage`の既定実装が`None`を返し、両ターゲットとも上書きしていないためです——クラウドセッションの消費量を問い合わせるポーリングAPIが公開されておらず、`is_complete`すらPR作成をプロキシシグナルにしています。したがって**無人運転の主経路ではトークン上限が効きません**。これは永続化以前の問題（そもそも記録すべきデータが生成されない）で、APIが公開され次第の再検討となります。なお`recompute_count`/`forced_serial`（子Issue本文）と`launch_history`（親Issue本文）は永続化済みで、この欠落の対象外です。
@@ -108,15 +108,18 @@ Orchestuneが**目指す**のは「常に自動で解決すること」ではな
 
 ## 1. DAG構築とコンフリクト回避（DAG Construction & Conflict Prevention）
 
-Orchestuneは、各サブタスク間の依存関係を単なる宣言（`depends_on`）だけでなく、変更を加える予定のファイルパス（`footprint`）やコードシンボル（`symbols`）の情報を元に静的に分析します。
+Orchestuneは、各サブタスク間の関係を2つの独立したモデルとして静的に分析します。`depends_on`は「先行タスクが完了しなければ開始できない」因果関係として**Precedence DAG**へ、`footprint`・`symbols`・shared-contractの重複は「同時実行できない」対称な排他関係として**Conflict Graph**へ格納されます。
 
 ```mermaid
 graph TD
     A[Decomposition Plan] --> B[Static Code Analysis]
     B --> C[Compute Similarity Metrics]
     C --> D[Identify File/Symbol Overlaps]
-    D --> E[Construct Dependency DAG]
-    E --> F[Cycle & Risk Check]
+    A --> E[Construct Precedence DAG from depends_on]
+    D --> F[Construct Symmetric Conflict Graph]
+    E --> G[Cycle & Topological Check]
+    F --> H[Conflict-aware Scheduling]
+    G --> H
 ```
 
 > **参考**: このセクションの類似度ベースのタスク分割は、Co-Coder論文（Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin, Fangru Lin, Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware Task Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026.）を出典としています。
@@ -128,13 +131,15 @@ graph TD
 ### コンフリクト回避の仕組み
 
 * **メタデータの重複分析**:
-  複数のタスクが同じファイルやクラスを同時に変更しようとすると、コンフリクト（競合）が発生します。Orchestuneは、類似度メトリクスを用いてフットプリント間の重複を計算し、競合する可能性のあるタスク間に「暗黙の依存関係」を追加して実行順序を整理します。
+  複数のタスクが同じファイルやクラスを同時に変更しようとすると、コンフリクト（競合）が発生します。Orchestuneは類似度メトリクスを用いて重複を計算し、priorityやIDに左右されない対称な`ConflictEdge`として、score・理由・対象resourceとともに保持します。競合を恣意的な有向依存へ変換することはありません。
 * **安全な並列実行**:
-  これにより、競合のない独立したタスクだけが同時に実行され、マージ時のコンフリクトを最小限に抑えるトポロジカルソートされたDAGが構築されます。
+  DispatcherはPrecedence DAGから依存解決済みの`Ready`集合を求め、priority score順の決定論的な貪欲法で、active taskおよび同じサイクルですでに選んだtaskのどちらともConflict Graph上で隣接しない集合を選びます。したがって因果依存のない競合taskは一方の完了後に再び選択可能となり、固定された疑似的実行順は付与されません。
+
+cycle検出とトポロジカルソートが参照するのはPrecedence DAGだけです。Conflict Graphは無向なのでcycleという概念を持たず、明示依存と競合が同じpairに共存しても競合情報は削除されません。`orchestune-dag --json`は`precedence_edges`と`conflict_edges`を別々に出力し、後方互換の`edges`キーはprecedence edgeだけを表します。
 
 ### 通常のfootprint重複と「共有コントラクトゲート」の違い
 
-上記の重複分析（`dag/similarity.py`）は、サブタスクが**宣言済み**の`footprint`/`symbols`の文字列が一致する（または加重コサイン類似度が閾値を超える）場合にのみ、暗黙の依存エッジを追加します。これは既に存在するファイルを複数タスクが編集する通常のケースには有効ですが、グリーンフィールドな分解計画では別の失敗モードが起こり得ます。
+上記の重複分析（`dag/similarity.py`）は、サブタスクが**宣言済み**の`footprint`/`symbols`の文字列が一致する（または加重コサイン類似度が閾値を超える）場合にsimilarity由来の競合辺を追加します。これは既に存在するファイルを複数タスクが編集する通常のケースには有効ですが、グリーンフィールドな分解計画では別の失敗モードが起こり得ます。
 
 例えば、フォーマットレジストリやCLI配線モジュールのような**まだ存在しない共有拡張ポイント**に対して、複数のサブタスクがそれぞれ異なる想定パスで暗黙的に触れてしまうケースです。この場合、どのサブタスクの`footprint`にも一致する文字列が現れないため、既存の重複検出では検出しようがありません。
 
@@ -145,7 +150,7 @@ graph TD
 1. **`shared_contract`タグが同じサブタスク群**
 2. **タグの有無を問わない全サブタスク**のうち、`footprint`が同一カテゴリ**かつ同一ディレクトリ**に該当するサブタスク群（`packages/auth/__init__.py`と`packages/payments/__init__.py`のような無関係な別パッケージまで誤って同一ホットスポット扱いしないためのスコープ限定です）
 
-いずれの段階でも、**DAG上で互いに到達可能でない（一方が他方の祖先になっていない）ペアが存在する場合**に、`orchestune-dag`の出力へ`Warnings:`として警告を表示します（ブロッキングエラーにはしません）。
+いずれの段階でもwriter pairはConflict Graphの排他制約になります。さらに、**Precedence DAG上で互いに到達可能でない（一方が他方の祖先になっていない）pairが存在する場合**に、`orchestune-dag`の出力へ`Warnings:`として警告を表示します（ブロッキングエラーにはしません）。
 
 ここで重要なのは、判定基準が「連結成分が同じか」ではなく「互いに到達可能か」である点です。`shared -> csv`、`shared -> yaml`のように共通の祖先タスクへ`depends_on`しているだけの2タスクは、互いには到達不能であり実際には並列実行され得ます。そのため、両者が同じ祖先を宣言していても警告対象のままになります。
 
@@ -316,7 +321,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 | --- | --- | --- |
 | **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning.cli` |
 | **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow` |
-| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
+| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.conflicts`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **アダプタ**<br/>`git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
 | **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `setup_skills`, `validation`, `version` |
 

@@ -34,6 +34,8 @@ class Task:
     parent_number: int | None = None
     issue_state: str = "OPEN"
     parent_state: str | None = None
+    shared_contract: str | None = None
+    writes_shared_contract: bool = False
 
 
 @dataclass(frozen=True)

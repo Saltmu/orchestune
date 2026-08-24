@@ -84,6 +84,31 @@ def test_cli_validation_json(tmp_path, capsys):
     assert "task-a" in data["subtasks"]
 
 
+def test_cli_prints_precedence_and_conflict_edges_separately(tmp_path, capsys):
+    plan_path = tmp_path / "plan.md"
+    _write_plan(
+        plan_path,
+        """\
+        ---
+        subtasks:
+          - id: task-a
+            footprint: ["src/shared.py"]
+          - id: task-b
+            footprint: ["src/shared.py"]
+            depends_on: ["task-a"]
+        ---
+        """,
+    )
+
+    _run_cli(["--plan", str(plan_path), "--threshold", "0.1"])
+
+    output = capsys.readouterr().out
+    assert "Precedence edges:" in output
+    assert "task-a -> task-b [reason: explicit]" in output
+    assert "Conflict edges:" in output
+    assert "task-a <-> task-b [reason: similarity" in output
+
+
 def test_cli_validation_cycle_failure(tmp_path, capsys):
     plan_path = tmp_path / "plan.md"
     _write_plan(
@@ -145,7 +170,7 @@ class TestRepoRootDiscovery:
 
         data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.1"], capsys)
 
-        assert data["edges"] == []
+        assert data["conflict_edges"] == []
 
 
 class TestThresholdFlag:
@@ -165,7 +190,7 @@ class TestThresholdFlag:
 
         data = _run_cli_json(["--plan", str(plan_path)], capsys)
 
-        assert data["edges"] == []
+        assert data["conflict_edges"] == []
 
     def test_low_threshold_creates_similarity_edge(self, tmp_path, capsys):
         plan_path = tmp_path / "plan.md"
@@ -173,7 +198,7 @@ class TestThresholdFlag:
 
         data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.1"], capsys)
 
-        assert {(e["source"], e["target"]) for e in data["edges"]} == {
+        assert {(e["left"], e["right"]) for e in data["conflict_edges"]} == {
             ("task-a", "task-b")
         }
 
@@ -197,12 +222,12 @@ class TestThresholdFlag:
         )
 
         default_data = _run_cli_json(["--plan", str(plan_path)], capsys)
-        assert len(default_data["edges"]) == 1
+        assert len(default_data["conflict_edges"]) == 1
 
         high_threshold_data = _run_cli_json(
             ["--plan", str(plan_path), "--threshold", "0.99"], capsys
         )
-        assert high_threshold_data["edges"] == []
+        assert high_threshold_data["conflict_edges"] == []
 
     @pytest.mark.parametrize("bad_threshold", ["nan", "inf", "-inf", "2", "-0.5"])
     def test_threshold_outside_score_range_is_rejected(
@@ -249,7 +274,7 @@ class TestIgnorePatternsConfig:
 
         data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.1"], capsys)
 
-        assert {(e["source"], e["target"]) for e in data["edges"]} == {
+        assert {(e["left"], e["right"]) for e in data["conflict_edges"]} == {
             ("task-a", "task-b")
         }
 
@@ -265,7 +290,7 @@ class TestIgnorePatternsConfig:
 
         data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.1"], capsys)
 
-        assert data["edges"] == []
+        assert data["conflict_edges"] == []
 
     def test_pyproject_toml_tool_orchestune_ignore_pattern(self, tmp_path, capsys):
         plan_path = tmp_path / "plan.md"
@@ -282,7 +307,7 @@ class TestIgnorePatternsConfig:
 
         data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.1"], capsys)
 
-        assert data["edges"] == []
+        assert data["conflict_edges"] == []
 
     def test_invalid_ignore_patterns_type_is_reported_as_error(self, tmp_path, capsys):
         plan_path = tmp_path / "plan.md"
@@ -339,7 +364,7 @@ class TestSimilarityThresholdConfig:
 
         data = _run_cli_json(["--plan", str(plan_path)], capsys)
 
-        assert data["edges"] == []
+        assert data["conflict_edges"] == []
 
     def test_config_threshold_lowers_effective_threshold(self, tmp_path, capsys):
         plan_path = tmp_path / "plan.md"
@@ -350,7 +375,7 @@ class TestSimilarityThresholdConfig:
 
         data = _run_cli_json(["--plan", str(plan_path)], capsys)
 
-        assert {(e["source"], e["target"]) for e in data["edges"]} == {
+        assert {(e["left"], e["right"]) for e in data["conflict_edges"]} == {
             ("task-a", "task-b")
         }
 
@@ -369,7 +394,7 @@ class TestSimilarityThresholdConfig:
 
         data = _run_cli_json(["--plan", str(plan_path)], capsys)
 
-        assert {(e["source"], e["target"]) for e in data["edges"]} == {
+        assert {(e["left"], e["right"]) for e in data["conflict_edges"]} == {
             ("task-a", "task-b")
         }
 
@@ -382,7 +407,7 @@ class TestSimilarityThresholdConfig:
 
         data = _run_cli_json(["--plan", str(plan_path), "--threshold", "0.99"], capsys)
 
-        assert data["edges"] == []
+        assert data["conflict_edges"] == []
 
     def test_invalid_threshold_type_is_reported_as_error(self, tmp_path, capsys):
         plan_path = tmp_path / "plan.md"

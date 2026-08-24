@@ -23,7 +23,7 @@ graph TD
     subgraph ENG ["Orchestune Engine (deterministic Python)"]
         L1["Forge / git_cli (L1)<br/>the only boundary running gh and git"]
         REC["State Recovery (L2)<br/>rebuild state from GitHub"]
-        DAG["DAG Engine (L2)<br/>similarity analysis, conflict detection, topological sort"]
+        DAG["DAG Engine (L2)<br/>Precedence DAG + Conflict Graph"]
         DP["Dispatcher (L4/L3)<br/>scheduling, worktree creation, rebase"]
         IG["Integrator (L3)<br/>pre-merge CI, auto-integration, final PR"]
     end
@@ -37,7 +37,7 @@ graph TD
     GI -->|read labels and PR state| L1
     L1 -->|restore| REC
     REC -->|reconstruct run state| DP
-    DAG -->|execution order| DP
+    DAG -->|ready set + exclusions| DP
     DP -->|footprint / symbols| DAG
     DP -->|create worktree, launch task| AG
     AG -->|work in isolation| WT
@@ -91,13 +91,13 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 |---|---|---|
 | Bad decomposition (an unestablished shared extension point) | Shared-contract gate (Section 1) | Warning |
 | Stale plan (a declared `symbol` does not exist) | AST symbol verification (Section 1) | Neutral note in the Issue body |
-| Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch.locks.check_footprint_deviation`) | DAG recomputation (with exclusion rules and a retry cap) |
+| Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch.locks.check_footprint_deviation`) | Conflict Graph recomputation (with exclusion rules and a retry cap) |
 | Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth (Section 2) |
 | The agent's own report (`result: not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by the outcome record and status label |
 
 The detailed behaviour of each mechanism — its exclusion rules, its skip conditions, how it differs per dispatch target — belongs to that mechanism's own section and to the docstring of its implementation. All that matters here is that each one follows from the same principle.
 
-And **loops are bounded, with a terminal state** — though not on every path today. DAG recomputation retries, launches per window, and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default) are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops. `tests/test_architecture.py` mechanically checks the finite retry/reclaim/review-timeout settings against their declared terminal behaviour. The check deliberately uses an explicit registry: it rejects new settings that match this recovery-loop naming contract without a terminal mapping, while leaving unrelated bounded controls to their feature-specific tests.
+And **loops are bounded, with a terminal state** — though not on every path today. Runtime Conflict Graph recomputation retries, launches per window, and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default) are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops. `tests/test_architecture.py` mechanically checks the finite retry/reclaim/review-timeout settings against their declared terminal behaviour. The check deliberately uses an explicit registry: it rejects new settings that match this recovery-loop naming contract without a terminal mapping, while leaving unrelated bounded controls to their feature-specific tests.
 
 > **Known gaps**: one path currently never reaches a terminal state.
 > - **Token usage is not observable.** `max_tokens_per_window` never fires on the cloud dispatch targets (`ClaudeCodeCloudRoutineDispatchTarget`, `CodexCloudDispatchTarget`): the default `collect_usage` returns `None` and neither target overrides it, because no polling API is published for a cloud session's consumption — even `is_complete` falls back to PR creation as a proxy signal. So **the token cap is inert on the primary unattended path**. This is upstream of persistence (the data is never produced in the first place) and is revisited when such an API becomes available. `recompute_count`/`forced_serial` (child Issue body) and `launch_history` (parent Issue body) are persisted and outside this gap.
@@ -108,15 +108,18 @@ What Orchestune **aims for** is not that everything resolves automatically, but 
 
 ## 1. DAG Construction & Conflict Prevention
 
-Orchestune analyzes subtask relationships statically using both explicit dependency declarations (`depends_on`) and overlap in target file paths (`footprint`) or code symbols (`symbols`).
+Orchestune analyzes subtask relationships as two independent models. `depends_on` is a causal relationship—its predecessor must complete first—and belongs to the **Precedence DAG**. Overlap in `footprint`, `symbols`, or shared-contract metadata is a symmetric “must not run together” relationship and belongs to the **Conflict Graph**.
 
 ```mermaid
 graph TD
     A[Decomposition Plan] --> B[Static Code Analysis]
     B --> C[Compute Similarity Metrics]
     C --> D[Identify File/Symbol Overlaps]
-    D --> E[Construct Dependency DAG]
-    E --> F[Cycle & Risk Check]
+    A --> E[Construct Precedence DAG from depends_on]
+    D --> F[Construct Symmetric Conflict Graph]
+    E --> G[Cycle & Topological Check]
+    F --> H[Conflict-aware Scheduling]
+    G --> H
 ```
 
 > **Reference**: the similarity-based task partitioning in this section derives from the Co-Coder paper (Xu Yang, Lunyiu Nie, Ethan Chandra, Stanislav Gannutin, Fangru Lin, Swarat Chaudhuri. "When Parallelism Pays Off: Cohesion-Aware Task Partitioning for Multi-Agent Coding." arXiv:2606.00953, 2026).
@@ -128,13 +131,15 @@ graph TD
 ### Conflict Prevention Mechanism
 
 * **Overlap Analysis**:
-  When multiple tasks attempt to edit the same files or symbols, merge conflicts are inevitable. Orchestune computes similarity metrics across footprints and automatically inserts "implicit dependencies" to sequence conflicting tasks safely.
+  When multiple tasks attempt to edit the same files or symbols, merge conflicts are likely. Orchestune computes similarity metrics and stores the result as a symmetric `ConflictEdge`, including its score, reason, and resources. Priority and task IDs never turn that exclusion into an arbitrary directed dependency.
 * **Safe Parallelization**:
-  Only completely independent subtasks are allowed to run concurrently. This topological sorting ensures that parallel branches are mergeable with minimal conflict.
+  The dispatcher obtains the dependency-ready set from the Precedence DAG, then uses a deterministic priority-ordered greedy selection. A candidate is selected only when it is not adjacent in the Conflict Graph to an active task or a task already selected in the same cycle. A conflict-only task can therefore be reconsidered after its neighbor finishes, without receiving a permanent artificial order.
+
+Cycle detection and topological sorting inspect only the Precedence DAG. The undirected Conflict Graph has no cycle error, and conflict information is never discarded when the same pair also has an explicit dependency. `orchestune-dag --json` exposes `precedence_edges` and `conflict_edges` separately; the backward-compatible `edges` key now aliases precedence edges only.
 
 ### Ordinary Footprint Overlap vs. the Shared-Contract Gate
 
-The overlap analysis above (`dag/similarity.py`) only inserts an implicit dependency edge when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.
+The overlap analysis above (`dag/similarity.py`) adds a similarity conflict edge only when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.
 
 Consider several subtasks that each need to establish or edit a **shared extension point that does not exist yet** — a format registry, a CLI wiring module — with each assuming a different plausible path for it. Since none of their declared footprints share a literal string, the existing overlap detection has nothing to match on and cannot catch the case.
 
@@ -145,9 +150,9 @@ To address this, Stage 1 of the `orchestune` skill asks the planner to explicitl
 1. **Subtasks sharing the same `shared_contract` tag.**
 2. ***Every* subtask regardless of tagging**, grouped where the `footprint` falls into the same category *and* the same directory (scoping by directory keeps unrelated sibling packages — `packages/auth/__init__.py` vs. `packages/payments/__init__.py` — from being flagged as the same hotspot).
 
-In either tier, a non-blocking `Warnings:` entry appears in `orchestune-dag`'s output when the group contains a pair that is not reachable from the other.
+Writer pairs in either tier become exclusion constraints in the Conflict Graph. In addition, a non-blocking `Warnings:` entry appears in `orchestune-dag`'s output when the group contains a pair that is not reachable from the other in the Precedence DAG.
 
-What matters here is that the check is **reachability**, not connectivity: a warning fires when some pair in the group cannot reach the other via `depends_on`/inferred edges in either direction. Two subtasks that merely share a common ancestor — both `depends_on` the same `shared-contract` task, as in `shared -> csv` and `shared -> yaml` — are not ordered relative to *each other* and can still run in parallel. The gate therefore keeps warning about such pairs even though both declare a dependency on the owner.
+What matters here is that the check is **reachability**, not connectivity: a warning fires when some pair in the group cannot reach the other via explicit `depends_on` edges in either direction. Two subtasks that merely share a common ancestor — both `depends_on` the same `shared-contract` task, as in `shared -> csv` and `shared -> yaml` — are not ordered relative to *each other* and can still run in parallel. The gate therefore keeps warning about such pairs even though both declare a dependency on the owner.
 
 Tier 2 deliberately does not skip tagged subtasks. If only one of two subtasks writing to the same file remembered to set `shared_contract` (a plausible authoring mistake), tier 1 alone would never compare them — each would sit alone in its own group — and the exact race this gate exists to catch would slip through. Pairs already flagged by tier 1 are tracked and not re-flagged by tier 2.
 
@@ -296,7 +301,7 @@ from its own layer or from any layer below it, never from a layer above.
 | --- | --- | --- |
 | **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning.cli` |
 | **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.conflicts`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **Adapters**<br/>the only modules that run `git` or `gh` | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
 | **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `setup_skills`, `validation`, `version` |
 

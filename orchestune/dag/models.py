@@ -6,7 +6,7 @@ import posixpath
 import re
 import tomllib
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -94,7 +94,7 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     if patterns is None:
         patterns = config.get("dag-ignore-patterns", [])
     # 空文字列はre.compile("")で有効な正規表現になり、あらゆるパスに
-    # マッチしてしまう（=全ての類似度エッジが無診断で消える）ため、
+    # マッチしてしまう（=全ての類似度競合辺が無診断で消える）ため、
     # 文字列であることに加えて空でないことも検証する（#404レビュー指摘）。
     if not isinstance(patterns, list) or not all(
         isinstance(p, str) and p for p in patterns
@@ -112,9 +112,9 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
     Shared by orchestune-dag (dag_cli.py) and orchestune-provision
     (provisioning.py, #407) so a threshold chosen via `orchestune-dag
     --threshold` and persisted here is also honored by
-    `orchestune-provision`'s own DAG recomputation, instead of that tool
+    `orchestune-provision`'s own conflict-graph computation, instead of that tool
     silently falling back to `DEFAULT_SIMILARITY_THRESHOLD` and producing a
-    different `topological_order`/edge set than what was validated.
+    a different conflict-edge set than what was validated.
 
     Follows the same hyphen-alias convention as `dag_ignore_patterns`:
     `dag-similarity-threshold` is accepted as an alias, and the
@@ -316,15 +316,97 @@ class DagEdge:
 
 
 @dataclass(frozen=True)
+class ConflictEdge:
+    """A symmetric exclusion constraint between two subtasks.
+
+    Endpoints and resources are canonicalized so the same relationship has one
+    stable representation regardless of discovery or input order.
+    """
+
+    left: str
+    right: str
+    reason: str
+    score: float | None = None
+    resources: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.left == self.right:
+            raise ValueError("a conflict edge must connect two distinct subtasks")
+        left, right = sorted((self.left, self.right))
+        object.__setattr__(self, "left", left)
+        object.__setattr__(self, "right", right)
+        object.__setattr__(self, "resources", tuple(sorted(set(self.resources))))
+
+    @property
+    def pair(self) -> frozenset[str]:
+        return frozenset((self.left, self.right))
+
+
+@dataclass(frozen=True)
+class ConflictGraph:
+    """Deterministically ordered collection of symmetric conflict edges."""
+
+    edges: tuple[ConflictEdge, ...] = ()
+
+    def __post_init__(self) -> None:
+        unique = set(self.edges)
+        ordered = tuple(
+            sorted(
+                unique,
+                key=lambda edge: (
+                    edge.left,
+                    edge.right,
+                    edge.reason,
+                    edge.score is None,
+                    edge.score or 0.0,
+                    edge.resources,
+                ),
+            )
+        )
+        object.__setattr__(self, "edges", ordered)
+
+    def has_conflict(self, first: str, second: str) -> bool:
+        pair = frozenset((first, second))
+        return first != second and any(edge.pair == pair for edge in self.edges)
+
+    def neighbors(self, subtask_id: str) -> frozenset[str]:
+        return frozenset(
+            edge.right if edge.left == subtask_id else edge.left
+            for edge in self.edges
+            if subtask_id in (edge.left, edge.right)
+        )
+
+
+@dataclass(frozen=True)
 class DagResult:
     subtasks: dict[str, SubTask]
     edges: list[DagEdge]
     topological_order: list[str]
     parallel_leaves: list[str]
     risky_subtask_ids: list[str]
+    conflict_graph: ConflictGraph = field(default_factory=ConflictGraph)
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        precedence_edges = [
+            {
+                "source": edge.source,
+                "target": edge.target,
+                "reason": edge.reason,
+                "score": edge.score,
+            }
+            for edge in self.edges
+        ]
+        conflict_edges = [
+            {
+                "left": edge.left,
+                "right": edge.right,
+                "reason": edge.reason,
+                "score": edge.score,
+                "resources": list(edge.resources),
+            }
+            for edge in self.conflict_graph.edges
+        ]
         return {
             "subtasks": {
                 subtask_id: {
@@ -343,15 +425,11 @@ class DagResult:
                 }
                 for subtask_id, subtask in self.subtasks.items()
             },
-            "edges": [
-                {
-                    "source": edge.source,
-                    "target": edge.target,
-                    "reason": edge.reason,
-                    "score": edge.score,
-                }
-                for edge in self.edges
-            ],
+            # `edges` remains as a compatibility alias, but now has the only
+            # semantically valid meaning for a DAG: causal precedence edges.
+            "edges": precedence_edges,
+            "precedence_edges": precedence_edges,
+            "conflict_edges": conflict_edges,
             "topological_order": list(self.topological_order),
             "parallel_leaves": list(self.parallel_leaves),
             "risky_subtask_ids": list(self.risky_subtask_ids),
@@ -365,3 +443,5 @@ class FootprintConflict:
     other_subtask_id: str
     similarity: float
     blocked_subtask_id: str
+    reason: str = "similarity"
+    resources: tuple[str, ...] = ()

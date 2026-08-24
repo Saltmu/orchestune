@@ -20,7 +20,7 @@ The canonical list of labels is `REQUIRED_LABELS` in `orchestune/forge.py`
 | `status:done` | Subtask work is complete |
 | `status:not-needed` | Determined to be unnecessary (already implemented on main, etc.) |
 | `status:blocked-human-review` | Paused pending human review |
-| `status:blocked-recompute` | Blocked as a side effect of DAG recomputation triggered by a footprint deviation |
+| `status:blocked-recompute` | Blocked as a side effect of Conflict Graph recomputation triggered by a footprint deviation |
 | `status:force-serial` | Forced to run serially after DAG-recompute retries are exhausted |
 | `status:manual-merge-required` | Automatic rebase failed; a human needs to merge manually |
 
@@ -32,7 +32,7 @@ stateDiagram-v2
     [*] --> blocked: Issue creation\n(unresolved deps)
 
     blocked --> queued: Dependency resolved\n(_promote_blocked_tasks)
-    blocked --> blocked_recompute: DAG recompute from footprint deviation\n(notify_recompute)
+    blocked --> blocked_recompute: Conflict Graph recompute from footprint deviation\n(notify_recompute)
 
     queued --> in_progress: Launch succeeded\n(_apply_task_launches)
     queued --> blocked: YAML parse error\n(_apply_yaml_error_blocking)
@@ -182,11 +182,11 @@ independently of the lifecycle above (see "External lock" below).
 - Condition: the Integrator's post-merge local CI run failed, so the merge is
   reverted and the task is sent back to the queue.
 
-### 12. DAG recompute from footprint deviation (`status:blocked-recompute` / `status:force-serial`)
+### 12. Conflict Graph recompute from footprint deviation (`status:blocked-recompute` / `status:force-serial`)
 - Source: `_apply_footprint_deviation_outcome` in `orchestune/dispatch/rebase.py`
   (`notify_recompute` / `notify_force_serial`)
 - Condition: an active worktree's actual changed files deviated from its
-  declared `footprint`, triggering a DAG recompute; any dependent Issue with a
+  declared `footprint`, triggering a Conflict Graph recompute; any Issue with a
   detected conflict gets `status:blocked-recompute`. If recompute retries hit
   `max_recompute_retries`, the task itself gets `status:force-serial` and
   subsequent cycles zero out the launch quota to fall back to serial

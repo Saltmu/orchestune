@@ -19,6 +19,8 @@ _TEMPLATE = (
     "footprint: {{footprint}}\n"
     "symbols: {{symbols}}\n"
     "depends_on: {{depends_on}}\n"
+    "shared_contract: {{shared_contract}}\n"
+    "writes_shared_contract: {{writes_shared_contract}}\n"
     "parent_issue_number: {{parent_issue_number}}\n"
     "```\n"
 )

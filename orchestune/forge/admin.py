@@ -122,7 +122,9 @@ REQUIRED_LABELS: tuple[LabelSpec, ...] = (
         "status:blocked", "B60205", "Issue is blocked on unresolved dependencies"
     ),
     LabelSpec(
-        "status:blocked-recompute", "B60205", "Blocked pending DAG recomputation"
+        "status:blocked-recompute",
+        "B60205",
+        "Blocked pending Conflict Graph recomputation",
     ),
     LabelSpec("status:blocked-human-review", "B60205", "Blocked pending human review"),
     LabelSpec("status:done", "0E8A16", "Subtask work is complete"),

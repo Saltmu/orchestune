@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from collections import deque
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from orchestune.dag.contracts import find_unowned_shared_contract_hotspots
+from orchestune.dag.contracts import (
+    build_shared_contract_conflicts,
+    find_unowned_shared_contract_hotspots,
+)
 from orchestune.dag.models import (
+    ConflictEdge,
+    ConflictGraph,
     DagCycleError,
     DagEdge,
     DagResult,
@@ -20,14 +25,12 @@ from orchestune.dag.models import (
 from orchestune.dag.parsing import detect_risk_from_values, parse_decomposition_plan
 from orchestune.dag.similarity import (
     DEFAULT_SIMILARITY_THRESHOLD,
-    build_similarity_edges,
+    build_similarity_conflicts,
 )
 from orchestune.symbol_verification import (
     find_missing_footprint_paths,
     find_missing_symbols,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def _collect_explicit_edges(subtasks: list[SubTask]) -> list[DagEdge]:
@@ -35,22 +38,6 @@ def _collect_explicit_edges(subtasks: list[SubTask]) -> list[DagEdge]:
         DagEdge(source=dependency, target=subtask.id, reason="explicit")
         for subtask in subtasks
         for dependency in subtask.depends_on
-    ]
-
-
-def _merge_explicit_and_similarity(
-    explicit_edges: list[DagEdge],
-    similarity_edges: list[DagEdge],
-) -> list[DagEdge]:
-    explicit_pairs = {(edge.source, edge.target) for edge in explicit_edges}
-    return [
-        *explicit_edges,
-        *(
-            edge
-            for edge in similarity_edges
-            if (edge.source, edge.target) not in explicit_pairs
-            and (edge.target, edge.source) not in explicit_pairs
-        ),
     ]
 
 
@@ -111,50 +98,6 @@ def _topological_sort(node_ids: list[str], edges: list[DagEdge]) -> list[str]:
     return order
 
 
-def _cycle_edges(cycle: list[str], edges: list[DagEdge]) -> list[DagEdge]:
-    by_pair = {(edge.source, edge.target): edge for edge in edges}
-    return [
-        by_pair[(source, target)]
-        for source, target in zip(cycle, cycle[1:], strict=False)
-    ]
-
-
-def _resolve_cycles_if_possible(
-    node_ids: list[str],
-    edges: list[DagEdge],
-) -> tuple[list[DagEdge], list[str]]:
-    resolved = list(edges)
-    warnings: list[str] = []
-    while cycle := _detect_cycle(node_ids, resolved):
-        similarity_edges = [
-            edge
-            for edge in _cycle_edges(cycle, resolved)
-            if edge.reason == "similarity"
-        ]
-        if not similarity_edges:
-            raise DagCycleError(f"循環参照を検出しました: {' -> '.join(cycle)}")
-
-        weakest = min(
-            similarity_edges,
-            key=lambda edge: edge.score if edge.score is not None else 0.0,
-        )
-        msg = (
-            f"循環参照を検出したため、類似度エッジを自動解消しました: "
-            f"{weakest.source} -> {weakest.target} (reason: {weakest.reason}, score: {weakest.score})"
-        )
-        logger.warning(
-            "循環参照を検出したため、類似度エッジを自動解消しました: "
-            "%s -> %s (reason: %s, score: %s)",
-            weakest.source,
-            weakest.target,
-            weakest.reason,
-            weakest.score,
-        )
-        warnings.append(msg)
-        resolved.remove(weakest)
-    return resolved, warnings
-
-
 def _footprint_and_symbol_warnings(
     subtasks: list[SubTask], repo_root: str | Path
 ) -> list[str]:
@@ -187,31 +130,46 @@ def _footprint_and_symbol_warnings(
 def _assemble_dag(
     subtasks: list[SubTask],
     edges: list[DagEdge],
+    conflict_graph: ConflictGraph,
     repo_root: str | Path | None = None,
 ) -> DagResult:
     node_ids = [subtask.id for subtask in subtasks]
-    resolved_edges, cycle_warnings = _resolve_cycles_if_possible(node_ids, edges)
-    topological_order = _topological_sort(node_ids, resolved_edges)
-    targets = {edge.target for edge in resolved_edges}
+    if cycle := _detect_cycle(node_ids, edges):
+        raise DagCycleError(f"循環参照を検出しました: {' -> '.join(cycle)}")
+    topological_order = _topological_sort(node_ids, edges)
+    targets = {edge.target for edge in edges}
 
-    contract_warnings = list(
-        find_unowned_shared_contract_hotspots(subtasks, resolved_edges)
-    )
+    contract_warnings = list(find_unowned_shared_contract_hotspots(subtasks, edges))
     existence_warnings = (
         _footprint_and_symbol_warnings(subtasks, repo_root)
         if repo_root is not None
         else []
     )
-    all_warnings = tuple(contract_warnings + cycle_warnings + existence_warnings)
+    all_warnings = tuple(contract_warnings + existence_warnings)
 
     return DagResult(
         subtasks={subtask.id: subtask for subtask in subtasks},
-        edges=resolved_edges,
+        edges=edges,
         topological_order=topological_order,
         parallel_leaves=sorted(node for node in node_ids if node not in targets),
         risky_subtask_ids=sorted(subtask.id for subtask in subtasks if subtask.risk),
+        conflict_graph=conflict_graph,
         warnings=all_warnings,
     )
+
+
+def build_conflict_graph(
+    subtasks: list[SubTask],
+    threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+) -> ConflictGraph:
+    """Build symmetric exclusion constraints independently of precedence."""
+    ignore_patterns = tuple(ignore_patterns)
+    similarity = build_similarity_conflicts(
+        subtasks, threshold=threshold, ignore_patterns=ignore_patterns
+    )
+    shared_contracts = build_shared_contract_conflicts(subtasks, ignore_patterns)
+    return ConflictGraph(tuple([*similarity, *shared_contracts]))
 
 
 def build_dag(
@@ -220,14 +178,15 @@ def build_dag(
     repo_root: str | Path | None = None,
     ignore_patterns: Iterable[re.Pattern[str]] = (),
 ) -> DagResult:
-    """Build a validated DAG from explicit and inferred dependencies."""
+    """Build an explicit precedence DAG and a separate conflict graph."""
     explicit_edges = _collect_explicit_edges(subtasks)
-    similarity_edges = build_similarity_edges(
+    conflict_graph = build_conflict_graph(
         subtasks, threshold=threshold, ignore_patterns=ignore_patterns
     )
     return _assemble_dag(
         subtasks,
-        _merge_explicit_and_similarity(explicit_edges, similarity_edges),
+        explicit_edges,
+        conflict_graph,
         repo_root=repo_root,
     )
 
@@ -260,58 +219,59 @@ def _updated_subtask(
         symbols,
         subtask.description,
     )
-    return SubTask(
-        id=subtask.id,
-        description=subtask.description,
+    return replace(
+        subtask,
         footprint=footprint,
         symbols=symbols,
-        depends_on=subtask.depends_on,
         risk=subtask.risk or heuristic_risk,
         risk_reasons=tuple(dict.fromkeys([*subtask.risk_reasons, *heuristic_reasons])),
-        priority=subtask.priority,
-        shared_contract=subtask.shared_contract,
-        writes_shared_contract=subtask.writes_shared_contract,
     )
 
 
-def _detect_footprint_conflicts_and_edges(
-    subtask_list: list[SubTask],
+def _detect_new_footprint_conflicts(
+    conflict_graph: ConflictGraph,
     subtask_id: str,
     previous_pairs: set[frozenset[str]],
     explicit_pairs: set[tuple[str, str]],
-    threshold: float,
-    ignore_patterns: tuple[re.Pattern[str], ...],
-) -> tuple[list[DagEdge], list[FootprintConflict]]:
+) -> list[FootprintConflict]:
     conflicts: list[FootprintConflict] = []
-    final_similarity_edges: list[DagEdge] = []
-    for edge in build_similarity_edges(
-        subtask_list, threshold=threshold, ignore_patterns=ignore_patterns
+    new_edges_by_pair: dict[frozenset[str], list[ConflictEdge]] = {}
+    for edge in conflict_graph.edges:
+        if edge.pair not in previous_pairs and subtask_id in edge.pair:
+            new_edges_by_pair.setdefault(edge.pair, []).append(edge)
+
+    for pair, edges in sorted(
+        new_edges_by_pair.items(), key=lambda item: sorted(item[0])
     ):
-        pair = frozenset((edge.source, edge.target))
-        if (edge.source, edge.target) in explicit_pairs or (
-            edge.target,
-            edge.source,
+        if pair in previous_pairs or subtask_id not in pair:
+            continue
+        representative = max(
+            edges,
+            key=lambda edge: (edge.score is not None, edge.score or 0.0),
+        )
+        other_id = (
+            representative.right
+            if representative.left == subtask_id
+            else representative.left
+        )
+        if (subtask_id, other_id) in explicit_pairs or (
+            other_id,
+            subtask_id,
         ) in explicit_pairs:
             continue
-
-        if pair not in previous_pairs and subtask_id in pair:
-            other_id = edge.target if edge.source == subtask_id else edge.source
-            edge = DagEdge(
-                source=subtask_id,
-                target=other_id,
-                reason="similarity",
-                score=edge.score,
+        conflicts.append(
+            FootprintConflict(
+                subtask_id=subtask_id,
+                other_subtask_id=other_id,
+                similarity=representative.score or 0.0,
+                blocked_subtask_id=other_id,
+                reason=representative.reason,
+                resources=tuple(
+                    sorted({resource for edge in edges for resource in edge.resources})
+                ),
             )
-            conflicts.append(
-                FootprintConflict(
-                    subtask_id=subtask_id,
-                    other_subtask_id=other_id,
-                    similarity=edge.score or 0.0,
-                    blocked_subtask_id=other_id,
-                )
-            )
-        final_similarity_edges.append(edge)
-    return final_similarity_edges, conflicts
+        )
+    return conflicts
 
 
 def recompute_dag_for_footprint_change(
@@ -328,12 +288,10 @@ def recompute_dag_for_footprint_change(
 
     ignore_patterns_tuple = tuple(ignore_patterns)
     previous_pairs = {
-        frozenset((edge.source, edge.target))
-        for edge in build_similarity_edges(
-            list(subtasks.values()),
-            threshold=threshold,
-            ignore_patterns=ignore_patterns_tuple,
-        )
+        edge.pair
+        for edge in build_conflict_graph(
+            list(subtasks.values()), threshold, ignore_patterns_tuple
+        ).edges
     }
     updated_subtasks = dict(subtasks)
     updated_subtasks[subtask_id] = _updated_subtask(
@@ -344,15 +302,14 @@ def recompute_dag_for_footprint_change(
     subtask_list = list(updated_subtasks.values())
     explicit_edges = _collect_explicit_edges(subtask_list)
     explicit_pairs = {(edge.source, edge.target) for edge in explicit_edges}
-
-    final_similarity_edges, conflicts = _detect_footprint_conflicts_and_edges(
-        subtask_list,
+    conflict_graph = build_conflict_graph(
+        subtask_list, threshold=threshold, ignore_patterns=ignore_patterns_tuple
+    )
+    conflicts = _detect_new_footprint_conflicts(
+        conflict_graph,
         subtask_id,
         previous_pairs,
         explicit_pairs,
-        threshold,
-        ignore_patterns_tuple,
     )
-
-    result = _assemble_dag(subtask_list, [*explicit_edges, *final_similarity_edges])
+    result = _assemble_dag(subtask_list, explicit_edges, conflict_graph)
     return result, conflicts

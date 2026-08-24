@@ -29,7 +29,12 @@ import posixpath
 import re
 from collections.abc import Iterable
 
-from orchestune.dag.models import DagEdge, SubTask
+from orchestune.dag.models import (
+    ConflictEdge,
+    DagEdge,
+    SubTask,
+    is_ignored_footprint,
+)
 
 _SHARED_CONTRACT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -87,6 +92,70 @@ def _scope(path: str) -> str:
     packages/payments/__init__.py)まで同一ホットスポット扱いしてしまうため、
     親ディレクトリを追加のグルーピングキーとして用いる。"""
     return posixpath.dirname(path)
+
+
+def _pairwise(ids: list[str]) -> list[tuple[str, str]]:
+    ordered_ids = sorted(set(ids))
+    return [
+        (left, right)
+        for index, left in enumerate(ordered_ids)
+        for right in ordered_ids[index + 1 :]
+    ]
+
+
+def build_shared_contract_conflicts(
+    subtasks: list[SubTask],
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+) -> list[ConflictEdge]:
+    """Return symmetric writer conflicts for declared and inferred contracts.
+
+    Unlike warning generation below, these constraints are retained even when
+    an explicit dependency also orders the pair. Precedence answers *when* a
+    task becomes ready; this graph independently records whether the two tasks
+    may run at the same time.
+    """
+    ignore_patterns = tuple(ignore_patterns)
+    conflicts: dict[tuple[str, str], ConflictEdge] = {}
+    explicit_groups: dict[str, list[str]] = {}
+    for subtask in subtasks:
+        if subtask.shared_contract and _is_contract_writer(subtask):
+            explicit_groups.setdefault(subtask.shared_contract, []).append(subtask.id)
+
+    for contract_id, ids in sorted(explicit_groups.items()):
+        for left, right in _pairwise(ids):
+            conflicts[(left, right)] = ConflictEdge(
+                left,
+                right,
+                reason="shared-contract",
+                resources=(f"shared_contract:{contract_id}",),
+            )
+
+    heuristic_groups: dict[tuple[str, str], list[str]] = {}
+    for subtask in subtasks:
+        seen: set[tuple[str, str]] = set()
+        for path in subtask.footprint:
+            if is_ignored_footprint(path, ignore_patterns):
+                continue
+            category = _categorize(path)
+            if category is None:
+                continue
+            key = (category, _scope(path))
+            if key not in seen:
+                heuristic_groups.setdefault(key, []).append(subtask.id)
+                seen.add(key)
+
+    for (category, scope), ids in sorted(heuristic_groups.items()):
+        for left, right in _pairwise(ids):
+            if (left, right) in conflicts:
+                continue
+            conflicts[(left, right)] = ConflictEdge(
+                left,
+                right,
+                reason="shared-contract-hotspot",
+                resources=(f"shared_contract_hotspot:{category}:{scope or '.'}",),
+            )
+
+    return list(conflicts.values())
 
 
 def _forward_reachable(
