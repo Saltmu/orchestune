@@ -9,15 +9,15 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import run_dispatch_cycle
-from orchestune.dispatch_locks import ExternalLockScanResult
-from orchestune.dispatch_phase_rebase import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.locks import ExternalLockScanResult
+from orchestune.dispatch.phase_rebase import (
     _apply_external_lock_sync,
     _decide_external_lock_sync,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     save_run_state,
@@ -80,9 +80,9 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
-            "orchestune.dispatch_gc.is_process_alive",
-            "orchestune.dispatch_gc_completion.is_process_alive",
-            "orchestune.dispatch_gc_zombies.is_process_alive",
+            "orchestune.dispatch.gc.is_process_alive",
+            "orchestune.dispatch.gc.completion.is_process_alive",
+            "orchestune.dispatch.gc.zombies.is_process_alive",
         ):
             stack.enter_context(patch(target, return_value=return_value))
         yield
@@ -109,7 +109,7 @@ class TestDecideExternalLockSync:
         run_state = RunState(active_worktrees={})
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=[],
             ),
         ):
@@ -122,7 +122,7 @@ class TestDecideExternalLockSync:
         task = _task(issue_number=1, footprint=("src/foo.py",))
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/feature/foo@bar"],
             ),
         ):
@@ -142,11 +142,11 @@ class TestDecideExternalLockSync:
         queued_task = _task(issue_number=2, footprint=("src/bar.py",))
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/feat/x"],
             ),
             patch(
-                "orchestune.dispatch_phase_rebase.branch_changed_files",
+                "orchestune.dispatch.phase_rebase.branch_changed_files",
                 return_value=None,
             ),
         ):
@@ -245,16 +245,16 @@ class TestRunDispatchCycleBranchNormalization:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/claude/issue-1-task-a"],
             ),
             patch(
-                "orchestune.dispatch_phase_rebase.branch_changed_files",
+                "orchestune.dispatch.phase_rebase.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch_rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -285,11 +285,11 @@ class TestRunDispatchCycleBranchNormalization:
         ]
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/feature/foo"],
             ),
             patch(
-                "orchestune.dispatch_phase_rebase.branch_changed_files"
+                "orchestune.dispatch.phase_rebase.branch_changed_files"
             ) as mock_branch_files,
         ):
             run_dispatch_cycle(config)
@@ -316,11 +316,11 @@ class TestRunDispatchCycleBranchNormalization:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch_phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
                 return_value=["origin/someone-elses-branch"],
             ),
             patch(
-                "orchestune.dispatch_phase_rebase.branch_changed_files",
+                "orchestune.dispatch.phase_rebase.branch_changed_files",
                 return_value=["src/shared.py"],
             ),
         ):

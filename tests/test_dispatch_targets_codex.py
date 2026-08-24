@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.targets import (
     CodexCloudDispatchTarget,
     DispatchHandle,
 )
@@ -41,7 +41,7 @@ class TestCodexCloudDispatchTarget:
             args=[], returncode=0, stdout=exec_output, stderr=""
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=[push_result, submit_result],
         ) as mock_run:
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
@@ -86,7 +86,7 @@ class TestCodexCloudDispatchTarget:
             args=[], returncode=0, stdout="Submitting task to cloud...\n", stderr=""
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=[push_result, submit_result],
         ):
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
@@ -106,7 +106,7 @@ class TestCodexCloudDispatchTarget:
             args=[], returncode=0, stdout="", stderr=""
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=[push_result, submit_result],
         ) as mock_run:
             target.launch(
@@ -135,7 +135,7 @@ class TestCodexCloudDispatchTarget:
             stderr="fatal error\n",
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=[push_result, submission_result],
         ):
             with pytest.raises(subprocess.CalledProcessError) as error:
@@ -162,7 +162,7 @@ class TestCodexCloudDispatchTarget:
             }
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             return_value=subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=payload, stderr=""
             ),
@@ -187,7 +187,7 @@ class TestCodexCloudDispatchTarget:
             }
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=[
                 subprocess.CompletedProcess(
                     args=[], returncode=0, stdout=page1, stderr=""
@@ -209,7 +209,7 @@ class TestCodexCloudDispatchTarget:
     def test_fetch_codex_cloud_task_status_handles_errors(self):
         target = CodexCloudDispatchTarget("env_123")
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             return_value=subprocess.CompletedProcess(
                 args=[], returncode=1, stdout="", stderr="CLI error"
             ),
@@ -217,7 +217,7 @@ class TestCodexCloudDispatchTarget:
             assert target._fetch_task_status("task_1") is None
 
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             return_value=subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="not json", stderr=""
             ),
@@ -225,7 +225,7 @@ class TestCodexCloudDispatchTarget:
             assert target._fetch_task_status("task_1") is None
 
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="codex", timeout=30),
         ):
             assert target._fetch_task_status("task_1") is None
@@ -242,7 +242,7 @@ class TestCodexCloudDispatchTarget:
             stderr="",
         )
         with patch(
-            "orchestune.dispatch_targets.subprocess.run",
+            "orchestune.dispatch.targets.subprocess.run",
             side_effect=[push_result, submit_result],
         ):
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")

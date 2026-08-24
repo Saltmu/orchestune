@@ -10,13 +10,13 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc_completion import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.completion import (
     _finalize_abandoned_cloud_worktree,
     _local_pr_completion_status,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
 
@@ -70,10 +70,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(active, task, config)
 
@@ -97,10 +97,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(active, task, config)
 
@@ -129,10 +129,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active, task, config, run_state=run_state
@@ -165,10 +165,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active, task, config, run_state=run_state
@@ -204,10 +204,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -247,10 +247,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -291,10 +291,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -329,10 +329,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_abandoned_cloud_worktree(
                 active,
@@ -369,10 +369,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_rm,
+            patch("orchestune.dispatch.gc.completion.remove_worktree") as mock_rm,
         ):
             with pytest.raises(OSError, match="Disk full"):
                 _finalize_abandoned_cloud_worktree(
@@ -417,10 +417,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             with pytest.raises(RuntimeError, match="Failed to remove old label"):
                 _finalize_abandoned_cloud_worktree(
@@ -436,7 +436,7 @@ class TestFinalizeAbandonedCloudWorktree:
         assert run_state.task_reclaim_counts[280].count == 2
 
     def test_stale_active_entry_discard_settles_pending_reservation(self, tmp_path):
-        from orchestune.dispatch_gc import _apply_stale_active_entry_discard
+        from orchestune.dispatch.gc import _apply_stale_active_entry_discard
 
         active = _active()
         config = DispatcherConfig(
@@ -451,7 +451,7 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch("os.path.exists", return_value=False),
-            patch("orchestune.dispatch_gc.remove_worktree"),
+            patch("orchestune.dispatch.gc.remove_worktree"),
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state,

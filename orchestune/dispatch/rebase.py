@@ -10,16 +10,16 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestune import dispatch_gc
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dag.models import FootprintConflict, SubTask
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_labels import transition_status_label
-from orchestune.dispatch_locks import check_footprint_deviation
-from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch import gc as dispatch_gc
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.locks import check_footprint_deviation
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive

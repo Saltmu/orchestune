@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from orchestune.dispatch_labels import TERMINAL_ESCALATION_LABELS
+from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import fetch_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command

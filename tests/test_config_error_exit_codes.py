@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.dag.cli import main as dag_main
-from orchestune.dispatcher import main as dispatcher_main
+from orchestune.dispatch.dispatcher import main as dispatcher_main
 from orchestune.provisioning import main as provisioning_main
 
 _PLAN = """\
@@ -125,7 +125,7 @@ class TestDispatcherConfigErrorNotAffectedByChange:
         _write_invalid_orchestune_toml(tmp_path)
 
         with (
-            patch("orchestune.dispatcher.build_dispatch_target"),
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
             pytest.raises(SystemExit) as excinfo,
         ):
             dispatcher_main(["--no-apply"], cwd=tmp_path)

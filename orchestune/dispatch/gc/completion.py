@@ -13,23 +13,23 @@ from pathlib import Path
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_gc_git import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.gc.git import (
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
-from orchestune.dispatch_labels import (
+from orchestune.dispatch.labels import (
     PRIMARY_STATUS_LABELS,
     TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
-from orchestune.dispatch_rules import NotNeededReviewDispatcher
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState, TaskReclaimRecord
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.rules import NotNeededReviewDispatcher
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )

@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]

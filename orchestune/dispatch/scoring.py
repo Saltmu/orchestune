@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from orchestune.dispatch_state import RunState
+from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
 from orchestune.models import Task

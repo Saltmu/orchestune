@@ -1,16 +1,16 @@
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_launch import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.launch import (
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
     _decide_yaml_error_tasks,
     _get_stack_eligible_tasks,
 )
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import CompletedWorktree, RunState
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import CompletedWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -208,8 +208,8 @@ class TestApplyTaskLaunches:
     def test_invalid_subtask_id_blocks_only_affected_task(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -236,9 +236,9 @@ class TestApplyTaskLaunches:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
         ):
@@ -268,8 +268,8 @@ class TestApplyTaskLaunches:
         既存PRまで新sessionの成果物と誤認する窓が生まれるため）。"""
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -290,11 +290,11 @@ class TestApplyTaskLaunches:
         dispatch_boundary_time = 1_050.0
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
-                "orchestune.dispatch_worktree.time.time",
+                "orchestune.dispatch.worktree.time.time",
                 return_value=dispatch_boundary_time,
             ),
         ):
@@ -314,9 +314,9 @@ class TestApplyTaskLaunches:
         （再キュー）されないことを検証する。"""
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch_reconciliation import _decide_blocked_promotions
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.reconciliation import _decide_blocked_promotions
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -360,9 +360,9 @@ class TestApplyTaskLaunches:
             added_labels.append((issue_num, label))
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
                 "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=fake_add_label,
@@ -396,8 +396,8 @@ class TestApplyTaskLaunchesLabelOrdering:
     def test_success_path_adds_in_progress_before_removing_queued(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -417,9 +417,9 @@ class TestApplyTaskLaunchesLabelOrdering:
         call_order: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
                 "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
@@ -441,8 +441,8 @@ class TestApplyTaskLaunchesLabelOrdering:
     def test_failure_path_adds_new_status_before_removing_queued(self, tmp_path):
         from unittest.mock import patch
 
-        from orchestune.dispatch_launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -466,7 +466,7 @@ class TestApplyTaskLaunchesLabelOrdering:
         call_order: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
             patch(
                 "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
@@ -489,7 +489,7 @@ class TestApplyYamlErrorBlockingLabelOrdering:
     def test_adds_blocked_before_removing_queued(self, tmp_path):
         from unittest.mock import patch
 
-        from orchestune.dispatch_launch import _apply_yaml_error_blocking
+        from orchestune.dispatch.launch import _apply_yaml_error_blocking
 
         task = _task(1, subtask_id="task-1", yaml_error=True)
         config = DispatcherConfig(
@@ -523,8 +523,8 @@ class TestLaunchSelectedTasks:
     def test_launches_selected_task_via_launch_context(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import LaunchContext, _launch_selected_tasks
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -551,9 +551,9 @@ class TestLaunchSelectedTasks:
         )
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
             patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
@@ -567,7 +567,7 @@ class TestLaunchSelectedTasks:
     def test_blocks_yaml_error_candidate_not_included_in_selected(self, tmp_path):
         from unittest.mock import patch
 
-        from orchestune.dispatch_launch import LaunchContext, _launch_selected_tasks
+        from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
 
         bad_task = _task(1, subtask_id="bad-task", yaml_error=True)
         config = DispatcherConfig(

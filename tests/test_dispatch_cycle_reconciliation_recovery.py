@@ -10,18 +10,18 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch_reconciliation import (
+from orchestune.dispatch.reconciliation import (
     _decide_blocked_promotions,
     _decide_dual_status_reconciliation,
     _reconcile_dual_status_tasks,
     _self_heal_run_state,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
 )
@@ -83,9 +83,9 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
-            "orchestune.dispatch_gc.is_process_alive",
-            "orchestune.dispatch_gc_completion.is_process_alive",
-            "orchestune.dispatch_gc_zombies.is_process_alive",
+            "orchestune.dispatch.gc.is_process_alive",
+            "orchestune.dispatch.gc.completion.is_process_alive",
+            "orchestune.dispatch.gc.zombies.is_process_alive",
         ):
             stack.enter_context(patch(target, return_value=return_value))
         yield
@@ -258,7 +258,7 @@ class TestSelfHealRunState:
         mock_list = fake_forge.list_issues_by_label
         with (
             patch(
-                "orchestune.dispatch_reconciliation.recover_run_state",
+                "orchestune.dispatch.reconciliation.recover_run_state",
                 return_value=False,
             ) as mock_recover,
         ):
@@ -339,24 +339,24 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
             patch(
-                "orchestune.dispatch_cycle._process_active_worktrees",
+                "orchestune.dispatch.cycle._process_active_worktrees",
                 return_value=([], deviation_events, False, set()),
             ),
             patch(
-                "orchestune.dispatch_phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
                 return_value=[],
             ),
-            patch("orchestune.dispatch_cycle._sync_external_locks"),
-            patch("orchestune.dispatch_phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.cycle._sync_external_locks"),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
-                "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 return_value=([blocked_task, normal_task], {}),
             ),
             patch(
-                "orchestune.dispatch_phase_scheduling.select_next_tasks"
+                "orchestune.dispatch.phase_scheduling.select_next_tasks"
             ) as mock_select,
         ):
             run_dispatch_cycle(config)
@@ -425,11 +425,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
-            patch("orchestune.dispatch_phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
-                "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 return_value=([], {}),
             ),
         ):
@@ -524,19 +524,19 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
             patch(
-                "orchestune.dispatch_cycle._process_active_worktrees",
+                "orchestune.dispatch.cycle._process_active_worktrees",
                 return_value=([], [], False, set()),
             ),
-            patch("orchestune.dispatch_phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
-                "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 return_value=([], {}),
             ),
             patch(
-                "orchestune.dispatch_locks.check_footprint_deviation", return_value=None
+                "orchestune.dispatch.locks.check_footprint_deviation", return_value=None
             ),  # エラー発生を模す
         ):
             run_dispatch_cycle(config)
@@ -546,7 +546,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
     def test_blocked_promotion_excludes_blocked_recompute(self):
         """status:blocked-recomputeを持つタスクは、通常のblocked昇格判定から除外されること"""
-        from orchestune.dispatch_reconciliation import _decide_blocked_promotions
+        from orchestune.dispatch.reconciliation import _decide_blocked_promotions
 
         task = _task(
             issue_number=2,
@@ -662,23 +662,23 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch_cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch_cycle._fetch_issues", return_value=MockIssues()),
+            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
             patch(
-                "orchestune.dispatch_cycle._process_active_worktrees",
+                "orchestune.dispatch.cycle._process_active_worktrees",
                 return_value=([], [], False, set()),
             ),
-            patch("orchestune.dispatch_phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
-                "orchestune.dispatch_phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 return_value=([], {}),
             ),
             patch(
-                "orchestune.dispatch_locks.check_footprint_deviation",
+                "orchestune.dispatch.locks.check_footprint_deviation",
                 return_value=["src/unexpected.py"],
             ),  # 逸脱ありとする
             patch(
-                "orchestune.dispatch_reconciliation.recompute_dag_for_footprint_change",
+                "orchestune.dispatch.reconciliation.recompute_dag_for_footprint_change",
                 side_effect=ValueError("DAG error"),
             ),  # DAG計算エラー
         ):

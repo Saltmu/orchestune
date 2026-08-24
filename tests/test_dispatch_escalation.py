@@ -1,15 +1,15 @@
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.escalation import (
     _decide_changes_requested_escalation,
     _rule_changes_requested,
     apply_human_review_escalation,
 )
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 

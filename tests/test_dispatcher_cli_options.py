@@ -17,9 +17,9 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch_cycle import CycleReport
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatcher import main
+from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.dispatcher import main
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.models import IssueRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -89,26 +89,26 @@ class TestBuildArgParser:
     """#328: dispatch-cycleの既定挙動をapplyに変更（--no-applyでdry-run）。"""
 
     def test_apply_defaults_to_true(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.apply is True
 
     def test_no_apply_flag_disables_apply(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--no-apply"])
         assert args.apply is False
 
     def test_max_tokens_args_defaults_to_none(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.max_tokens_per_window is None
         assert args.max_tokens_per_task is None
 
     def test_max_tokens_args_are_parsed(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(
             [
@@ -122,68 +122,68 @@ class TestBuildArgParser:
         assert args.max_tokens_per_task == 10000
 
     def test_explicit_apply_flag_still_works(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--apply"])
         assert args.apply is True
 
     def test_dispatch_target_defaults_to_none_when_unspecified(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.dispatch_target is None
 
     def test_dispatch_target_explicit_local_is_preserved(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--dispatch-target", "local"])
         assert args.dispatch_target == "local"
 
     def test_dispatch_target_explicit_auto_is_preserved(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--dispatch-target", "auto"])
         assert args.dispatch_target == "auto"
 
     def test_dispatch_target_explicit_codex_cli_is_preserved(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cli"])
         assert args.dispatch_target == "codex-cli"
 
     def test_dispatch_target_explicit_codex_cloud_is_preserved(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cloud"])
         assert args.dispatch_target == "codex-cloud"
 
     def test_codex_cloud_env_option_is_parsed(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--codex-cloud-env", "env_123"])
         assert args.codex_cloud_env == "env_123"
 
     def test_task_timeout_seconds_defaults_to_zero(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.task_timeout_seconds == 0
 
     def test_task_timeout_seconds_arg_is_parsed(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--task-timeout-seconds", "3600"])
         assert args.task_timeout_seconds == 3600
 
     def test_max_task_reclaims_defaults_to_a_finite_value(self):
         """#512: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.max_task_reclaims == 3
 
     def test_max_task_reclaims_arg_is_parsed(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--max-task-reclaims", "5"])
         assert args.max_task_reclaims == 5
@@ -194,20 +194,20 @@ class TestBuildArgParser:
         status:blocked-human-reviewへ落ちてしまう）。"""
         import pytest
 
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         with pytest.raises(SystemExit):
             _build_arg_parser().parse_args(["--max-task-reclaims", "-1"])
 
     def test_not_needed_review_timeout_seconds_defaults_to_a_finite_value(self):
         """#511: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.not_needed_review_timeout_seconds == 86400
 
     def test_not_needed_review_timeout_seconds_arg_is_parsed(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(
             ["--not-needed-review-timeout-seconds", "1800"]
@@ -220,7 +220,7 @@ class TestBuildArgParser:
         status:blocked-human-reviewへ落ちてしまう）。"""
         import pytest
 
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         with pytest.raises(SystemExit):
             _build_arg_parser().parse_args(
@@ -228,13 +228,13 @@ class TestBuildArgParser:
             )
 
     def test_zombie_gc_defaults_to_true(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args([])
         assert args.zombie_gc is True
 
     def test_no_zombie_gc_disables_zombie_gc(self):
-        from orchestune.dispatcher import _build_arg_parser
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         args = _build_arg_parser().parse_args(["--no-zombie-gc"])
         assert args.zombie_gc is False
@@ -242,7 +242,7 @@ class TestBuildArgParser:
 
 class TestDispatcherCliSingleResponsibility:
     def test_parser_option_groups_preserve_all_destinations(self):
-        from orchestune.dispatcher import (
+        from orchestune.dispatch.dispatcher import (
             _add_dispatch_target_arguments,
             _add_execution_arguments,
             _add_safety_and_budget_arguments,
@@ -282,7 +282,7 @@ class TestDispatcherCliSingleResponsibility:
         ],
     )
     def test_post_cycle_exit_code_is_calculated_independently(self, statuses, expected):
-        from orchestune.dispatcher import _post_cycle_exit_code
+        from orchestune.dispatch.dispatcher import _post_cycle_exit_code
 
         results = [PhaseResult(phase_name="test", status=status) for status in statuses]
         assert _post_cycle_exit_code(results) == expected
@@ -290,7 +290,7 @@ class TestDispatcherCliSingleResponsibility:
 
 class TestConfigDefaults:
     def test_config_defaults_load(self):
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         config_data = {
@@ -308,7 +308,7 @@ class TestConfigDefaults:
     def test_config_defaults_validation_error(self):
         import pytest
 
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         with pytest.raises(SystemExit):
@@ -328,7 +328,7 @@ class TestConfigDefaults:
         （orchestune.toml/[tool.orchestune]）から読む`dag_ignore_patterns`は
         dispatcher自身の引数ではないため、他のtypoと違って"unknown key"には
         せず無視して処理を継続できること。"""
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         defaults = _config_defaults(
@@ -348,7 +348,7 @@ class TestConfigDefaults:
         `_NON_DISPATCHER_CONFIG_KEYS`の完全一致リストへ個別に追記する方式
         だと、こうした「他ツール専用の新規キー」が増えるたびに手動追記が
         必要になる（Issue #407 項目3）。"""
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         defaults = _config_defaults(
@@ -363,7 +363,7 @@ class TestConfigDefaults:
 
     def test_hyphenated_dag_similarity_threshold_key_is_also_ignored(self):
         """`dag-similarity-threshold`エイリアス表記でも同様に無視されること。"""
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         defaults = _config_defaults(
@@ -380,7 +380,7 @@ class TestConfigDefaults:
         ことにユーザーが気づけない。既知の共有DAGキー名の完全一致でのみ
         無視し、それ以外の`dag_`始まりキーは引き続き"unknown key"として
         拒否すること。"""
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         with pytest.raises(SystemExit):
@@ -400,7 +400,7 @@ class TestConfigDefaults:
         気づかれないまま値が一切読み取られずデフォルトへフォールバックする
         （二重の見逃し）。混在表記は正規のスペリングでは無いため、
         引き続き"unknown key"として拒否すること。"""
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         with pytest.raises(SystemExit):
@@ -414,7 +414,7 @@ class TestConfigDefaults:
         typo検知（意図的な仕様）を無効化しないこと。"""
         import pytest
 
-        from orchestune.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
 
         parser = _build_arg_parser()
         with pytest.raises(SystemExit):
@@ -439,9 +439,9 @@ class TestMainDispatchTargetAutoDetection:
     def test_defaults_to_auto_outside_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         with (
-            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
             patch(
-                "orchestune.dispatcher.run_dispatch_cycle",
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
                 return_value=self._empty_report(),
             ),
         ):
@@ -460,9 +460,9 @@ class TestMainDispatchTargetAutoDetection:
     def test_defaults_to_cloud_routine_in_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
         with (
-            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
             patch(
-                "orchestune.dispatcher.run_dispatch_cycle",
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
                 return_value=self._empty_report(),
             ),
         ):
@@ -483,9 +483,9 @@ class TestMainDispatchTargetAutoDetection:
     ):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
         with (
-            patch("orchestune.dispatcher.build_dispatch_target") as mock_build,
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
             patch(
-                "orchestune.dispatcher.run_dispatch_cycle",
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
                 return_value=self._empty_report(),
             ),
         ):

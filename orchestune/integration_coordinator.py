@@ -31,14 +31,14 @@ from pathlib import Path
 from typing import Protocol
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.targets import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )
-from orchestune.dispatch_worktree import file_lock
+from orchestune.dispatch.worktree import file_lock
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.not_needed_review_state import (
     NotNeededReviewState,

@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_labels import transition_status_label
-from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree, RunState
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 
 # #511: `status:not-needed`（対応不要）検証レビューのタイムアウト時にも

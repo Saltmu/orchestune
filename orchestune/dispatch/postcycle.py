@@ -14,10 +14,10 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import CycleReport
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
-from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integration_coordinator import (
     DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,

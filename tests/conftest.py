@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_scoring import Task
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.scoring import Task
 from orchestune.forge import BootstrapResult, Forge, GitHubForge, LabelSpec
 from orchestune.infra.git_cli import (
     DANGEROUS_GIT_ENV_VARS,
@@ -548,10 +548,10 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
     }
 )
 _FAKE_FORGE_MIGRATION_MODULES = (
-    "orchestune.dispatch_actor_verification",
-    "orchestune.dispatch_config",
-    "orchestune.dispatch_escalation",
-    "orchestune.dispatch_rebase",
+    "orchestune.dispatch.actor_verification",
+    "orchestune.dispatch.config",
+    "orchestune.dispatch.escalation",
+    "orchestune.dispatch.rebase",
 )
 
 
@@ -755,7 +755,7 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
         return
     with (
         patch(
-            "orchestune.dispatch_cycle.file_lock",
+            "orchestune.dispatch.cycle.file_lock",
             lambda _lock_path: contextlib.nullcontext(),
         ),
         patch(
@@ -818,12 +818,12 @@ def _guard_dispatch_cycle_ensure_parent_branch(
     def guarded_ensure(parent_issue_number: int) -> None:
         pytest.fail(
             f"Test '{request.node.name}' called unmocked `ensure_parent_branch({parent_issue_number})`. "
-            "Dispatch cycle tests must patch `orchestune.dispatch_phase_rebase.ensure_parent_branch` "
+            "Dispatch cycle tests must patch `orchestune.dispatch.phase_rebase.ensure_parent_branch` "
             "to prevent accidental git branch creation/push to remote origin."
         )
 
     monkeypatch.setattr(
-        "orchestune.dispatch_phase_rebase.ensure_parent_branch", guarded_ensure
+        "orchestune.dispatch.phase_rebase.ensure_parent_branch", guarded_ensure
     )
     yield
 

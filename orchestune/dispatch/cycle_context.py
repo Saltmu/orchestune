@@ -6,13 +6,13 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_filters import _filter_by_parent
-from orchestune.dispatch_phase_reconciliation import _dispatch_not_needed_review
-from orchestune.dispatch_recovery import _extract_raw_subtask_id
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import parse_task_from_issue
-from orchestune.dispatch_state import RunState
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.filters import _filter_by_parent
+from orchestune.dispatch.phase_reconciliation import _dispatch_not_needed_review
+from orchestune.dispatch.recovery import _extract_raw_subtask_id
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import parse_task_from_issue
+from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import find_children_by_parent
 from orchestune.models import IssueRecord
 

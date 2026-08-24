@@ -23,7 +23,7 @@ def test_cli_delegates_to_dispatch():
     test_args = ["orchestune", "dispatch", "--apply"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.dispatcher.main") as mock_dispatch_main,
+        patch("orchestune.dispatch.dispatcher.main") as mock_dispatch_main,
     ):
         main()
         mock_dispatch_main.assert_called_once()

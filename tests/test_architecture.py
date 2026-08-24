@@ -30,19 +30,26 @@ PACKAGE_NAME = "orchestune"
 # mapping by `test_documented_layers_match_the_expected_layers`.
 EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     4: frozenset(
-        {"bootstrap", "cli", "dag.cli", "dispatcher", "monitor", "provisioning"}
+        {
+            "bootstrap",
+            "cli",
+            "dag.cli",
+            "dispatch.dispatcher",
+            "monitor",
+            "provisioning",
+        }
     ),
     3: frozenset(
         {
-            "dispatch_cycle",
-            "dispatch_cycle_context",
-            "dispatch_cycle_report",
-            "dispatch_phase_gc",
-            "dispatch_phase_reconciliation",
-            "dispatch_phase_rebase",
-            "dispatch_phase_scheduling",
-            "dispatch_postcycle",
-            "dispatch_report",
+            "dispatch.cycle",
+            "dispatch.cycle_context",
+            "dispatch.cycle_report",
+            "dispatch.phase_gc",
+            "dispatch.phase_reconciliation",
+            "dispatch.phase_rebase",
+            "dispatch.phase_scheduling",
+            "dispatch.postcycle",
+            "dispatch.report",
             "integration_coordinator",
             "integrator",
             "integrator_steps",
@@ -57,25 +64,25 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dag.graph",
             "dag.parsing",
             "dag.similarity",
-            "dispatch_actor_verification",
-            "dispatch_config",
-            "dispatch_escalation",
-            "dispatch_filters",
-            "dispatch_gc",
-            "dispatch_gc_completion",
-            "dispatch_gc_git",
-            "dispatch_gc_zombies",
-            "dispatch_labels",
-            "dispatch_launch",
-            "dispatch_locks",
-            "dispatch_rebase",
-            "dispatch_reconciliation",
-            "dispatch_recovery",
-            "dispatch_rules",
-            "dispatch_scoring",
-            "dispatch_state",
-            "dispatch_targets",
-            "dispatch_worktree",
+            "dispatch.actor_verification",
+            "dispatch.config",
+            "dispatch.escalation",
+            "dispatch.filters",
+            "dispatch.gc",
+            "dispatch.gc.completion",
+            "dispatch.gc.git",
+            "dispatch.gc.zombies",
+            "dispatch.labels",
+            "dispatch.launch",
+            "dispatch.locks",
+            "dispatch.rebase",
+            "dispatch.reconciliation",
+            "dispatch.recovery",
+            "dispatch.rules",
+            "dispatch.scoring",
+            "dispatch.state",
+            "dispatch.targets",
+            "dispatch.worktree",
             "infra.not_needed_review_state",
             "integrator_git_ops",
             "integrator_pr",
@@ -98,7 +105,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "bounded_limit",
             "dag",
             "dag.models",
-            "dispatch_result",
+            "dispatch",
+            "dispatch.result",
             "infra",
             "infra.json_state",
             "infra.process_utils",
@@ -115,7 +123,7 @@ L4_MODULES = EXPECTED_LAYERS[4]
 ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
     "dag.cli": frozenset({"cli"}),
-    "dispatcher": frozenset({"cli"}),
+    "dispatch.dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
     "provisioning": frozenset({"cli"}),
 }
@@ -140,8 +148,8 @@ _BOUNDED_RECOVERY_LIMIT_NAME = re.compile(
 # not part of a retry/recovery loop (for example a throughput window) must not
 # be added here; its boundedness is verified by its owning feature's tests.
 BOUNDED_RECOVERY_TERMINALS = {
-    "max_recompute_retries": ("dispatch_rebase.py", "forced_serial"),
-    "max_task_reclaims": ("dispatch_gc_zombies.py", "apply_human_review_escalation"),
+    "max_recompute_retries": ("dispatch/rebase.py", "forced_serial"),
+    "max_task_reclaims": ("dispatch/gc/zombies.py", "apply_human_review_escalation"),
     "not_needed_review_timeout_seconds": (
         "integration_coordinator.py",
         "apply_human_review_escalation",
@@ -715,7 +723,7 @@ def test_architecture_docs_mention_dispatch_cycle_report() -> None:
     機能がarchitecture.mdのトレーサビリティに関する記述に反映されていること。
     見出し文字列は実装（`_format_event_log_comment`）のソースから直接抽出し、
     ハードコード複製によるドリフトを防ぐ。"""
-    from orchestune.dispatch_postcycle import _format_event_log_comment
+    from orchestune.dispatch.postcycle import _format_event_log_comment
 
     source = inspect.getsource(_format_event_log_comment)
     match = re.search(r'lines = \["(## [^"]+)\\n"\]', source)
@@ -796,7 +804,9 @@ def _source_has_terminal_marker(source: str, marker: str) -> bool:
 
 def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() -> None:
     """#566: 新たな有限リトライ／回収上限には終端動作を必ず宣言させる。"""
-    config_source = (PACKAGE_ROOT / "dispatch_config.py").read_text(encoding="utf-8")
+    config_source = (PACKAGE_ROOT / "dispatch" / "config.py").read_text(
+        encoding="utf-8"
+    )
     assert _bounded_recovery_limits(config_source) == set(BOUNDED_RECOVERY_TERMINALS)
 
 

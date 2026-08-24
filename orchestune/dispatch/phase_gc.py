@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc import _collect_zombies_and_timeouts
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import RunState
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc import _collect_zombies_and_timeouts
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
 
 

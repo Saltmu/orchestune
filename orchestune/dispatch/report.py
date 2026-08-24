@@ -6,8 +6,8 @@ import dataclasses
 import os
 import sys
 
-from orchestune.dispatch_cycle import CycleReport
-from orchestune.dispatch_result import PhaseResult, PhaseStatus
+from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
 
 
 def _format_post_cycle_summary(

@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.dispatch_scoring import Task
+from orchestune.dispatch.scoring import Task
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.models import PrRecord
 

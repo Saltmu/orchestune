@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch_filters import _filter_by_parent
+from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.models import IssueRecord
 
 

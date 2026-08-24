@@ -11,8 +11,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_gc_completion import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.completion import (
     _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
@@ -20,9 +20,9 @@ from orchestune.dispatch_gc_completion import (
     _finalize_not_needed_worktree,
     _is_worktree_complete,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import ActiveWorktree
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import ActiveWorktree
+from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
 )
@@ -74,15 +74,15 @@ class TestFinalizeCompletedWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(active, task, config)
@@ -105,16 +105,16 @@ class TestFinalizeCompletedWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -147,16 +147,16 @@ class TestFinalizeCompletedWorktree:
         ]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -185,16 +185,16 @@ class TestFinalizeCompletedWorktree:
         ]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -218,15 +218,15 @@ class TestFinalizeCompletedWorktree:
         fake_forge.list_comments.side_effect = RuntimeError("connection error")
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(active, task, config)
@@ -246,15 +246,15 @@ class TestFinalizeCompletedWorktree:
         ]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -288,15 +288,15 @@ class TestFinalizeCompletedWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch("orchestune.dispatch_gc_git.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="deadbeef\n", stderr=""
@@ -320,11 +320,11 @@ class TestFinalizeNotNeededWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_not_needed_worktree(active, task, config)
@@ -351,11 +351,11 @@ class TestFinalizeNotNeededWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_not_needed_worktree(active, task, config)
@@ -373,11 +373,11 @@ class TestFinalizeNotNeededWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_not_needed_worktree(active, task, config)
@@ -394,10 +394,10 @@ class TestFinalizeNotNeededWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             event = _finalize_not_needed_worktree(active, None, config)
         assert event["subtask_id"] == ""
@@ -426,11 +426,11 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         dispatch_review = MagicMock()
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_not_needed_worktree(
@@ -456,7 +456,7 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
             patch(
@@ -477,7 +477,7 @@ class TestDecideCompletedWorktreeOutcome:
         active = _active()
         task = _task()
         with patch(
-            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+            "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
             return_value=True,
         ):
             decision = _decide_completed_worktree_outcome(active, task)
@@ -488,11 +488,11 @@ class TestDecideCompletedWorktreeOutcome:
         task = _task()
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=False,
             ),
         ):
@@ -510,11 +510,11 @@ class TestDecideCompletedWorktreeOutcome:
         fake_forge.list_prs.side_effect = RuntimeError("network error")
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=False,
             ),
         ):
@@ -529,11 +529,11 @@ class TestDecideCompletedWorktreeOutcome:
         task = _task()
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
         ):
@@ -552,11 +552,11 @@ class TestDecideCompletedWorktreeOutcome:
         fake_forge.list_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
         ):
@@ -577,11 +577,11 @@ class TestDecideCompletedWorktreeOutcome:
         fake_forge.list_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
         ):
@@ -615,11 +615,11 @@ class TestDecideCompletedWorktreeOutcome:
         fake_forge.list_prs.return_value = [stale_closed_pr]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
         ):
@@ -634,14 +634,14 @@ class TestDecideCompletedWorktreeOutcome:
 class TestDecideNotNeededDirtyWorktree:
     def test_true_when_dirty(self):
         with patch(
-            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+            "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
             return_value=True,
         ):
             assert _decide_not_needed_dirty_worktree(_active()) is True
 
     def test_false_when_clean(self):
         with patch(
-            "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+            "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
             return_value=False,
         ):
             assert _decide_not_needed_dirty_worktree(_active()) is False
@@ -696,7 +696,7 @@ class TestIsWorktreeComplete:
 
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive"
+                "orchestune.dispatch.gc.completion.is_process_alive"
             ) as mock_is_alive,
         ):
             assert _is_worktree_complete(active, config) is False
@@ -772,15 +772,15 @@ class TestFinalizeBaseBranchRedWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(active, task, config)
@@ -816,15 +816,15 @@ class TestFinalizeBaseBranchRedWorktree:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_new_commits",
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree"
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(active, task, config)

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from orchestune.dispatch_state import load_run_state
+from orchestune.dispatch.state import load_run_state
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.process_utils import is_process_alive
 

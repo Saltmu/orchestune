@@ -8,7 +8,7 @@ test_dispatch_gc_integration.py を参照。
 
 from unittest.mock import patch
 
-from orchestune.dispatch_gc import _rule_completed
+from orchestune.dispatch.gc import _rule_completed
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
 
@@ -34,13 +34,13 @@ class TestRuleCompleted:
         fake_forge.list_prs.return_value = ctx.prs
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.completion.remove_worktree") as mock_remove,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -84,13 +84,13 @@ class TestRuleCompleted:
         )
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             _rule_completed(ctx, "1", active, task)
 
@@ -116,10 +116,10 @@ class TestRuleCompleted:
                 create=True,
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree") as mock_remove,
+            patch("orchestune.dispatch.gc.completion.remove_worktree") as mock_remove,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -141,7 +141,7 @@ class TestRuleCompleted:
         ctx = _ctx(forge=fake_forge)
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive", return_value=True
+                "orchestune.dispatch.gc.completion.is_process_alive", return_value=True
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
@@ -167,10 +167,10 @@ class TestRuleCompleted:
         fake_forge.list_prs.return_value = [stale_pr]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={"action": "completed_no_commits"},
             ),
         ):
@@ -198,13 +198,13 @@ class TestRuleCompleted:
         fake_forge.list_prs.return_value = [closed_pr]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -221,10 +221,10 @@ class TestRuleCompleted:
         fake_forge.list_prs.side_effect = RuntimeError("temporary GitHub failure")
         with (
             patch(
-                "orchestune.dispatch_gc_completion.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={"action": "completed_no_commits"},
             ) as mock_finalize,
         ):
@@ -251,10 +251,10 @@ class TestRuleCompleted:
         fake_forge.list_prs.return_value = [closed_pr]
         with (
             patch(
-                "orchestune.dispatch_gc_completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=False,
             ),
-            patch("orchestune.dispatch_gc_completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
@@ -283,11 +283,11 @@ class TestRuleCompleted:
         ctx = _ctx(forge=fake_forge)
         with (
             patch(
-                "orchestune.dispatch_gc._is_worktree_complete",
+                "orchestune.dispatch.gc._is_worktree_complete",
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={"action": "completion_skipped_dirty_worktree"},
             ),
         ):
@@ -306,11 +306,11 @@ class TestRuleCompleted:
 
         with (
             patch(
-                "orchestune.dispatch_gc._is_worktree_complete",
+                "orchestune.dispatch.gc._is_worktree_complete",
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={"action": "completed", "commit_sha": "abc123d"},
             ),
         ):
@@ -338,7 +338,7 @@ class TestRuleCompleted:
 
         with (
             patch(
-                "orchestune.dispatch_gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 return_value={"action": "completed", "commit_sha": "abc123d"},
             ),
         ):

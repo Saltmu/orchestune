@@ -15,7 +15,7 @@ from orchestune.dag.cli import _build_parser as _build_dag_arg_parser
 from orchestune.dag.contracts import _SHARED_CONTRACT_PATTERNS
 from orchestune.dag.models import DAG_TOOL_CONFIG_KEYS
 from orchestune.dag.parsing import _parse_subtask
-from orchestune.dispatcher import _build_arg_parser
+from orchestune.dispatch.dispatcher import _build_arg_parser
 from orchestune.provisioning import _build_arg_parser as _build_provision_arg_parser
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent

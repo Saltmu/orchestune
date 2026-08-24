@@ -9,19 +9,19 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_gc_git import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
     worktree_has_uncommitted_changes,
 )
-from orchestune.dispatch_labels import (
+from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     TaskReclaimRecord,

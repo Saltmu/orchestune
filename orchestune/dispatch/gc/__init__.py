@@ -12,9 +12,9 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_gc_completion import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     _active_dispatch_handle,
     _apply_completed_worktree_outcome,
@@ -30,23 +30,23 @@ from orchestune.dispatch_gc_completion import (
     _local_pr_completion_status,
     _parse_github_timestamp,
 )
-from orchestune.dispatch_gc_git import (
+from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
-from orchestune.dispatch_gc_zombies import (
+from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
     _check_zombie_and_timeout,
     _collect_zombies_and_timeouts,
     _decide_zombie_or_timeout_reclaims,
 )
-from orchestune.dispatch_rules import ActiveWorktreeRuleOutcome, CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import (
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,

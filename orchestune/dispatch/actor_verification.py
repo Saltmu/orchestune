@@ -6,12 +6,12 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orchestune.dispatch_escalation import apply_human_review_escalation
-from orchestune.dispatch_scoring import Task
+from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.scoring import Task
 from orchestune.forge import Forge, GitHubForge
 
 if TYPE_CHECKING:
-    from orchestune.dispatch_config import DispatcherConfig
+    from orchestune.dispatch.config import DispatcherConfig
 
 _AUTHORIZED_PERMISSIONS = frozenset({"admin", "maintain", "write", "triage"})
 

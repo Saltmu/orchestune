@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch_targets import (
+from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
 )

@@ -2,15 +2,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-import orchestune.dispatch_scoring as dispatch_scoring
-from orchestune.dispatch_scoring import (
+import orchestune.dispatch.scoring as dispatch_scoring
+from orchestune.dispatch.scoring import (
     Task,
     compute_priority_score,
     parse_task_from_issue,
     quota_available,
     select_next_tasks,
 )
-from orchestune.dispatch_state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import IssueRecord
 
 

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.forge import (
     BootstrapResult,
     Forge,
@@ -34,10 +34,10 @@ def test_guard_events_log_path_succeeds_with_explicit_tmp_path(tmp_path: Path):
 
 def test_guard_dispatch_cycle_ensure_parent_branch_fails_when_unmocked():
     """`ensure_parent_branch` inside dispatch_cycle should fail in unit tests when unmocked."""
-    import orchestune.dispatch_phase_rebase
+    import orchestune.dispatch.phase_rebase
 
     with pytest.raises(pytest.fail.Exception) as exc_info:
-        orchestune.dispatch_phase_rebase.ensure_parent_branch(181)
+        orchestune.dispatch.phase_rebase.ensure_parent_branch(181)
 
     assert "called unmocked `ensure_parent_branch(181)`" in str(exc_info.value)
 

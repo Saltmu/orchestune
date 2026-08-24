@@ -1,12 +1,12 @@
 from unittest.mock import patch
 
-from orchestune.dispatch_actor_verification import (
+from orchestune.dispatch.actor_verification import (
     ActorVerificationDecision,
     _apply_actor_verification,
     _decide_actor_verification,
 )
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_scoring import Task
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.scoring import Task
 
 
 def _task(issue_number=1, status_labels=("status:queued",)):
@@ -142,7 +142,7 @@ class TestApplyActorVerification:
         ]
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
-            "orchestune.dispatch_actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
         ) as mock_escalate:
             result = _apply_actor_verification(decisions, config)
         assert result == [task]
@@ -159,7 +159,7 @@ class TestApplyActorVerification:
         ]
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
-            "orchestune.dispatch_actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
         ) as mock_escalate:
             result = _apply_actor_verification(decisions, config)
         assert result == []
@@ -183,7 +183,7 @@ class TestApplyActorVerification:
             events_log_path=tmp_path / "events.jsonl", apply=False
         )
         with patch(
-            "orchestune.dispatch_actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
         ) as mock_escalate:
             result = _apply_actor_verification(decisions, config)
         assert result == []
@@ -202,7 +202,7 @@ class TestApplyActorVerification:
         ]
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
-            "orchestune.dispatch_actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
         ):
             result = _apply_actor_verification(decisions, config)
         assert result == [task_ok]

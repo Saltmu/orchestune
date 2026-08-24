@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_rules import CycleContext
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import CompletedWorktree, RunState
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import CompletedWorktree, RunState
 from orchestune.models import PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -55,8 +55,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
     保護漏れ（重複起動誤判定）がクラッシュ時に再現してしまう。"""
 
     def _launch_plan(self, tmp_path):
-        from orchestune.dispatch_launch import TaskLaunchPlan
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -71,8 +71,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
     def test_preserves_launch_history_within_configured_window(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
-        from orchestune.dispatch_state import load_run_state, save_run_state
+        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.state import load_run_state, save_run_state
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
@@ -95,9 +95,9 @@ class TestApplyTaskLaunchesRunStatePersistence:
         run_state = load_run_state(run_state_path)
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
@@ -113,8 +113,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
     def test_protects_open_pr_completed_worktree_via_open_prs(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
-        from orchestune.dispatch_state import load_run_state
+        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.state import load_run_state
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
@@ -145,9 +145,9 @@ class TestApplyTaskLaunchesRunStatePersistence:
         ]
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
@@ -169,8 +169,8 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
     """
 
     def _launch_plan(self, tmp_path):
-        from orchestune.dispatch_launch import TaskLaunchPlan
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -185,7 +185,7 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
     def _run(self, tmp_path, run_state, now, *, parent_issue_number, forge):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         config = DispatcherConfig(
@@ -197,9 +197,9 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
             forge=forge,
         )
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -274,8 +274,8 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
     """
 
     def _launch_plan(self, tmp_path):
-        from orchestune.dispatch_launch import TaskLaunchPlan
-        from orchestune.dispatch_targets import (
+        from orchestune.dispatch.launch import TaskLaunchPlan
+        from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
         )
@@ -290,7 +290,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
     def _run(self, tmp_path, run_state, now, forge, *, run_state_path=None):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         config = DispatcherConfig(
@@ -302,9 +302,9 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             forge=forge,
         )
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
@@ -319,8 +319,8 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         """
         from unittest.mock import MagicMock, patch
 
-        import orchestune.dispatch_worktree as dw
-        from orchestune.dispatch_launch import _apply_task_launches
+        import orchestune.dispatch.worktree as dw
+        from orchestune.dispatch.launch import _apply_task_launches
 
         calls: list[str] = []
         forge = MagicMock()
@@ -343,11 +343,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             return real_launch(*args, **kwargs)
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
-                "orchestune.dispatch_launch.create_worktree_and_launch",
+                "orchestune.dispatch.launch.create_worktree_and_launch",
                 side_effect=_record_launch,
             ),
         ):
@@ -367,7 +367,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         次サイクルで再試行される。"""
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
 
         forge = MagicMock()
         forge.get_issue.return_value = MagicMock(body="EPIC body")
@@ -385,11 +385,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.dispatch_worktree._branch_exists", return_value=False),
-            patch("orchestune.dispatch_worktree.subprocess.run") as mock_run,
-            patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
-                "orchestune.dispatch_launch.create_worktree_and_launch"
+                "orchestune.dispatch.launch.create_worktree_and_launch"
             ) as mock_launch,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -414,8 +414,8 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         """
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
-        from orchestune.dispatch_worktree import LaunchResult
+        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.worktree import LaunchResult
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -439,7 +439,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         )
 
         with patch(
-            "orchestune.dispatch_launch.create_worktree_and_launch",
+            "orchestune.dispatch.launch.create_worktree_and_launch",
             return_value=LaunchResult(
                 issue_number=1,
                 branch="claude/issue-1-task-1",
@@ -465,8 +465,8 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         """
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
-        from orchestune.dispatch_worktree import LaunchResult
+        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.worktree import LaunchResult
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -490,7 +490,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         )
 
         with patch(
-            "orchestune.dispatch_launch.create_worktree_and_launch",
+            "orchestune.dispatch.launch.create_worktree_and_launch",
             return_value=LaunchResult(
                 issue_number=1,
                 branch="claude/issue-1-task-1",
@@ -514,7 +514,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         """
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch_launch import _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -536,7 +536,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         )
 
         with patch(
-            "orchestune.dispatch_launch.create_worktree_and_launch",
+            "orchestune.dispatch.launch.create_worktree_and_launch",
             side_effect=RuntimeError("unexpected crash during worktree creation"),
         ):
             with pytest.raises(
@@ -616,7 +616,7 @@ class TestLaunchReservationContextManager:
     def test_launch_reservation_preserves_slot_when_committed(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.dispatch.launch import _launch_reservation
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -644,7 +644,7 @@ class TestLaunchReservationContextManager:
     def test_launch_reservation_releases_slot_when_not_committed(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.dispatch.launch import _launch_reservation
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -672,7 +672,7 @@ class TestLaunchReservationContextManager:
     def test_launch_reservation_releases_slot_on_exception(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.dispatch.launch import _launch_reservation
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -701,7 +701,7 @@ class TestLaunchReservationContextManager:
     def test_launch_reservation_yields_none_when_persist_fails(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch_launch import _launch_reservation
+        from orchestune.dispatch.launch import _launch_reservation
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0

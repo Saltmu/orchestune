@@ -11,18 +11,18 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_escalation import _rule_changes_requested
-from orchestune.dispatch_gc import (
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.escalation import _rule_changes_requested
+from orchestune.dispatch.gc import (
     _rule_completed,
     _rule_not_needed,
     _rule_stale_entry,
 )
-from orchestune.dispatch_rebase import (
+from orchestune.dispatch.rebase import (
     _rule_auto_rebase,
     _rule_footprint_deviation,
 )
-from orchestune.dispatch_reconciliation import (
+from orchestune.dispatch.reconciliation import (
     _handle_base_branch_red_recovery,
     _handle_blocked_recompute_recovery,
     _promote_blocked_tasks,
@@ -31,8 +31,8 @@ from orchestune.dispatch_reconciliation import (
     _self_heal_launch_history,
     _self_heal_run_state,
 )
-from orchestune.dispatch_rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
-from orchestune.dispatch_targets import ClaudeCodeCloudRoutineDispatchTarget
+from orchestune.dispatch.rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
+from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.integration_coordinator import (
     IntegrationCoordinator,
     record_pending_not_needed_review,

@@ -3,20 +3,20 @@ from unittest.mock import patch
 
 import pytest
 
-import orchestune.dispatch_locks
-from orchestune.dispatch_config import DispatcherConfig
-from orchestune.dispatch_cycle import CycleReport, _sync_external_locks
-from orchestune.dispatch_locks import check_footprint_deviation, scan_external_locks
-from orchestune.dispatch_report import write_github_step_summary
-from orchestune.dispatch_scoring import Task
-from orchestune.dispatch_state import RunState
+import orchestune.dispatch.locks
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import CycleReport, _sync_external_locks
+from orchestune.dispatch.locks import check_footprint_deviation, scan_external_locks
+from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
 
 
 @pytest.fixture(autouse=True)
 def mock_resolve_branch(monkeypatch):
     monkeypatch.setattr(
-        orchestune.dispatch_locks,
+        orchestune.dispatch.locks,
         "resolve_local_or_remote_branch",
         lambda worktree_path, branch, prefer_remote=False: branch,
     )
@@ -477,7 +477,7 @@ class TestScanExternalLocksWithUnknownFootprint:
 
 class TestCheckFootprintDeviation:
     def test_returns_files_outside_declared_footprint(self):
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -490,7 +490,7 @@ class TestCheckFootprintDeviation:
         assert deviated == ["src/unexpected.py"]
 
     def test_no_deviation_returns_empty(self):
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="1\t0\tsrc/foo.py\n", stderr=""
             )
@@ -501,7 +501,7 @@ class TestCheckFootprintDeviation:
 
     def test_small_deviation_within_buffer_is_ignored(self):
         """#200: 数行程度の微小な逸脱はライブロック防止のバッファとして無視する。"""
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -516,7 +516,7 @@ class TestCheckFootprintDeviation:
         assert deviated == []
 
     def test_large_deviation_exceeding_buffer_is_reported(self):
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -531,7 +531,7 @@ class TestCheckFootprintDeviation:
         assert deviated == ["src/large_new_file.py"]
 
     def test_binary_file_change_always_reported_regardless_of_buffer(self):
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="-\t-\tsrc/image.png\n", stderr=""
             )
@@ -543,7 +543,7 @@ class TestCheckFootprintDeviation:
         assert deviated == ["src/image.png"]
 
     def test_hotspot_files_are_ignored_from_deviation(self):
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -557,7 +557,7 @@ class TestCheckFootprintDeviation:
         assert deviated == ["src/unexpected.py"]
 
     def test_respects_custom_base_branch(self):
-        with patch("orchestune.dispatch_locks.subprocess.run") as mock_run:
+        with patch("orchestune.dispatch.locks.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -573,7 +573,7 @@ class TestCheckFootprintDeviation:
 
     def test_deviation_error_returns_none(self):
         with patch(
-            "orchestune.dispatch_locks.subprocess.run",
+            "orchestune.dispatch.locks.subprocess.run",
             side_effect=OSError("git command failed"),
         ):
             deviated = check_footprint_deviation(
@@ -584,7 +584,7 @@ class TestCheckFootprintDeviation:
 
 
 class TestSyncExternalLocks:
-    @patch("orchestune.dispatch_phase_rebase.list_remote_branches")
+    @patch("orchestune.dispatch.phase_rebase.list_remote_branches")
     @patch("fake_forge_proxy.active_fake_forge.remove_label")
     @patch("fake_forge_proxy.active_fake_forge.add_label")
     def test_sync_external_locks_unlocks_without_requeue_for_done_tasks(
