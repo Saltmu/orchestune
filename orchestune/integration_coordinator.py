@@ -40,7 +40,7 @@ from orchestune.dispatch_targets import (
 )
 from orchestune.dispatch_worktree import file_lock
 from orchestune.forge import Forge, GitHubForge
-from orchestune.not_needed_review_state import (
+from orchestune.infra.not_needed_review_state import (
     NotNeededReviewState,
     PendingNotNeededReview,
     load_not_needed_review_state,

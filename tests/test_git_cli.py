@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.git_cli import (
+from orchestune.infra.git_cli import (
     GitResult,
     branch_changed_files,
     ensure_parent_branch,
@@ -16,7 +16,7 @@ from orchestune.git_cli import (
 
 class TestRunGit:
     def test_prefixes_git_and_returns_git_result(self, tmp_path):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="out", stderr="err"
             )
@@ -33,7 +33,7 @@ class TestRunGit:
         import sys
 
         real_run = subprocess.run
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
 
             def fake_run(args, **kwargs):
                 # 渡されたkwargsを使ってsys.executableで不正バイトを出力するプロセスを実行
@@ -53,7 +53,7 @@ class TestRunGit:
         assert "diff --git" in result.stdout
 
     def test_run_git_specifies_utf8_encoding_and_replace_errors_in_kwargs(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="日本語コミットメッセージ", stderr=""
             )
@@ -63,7 +63,7 @@ class TestRunGit:
         assert mock_run.call_args.kwargs["errors"] == "replace"
 
     def test_check_true_propagates_called_process_error(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(1, ["git", "status"])
             try:
                 run_git(["status"], cwd=None)
@@ -73,7 +73,7 @@ class TestRunGit:
                 raise AssertionError("CalledProcessError should propagate")
 
     def test_check_false_does_not_raise_on_nonzero_exit(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=1, stdout="", stderr="fatal"
             )
@@ -83,7 +83,7 @@ class TestRunGit:
 
 class TestListRemoteBranches:
     def test_parses_branch_lines(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -94,7 +94,7 @@ class TestListRemoteBranches:
         assert branches == ["origin/main", "origin/feat/foo"]
 
     def test_fetches_all_branches_before_listing(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="origin/main\n", stderr=""
             )
@@ -109,7 +109,7 @@ class TestListRemoteBranches:
         ] in called_commands
 
     def test_fetch_failure_falls_back_to_local_refs(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
 
             def side_effect(args, **kwargs):
                 if args[:2] == ["git", "fetch"]:
@@ -207,7 +207,7 @@ class TestListRemoteBranches:
 
 class TestBranchChangedFiles:
     def test_calls_git_diff_name_only(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="src/a.py\nsrc/b.py\n", stderr=""
             )
@@ -220,7 +220,7 @@ class TestBranchChangedFiles:
     def test_returns_empty_list_for_invalid_branch_name(self):
         stderr = StringIO()
         with (
-            patch("orchestune.git_cli.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("sys.stderr", stderr),
         ):
             files = branch_changed_files("--upload-pack=evil")
@@ -234,7 +234,7 @@ class TestBranchChangedFiles:
         させず、footprint差分なし（ロック対象外）として扱うべき。"""
         stderr = StringIO()
         with (
-            patch("orchestune.git_cli.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("sys.stderr", stderr),
         ):
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -253,7 +253,7 @@ class TestBranchChangedFiles:
         呼び出し側がfail closedに判定できるようNoneを返す。"""
         stderr = StringIO()
         with (
-            patch("orchestune.git_cli.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("sys.stderr", stderr),
         ):
             mock_run.side_effect = OSError("git binary missing")
@@ -269,7 +269,7 @@ class TestBranchChangedFiles:
         解除してしまう。差分不明としてNoneを返す。"""
         stderr = StringIO()
         with (
-            patch("orchestune.git_cli.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("sys.stderr", stderr),
         ):
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -287,7 +287,7 @@ class TestBranchChangedFiles:
 class TestEnsureParentBranch:
     def test_ensure_parent_branch_does_not_checkout_and_pushes_directly(self):
         # リモートに親ブランチが存在しない場合、checkoutを行わずに直接pushする
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 subprocess.CompletedProcess(
                     args=[], returncode=0, stdout="", stderr=""
@@ -335,7 +335,7 @@ class TestEnsureParentBranch:
             ]
 
     def test_ensure_parent_branch_does_nothing_if_remote_exists(self):
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             # ls-remote が結果（ハッシュ値など）を返す（存在する）
             # fetch -> ""
             mock_run.side_effect = [
@@ -369,7 +369,7 @@ class TestEnsureParentBranch:
 
     def test_ensure_parent_branch_handles_ls_remote_error(self):
         # ls-remote が例外を投げた場合、存在しないものとみなして作成処理へ進む
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             # 1. ls-remote -> Exception
             # 2. fetch main -> ""
             # 3. push -> ""
@@ -413,7 +413,7 @@ class TestEnsureParentBranch:
 
     def test_ensure_parent_branch_handles_push_error_without_crashing(self):
         # fetch または push が失敗しても、警告を出力してクラッシュしない
-        with patch("orchestune.git_cli.subprocess.run") as mock_run:
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
             # 1. ls-remote -> ""
             # 2. fetch -> Exception
             mock_run.side_effect = [

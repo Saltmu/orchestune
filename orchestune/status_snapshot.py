@@ -16,7 +16,7 @@ from pathlib import Path
 
 from orchestune.dispatch_state import load_run_state
 from orchestune.forge import Forge, GitHubForge
-from orchestune.process_utils import is_process_alive
+from orchestune.infra.process_utils import is_process_alive
 
 _TAIL_CHUNK_SIZE = 8192
 _LABEL_CACHE_TTL_SECONDS = 15.0

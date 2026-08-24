@@ -53,9 +53,9 @@ from orchestune.dispatch_state import (
     TaskReclaimRecord,
     save_run_state,
 )
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
-from orchestune.process_utils import is_process_alive
 
 __all__ = [
     "CompletedWorktreeDecision",

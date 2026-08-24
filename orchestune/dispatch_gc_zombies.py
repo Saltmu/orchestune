@@ -27,8 +27,8 @@ from orchestune.dispatch_state import (
     TaskReclaimRecord,
     save_run_state,
 )
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import PrRecord
-from orchestune.process_utils import is_process_alive
 
 
 def _check_zombie_and_timeout(

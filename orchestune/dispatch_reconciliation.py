@@ -18,7 +18,7 @@ from orchestune.dispatch_recovery import (
 from orchestune.dispatch_rules import CycleContext
 from orchestune.dispatch_scoring import Task
 from orchestune.dispatch_state import RunState, save_run_state
-from orchestune.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.issue_parsing import (
     launch_history_from_body,
     launch_history_in_window,

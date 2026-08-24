@@ -18,10 +18,10 @@ import pytest
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_scoring import Task
 from orchestune.forge import BootstrapResult, Forge, GitHubForge, LabelSpec
-from orchestune.git_cli import (
+from orchestune.infra.git_cli import (
     DANGEROUS_GIT_ENV_VARS,
 )
-from orchestune.git_cli import (
+from orchestune.infra.git_cli import (
     get_clean_git_env as get_clean_git_env,
 )
 from orchestune.integrator_types import IntegratorConfig

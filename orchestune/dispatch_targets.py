@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from orchestune.forge import Forge, GitHubForge
-from orchestune.git_cli import run_git
+from orchestune.infra.git_cli import run_git
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import Usage
 from orchestune.outcome_record import (
     RESULT_BLOCKED,
@@ -34,7 +35,6 @@ from orchestune.outcome_record import (
     RESULT_NOT_NEEDED,
     parse_from_comments,
 )
-from orchestune.process_utils import is_process_alive
 
 if TYPE_CHECKING:
     from orchestune.models import PrRecord, Task

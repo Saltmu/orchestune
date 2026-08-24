@@ -186,7 +186,7 @@ class TestRecoveredActiveTask:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch(
-                "orchestune.git_cli.subprocess.run",
+                "orchestune.infra.git_cli.subprocess.run",
                 return_value=MagicMock(stdout=""),
             ),
             patch(
@@ -621,7 +621,7 @@ class TestPreventDuplicateSessions:
                 "orchestune.dispatch_phase_rebase.list_remote_branches", return_value=[]
             ),
             patch(
-                "orchestune.git_cli.subprocess.run",
+                "orchestune.infra.git_cli.subprocess.run",
                 side_effect=ls_remote_result,
             ) as mock_subprocess_run,
             patch("orchestune.dispatch_targets.subprocess.Popen") as mock_popen,

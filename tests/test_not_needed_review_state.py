@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestune.not_needed_review_state import (
+from orchestune.infra.not_needed_review_state import (
     NotNeededReviewState,
     PendingNotNeededReview,
     load_not_needed_review_state,

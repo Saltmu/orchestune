@@ -10,10 +10,10 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.integrator_git_ops import IntegrationMerger
 from orchestune.models import PrRecord
-from orchestune.process_utils import default_ci_command
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _TASK_1_BRANCH = "claude/issue-1-task-1"

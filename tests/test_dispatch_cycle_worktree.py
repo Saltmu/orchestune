@@ -386,7 +386,7 @@ class TestProcessActiveWorktrees:
                 return_value=True,
             ),
             patch(
-                "orchestune.git_cli.subprocess.run",
+                "orchestune.infra.git_cli.subprocess.run",
                 side_effect=mock_subprocess_run,
             ),
         ):
