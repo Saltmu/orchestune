@@ -181,9 +181,10 @@ def _relative_import_name(
 
     base = current_module if is_package else current_module.rsplit(".", 1)[0]
     package_parts = base.split(".")
-    parent_parts = package_parts[: len(package_parts) - node.level + 1]
-    if not parent_parts:
+    target_len = len(package_parts) - node.level + 1
+    if target_len <= 0:
         return None
+    parent_parts = package_parts[:target_len]
     if node.module:
         parent_parts.extend(node.module.split("."))
     return ".".join(parent_parts) or None
@@ -1029,6 +1030,17 @@ def test_relative_import_resolution_for_subpackages() -> None:
     assert isinstance(import_from7, ast.ImportFrom)
     assert (
         _relative_import_name("orchestune.cli", import_from7, is_package=False) is None
+    )
+
+    # 深い階層からパッケージ境界を大幅に超えるケース（負のスライスインデックスによる誤解決の防止）
+    tree8 = ast.parse("from ..... import way_outside")
+    import_from8 = tree8.body[0]
+    assert isinstance(import_from8, ast.ImportFrom)
+    assert (
+        _relative_import_name(
+            "orchestune.dispatch.phase.gc", import_from8, is_package=False
+        )
+        is None
     )
 
 
