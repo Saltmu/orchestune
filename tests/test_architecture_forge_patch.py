@@ -13,33 +13,13 @@ REPO_ROOT = Path(__file__).parents[1]
 
 GITHUB_FORGE_PATCH_EXEMPTIONS = frozenset({"test_forge.py"})
 _GITHUB_FORGE_PATCH_TARGET = re.compile(r"(?:^|\.)GitHubForge(?:\.|$)")
-_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 
-
-def _assigned_names(node: ast.AST) -> tuple[list[ast.expr], ast.expr | None]:
-    if isinstance(node, ast.Assign):
-        return list(node.targets), node.value
-    if isinstance(node, ast.AnnAssign | ast.AugAssign):
-        return [node.target], node.value
-    return [], None
-
-
-def _nodes_in_scope(scope: ast.AST) -> list[ast.AST]:
-    """`scope` 直下のノードを、ネストしたスコープの中身を除いて位置順に返す。"""
-    collected: list[ast.AST] = []
-
-    def visit(node: ast.AST, *, is_root: bool) -> None:
-        if not is_root:
-            collected.append(node)
-            if isinstance(node, _SCOPE_NODES):
-                return
-        for child in ast.iter_child_nodes(node):
-            visit(child, is_root=False)
-
-    visit(scope, is_root=True)
-    return sorted(
-        collected, key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0))
-    )
+# Re-use shared AST walking and scope helpers from test_architecture
+from tests.test_architecture import (  # noqa: E402
+    _SCOPE_NODES,
+    _assigned_names,
+    _nodes_in_scope,
+)
 
 
 def _stale_github_patch_targets() -> list[str]:
@@ -102,7 +82,8 @@ def _mock_patch_references(tree: ast.AST) -> tuple[set[str], set[str]]:
             )
         elif isinstance(node, ast.ImportFrom) and (
             node.module == "orchestune"
-            or (node.module is not None and node.module.startswith("orchestune.forge"))
+            or node.module == "orchestune.forge"
+            or (node.module is not None and node.module.startswith("orchestune.forge."))
         ):
             github_forge_names.update(
                 alias.asname or alias.name
@@ -390,3 +371,15 @@ with patch.object(SubForge, "list_prs"):
     pass
 """
     assert _github_forge_patch_lines(source) == [5]
+
+
+def test_github_forge_patch_detector_ignores_sibling_module_prefix() -> None:
+    """#614: orchestune.forge_admin 等のプレフィックス一致する兄弟モジュールからの import を誤検知しないこと。"""
+    source = """
+from unittest.mock import patch
+from orchestune.forge_admin import GitHubForge as ProductionForge
+
+with patch.object(ProductionForge, "run"):
+    pass
+"""
+    assert _github_forge_patch_lines(source) == []
