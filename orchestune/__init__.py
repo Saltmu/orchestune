@@ -9,14 +9,14 @@ invariants in `docs/en/architecture.md` (and `docs/ja/architecture.md`):
     L4 entrypoints  the modules that expose a `main()`
     L3 workflows    dispatch cycle and integration pipelines
     L2 domain       DAG construction, scoring, dispatch mechanics
-    L1 adapters     the only place `gh` (forge) and `git` (git_cli) are run
+    L1 adapters     the only place `gh` (forge) and `git` (infra.git_cli) are run
     L0 infra        pure DTOs and dependency-free helpers
 
 Entrypoint modules are deliberately absent from `__all__`: re-exporting them
 here would make the package root itself an importer of L4 and break the
 "nothing but `cli` imports an entrypoint" invariant that this file exists to
 declare. `cli` is the one permitted importer because it dispatches to the other
-four; `tests/test_architecture.py` encodes that as `ALLOWED_L4_DEPENDENTS`.
+five; `tests/test_architecture.py` encodes that as `ALLOWED_L4_DEPENDENTS`.
 """
 
 from orchestune.forge import (
