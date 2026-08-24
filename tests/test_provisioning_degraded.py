@@ -12,9 +12,11 @@ from orchestune.issue_parsing import (
     PARENT_MARKER,
 )
 from orchestune.models import IssueRecord
-from orchestune.provisioning import (
+from orchestune.provisioning.cli import (
     ProvisionResult,
     _print_result,
+)
+from orchestune.provisioning.flow import (
     provision_issues,
 )
 from tests.test_provisioning_support import (

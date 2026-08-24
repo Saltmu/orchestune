@@ -16,7 +16,7 @@ import pytest
 
 from orchestune.dag.cli import main as dag_main
 from orchestune.dispatch.dispatcher import main as dispatcher_main
-from orchestune.provisioning import main as provisioning_main
+from orchestune.provisioning.cli import main as provisioning_main
 
 _PLAN = """\
 ---

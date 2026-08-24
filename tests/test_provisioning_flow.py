@@ -11,11 +11,13 @@ from orchestune.forge import (
 from orchestune.issue_parsing import (
     PARENT_MARKER,
 )
-from orchestune.provisioning import (
-    _link_subtask_relationships,
-    _parent_body,
-    _provision_subtask,
+from orchestune.provisioning.flow import (
     provision_issues,
+)
+from orchestune.provisioning.plan import _parent_body
+from orchestune.provisioning.subtasks import (
+    _link_subtask_relationships,
+    _provision_subtask,
 )
 from tests.test_provisioning_support import (
     FakeForge,

@@ -38,7 +38,7 @@ def main() -> None:
 
         bootstrap_main()
     elif cmd == "provision":
-        from orchestune.provisioning import main as provision_main
+        from orchestune.provisioning.cli import main as provision_main
 
         provision_main()
     else:

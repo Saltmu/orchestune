@@ -36,7 +36,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dag.cli",
             "dispatch.dispatcher",
             "monitor",
-            "provisioning",
+            "provisioning.cli",
         }
     ),
     3: frozenset(
@@ -55,7 +55,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.parent_completion",
             "integrator.steps",
             "integrator.types",
-            "provisioning_flow",
+            "provisioning.flow",
         }
     ),
     2: frozenset(
@@ -89,12 +89,12 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.tasks",
             "integrator.worktree",
             "issue_parsing",
+            "provisioning.parent",
+            "provisioning.plan",
+            "provisioning.rendering",
+            "provisioning.subtasks",
             "status_snapshot",
             "symbol_verification",
-            "provisioning_parent",
-            "provisioning_plan",
-            "provisioning_rendering",
-            "provisioning_subtasks",
         }
     ),
     1: frozenset(
@@ -113,6 +113,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "models",
             "outcome_record",
             "plan_writer",
+            "provisioning",
             "setup_skills",
             "validation",
             "version",
@@ -125,7 +126,7 @@ ALLOWED_L4_DEPENDENTS = {
     "dag.cli": frozenset({"cli"}),
     "dispatch.dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
-    "provisioning": frozenset({"cli"}),
+    "provisioning.cli": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},

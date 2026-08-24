@@ -11,11 +11,9 @@ from orchestune.issue_parsing import (
     embed_decomposition_plan_in_parent_body,
     restore_plan_markdown_from_parent_body,
 )
-from orchestune.provisioning import (
-    PlanMetadata,
-    _resolve_parent_issue,
-    provision_issues,
-)
+from orchestune.provisioning.flow import provision_issues
+from orchestune.provisioning.parent import _resolve_parent_issue
+from orchestune.provisioning.plan import PlanMetadata
 from tests.test_provisioning_support import FakeForge
 
 
@@ -128,7 +126,7 @@ def test_embed_and_parse_yaml_with_embedded_code_fence():
 
 def test_restore_plan_file_from_parent_helper(tmp_path: Path):
     # Review finding #6: CLI helper for restoring plan file
-    from orchestune.provisioning import restore_plan_file_from_parent
+    from orchestune.provisioning.plan import restore_plan_file_from_parent
 
     forge = FakeForge()
     plan_dict = {
@@ -416,7 +414,7 @@ def test_provision_reports_plan_synced_false_on_sync_failure(tmp_path: Path):
 
 
 def test_print_result_warns_on_plan_sync_failure(capsys):
-    from orchestune.provisioning import ProvisionResult, _print_result
+    from orchestune.provisioning.cli import ProvisionResult, _print_result
 
     res = ProvisionResult(
         parent_issue_number=100,

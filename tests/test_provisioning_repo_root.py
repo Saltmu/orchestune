@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.provisioning import provision_issues
+from orchestune.provisioning.flow import provision_issues
 from tests.test_provisioning_support import FakeForge
 
 _TEMPLATE = (
@@ -256,7 +256,7 @@ class TestDagIgnorePatterns:
         )
 
         with patch(
-            "orchestune.provisioning_flow.build_dag", wraps=lambda *a, **kw: MagicMock()
+            "orchestune.provisioning.flow.build_dag", wraps=lambda *a, **kw: MagicMock()
         ) as mock_build_dag:
             provision_issues(
                 plan_path,
@@ -276,7 +276,7 @@ class TestDagIgnorePatterns:
         plan_path.write_text(self._plan(), encoding="utf-8")
 
         with patch(
-            "orchestune.provisioning_flow.build_dag", wraps=lambda *a, **kw: MagicMock()
+            "orchestune.provisioning.flow.build_dag", wraps=lambda *a, **kw: MagicMock()
         ) as mock_build_dag:
             provision_issues(
                 plan_path,

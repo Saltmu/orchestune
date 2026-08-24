@@ -18,19 +18,19 @@ from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
-from orchestune.provisioning_parent import _resolve_parent_issue
-from orchestune.provisioning_plan import (
+from orchestune.provisioning.parent import _resolve_parent_issue
+from orchestune.provisioning.plan import (
     PlanMetadata,
     _load_plan,
     sync_parent_decomposition_plan,
 )
-from orchestune.provisioning_rendering import (
+from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
     _derive_labels,
     _issue_title,
     _validate_template_identity_marker,
 )
-from orchestune.provisioning_subtasks import (
+from orchestune.provisioning.subtasks import (
     _index_sub_issues_by_subtask_id,
     _link_subtask_relationships,
     _provision_subtask,

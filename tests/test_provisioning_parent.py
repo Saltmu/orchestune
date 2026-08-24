@@ -4,18 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.issue_parsing import (
-    PARENT_MARKER,
-)
-from orchestune.provisioning import (
-    PlanMetadata,
-    _parent_body,
+from orchestune.issue_parsing import PARENT_MARKER
+from orchestune.provisioning.flow import provision_issues
+from orchestune.provisioning.parent import (
     _resolve_parent_issue,
-    provision_issues,
 )
-from tests.test_provisioning_support import (
-    FakeForge,
+from orchestune.provisioning.plan import (
+    PlanMetadata,
+    _load_plan,
+    _parent_body,
 )
+from tests.test_provisioning_support import FakeForge
 
 
 class TestResolveParentIssue:
@@ -327,7 +326,6 @@ class TestResolveParentIssue:
 
     def test_load_plan_validates_parent_issue_source(self, tmp_path: Path):
         """#533: _load_plan が parent_issue_source を正しくパースし、不正な値を弾く。"""
-        from orchestune.provisioning import _load_plan
 
         plan_path = tmp_path / "plan.md"
         plan_path.write_text(
@@ -341,7 +339,6 @@ class TestResolveParentIssue:
         self, tmp_path: Path
     ):
         """#533: parent_issue_source: adopted なのに parent_issue_number が null の場合 _load_plan でエラー。"""
-        from orchestune.provisioning import _load_plan
 
         plan_path = tmp_path / "plan.md"
         plan_path.write_text(

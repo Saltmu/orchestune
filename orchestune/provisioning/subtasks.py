@@ -16,7 +16,7 @@ from orchestune.issue_parsing import (
 )
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
-from orchestune.provisioning_rendering import (
+from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
     _derive_labels,
     _issue_title,
