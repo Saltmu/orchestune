@@ -251,7 +251,7 @@ sequenceDiagram
 
 If the dispatcher is run without `--parent-issue`, Orchestune falls back to the flat, single-tier mode: child branches merge directly toward `main` and, matching the "final merge" semantics above, that merge is always left for a human (the integrator only opens the PR).
 
-> **Design assumption (#377)**: writes to the integrator's temporary integration branch (including `git push --force`) are serialized only by a same-machine file lock (`file_lock` in `orchestune/integrator_worktree.py`). That lock is a process-level lock and provides no protection across multiple CI runners/machines. The integrator assumes it always runs serially on a single runner; running it concurrently against the same `temp_branch` from multiple runners (e.g. a parallel build matrix) is not supported.
+> **Design assumption (#377)**: writes to the integrator's temporary integration branch (including `git push --force`) are serialized only by a same-machine file lock (`file_lock` in `orchestune/integrator/worktree.py`). That lock is a process-level lock and provides no protection across multiple CI runners/machines. The integrator assumes it always runs serially on a single runner; running it concurrently against the same `temp_branch` from multiple runners (e.g. a parallel build matrix) is not supported.
 >
 > The recommended mitigation for this constraint is a `concurrency` group when running `orchestune dispatch` on a GitHub Actions schedule (see [Setup Guide §6](setup.md#6-scheduled-runs-on-github-actions-and-cross-runner-serialization) for an example). A `concurrency` group is a preventive measure that requires no code changes; independently of it, per-run temp branch names and a compare-and-swap on the parent branch update (#435) ensure that, even under this constraint, a collision is never a silent data race — it is always surfaced as a push failure (defense in depth).
 
@@ -295,8 +295,8 @@ from its own layer or from any layer below it, never from a layer above.
 | Layer | Role | Modules |
 | --- | --- | --- |
 | **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning` |
-| **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
+| **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning_flow` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **Adapters**<br/>the only modules that run `git` or `gh` | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
 | **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
 
@@ -334,9 +334,8 @@ table above cannot silently drift from the code:
    | `gh` | `forge.admin` |
    | `git` | `infra.git_cli` |
 
-   This covers the VCS and GitHub client surface only. Other external processes
    are deliberately outside it and are not guarded: `dispatch.targets` launches
-   the agent CLIs, and `dispatch.rebase` and `integrator_git_ops` shell out to
+   the agent CLIs, and `dispatch.rebase` and `integrator.git_ops` shell out to
    the CI script and to `poetry`. Those are one-off process launches rather
    than a client that callers need to fake, so they stay where they are used.
 

@@ -33,7 +33,7 @@ from orchestune.dispatch.reconciliation import (
 )
 from orchestune.dispatch.rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
-from orchestune.integration_coordinator import (
+from orchestune.integrator.coordinator import (
     IntegrationCoordinator,
     record_pending_not_needed_review,
 )

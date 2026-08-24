@@ -13,7 +13,7 @@ from typing import TypedDict
 
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
-from orchestune.integration_coordinator import IntegrationCoordinator
+from orchestune.integrator.coordinator import IntegrationCoordinator
 from orchestune.models import Task
 
 

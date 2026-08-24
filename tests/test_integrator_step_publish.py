@@ -11,8 +11,8 @@ from collections.abc import Sequence
 from unittest.mock import Mock
 
 from orchestune.dispatch.targets import DispatchHandle
-from orchestune.integration_coordinator import IntegrationCoordinator
 from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator.coordinator import IntegrationCoordinator
 from orchestune.models import PrRecord
 from tests.conftest import IntegratorEnv, make_done_issue
 

@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.integrator import Integrator, IntegratorConfig
-from orchestune.integrator_git_ops import IntegrationMerger
+from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.models import Task
 from tests.conftest import IntegratorEnv, make_done_issue
 
@@ -389,7 +389,7 @@ class TestFetchTaskBranch:
     def test_fetch_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with patch(
-            "orchestune.integrator_git_ops.fetch_remote_branch",
+            "orchestune.integrator.git_ops.fetch_remote_branch",
             return_value="origin/feature",
         ):
             success, already_merged, err = merger._fetch_task_branch("feature", "main")
@@ -404,7 +404,7 @@ class TestFetchTaskBranch:
                 merger.forge, "is_current_branch_tip_merged_into", return_value=True
             ),
             patch(
-                "orchestune.integrator_git_ops.fetch_remote_branch",
+                "orchestune.integrator.git_ops.fetch_remote_branch",
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
                 ),
@@ -422,7 +422,7 @@ class TestFetchTaskBranch:
                 merger.forge, "is_current_branch_tip_merged_into", return_value=False
             ),
             patch(
-                "orchestune.integrator_git_ops.fetch_remote_branch",
+                "orchestune.integrator.git_ops.fetch_remote_branch",
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
                 ),
@@ -437,7 +437,7 @@ class TestFetchTaskBranch:
 class TestMergeTaskBranch:
     def test_merge_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator_git_ops.run_git") as mock_git:
+        with patch("orchestune.integrator.git_ops.run_git") as mock_git:
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 _ok(["merge"]),
@@ -449,7 +449,7 @@ class TestMergeTaskBranch:
 
     def test_merge_conflict_aborts(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator_git_ops.run_git") as mock_git:
+        with patch("orchestune.integrator.git_ops.run_git") as mock_git:
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 subprocess.CalledProcessError(1, ["merge"], stderr=b"CONFLICT"),
@@ -463,7 +463,7 @@ class TestMergeTaskBranch:
     def test_head_capture_failure_returns_none_sha(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with patch(
-            "orchestune.integrator_git_ops.run_git",
+            "orchestune.integrator.git_ops.run_git",
             side_effect=subprocess.CalledProcessError(
                 1, ["rev-parse", "HEAD"], stderr=b"HEAD error"
             ),
@@ -475,7 +475,7 @@ class TestMergeTaskBranch:
 
     def test_merge_oserror_aborts_and_fails(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator_git_ops.run_git") as mock_git:
+        with patch("orchestune.integrator.git_ops.run_git") as mock_git:
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 OSError("git process failed to start"),

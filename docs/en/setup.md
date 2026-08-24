@@ -190,7 +190,7 @@ There is no separate permission-file setup step required; `orchestune bootstrap`
 
 ## 6. Scheduled Runs on GitHub Actions and Cross-Runner Serialization
 
-If you build a workflow that runs `orchestune dispatch` on a GitHub Actions cron schedule, we strongly recommend configuring a `concurrency` group. As documented in [Architecture §3](architecture.md#3-integration--auto-rebase) (design assumption #377), the integrator's mutual exclusion is enforced only by a same-machine file lock (`file_lock` in `orchestune/integrator_worktree.py`), which provides no protection across multiple CI runners/machines. A `concurrency` group gets you repository-wide (i.e. all-runner) serialization per parent Issue with no code changes.
+If you build a workflow that runs `orchestune dispatch` on a GitHub Actions cron schedule, we strongly recommend configuring a `concurrency` group. As documented in [Architecture §3](architecture.md#3-integration--auto-rebase) (design assumption #377), the integrator's mutual exclusion is enforced only by a same-machine file lock (`file_lock` in `orchestune/integrator/worktree.py`), which provides no protection across multiple CI runners/machines. A `concurrency` group gets you repository-wide (i.e. all-runner) serialization per parent Issue with no code changes.
 
 ```yaml
 concurrency:
