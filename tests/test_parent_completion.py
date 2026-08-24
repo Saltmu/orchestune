@@ -3,8 +3,8 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import ANY, MagicMock, patch
 
+from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.models import IssueRecord
-from orchestune.parent_completion import process_parent_completion
 
 
 def _issue(number: int, state: str) -> IssueRecord:
@@ -84,7 +84,7 @@ class TestProcessParentCompletion:
         fake_forge.close_issue.assert_not_called()
         assert res == {"status": "already_closed"}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_creates_final_pr_once_all_children_are_closed(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -100,7 +100,7 @@ class TestProcessParentCompletion:
         mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_waits_when_some_children_still_open(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -115,7 +115,7 @@ class TestProcessParentCompletion:
         mock_ensure_pr.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": [102]}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_waits_when_parent_has_no_children_yet(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -144,7 +144,7 @@ class TestProcessParentCompletion:
         fake_forge.close_issue.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": [102]}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_does_not_close_when_branch_has_new_unmerged_commit(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -182,7 +182,7 @@ class TestProcessParentCompletion:
         fake_forge.branch_exists.assert_not_called()
         fake_forge.close_issue.assert_not_called()
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_does_not_close_when_reopened_after_last_merge(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -213,7 +213,7 @@ class TestProcessParentCompletion:
         fake_forge.close_issue.assert_called_once_with(100, "completed", comment=ANY)
         assert res == {"status": "parent_closed", "parent_issue_number": 100}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_does_not_close_when_merged_at_equals_reopened_at(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -233,7 +233,7 @@ class TestProcessParentCompletion:
         mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_does_not_close_when_branch_still_exists_despite_tip_check_404(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -258,7 +258,7 @@ class TestProcessParentCompletion:
         mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
-    @patch("orchestune.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_does_not_close_when_branch_existence_check_itself_fails(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):

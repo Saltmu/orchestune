@@ -24,7 +24,7 @@ from orchestune.infra.git_cli import (
 from orchestune.infra.git_cli import (
     get_clean_git_env as get_clean_git_env,
 )
-from orchestune.integrator_types import IntegratorConfig
+from orchestune.integrator.types import IntegratorConfig
 from orchestune.models import IssueRecord, PrRecord
 
 pytest_plugins = ["tests.test_provisioning_support"]
@@ -759,11 +759,11 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
             lambda _lock_path: contextlib.nullcontext(),
         ),
         patch(
-            "orchestune.integration_coordinator.file_lock",
+            "orchestune.integrator.coordinator.file_lock",
             lambda _lock_path: contextlib.nullcontext(),
         ),
         patch(
-            "orchestune.integrator_steps.file_lock",
+            "orchestune.integrator.steps.file_lock",
             lambda _lock_path: contextlib.nullcontext(),
         ),
     ):

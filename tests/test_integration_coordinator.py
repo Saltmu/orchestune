@@ -14,7 +14,7 @@ from orchestune.infra.not_needed_review_state import (
     load_not_needed_review_state,
     save_not_needed_review_state,
 )
-from orchestune.integration_coordinator import (
+from orchestune.integrator.coordinator import (
     DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
     NOT_NEEDED_REJECTED_LABEL,
     NOT_NEEDED_VERIFIED_LABEL,

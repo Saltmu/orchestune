@@ -10,7 +10,7 @@ from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import fetch_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command
-from orchestune.integrator_pr import handle_merge_failure
+from orchestune.integrator.pr import handle_merge_failure
 from orchestune.models import Task
 
 

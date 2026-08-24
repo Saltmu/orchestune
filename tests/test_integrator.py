@@ -28,25 +28,25 @@ from orchestune.integrator import (
     SemanticReviewStep,
     SetupWorktreeStep,
 )
-from orchestune.integrator_steps import (
+from orchestune.integrator.steps import (
     AutoMergeChildIntegrationStep as ExtractedAutoMergeChildIntegrationStep,
 )
-from orchestune.integrator_steps import (
+from orchestune.integrator.steps import (
     EnsureIntegrationPrStep as ExtractedEnsureIntegrationPrStep,
 )
-from orchestune.integrator_steps import LabelIncludedStep as ExtractedLabelIncludedStep
-from orchestune.integrator_steps import MergeAndTestStep as ExtractedMergeAndTestStep
-from orchestune.integrator_steps import PrepareTasksStep as ExtractedPrepareTasksStep
-from orchestune.integrator_steps import (
+from orchestune.integrator.steps import LabelIncludedStep as ExtractedLabelIncludedStep
+from orchestune.integrator.steps import MergeAndTestStep as ExtractedMergeAndTestStep
+from orchestune.integrator.steps import PrepareTasksStep as ExtractedPrepareTasksStep
+from orchestune.integrator.steps import (
     PushTempBranchStep as ExtractedPushTempBranchStep,
 )
-from orchestune.integrator_steps import (
+from orchestune.integrator.steps import (
     RetryChildIssueCloseStep as ExtractedRetryChildIssueCloseStep,
 )
-from orchestune.integrator_steps import (
+from orchestune.integrator.steps import (
     SemanticReviewStep as ExtractedSemanticReviewStep,
 )
-from orchestune.integrator_steps import SetupWorktreeStep as ExtractedSetupWorktreeStep
+from orchestune.integrator.steps import SetupWorktreeStep as ExtractedSetupWorktreeStep
 from tests.conftest import IntegratorEnv, make_done_issue
 
 

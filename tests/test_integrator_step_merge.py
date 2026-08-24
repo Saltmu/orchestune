@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator import Integrator, IntegratorConfig
-from orchestune.integrator_git_ops import IntegrationMerger
+from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.models import PrRecord
 from tests.conftest import IntegratorEnv, make_done_issue
 

@@ -460,7 +460,7 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
                 return_value=True,
             ),
             patch(
-                "orchestune.integration_coordinator.ClaudeCodeCloudRoutineDispatchTarget.fire_text"
+                "orchestune.integrator.coordinator.ClaudeCodeCloudRoutineDispatchTarget.fire_text"
             ) as mock_fire_text,
         ):
             event = _finalize_not_needed_worktree(active, task, config)
