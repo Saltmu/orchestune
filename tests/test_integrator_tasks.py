@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from unittest.mock import MagicMock, patch
 
-from orchestune.integrator_tasks import get_sorted_done_tasks
+from orchestune.integrator.tasks import get_sorted_done_tasks
 from orchestune.models import IssueRecord
 
 
@@ -99,7 +99,7 @@ def test_ignore_patterns_default_to_empty_tuple_when_unspecified():
     )
 
     with patch(
-        "orchestune.integrator_tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
+        "orchestune.integrator.tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
     ) as mock_build_dag:
         get_sorted_done_tasks(None, forge=fake_forge)
 
@@ -120,7 +120,7 @@ def test_ignore_patterns_are_forwarded_to_build_dag():
     patterns = (re.compile(r"(^|/)package\.json$"),)
 
     with patch(
-        "orchestune.integrator_tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
+        "orchestune.integrator.tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
     ) as mock_build_dag:
         get_sorted_done_tasks(None, forge=fake_forge, ignore_patterns=patterns)
 
@@ -140,7 +140,7 @@ def test_threshold_defaults_to_default_similarity_threshold_when_unspecified():
     )
 
     with patch(
-        "orchestune.integrator_tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
+        "orchestune.integrator.tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
     ) as mock_build_dag:
         get_sorted_done_tasks(None, forge=fake_forge)
 
@@ -163,7 +163,7 @@ def test_threshold_is_forwarded_to_build_dag():
     )
 
     with patch(
-        "orchestune.integrator_tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
+        "orchestune.integrator.tasks.build_dag", wraps=lambda *a, **kw: MagicMock()
     ) as mock_build_dag:
         get_sorted_done_tasks(None, forge=fake_forge, threshold=0.1)
 

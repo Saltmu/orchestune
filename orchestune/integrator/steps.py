@@ -19,16 +19,16 @@ from orchestune.dispatch.worktree import file_lock
 from orchestune.forge import REQUIRED_LABELS
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import default_ci_command
-from orchestune.integrator_git_ops import IntegrationMerger
-from orchestune.integrator_pr import ensure_integration_pr
-from orchestune.integrator_tasks import get_sorted_done_tasks
-from orchestune.integrator_types import (
+from orchestune.integrator.git_ops import IntegrationMerger
+from orchestune.integrator.pr import ensure_integration_pr
+from orchestune.integrator.tasks import get_sorted_done_tasks
+from orchestune.integrator.types import (
     IntegrationComponent,
     IntegrationContext,
     IntegrationReport,
     IntegrationStatus,
 )
-from orchestune.integrator_worktree import IntegrationWorktree
+from orchestune.integrator.worktree import IntegrationWorktree
 
 
 @contextmanager

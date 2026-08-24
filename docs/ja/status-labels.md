@@ -178,7 +178,7 @@ stateDiagram-v2
 
 
 ### 11. `status:done` → `status:queued`（仮マージCI失敗によるロールバック）
-- 発生元: `orchestune/integrator_pr.py`の`handle_merge_failure`
+- 発生元: `orchestune/integrator/pr.py`の`handle_merge_failure`
 - 条件: Integratorによる仮マージ後のローカルCIが失敗した場合、マージを
   取り消しタスクを差し戻す。
 
@@ -214,7 +214,7 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
 （[アーキテクチャ §3](./architecture.md#3-統合integrationと自動リベース)参照）。
 
 ### 子Issue: `status:done`（オープン） → クローズ（`completed`）
-- 発生元: `orchestune/integrator.py`の`AutoMergeChildIntegrationStep`
+- 発生元: `orchestune/integrator/`の`AutoMergeChildIntegrationStep`
 - 条件: 子ブランチの統合PR（一時ブランチ → `parent/issue-{N}`）がCIを
   通過し、Integratorによって自動マージされた場合。マージ直後、人間を
   介さず`reason=completed`で子Issueをクローズする。自動マージ自体が
@@ -226,12 +226,12 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   `AutoMergeChildIntegrationStep`は何もしない。
 
 ### 親Issue: オープン → クローズ（`completed`）
-- 発生元: `orchestune/parent_completion.py`の`process_parent_completion`。
+- 発生元: `orchestune/integrator/parent_completion.py`の`process_parent_completion`。
   `--parent-issue`指定時、apply モードの各ディスパッチサイクルで1回呼ばれる。
 - 条件: `parent/issue-{N}`が`main`へマージされたこと
   （`github.is_branch_merged_into`で確認）——すなわち、親Issue配下の
   全子Issueがクローズされた時点で`ensure_parent_final_pr`
-  （`orchestune/integrator_pr.py`）が作成した最終PRを、人間がマージした
+  （`orchestune/integrator/pr.py`）が作成した最終PRを、人間がマージした
   ことを意味する。親Issueは`reason=completed`でクローズされる。既に
   クローズ済みの親Issueは（`github.get_issue_state`で確認の上）そのまま
   にし、二重のクローズ呼び出しを避ける。
@@ -239,10 +239,10 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
 ## 関連ラベル（`status:*`ではないが密接に関わるもの）
 
 - `not-needed-review:passed` / `not-needed-review:failed`:
-  `status:not-needed`の独立検証レビュー結果（`orchestune/integration_coordinator.py`）。
+  `status:not-needed`の独立検証レビュー結果（`orchestune/integrator/coordinator.py`）。
   検証済みIssueのクローズ判定にのみ使われ、`status:*`の状態遷移には含まれない。
 - `integration:included`:
-  Integrator（`orchestune/integrator.py`）が、統合ブランチへのforce pushおよび
+  Integrator（`orchestune/integrator/`）が、統合ブランチへのforce pushおよび
   統合PRの確保（新規作成または既存PRの再利用）に成功した時点で付与する記帳用
   ラベル。`status:done`は変更しない（依存解決判定・外部ロック解除条件・monitor
   表示など他サブシステムが引き続き`status:done`を参照するため）。統合ブランチは
@@ -253,7 +253,7 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   シグナルとしてのみ使われる。
 - `integration:parent-branch-stale`:
   Integratorが親branchへのpushでnon-fast-forward（CAS）拒否を検知した際に
-  親Issueへ付与するマーカーラベル（`orchestune/integrator_steps.py`）。
+  親Issueへ付与するマーカーラベル（`orchestune/integrator/steps.py`）。
   ローカルのstate fileではなくGitHub上のラベルとして持たせることで、GitHub
   Actionsのスケジュール実行のようにサイクルごとに異なるランナーが使われる
   構成でも判定が失われない（#437）。次サイクルで押下pushが成功すれば除去される。

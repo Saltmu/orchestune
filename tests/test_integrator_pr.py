@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestune.integrator_pr import (
+from orchestune.integrator.pr import (
     ensure_integration_pr,
     ensure_parent_final_pr,
     handle_merge_failure,

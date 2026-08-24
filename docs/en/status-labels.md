@@ -178,7 +178,7 @@ independently of the lifecycle above (see "External lock" below).
 
 
 ### 11. `status:done` → `status:queued` (rollback on provisional-merge CI failure)
-- Source: `handle_merge_failure` in `orchestune/integrator_pr.py`
+- Source: `handle_merge_failure` in `orchestune/integrator/pr.py`
 - Condition: the Integrator's post-merge local CI run failed, so the merge is
   reverted and the task is sent back to the queue.
 
@@ -216,7 +216,7 @@ dispatcher having been run with `--parent-issue <N>` (see
 [Architecture §3](./architecture.md#3-integration--auto-rebase)).
 
 ### Child Issue: `status:done` (still open) → closed (`completed`)
-- Source: `AutoMergeChildIntegrationStep` in `orchestune/integrator.py`
+- Source: `AutoMergeChildIntegrationStep` in `orchestune/integrator/`
 - Condition: the child's integration PR (temp branch → `parent/issue-{N}`)
   passed CI and was auto-merged by the Integrator. The child Issue is closed
   immediately afterward with `reason=completed`, with no human involved. If
@@ -228,11 +228,11 @@ dispatcher having been run with `--parent-issue <N>` (see
   is a no-op.
 
 ### Parent Issue: open → closed (`completed`)
-- Source: `process_parent_completion` in `orchestune/parent_completion.py`,
+- Source: `process_parent_completion` in `orchestune/integrator/parent_completion.py`,
   called once per apply-mode dispatch cycle when `--parent-issue` is set.
 - Condition: `parent/issue-{N}` has been merged into `main` (checked via
   `github.is_branch_merged_into`) — i.e. a human merged the final PR that
-  `ensure_parent_final_pr` (in `orchestune/integrator_pr.py`) opened once every
+  `ensure_parent_final_pr` (in `orchestune/integrator/pr.py`) opened once every
   child Issue under the parent was closed. The parent Issue is closed with
   `reason=completed`; already-closed parent Issues are left alone (checked via
   `github.get_issue_state`) to avoid a redundant close call.
@@ -241,11 +241,11 @@ dispatcher having been run with `--parent-issue <N>` (see
 
 - `not-needed-review:passed` / `not-needed-review:failed`: outcome of the
   independent verification review for `status:not-needed`
-  (`orchestune/integration_coordinator.py`). Used only to decide whether to
+  (`orchestune/integrator/coordinator.py`). Used only to decide whether to
   close a verified Issue; not part of the `status:*` transitions.
 - `integration:parent-branch-stale`: marker label the integrator sets on the
   parent Issue when a push to the parent branch is rejected as
-  non-fast-forward (a CAS rejection, `orchestune/integrator_steps.py`).
+  non-fast-forward (a CAS rejection, `orchestune/integrator/steps.py`).
   Living on a GitHub label rather than a local state file means the
   detection survives across cycles even when each cycle runs on a fresh
   runner (e.g. a scheduled GitHub Actions workflow, #437). It is cleared as

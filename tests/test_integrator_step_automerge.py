@@ -23,7 +23,7 @@ from orchestune.integrator import (
     Integrator,
     IntegratorConfig,
 )
-from orchestune.integrator_steps import (
+from orchestune.integrator.steps import (
     _is_parent_branch_cas_rejection,
     clear_parent_branch_stale_marker,
 )

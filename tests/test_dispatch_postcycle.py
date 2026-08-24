@@ -151,7 +151,7 @@ class TestPollPendingNotNeededReviews:
         mock_poll.assert_called_once_with(state_path, forge=ANY, timeout_seconds=1800.0)
 
     def test_defaults_to_a_finite_timeout_when_unspecified(self, tmp_path):
-        from orchestune.integration_coordinator import (
+        from orchestune.integrator.coordinator import (
             DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
         )
 

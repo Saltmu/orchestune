@@ -19,13 +19,13 @@ from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.forge import Forge, ForgeAuthError
-from orchestune.integration_coordinator import (
+from orchestune.integrator import IntegrationStatus, Integrator, IntegratorConfig
+from orchestune.integrator.coordinator import (
     DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS,
     IntegrationCoordinator,
     process_pending_not_needed_reviews,
 )
-from orchestune.integrator import IntegrationStatus, Integrator, IntegratorConfig
-from orchestune.parent_completion import process_parent_completion
+from orchestune.integrator.parent_completion import process_parent_completion
 
 
 def _decide_semantic_review_enabled() -> bool:

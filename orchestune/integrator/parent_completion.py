@@ -19,7 +19,7 @@ import subprocess
 import sys
 
 from orchestune.forge import Forge, GitHubForge
-from orchestune.integrator_pr import ensure_parent_final_pr
+from orchestune.integrator.pr import ensure_parent_final_pr
 from orchestune.issue_parsing import find_children_by_parent
 
 
