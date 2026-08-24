@@ -307,7 +307,7 @@ that dependency point upward.
 
 L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
 "contains only argparse wiring". `cli` is the exception because it dispatches to
-the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
+the other five; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
 
 All code that predated this boundary has since been resolved. Three modules used to carry such code:
 
