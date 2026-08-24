@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from orchestune.dag_parsing import parse_decomposition_plan
+from orchestune.dag.parsing import parse_decomposition_plan
 from tests.dag_test_support import BASIC_PLAN, _write_plan
 
 
@@ -58,7 +58,7 @@ class TestParseDecompositionPlan:
         assert subtasks[1].acceptance_criteria == ()
 
         # to_dictのテスト
-        from orchestune.dag_models import DagResult
+        from orchestune.dag.models import DagResult
 
         res = DagResult(
             subtasks={subtasks[0].id: subtasks[0]},
@@ -97,7 +97,7 @@ class TestParseDecompositionPlan:
         assert subtasks[1].verification_plan == ()
 
         # to_dictのテスト
-        from orchestune.dag_models import DagResult
+        from orchestune.dag.models import DagResult
 
         res = DagResult(
             subtasks={subtasks[0].id: subtasks[0]},
@@ -304,7 +304,7 @@ class TestSubtaskFieldContract:
         ---
         """
         path = _write_plan(tmp_path, plan)
-        with caplog.at_level(logging.WARNING, logger="orchestune.dag_parsing"):
+        with caplog.at_level(logging.WARNING, logger="orchestune.dag.parsing"):
             parse_decomposition_plan(path)
 
         messages = " ".join(record.getMessage() for record in caplog.records)
@@ -314,10 +314,10 @@ class TestSubtaskFieldContract:
 
     def test_complete_subtask_emits_no_warning(self, tmp_path, caplog):
         path = _write_plan(tmp_path, BASIC_PLAN)
-        with caplog.at_level(logging.WARNING, logger="orchestune.dag_parsing"):
+        with caplog.at_level(logging.WARNING, logger="orchestune.dag.parsing"):
             parse_decomposition_plan(path)
 
-        assert [r for r in caplog.records if r.name == "orchestune.dag_parsing"] == []
+        assert [r for r in caplog.records if r.name == "orchestune.dag.parsing"] == []
 
     def test_parses_shared_contract_fields(self, tmp_path):
         plan = """\

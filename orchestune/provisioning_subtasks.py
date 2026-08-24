@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.dag_models import SubTask
+from orchestune.dag.models import SubTask
 from orchestune.forge import IssueForge, RelationshipUnavailableError
 from orchestune.issue_parsing import (
     backfill_parent_issue_number,

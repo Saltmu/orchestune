@@ -11,10 +11,10 @@ import tomllib
 
 import pytest
 
-from orchestune.dag_cli import _build_parser as _build_dag_arg_parser
-from orchestune.dag_contracts import _SHARED_CONTRACT_PATTERNS
-from orchestune.dag_models import DAG_TOOL_CONFIG_KEYS
-from orchestune.dag_parsing import _parse_subtask
+from orchestune.dag.cli import _build_parser as _build_dag_arg_parser
+from orchestune.dag.contracts import _SHARED_CONTRACT_PATTERNS
+from orchestune.dag.models import DAG_TOOL_CONFIG_KEYS
+from orchestune.dag.parsing import _parse_subtask
 from orchestune.dispatcher import _build_arg_parser
 from orchestune.provisioning import _build_arg_parser as _build_provision_arg_parser
 

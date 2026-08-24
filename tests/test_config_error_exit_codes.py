@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dag_cli import main as dag_main
+from orchestune.dag.cli import main as dag_main
 from orchestune.dispatcher import main as dispatcher_main
 from orchestune.provisioning import main as provisioning_main
 

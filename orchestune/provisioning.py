@@ -6,7 +6,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from orchestune.dag_models import ConfigError, resolve_repo_root
+from orchestune.dag.models import ConfigError, resolve_repo_root
 from orchestune.forge import GitHubForge
 from orchestune.provisioning_flow import (
     IssuePreview,

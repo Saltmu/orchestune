@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from orchestune.dag_models import SubTask
+from orchestune.dag.models import SubTask
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parent_issue_number_from_body,

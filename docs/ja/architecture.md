@@ -123,7 +123,7 @@ graph TD
 >
 > 同論文では、静的解析によってリポジトリのインターフェースからシンボル共有グラフを構築し、Infomapによるコミュニティ検出で「ファイル → エージェント」の割り当てを最適化しています（目的関数はクリティカルパス＋通信コスト）。
 >
-> Orchestuneはこの手法を運用ツール向けに適応させ、目的関数を「凝集度/コスト最適化」から「競合回避」へ、グラフの入力元をリポジトリ既存ファイルから分解計画の宣言済み`footprint`/`symbols`へと変更したうえで、IDF重み付きOtsuka-Ochiai類似度を採用しています。詳細は `orchestune/dag_similarity.py` のdocstringを参照してください。
+> Orchestuneはこの手法を運用ツール向けに適応させ、目的関数を「凝集度/コスト最適化」から「競合回避」へ、グラフの入力元をリポジトリ既存ファイルから分解計画の宣言済み`footprint`/`symbols`へと変更したうえで、IDF重み付きOtsuka-Ochiai類似度を採用しています。詳細は `orchestune/dag/similarity.py` のdocstringを参照してください。
 
 ### コンフリクト回避の仕組み
 
@@ -134,13 +134,13 @@ graph TD
 
 ### 通常のfootprint重複と「共有コントラクトゲート」の違い
 
-上記の重複分析（`dag_similarity.py`）は、サブタスクが**宣言済み**の`footprint`/`symbols`の文字列が一致する（または加重コサイン類似度が閾値を超える）場合にのみ、暗黙の依存エッジを追加します。これは既に存在するファイルを複数タスクが編集する通常のケースには有効ですが、グリーンフィールドな分解計画では別の失敗モードが起こり得ます。
+上記の重複分析（`dag/similarity.py`）は、サブタスクが**宣言済み**の`footprint`/`symbols`の文字列が一致する（または加重コサイン類似度が閾値を超える）場合にのみ、暗黙の依存エッジを追加します。これは既に存在するファイルを複数タスクが編集する通常のケースには有効ですが、グリーンフィールドな分解計画では別の失敗モードが起こり得ます。
 
 例えば、フォーマットレジストリやCLI配線モジュールのような**まだ存在しない共有拡張ポイント**に対して、複数のサブタスクがそれぞれ異なる想定パスで暗黙的に触れてしまうケースです。この場合、どのサブタスクの`footprint`にも一致する文字列が現れないため、既存の重複検出では検出しようがありません。
 
 これに対処するため、`orchestune`スキルのStage 1では、分解時に共有拡張ポイント（レジストリ・CLI配線・依存関係マニフェスト・パッケージ公開APIなど）を明示的に特定し、それらを所有する`shared-contract`/`integration-scaffold`サブタスクを作成したうえで、関与する全サブタスクに共通の`shared_contract: <id>`タグを付与することを求めます。これは文字列一致に頼らない、最も信頼できるシグナルです。
 
-さらに`orchestune/dag_contracts.py`の`find_unowned_shared_contract_hotspots`が、以下の2段階でこれを補強します。
+さらに`orchestune/dag/contracts.py`の`find_unowned_shared_contract_hotspots`が、以下の2段階でこれを補強します。
 
 1. **`shared_contract`タグが同じサブタスク群**
 2. **タグの有無を問わない全サブタスク**のうち、`footprint`が同一カテゴリ**かつ同一ディレクトリ**に該当するサブタスク群（`packages/auth/__init__.py`と`packages/payments/__init__.py`のような無関係な別パッケージまで誤って同一ホットスポット扱いしないためのスコープ限定です）
@@ -314,13 +314,13 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 | 層 | 役割 | モジュール |
 | --- | --- | --- |
-| **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag_cli`, `dispatcher`, `monitor`, `provisioning` |
+| **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag.cli`, `dispatcher`, `monitor`, `provisioning` |
 | **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch_cycle`, `dispatch_cycle_context`, `dispatch_cycle_report`, `dispatch_phase_gc`, `dispatch_phase_reconciliation`, `dispatch_phase_rebase`, `dispatch_phase_scheduling`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
-| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_labels`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
+| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_labels`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **アダプタ**<br/>`git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
-| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `dag_models`, `dispatch_result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
+| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `dag`, `dag.models`, `dispatch_result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
 
-純粋なデータ転送モジュール（`models`, `dag_models`, `dispatch_result`）を
+純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch_result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
 `PrRecord` を返すためです。DTOを、それを生成するアダプタより上位に置くと、
 この依存が上向きになってしまいます。
@@ -329,7 +329,7 @@ L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」
 
 境界を定める前から存在するコードは、現時点ではすべて解消済みです。かつては`dag`・`dispatcher`・`monitor`の3つに残滓がありました。
 
-* `dag`: `dag_*`パッケージ全体を再エクスポートする互換ファサードでした。呼び出し側が具体的な`dag_*`モジュールを直接importするようになり、実際に`main()`を持つ`dag_cli`が本来のL4エントリポイントとして扱われています。
+* `dag`: `dag_*`パッケージ全体を再エクスポートする互換ファサードでした。呼び出し側が具体的な`dag_*`モジュールを直接importするようになり、実際に`main()`を持つ`dag.cli`が本来のL4エントリポイントとして扱われています。
 * `dispatcher`: dispatch cycle後のベストエフォート後処理オーケストレーションを直接抱えていました。これは`dispatch_postcycle`（L3）へ切り出し済みで、現在は引数解析・設定読み込み・`main()`のみが残っています。
 * `monitor`: 自前のステータススナップショット構築（`MonitorState`/`build_status_snapshot`/`format_status_report`等）を直接抱えていました。これは`status_snapshot`（L2）へ切り出し済みで、現在は引数解析・`--watch`ループ・`main()`のみが残っています。
 

@@ -8,10 +8,10 @@ import re
 
 import pytest
 
-from orchestune.dag_models import compile_extra_ignore_patterns
-from orchestune.dag_similarity import build_similarity_edges
-from orchestune.dag_similarity import find_candidate_pairs as _find_candidate_pairs
-from orchestune.dag_similarity import otsuka_ochiai as _otsuka_ochiai
+from orchestune.dag.models import compile_extra_ignore_patterns
+from orchestune.dag.similarity import build_similarity_edges
+from orchestune.dag.similarity import find_candidate_pairs as _find_candidate_pairs
+from orchestune.dag.similarity import otsuka_ochiai as _otsuka_ochiai
 from tests.dag_test_support import _subtask
 
 

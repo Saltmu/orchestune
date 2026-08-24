@@ -8,8 +8,8 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from orchestune.dag_graph import build_dag_from_plan
-from orchestune.dag_models import (
+from orchestune.dag.graph import build_dag_from_plan
+from orchestune.dag.models import (
     ConfigError,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
@@ -17,7 +17,7 @@ from orchestune.dag_models import (
     load_orchestune_config,
     resolve_repo_root,
 )
-from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -33,7 +33,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Similarity edge threshold (default: "
-        f"{DEFAULT_SIMILARITY_THRESHOLD}, i.e. orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD)",
+        f"{DEFAULT_SIMILARITY_THRESHOLD}, i.e. orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD)",
     )
     return parser
 

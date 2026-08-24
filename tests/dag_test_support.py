@@ -8,7 +8,7 @@ test_dag_parsing.py / test_dag_similarity.py / test_dag_graph.py へ分割した
 
 import textwrap
 
-from orchestune.dag_models import SubTask
+from orchestune.dag.models import SubTask
 
 
 def _write_plan(tmp_path, content: str):

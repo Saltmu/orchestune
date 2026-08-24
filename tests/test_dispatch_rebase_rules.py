@@ -7,7 +7,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from orchestune.dag_models import compile_extra_ignore_patterns
+from orchestune.dag.models import compile_extra_ignore_patterns
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_rebase import (
     FootprintDeviationDecision,

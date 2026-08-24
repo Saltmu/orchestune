@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dag_models import (
+from orchestune.dag.models import (
     FootprintConflict,
     SubTask,
     compile_extra_ignore_patterns,

@@ -123,7 +123,7 @@ graph TD
 >
 > That paper builds a symbol-sharing graph from a repository's static interface and runs Infomap community detection to assign files to agents, optimizing for critical-path length plus communication cost.
 >
-> Orchestune adapts this for an operational tool: the objective changes from cohesion/cost optimization to conflict avoidance, the graph's source changes from existing repository files to a decomposition plan's declared `footprint`/`symbols`, and it uses IDF-weighted Otsuka-Ochiai similarity. See the docstring in `orchestune/dag_similarity.py` for details.
+> Orchestune adapts this for an operational tool: the objective changes from cohesion/cost optimization to conflict avoidance, the graph's source changes from existing repository files to a decomposition plan's declared `footprint`/`symbols`, and it uses IDF-weighted Otsuka-Ochiai similarity. See the docstring in `orchestune/dag/similarity.py` for details.
 
 ### Conflict Prevention Mechanism
 
@@ -134,13 +134,13 @@ graph TD
 
 ### Ordinary Footprint Overlap vs. the Shared-Contract Gate
 
-The overlap analysis above (`dag_similarity.py`) only inserts an implicit dependency edge when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.
+The overlap analysis above (`dag/similarity.py`) only inserts an implicit dependency edge when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.
 
 Consider several subtasks that each need to establish or edit a **shared extension point that does not exist yet** — a format registry, a CLI wiring module — with each assuming a different plausible path for it. Since none of their declared footprints share a literal string, the existing overlap detection has nothing to match on and cannot catch the case.
 
 To address this, Stage 1 of the `orchestune` skill asks the planner to explicitly identify such shared extension points (registries, CLI wiring, dependency manifests, public API index files) up front, create a dedicated `shared-contract` / `integration-scaffold` subtask that owns them, and tag every subtask involved — owner and dependents alike — with a matching `shared_contract: <id>` value. This is the most reliable signal, since it does not rely on literal string matching at all.
 
-`orchestune/dag_contracts.py`'s `find_unowned_shared_contract_hotspots` backs this up in two tiers:
+`orchestune/dag/contracts.py`'s `find_unowned_shared_contract_hotspots` backs this up in two tiers:
 
 1. **Subtasks sharing the same `shared_contract` tag.**
 2. ***Every* subtask regardless of tagging**, grouped where the `footprint` falls into the same category *and* the same directory (scoping by directory keeps unrelated sibling packages — `packages/auth/__init__.py` vs. `packages/payments/__init__.py` — from being flagged as the same hotspot).
@@ -294,13 +294,13 @@ from its own layer or from any layer below it, never from a layer above.
 
 | Layer | Role | Modules |
 | --- | --- | --- |
-| **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag_cli`, `dispatcher`, `monitor`, `provisioning` |
+| **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatcher`, `monitor`, `provisioning` |
 | **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch_cycle`, `dispatch_cycle_context`, `dispatch_cycle_report`, `dispatch_phase_gc`, `dispatch_phase_reconciliation`, `dispatch_phase_rebase`, `dispatch_phase_scheduling`, `dispatch_postcycle`, `dispatch_report`, `integration_coordinator`, `integrator`, `integrator_steps`, `integrator_types`, `parent_completion`, `provisioning_flow` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag_contracts`, `dag_graph`, `dag_parsing`, `dag_similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_labels`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch_actor_verification`, `dispatch_config`, `dispatch_escalation`, `dispatch_filters`, `dispatch_gc`, `dispatch_gc_completion`, `dispatch_gc_git`, `dispatch_gc_zombies`, `dispatch_labels`, `dispatch_launch`, `dispatch_locks`, `dispatch_rebase`, `dispatch_reconciliation`, `dispatch_recovery`, `dispatch_rules`, `dispatch_scoring`, `dispatch_state`, `dispatch_targets`, `dispatch_worktree`, `infra.not_needed_review_state`, `integrator_git_ops`, `integrator_pr`, `integrator_tasks`, `integrator_worktree`, `issue_parsing`, `provisioning_parent`, `provisioning_plan`, `provisioning_rendering`, `provisioning_subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **Adapters**<br/>the only modules that run `git` or `gh` | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
-| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag_models`, `dispatch_result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
+| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag`, `dag.models`, `dispatch_result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `setup_skills`, `validation`, `version` |
 
-Pure data-transfer modules (`models`, `dag_models`, `dispatch_result`) sit at
+Pure data-transfer modules (`models`, `dag.models`, `dispatch_result`) sit at
 **L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and
 `PrRecord`. Putting the DTOs above the adapter that produces them would make
 that dependency point upward.
@@ -311,7 +311,7 @@ the other four; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
 
 All code that predated this boundary has since been resolved. Three modules used to carry such code:
 
-* `dag`: a compatibility facade re-exporting the whole `dag_*` package. Callers now import the concrete `dag_*` module directly, and `dag_cli` — the module that actually owns `main()` — is the real L4 entrypoint.
+* `dag`: a compatibility facade re-exporting the whole `dag_*` package. Callers now import the concrete `dag_*` module directly, and `dag.cli` — the module that actually owns `main()` — is the real L4 entrypoint.
 * `dispatcher`: held the dispatch cycle's best-effort post-cycle orchestration directly. That has moved to `dispatch_postcycle` (L3), leaving only argument parsing, config loading, and `main()`.
 * `monitor`: built its own status snapshots (`MonitorState`/`build_status_snapshot`/`format_status_report` and friends) directly. That has moved to `status_snapshot` (L2), leaving only argument parsing, the `--watch` loop, and `main()`.
 

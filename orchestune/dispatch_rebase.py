@@ -12,8 +12,8 @@ from pathlib import Path
 
 from orchestune import dispatch_gc
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dag_graph import recompute_dag_for_footprint_change
-from orchestune.dag_models import FootprintConflict, SubTask
+from orchestune.dag.graph import recompute_dag_for_footprint_change
+from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch_config import DispatcherConfig
 from orchestune.dispatch_labels import transition_status_label
 from orchestune.dispatch_locks import check_footprint_deviation

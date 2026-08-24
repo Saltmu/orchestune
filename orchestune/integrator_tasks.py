@@ -4,9 +4,9 @@ import re
 import sys
 from collections.abc import Iterable
 
-from orchestune.dag_graph import build_dag
-from orchestune.dag_models import SubTask
-from orchestune.dag_similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dag.graph import build_dag
+from orchestune.dag.models import SubTask
+from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,

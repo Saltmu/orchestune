@@ -167,7 +167,7 @@ orchestune dag --plan decomposition_plan.md
 
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `--threshold <float>` | - | 類似度エッジの閾値（`[0, 1]`の範囲）。未指定時は、設定ファイルの`dag_similarity_threshold`（後述）が設定されていればその値、無ければ`0.2`（`orchestune.dag_similarity.DEFAULT_SIMILARITY_THRESHOLD`）にフォールバックする。`[0, 1]`の範囲外の値（`nan`/`inf`を含む）はエラーとして拒否される。 |
+| `--threshold <float>` | - | 類似度エッジの閾値（`[0, 1]`の範囲）。未指定時は、設定ファイルの`dag_similarity_threshold`（後述）が設定されていればその値、無ければ`0.2`（`orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD`）にフォールバックする。`[0, 1]`の範囲外の値（`nan`/`inf`を含む）はエラーとして拒否される。 |
 
 ### 設定ファイルによる指定
 

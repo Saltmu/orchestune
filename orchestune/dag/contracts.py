@@ -29,7 +29,7 @@ import posixpath
 import re
 from collections.abc import Iterable
 
-from orchestune.dag_models import DagEdge, SubTask
+from orchestune.dag.models import DagEdge, SubTask
 
 _SHARED_CONTRACT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (

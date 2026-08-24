@@ -19,7 +19,7 @@ import math
 import re
 from collections.abc import Iterable
 
-from orchestune.dag_models import DagEdge, SubTask
+from orchestune.dag.models import DagEdge, SubTask
 
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
 _PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}

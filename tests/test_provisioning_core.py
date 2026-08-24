@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from orchestune.dag_models import SubTask
+from orchestune.dag.models import SubTask
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,

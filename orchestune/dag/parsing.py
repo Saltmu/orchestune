@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from orchestune.dag_models import SubTask, normalize_footprint_path
+from orchestune.dag.models import SubTask, normalize_footprint_path
 
 logger = logging.getLogger(__name__)
 

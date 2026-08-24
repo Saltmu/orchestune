@@ -30,7 +30,7 @@ PACKAGE_NAME = "orchestune"
 # mapping by `test_documented_layers_match_the_expected_layers`.
 EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     4: frozenset(
-        {"bootstrap", "cli", "dag_cli", "dispatcher", "monitor", "provisioning"}
+        {"bootstrap", "cli", "dag.cli", "dispatcher", "monitor", "provisioning"}
     ),
     3: frozenset(
         {
@@ -53,10 +53,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     ),
     2: frozenset(
         {
-            "dag_contracts",
-            "dag_graph",
-            "dag_parsing",
-            "dag_similarity",
+            "dag.contracts",
+            "dag.graph",
+            "dag.parsing",
+            "dag.similarity",
             "dispatch_actor_verification",
             "dispatch_config",
             "dispatch_escalation",
@@ -96,7 +96,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     0: frozenset(
         {
             "bounded_limit",
-            "dag_models",
+            "dag",
+            "dag.models",
             "dispatch_result",
             "infra",
             "infra.json_state",
@@ -113,7 +114,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
 L4_MODULES = EXPECTED_LAYERS[4]
 ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
-    "dag_cli": frozenset({"cli"}),
+    "dag.cli": frozenset({"cli"}),
     "dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
     "provisioning": frozenset({"cli"}),
