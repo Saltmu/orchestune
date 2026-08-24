@@ -11,6 +11,22 @@ run CI, commit, and push only from that worktree.
 
 Execute `scripts/wait_for_review.py` synchronously to request a review from a reviewer bot (Claude / Codex), wait for completion, and analyze feedback. Double-posting is prevented by the script's internal wait controls. The cumulative round count is tracked via `@<bot> review` comments and `Round X/5` notations, preserving count across session interruptions.
 
+### Handling Review Findings and Scope Management
+
+When findings are returned (Exit 10):
+1. **In-Scope Findings**:
+   - Address the feedback by updating code and adding/modifying tests in the worktree.
+   - Run local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`) to ensure all checks pass.
+   - Commit and push the fixes to the PR branch.
+   - Note the commit hash and summary of changes for inclusion in the re-review reply.
+2. **Out-of-Scope Findings**:
+   - If a suggestion falls outside the scope of the current Issue (e.g. unrelated refactoring, new feature requests, or broader architectural changes):
+     - **Do NOT implement** the changes in the current PR.
+     - File a new follow-up GitHub Issue to track the task separately via the selected backend.
+     - Decline the finding in the re-review reply and reference the newly created follow-up Issue (e.g. `[Declined - Out of Scope] Deferred to follow-up Issue #...`).
+3. **Re-Review Reply Documentation**:
+   - Always include the detailed resolution summary (with commit hashes for addressed items and follow-up Issue numbers for out-of-scope items) in `/tmp/review_reply.md`.
+
 ### Review Loop Control Flow (Pseudocode)
 
 ```text
@@ -18,7 +34,7 @@ Loop (up to 5 rounds):
   1. Acquire review state and execute the shared verdict evaluator:
      - CLI/gh, initial round:
        poetry run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
-     - CLI/gh, subsequent rounds: attach --body-file /tmp/review_reply.md.
+     - CLI/gh, subsequent rounds: attach --body-file /tmp/review_reply.md (must include commit hash and fix summary).
      - GitHub MCP / GitHub App: retrieve `issue_comments`, `reviews`, and
        `inline_comments`, write the normalized JSON snapshot, then run:
        poetry run python scripts/wait_for_review.py --bot-name <bot> --review-state-file <STATE.json>
@@ -30,21 +46,27 @@ Loop (up to 5 rounds):
      - Exit 20: timeout; retry once with --no-post --timeout 300, then escalate.
      - Exit 30: ambiguous verdict; inspect summary and inline findings before
        requesting another review or escalating. Exit 2 or 12: record and escalate.
-     - Exit 10: fix code and add tests, verify local CI, commit and push, then
-       create /tmp/review_reply.md (Round X/5) and return to step 1.
+     - Exit 10:
+       a. Classify findings into in-scope vs out-of-scope.
+       b. For in-scope findings: fix code and add tests, verify local CI, commit and push.
+       c. For out-of-scope findings: do NOT modify code; file a follow-up Issue instead.
+       d. Create /tmp/review_reply.md with fix details, commit hashes, and follow-up Issue references (Round X/5).
+       e. Return to step 1.
      - Exit 0: terminate the loop and proceed to Step 12 (Outcome).
 ```
 
 ### Creating Review Reply File (`/tmp/review_reply.md`)
-After addressing feedback, write a summary reply file:
+After addressing feedback and committing fixes, write a summary reply file explicitly detailing the modifications, commit hashes, and any out-of-scope follow-up Issues:
 ```markdown
 ## Addressing Review Feedback (Round 2/5)
 
-### Changes
+### Changes & Resolutions
 - [Addressed] Fixed bug in Finding A and added regression tests (commit: abc1234)
+- [Declined - Out of Scope] Refactoring module X is out of scope for this Issue; filed follow-up Issue #123 (reason: ...)
 - [Declined] Preserved Finding B behavior as it conforms to intended specification (reason: ...)
 
 @claude review
 ```
 
 After writing the reply file, run `wait_for_review.py` with `--body-file /tmp/review_reply.md` to trigger and wait for re-review.
+
