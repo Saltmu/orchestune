@@ -8,27 +8,27 @@ from collections.abc import Sequence
 
 from orchestune.dag.models import ConfigError, resolve_repo_root
 from orchestune.forge import GitHubForge
-from orchestune.provisioning_flow import (
+from orchestune.provisioning.flow import (
     IssuePreview,
     ProvisionResult,
     _build_provisioning_dag,
 )
-from orchestune.provisioning_flow import provision_issues as _provision_issues
-from orchestune.provisioning_parent import _resolve_parent_issue
-from orchestune.provisioning_plan import (
+from orchestune.provisioning.flow import provision_issues as _provision_issues
+from orchestune.provisioning.parent import _resolve_parent_issue
+from orchestune.provisioning.plan import (
     PlanMetadata,
     _load_plan,
     _parent_body,
     restore_plan_file_from_parent,
 )
-from orchestune.provisioning_rendering import (
+from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
     _derive_labels,
     _render_issue_body,
     _subtask_id_from_body,
     _validate_template_identity_marker,
 )
-from orchestune.provisioning_subtasks import (
+from orchestune.provisioning.subtasks import (
     _link_subtask_relationships,
     _provision_subtask,
 )

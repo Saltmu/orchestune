@@ -12,15 +12,17 @@ from orchestune.issue_parsing import (
     is_epic_issue,
 )
 from orchestune.models import IssueRecord
-from orchestune.provisioning import (
+from orchestune.provisioning.cli import main
+from orchestune.provisioning.flow import (
     _build_provisioning_dag,
+    provision_issues,
+)
+from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
     _derive_labels,
     _render_issue_body,
     _subtask_id_from_body,
     _validate_template_identity_marker,
-    main,
-    provision_issues,
 )
 from tests.test_provisioning_support import (
     _PLAN,
@@ -318,7 +320,7 @@ class TestMain:
         self, plan_path: Path, template_path: Path, capsys, monkeypatch
     ):
         forge = FakeForge()
-        monkeypatch.setattr("orchestune.provisioning.GitHubForge", lambda: forge)
+        monkeypatch.setattr("orchestune.provisioning.cli.GitHubForge", lambda: forge)
         with pytest.raises(SystemExit) as exc_info:
             main(["--plan", str(plan_path), "--template", str(template_path)])
         assert exc_info.value.code == 0
