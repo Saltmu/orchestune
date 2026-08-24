@@ -26,7 +26,7 @@ from tests.dag_test_support import _subtask, _write_plan
 
 
 class TestBuildDag:
-    def test_merges_explicit_and_similarity_edges(self):
+    def test_separates_explicit_and_similarity_edges(self):
         subtasks = [
             _subtask("a", ["src/x.py"], ["x.foo"]),
             _subtask("b", ["src/x.py"], ["x.foo"], depends_on=[]),
@@ -35,7 +35,8 @@ class TestBuildDag:
         dag = build_dag(subtasks, threshold=0.2)
         reasons = {(e.source, e.target): e.reason for e in dag.edges}
         assert reasons[("a", "c")] == "explicit"
-        assert ("a", "b") in reasons and reasons[("a", "b")] == "similarity"
+        assert ("a", "b") not in reasons
+        assert dag.conflict_graph.has_conflict("a", "b")
 
     def test_threshold_changes_similarity_edge_outcome(self):
         subtasks = [
@@ -44,8 +45,8 @@ class TestBuildDag:
         ]
         dag_low_threshold = build_dag(subtasks, threshold=0.1)
         dag_high_threshold = build_dag(subtasks, threshold=0.9)
-        assert len(dag_low_threshold.edges) == 1
-        assert len(dag_high_threshold.edges) == 0
+        assert len(dag_low_threshold.conflict_graph.edges) == 1
+        assert len(dag_high_threshold.conflict_graph.edges) == 0
 
     def test_ignore_patterns_propagate_through_build_dag(self):
         subtasks = [
@@ -54,7 +55,7 @@ class TestBuildDag:
         ]
         extra_patterns = compile_extra_ignore_patterns([r"(^|/)package\.json$"])
         dag = build_dag(subtasks, threshold=0.1, ignore_patterns=extra_patterns)
-        assert dag.edges == []
+        assert dag.conflict_graph.edges == ()
 
     def test_detects_cycle(self):
         subtasks = [
@@ -129,7 +130,9 @@ class TestRealProjectSymbolCollision:
             path.write_text(textwrap.dedent(plan), encoding="utf-8")
             dag_dict = build_dag_from_plan(path, threshold=0.2)
 
-        reasons = {(e["source"], e["target"]): e["reason"] for e in dag_dict["edges"]}
+        reasons = {
+            (e["left"], e["right"]): e["reason"] for e in dag_dict["conflict_edges"]
+        }
         bloat_pair = ("task-bloat-cli", "task-bloat-report")
         alt_pair = ("task-bloat-report", "task-bloat-cli")
         assert (
@@ -179,7 +182,9 @@ class TestCommonUtilityPseudoCoupling:
         path = _write_plan(tmp_path, self._common_utility_plan())
         dag_dict = build_dag_from_plan(path, threshold=0.2)
 
-        reasons = {(e["source"], e["target"]): e["reason"] for e in dag_dict["edges"]}
+        reasons = {
+            (e["left"], e["right"]): e["reason"] for e in dag_dict["conflict_edges"]
+        }
         pair = ("task-one", "task-two")
         alt_pair = ("task-two", "task-one")
         assert reasons.get(pair) is None and reasons.get(alt_pair) is None
@@ -215,7 +220,9 @@ class TestCommonUtilityPseudoCoupling:
         path = _write_plan(tmp_path, plan)
         dag_dict = build_dag_from_plan(path, threshold=0.2)
 
-        reasons = {(e["source"], e["target"]): e["reason"] for e in dag_dict["edges"]}
+        reasons = {
+            (e["left"], e["right"]): e["reason"] for e in dag_dict["conflict_edges"]
+        }
         pair = ("task-one", "task-two")
         alt_pair = ("task-two", "task-one")
         assert (
@@ -244,8 +251,8 @@ class TestRecomputeDagForFootprintChange:
         assert conflict.other_subtask_id == "b"
         assert conflict.blocked_subtask_id == "b"
 
-        reasons = {(e.source, e.target): e.reason for e in after.edges}
-        assert reasons.get(("a", "b")) == "similarity"
+        assert after.edges == []
+        assert after.conflict_graph.has_conflict("a", "b")
 
     def test_no_conflict_when_already_explicit_dependency(self):
         subtasks = {
@@ -261,6 +268,7 @@ class TestRecomputeDagForFootprintChange:
         )
         assert conflicts == []
         assert after.topological_order.index("a") < after.topological_order.index("b")
+        assert after.conflict_graph.has_conflict("a", "b")
 
     def test_risk_flag_is_monotonic_after_recompute(self):
         subtasks = {
@@ -312,21 +320,20 @@ class TestRecomputeDagForFootprintChange:
         )
         assert conflicts == []
         assert after.edges == []
+        assert after.conflict_graph.edges == ()
 
 
-class TestPriorityAndVolumeDirection:
-    def test_priority_determines_edge_direction(self):
-        # a: medium, b: high -> high (b) から medium (a) へエッジが張られる (b -> a)
+class TestConflictSymmetry:
+    def test_priority_does_not_direct_a_conflict(self):
         subtasks = [
             SubTask("a", "", ("src/shared.py",), (), (), False, (), "medium"),
             SubTask("b", "", ("src/shared.py",), (), (), False, (), "high"),
         ]
         dag = build_dag(subtasks, threshold=0.1)
-        reasons = {(e.source, e.target): e.reason for e in dag.edges}
-        assert reasons.get(("b", "a")) == "similarity"
+        assert dag.edges == []
+        assert [(e.left, e.right) for e in dag.conflict_graph.edges] == [("a", "b")]
 
-    def test_volume_determines_edge_direction_when_priority_equal(self):
-        # priorityはどちらもmedium。a の footprint数は2、b は1 -> a から b へエッジが張られる (a -> b)
+    def test_footprint_volume_does_not_direct_a_conflict(self):
         subtasks = [
             SubTask(
                 "a", "", ("src/x.py", "src/shared.py"), (), (), False, (), "medium"
@@ -334,28 +341,22 @@ class TestPriorityAndVolumeDirection:
             SubTask("b", "", ("src/shared.py",), (), (), False, (), "medium"),
         ]
         dag = build_dag(subtasks, threshold=0.1)
-        reasons = {(e.source, e.target): e.reason for e in dag.edges}
-        assert reasons.get(("a", "b")) == "similarity"
+        assert dag.edges == []
+        assert dag.conflict_graph.has_conflict("a", "b")
 
-    def test_id_order_determines_edge_direction_when_all_equal(self):
-        # 全て等しい場合、辞書順で a -> b
+    def test_id_order_only_canonicalizes_the_symmetric_representation(self):
         subtasks = [
             SubTask("a", "", ("src/shared.py",), (), (), False, (), "medium"),
             SubTask("b", "", ("src/shared.py",), (), (), False, (), "medium"),
         ]
         dag = build_dag(subtasks, threshold=0.1)
-        reasons = {(e.source, e.target): e.reason for e in dag.edges}
-        assert reasons.get(("a", "b")) == "similarity"
+        edge = dag.conflict_graph.edges[0]
+        assert (edge.left, edge.right) == ("a", "b")
+        assert dag.conflict_graph.has_conflict("b", "a")
 
 
 class TestCycleResolution:
-    def test_resolves_cycle_by_removing_weakest_similarity_edge(self, caplog):
-        import logging
-
-        # a -> b (明示) -> c (類似) -> a (類似) のサイクルが発生。
-        # a: medium, b: high, c: high
-        # c -> a の方が類似度が低いはず（共通要素が少ないため）。
-        # このため、c -> a のエッジが自動削除されてサイクルが解消されるはず。
+    def _subtasks_with_precedence_and_conflicts(self):
         subtasks = [
             SubTask("a", "", ("src/a.py",), ("c_shared",), (), False, (), "medium"),
             SubTask(
@@ -379,54 +380,17 @@ class TestCycleResolution:
                 "high",
             ),
         ]
+        return subtasks
 
-        with caplog.at_level(logging.WARNING):
-            dag = build_dag(subtasks, threshold=0.1)
+    def test_conflicts_do_not_create_or_require_cycle_resolution(self):
+        dag = build_dag(self._subtasks_with_precedence_and_conflicts(), threshold=0.1)
+        assert dag.topological_order.index("a") < dag.topological_order.index("b")
+        assert not any("類似度エッジを自動解消" in warning for warning in dag.warnings)
 
-        # サイクルが解消され、エラーにならずにDAGが構築できること
-        assert dag.topological_order == ["a", "b", "c"]
-        # 警告ログが出力されていること
-        assert "循環参照を検出したため、類似度エッジを自動解消しました" in caplog.text
-
-    def test_resolves_cycle_warning_is_added_to_dag_result(self):
-        # Issue #395: 循環解消で捨てられたエッジの警告が DagResult.warnings に反映されること
-        subtasks = [
-            SubTask("a", "", ("src/shared.py",), (), (), False, (), "medium"),
-            SubTask("b", "", ("src/shared.py",), (), ("a",), False, (), "high"),
-            SubTask("c", "", ("src/shared.py",), (), (), False, (), "high"),
-        ]
-        # c -> a (similarity 1.0) is the weakest because priority of 'a' is medium, 'c' is high. Wait, direction is c->a ?
-        # Actually let's use the exact same subtasks as the previous test to reliably trigger the warning.
-        subtasks = [
-            SubTask("a", "", ("src/a.py",), ("c_shared",), (), False, (), "medium"),
-            SubTask(
-                "b",
-                "",
-                ("src/b.py", "src/bc1.py", "src/bc2.py"),
-                ("bc_shared",),
-                ("a",),
-                False,
-                (),
-                "high",
-            ),
-            SubTask(
-                "c",
-                "",
-                ("src/c.py", "src/bc1.py", "src/bc2.py"),
-                ("bc_shared", "c_shared"),
-                (),
-                False,
-                (),
-                "high",
-            ),
-        ]
-        dag = build_dag(subtasks, threshold=0.1)
-
-        # Check that the warning is included in DagResult.warnings
-        assert any(
-            "循環参照を検出したため、類似度エッジを自動解消しました: c -> a" in w
-            for w in dag.warnings
-        )
+    def test_conflicts_are_not_dropped_during_precedence_validation(self):
+        dag = build_dag(self._subtasks_with_precedence_and_conflicts(), threshold=0.1)
+        assert dag.conflict_graph.has_conflict("a", "c")
+        assert dag.conflict_graph.has_conflict("b", "c")
 
     def test_does_not_resolve_explicit_only_cycles(self):
         # 明示的な依存関係のみで循環が発生した場合、自動解消できずに例外を投げること
@@ -524,8 +488,9 @@ def test_dag_conflict_edge_generated_for_unnormalized_equivalent_paths(tmp_path)
     assert res.subtasks["task-a"].footprint == ("src/core.py",)
     assert res.subtasks["task-b"].footprint == ("src/core.py",)
 
-    # A similarity edge must exist between task-a and task-b due to shared normalized footprint
-    assert len(res.edges) == 1
-    edge = res.edges[0]
+    # A symmetric conflict must exist due to the shared normalized footprint.
+    assert res.edges == []
+    assert len(res.conflict_graph.edges) == 1
+    edge = res.conflict_graph.edges[0]
     assert edge.reason == "similarity"
-    assert {edge.source, edge.target} == {"task-a", "task-b"}
+    assert {edge.left, edge.right} == {"task-a", "task-b"}

@@ -26,6 +26,8 @@ _PLACEHOLDERS = (
     "footprint",
     "symbols",
     "depends_on",
+    "shared_contract",
+    "writes_shared_contract",
     "parent_issue_number",
 )
 _PLACEHOLDER_PATTERN = re.compile(
@@ -85,6 +87,14 @@ def _render_issue_body(
         "footprint": _yaml_inline_list(subtask.footprint),
         "symbols": _yaml_inline_list(subtask.symbols),
         "depends_on": _yaml_inline_list(subtask.depends_on),
+        "shared_contract": (
+            "null"
+            if subtask.shared_contract is None
+            else _yaml_scalar(subtask.shared_contract)
+        ),
+        "writes_shared_contract": (
+            "true" if subtask.writes_shared_contract else "false"
+        ),
         "parent_issue_number": "null"
         if parent_issue_number is None
         else str(parent_issue_number),

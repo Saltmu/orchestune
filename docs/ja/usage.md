@@ -72,7 +72,7 @@ subtasks:
 * **`proposed_changes`** (文字列のリスト, 任意, 既定値 `[]`): 起票されるIssue本文の「変更内容」に転記される変更方針。
 * **`verification_plan`** (文字列のリスト, 任意, 既定値 `[]`): 起票されるIssue本文の「修正・検証計画」に転記される検証手順。
 * **`risk`** (真偽値, 任意, 既定値 `false`): `true` を指定すると、自動判定の結果によらずリスクありとして明示的にフラグを立てます（リスク理由に `explicit` が追加されます）。`false` を指定してもパスやキーワードによる自動判定は無効化されません。
-* **`shared_contract`** (文字列, 任意, 既定値なし): レジストリやCLI配線のような共有拡張点を識別するタグ。ただしタグの一致だけでは警告されません。`orchestune-dag` が比較するのは、その共有ファイルへ実際に**書き込む**と判定されたサブタスク同士のみで、契約に `depends_on` するだけの消費者（読み取り・importのみ）は対象外です。書き込み者同士が順序付けられていない（DAG上でどちらもどちらへも到達不能な）場合に警告します。
+* **`shared_contract`** (文字列, 任意, 既定値なし): レジストリやCLI配線のような共有拡張点を識別するタグ。`orchestune-dag` が比較するのは、その共有ファイルへ実際に**書き込む**と判定されたサブタスク同士のみで、契約に `depends_on` するだけの消費者（読み取り・importのみ）は対象外です。書き込み者pairはConflict Graphの排他制約となり、さらにPrecedence DAG上で順序付けられていない（どちらもどちらへも到達不能な）場合は警告も表示されます。
 * **`writes_shared_contract`** (真偽値, 任意, 既定値 `false`): このサブタスクが `shared_contract` のファイルへ書き込むことを明示します。書き込み者かどうかは、まず `footprint` のパスが以下の命名カテゴリに一致するかで自動判定されます。
     * `registry`: `registry` / `registration` / `registrar` を含むファイル名（例: `src/format_registry.py`）
     * `cli-wiring`: `cli.*` / `__main__.*` / `main.*`
@@ -94,7 +94,7 @@ subtasks:
 - **複数 big rock（計画）の並行運用**:
   複数の大きな石を並行して進める場合は、`orchestune provision --plan plans/rock-a.md` のように `--plan` オプションで個別パスを指定するか、別々のworktreeで作成してください。いずれの場合も `provision` 実行時に各big rockの親Issue本文へ個別に計画が永続化されるため、衝突することなく安全に分離・管理されます。
 - **`orchestune-dispatch` は計画ファイルを参照しない**:
-  `orchestune-dispatch` は、各サブタスクのGitHub Issue本文に埋め込まれた Footprint YAML（`subtask_id`, `depends_on`, `footprint` 等）から実行DAGを自律的に復元します。そのため、ローカルの `decomposition_plan.md` が存在しなくても、ディスパッチ・並列実行・自己修復・マージ統合は正常に動作します。
+  `orchestune-dispatch` は、各サブタスクのGitHub Issue本文に埋め込まれた Footprint YAML（`subtask_id`, `depends_on`, `footprint`, `symbols`, `shared_contract`, `writes_shared_contract` 等）からPrecedence DAGとConflict Graphを自律的に復元します。そのため、ローカルの `decomposition_plan.md` が存在しなくても、ディスパッチ・並列実行・自己修復・マージ統合は正常に動作します。
 
 > [!NOTE]
 > 必須フィールドは `id` のみです。`id` が欠落している、または空文字の場合はパース時にエラーで停止します。
@@ -152,7 +152,7 @@ orchestune provision --plan decomposition_plan.md --parent-issue 123
 
 ## 3. DAG検証（orchestune-dag）
 
-`decomposition_plan.md` で定義されたタスク構成が正しいDAG（有向非巡回グラフ）になっているか、コンフリクトがないかを検証します。
+`decomposition_plan.md` から、明示的な`depends_on`だけを含むPrecedence DAGが非巡回であることを検証し、`footprint`・`symbols`・shared-contractから得た対称なConflict Graphを別に表示します。
 通常、AIエージェントが自動でこのコマンドを実行して計画を修正しますが、手動で検証を行うこともできます。
 
 ```bash
@@ -167,7 +167,7 @@ orchestune dag --plan decomposition_plan.md
 
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `--threshold <float>` | - | 類似度エッジの閾値（`[0, 1]`の範囲）。未指定時は、設定ファイルの`dag_similarity_threshold`（後述）が設定されていればその値、無ければ`0.2`（`orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD`）にフォールバックする。`[0, 1]`の範囲外の値（`nan`/`inf`を含む）はエラーとして拒否される。 |
+| `--threshold <float>` | - | 類似度に基づく競合辺の閾値（`[0, 1]`の範囲）。未指定時は、設定ファイルの`dag_similarity_threshold`（後述）が設定されていればその値、無ければ`0.2`（`orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD`）にフォールバックする。`[0, 1]`の範囲外の値（`nan`/`inf`を含む）はエラーとして拒否される。 |
 
 ### 設定ファイルによる指定
 
@@ -175,8 +175,8 @@ orchestune dag --plan decomposition_plan.md
 
 | 設定項目 | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチする — `symbols`の項目はこの設定でフィルタされることは無く、常に類似度スコアの計算対象に含まれる。マッチしたfootprintパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度スコアの**計算入力**から除外される（＝そのペアの重なりスコアに寄与しなくなる）。ただし、そのペアが除外対象でない別のfootprintパスや共有する`symbols`の項目でも重なっている場合は、類似度エッジ自体は形成され続ける（または新たに形成される）ことがある。同様に、下記の「ファイル/シンボルの競合」チェックが必ず防げるとも限らない — このチェックは各subtaskの元の（フィルタ前の）footprintを見るため、同一カテゴリの書き込み者同士をそれまで繋いでいたエッジが除外によって消えた場合、この警告を防ぐのではなく**新たに発生させる**こともある。`DagCycleError`自体には影響しない（循環が全て明示的な`depends_on`エッジのみで構成される場合にのみ発生し、`dag_ignore_patterns`はそのケースに影響を及ぼせない） — 下記の実在検証・リスク検出という独立したチェックにも影響しない。空文字列は拒否される（空パターンはあらゆるfootprintパスに一致し、全てのfootprint項目をスコア計算から無診断で除いてしまうが、共有する`symbols`の項目があれば依然としてエッジが形成され得るため）。 |
-| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のDAG再計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `orchestune-dag`と`orchestune provision`はいずれも共通の`resolve_repo_root()`関数を使ってリポジトリルートを解決しており、これは上位へ`.git`を探索してリポジトリルートを特定する。そのため`--plan`がリポジトリルートより下のネストしたファイルを指す場合でも、両ツールは一貫して同じリポジトリルートの設定を参照する。 |
+| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチし、`symbols`は常に類似度スコアの入力に残る。マッチしたパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度Conflict Edgeのスコア入力とヒューリスティックなshared-contract hotspot競合から除外される。ただし、別の非除外パスや共有`symbols`があればsimilarity競合は残り、明示的な`shared_contract` writer競合と独立したwriter警告もこの設定では消えない。Precedence DAGは明示的な`depends_on`だけから成るため、`DagCycleError`にも影響しない。空文字列は全パスに一致するため拒否される。 |
+| `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のConflict Graph計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `orchestune-dag`と`orchestune provision`はいずれも共通の`resolve_repo_root()`関数を使ってリポジトリルートを解決しており、これは上位へ`.git`を探索してリポジトリルートを特定する。そのため`--plan`がリポジトリルートより下のネストしたファイルを指す場合でも、両ツールは一貫して同じリポジトリルートの設定を参照する。 |
 
 #### 設定ファイルの記述例 (`orchestune.toml`)
 
@@ -192,7 +192,8 @@ dag_similarity_threshold = 0.35
 ### 主なエラー・警告検出
 1回の`Warnings:`出力に、以下の複数種類の警告が同時に含まれることがあります。各行の文言に応じて種類を判別してください。
 * **`DagCycleError`**: 依存関係（`depends_on`）に循環参照がある場合にエラーを出力します。
-* **ファイル/シンボルの競合**: 異なるサブタスクで `footprint` や `symbols` が競合し、依存関係が適切に定義されていない場合に警告またはエラーを出力します。
+* **競合辺**: `footprint` / `symbols` の類似度とshared-contract writer判定から、priorityやIDに依存しない対称な排他制約を生成します。テキスト出力では`Precedence edges:`と`Conflict edges:`、`--json`では`precedence_edges`と`conflict_edges`として分離されます（後方互換の`edges`はprecedenceだけです）。
+* **Shared-contract writer警告**: writer同士がPrecedence DAGで順序付けられていない場合は、Conflict Edgeに加えて非ブロッキング警告を表示します。
 * **実在検証（`footprint`/`symbols`）**: 宣言された `footprint` のパスや `symbols` のエントリが、現在のコードベース上に実在すると確認できない場合に警告します（例: `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`）。これは必ずしもエラーではありません — ただし挙動は`footprint`と`symbols`で異なります: これから新規作成する`footprint`パスは常にこの警告が出ますが、新規追加予定の`symbols`エントリが警告されるのは検証が実際に実行された場合のみです。検証の実行には、footprint中に実在しparseに成功した`.py`ファイルが少なくとも1つあり、かつfootprint中の既存`.py`ファイルにparse失敗（構文エラー・エンコーディングエラー）が1件も無いことの両方が必要です（1件でもparse失敗ファイルがあると、そのsubtask全体で検証自体がスキップされます）。検証が実行されなかった場合、`symbols`の警告は一切出ません。警告が出ないことを「確認済み」と読み替えないでください。typo・パス誤りなのか、`footprint` の記載漏れ（衝突検知の見逃し）を疑うべきかの判断基準は [`orchestune` スキル](../../skills/orchestune/SKILL.md) のStage 2を参照してください。
 * **リスク検出**: 認証情報の露出や危険なコマンド実行の記述がある場合にフラグを設定します。
 
@@ -226,7 +227,7 @@ orchestune-dispatch
 | `--window-seconds <int>` | `3600` | バースト制限およびトークン消費上限を適用する時間窓の秒数（デフォルトは1時間）。 |
 | `--max-tokens-per-window <int>` | - | 指定した時間窓（`--window-seconds`）内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止する。未指定時は無制限。 |
 | `--max-tokens-per-task <int>` | - | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送り `status:blocked-human-review` へエスカレーションする。未指定時は無制限。 |
-| `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のDAG再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
+| `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のruntime Conflict Graph再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
 | `--task-timeout-seconds <int>` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行する。無人運転時は正の値を設定することを推奨。 |
 | `--max-task-reclaims <int>` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移し、以降は再投入されない。`0`は「1回目の回収で即エスカレーション」を意味する（無制限にする設定値は存在しない）。 |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
@@ -297,5 +298,4 @@ run-state-path = "run_state.json"
 ### 4.4 自動リベース
 
 下流の依存タスクのブランチは、依存先タスクの完了状況に応じて自動でリベースされます。リベース先は「最新の main」ではなく、**CIを通過済みの依存先タスクのブランチ**です（スタッキング）。依存先が単一に絞り込めない場合や、依存先がまだCIを通過していない場合、自動リベースは行われません。
-
 

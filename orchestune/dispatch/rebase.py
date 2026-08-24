@@ -1,4 +1,4 @@
-"""footprint逸脱によるDAG再計算通知と、依存先PRマージ済み時の自動リベース処理。"""
+"""footprint逸脱によるConflict Graph再計算通知と、自動リベース処理。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.conflicts import subtasks_from_tasks
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
@@ -51,9 +52,11 @@ def notify_recompute(
     forge: Forge | None = None,
 ) -> list[str]:
     detail = (
-        "footprint逸脱によるDAG再計算が発生しました。\n\n"
+        "footprint逸脱によるConflict Graph再計算が発生しました。\n\n"
         f"- 発覚したサブタスク: {conflict.subtask_id}\n"
         f"- 競合相手のサブタスク: {conflict.other_subtask_id}\n"
+        f"- 競合理由: {conflict.reason}\n"
+        f"- 対象resource: {', '.join(conflict.resources) or '(不明)'}\n"
         f"- 結合度スコア: {conflict.similarity:.3f}\n"
         f"- ブロックされるサブタスク: {conflict.blocked_subtask_id}\n"
         f"- 発覚時点までの作業内容: {work_summary}\n"
@@ -67,7 +70,7 @@ def notify_recompute(
     if parent_issue_number is not None:
         bodies.append(
             f"[自動記録] サブタスク {conflict.subtask_id} と {conflict.other_subtask_id} の"
-            f"間でfootprint逸脱によるDAG再計算が発生しました。\n\n{detail}"
+            f"間でfootprint逸脱によるConflict Graph再計算が発生しました。\n\n{detail}"
         )
 
     if apply:
@@ -95,9 +98,9 @@ def notify_force_serial(
     apply: bool,
     forge: Forge | None = None,
 ) -> str:
-    """#200: DAG再計算のリトライ上限超過を親Issueへ通知し、強制直列化を告知する。"""
+    """#200: Conflict Graph再計算の上限超過と強制直列化を通知する。"""
     body = (
-        "footprint逸脱によるDAG再計算のリトライ上限に達しました。\n\n"
+        "footprint逸脱によるConflict Graph再計算のリトライ上限に達しました。\n\n"
         f"- サブタスク: {subtask_id}\n"
         f"- 対象Issue: #{issue_number}\n"
         f"- 再計算試行回数: {retry_count}\n\n"
@@ -114,19 +117,7 @@ def notify_force_serial(
 def _build_subtasks_for_recompute(
     tasks_by_issue: dict[int, Task],
 ) -> dict[str, SubTask]:
-    return {
-        task.subtask_id: SubTask(
-            id=task.subtask_id,
-            description="",
-            footprint=task.footprint,
-            symbols=task.symbols,
-            depends_on=(),
-            risk=task.risk,
-            risk_reasons=(),
-        )
-        for task in tasks_by_issue.values()
-        if task.subtask_id
-    }
+    return subtasks_from_tasks(tasks_by_issue.values())
 
 
 @dataclass
@@ -144,7 +135,7 @@ def _persist_recovery_counters(
     書き戻す。`run_state.json`消失時、自己修復（`dispatch_recovery.py`の
     `recovery_counters_from_body`）がここから復元する。
 
-    逸脱イベント発生時（DAG再計算・forced_serial遷移）にのみ呼ばれるため、
+    逸脱イベント発生時（Conflict Graph再計算・forced_serial遷移）にのみ呼ばれるため、
     毎ディスパッチサイクルではなく、頻度としては`notify_recompute`/
     `notify_force_serial`のコメント投稿と同程度——追加のAPI呼び出しは
     このイベントに比例する。
@@ -166,10 +157,10 @@ def _decide_footprint_deviation_outcome(
     config: DispatcherConfig,
 ) -> FootprintDeviationDecision:
     """#192/#200: footprint逸脱への対応方針を判定する（githubへの通知・
-    active/run_stateの変更は行わない）。DAG再計算自体は純粋な計算のためここに含む。
+    active/run_stateの変更は行わない）。Conflict Graph再計算自体は純粋な計算のためここに含む。
 
     既に強制直列化済みなら何もしない（チャーン防止）。リトライ上限超過なら
-    強制直列化にフォールバックし、それ以外はDAG再計算を行う。
+    強制直列化にフォールバックし、それ以外はConflict Graph再計算を行う。
     """
     if active.forced_serial:
         return FootprintDeviationDecision(action="already_forced_serial")

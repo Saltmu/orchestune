@@ -1,6 +1,6 @@
-"""Similarity scoring and edge inference for DAG subtasks.
+"""Similarity scoring and conflict inference for DAG subtasks.
 
-サブタスク間の重なりから暗黙の依存エッジを推定する手法は、Co-Coder
+サブタスク間の重なりから競合辺を推定する手法は、Co-Coder
 (arXiv:2606.00953, "When Parallelism Pays Off: Cohesion-Aware Task
 Partitioning for Multi-Agent Coding") を参考にしている。ただし目的が
 異なるため、以下を変更している:
@@ -8,7 +8,7 @@ Partitioning for Multi-Agent Coding") を参考にしている。ただし目的
 - グラフの由来: 既存リポジトリの構造ではなく、decomposition planで
   宣言されたfootprint/symbols（まだ存在しないファイルを含む）
 - 出力: Infomapによるコミュニティ分割ではなく、閾値超過ペアへの
-  依存エッジ（担当の割り当てではなく実行順序を決めるため）
+  対称な排他制約（実行順序そのものは明示的なdepends_onだけで決める）
 - 重み付け: IDF（多くのサブタスクが触る項目の弁別力を下げる）と、
   footprint項目への1.5倍係数（マージを壊すのはファイル単位の衝突のため）
 """
@@ -19,10 +19,9 @@ import math
 import re
 from collections.abc import Iterable
 
-from orchestune.dag.models import DagEdge, SubTask
+from orchestune.dag.models import ConflictEdge, SubTask
 
 DEFAULT_SIMILARITY_THRESHOLD = 0.2
-_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 
 def otsuka_ochiai(set_a: frozenset[str], set_b: frozenset[str]) -> float:
@@ -107,62 +106,48 @@ def find_candidate_pairs(
     return candidates
 
 
-def _similarity_edge(source: SubTask, target: SubTask, score: float) -> DagEdge:
-    return DagEdge(
-        source=source.id,
-        target=target.id,
-        reason="similarity",
-        score=score,
-    )
-
-
-def _determine_edge_direction(
-    subtask_a: SubTask,
-    subtask_b: SubTask,
-    score: float,
-) -> DagEdge:
-    priority_a = _PRIORITY_ORDER.get(subtask_a.priority.lower(), 1)
-    priority_b = _PRIORITY_ORDER.get(subtask_b.priority.lower(), 1)
-    if priority_a != priority_b:
-        source, target = (
-            (subtask_a, subtask_b)
-            if priority_a < priority_b
-            else (subtask_b, subtask_a)
-        )
-        return _similarity_edge(source, target, score)
-
-    if len(subtask_a.footprint) != len(subtask_b.footprint):
-        source, target = (
-            (subtask_a, subtask_b)
-            if len(subtask_a.footprint) > len(subtask_b.footprint)
-            else (subtask_b, subtask_a)
-        )
-        return _similarity_edge(source, target, score)
-
-    source, target = (
-        (subtask_a, subtask_b)
-        if subtask_a.id < subtask_b.id
-        else (subtask_b, subtask_a)
-    )
-    return _similarity_edge(source, target, score)
+def build_similarity_conflicts(
+    subtasks: list[SubTask],
+    threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+) -> list[ConflictEdge]:
+    """Infer symmetric conflicts for pairs above the similarity threshold."""
+    # ignore_patternsは複数回反復されるため、ジェネレータ等の使い捨てiterableが
+    # 渡された場合に2回目以降の反復が空になる問題を避けてtupleへ実体化する。
+    ignore_patterns = tuple(ignore_patterns)
+    by_id = {subtask.id: subtask for subtask in subtasks}
+    weights = _idf_weights(subtasks, ignore_patterns)
+    conflicts: list[ConflictEdge] = []
+    for first_id, second_id in sorted(find_candidate_pairs(subtasks, ignore_patterns)):
+        first = by_id[first_id]
+        second = by_id[second_id]
+        score = _weighted_otsuka_ochiai(first, second, weights, ignore_patterns)
+        if score > threshold:
+            resources = tuple(
+                sorted(
+                    first.touch_set(ignore_patterns) & second.touch_set(ignore_patterns)
+                )
+            )
+            conflicts.append(
+                ConflictEdge(
+                    left=first.id,
+                    right=second.id,
+                    reason="similarity",
+                    score=score,
+                    resources=resources,
+                )
+            )
+    return conflicts
 
 
 def build_similarity_edges(
     subtasks: list[SubTask],
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     ignore_patterns: Iterable[re.Pattern[str]] = (),
-) -> list[DagEdge]:
-    """Infer dependency edges for candidate pairs above the similarity threshold."""
-    # ignore_patternsは複数回反復されるため、ジェネレータ等の使い捨てiterableが
-    # 渡された場合に2回目以降の反復が空になる問題を避けてtupleへ実体化する。
-    ignore_patterns = tuple(ignore_patterns)
-    by_id = {subtask.id: subtask for subtask in subtasks}
-    weights = _idf_weights(subtasks, ignore_patterns)
-    edges: list[DagEdge] = []
-    for first_id, second_id in sorted(find_candidate_pairs(subtasks, ignore_patterns)):
-        first = by_id[first_id]
-        second = by_id[second_id]
-        score = _weighted_otsuka_ochiai(first, second, weights, ignore_patterns)
-        if score > threshold:
-            edges.append(_determine_edge_direction(first, second, score))
-    return edges
+) -> list[ConflictEdge]:
+    """Compatibility name for callers predating the graph-model split.
+
+    Despite the historical name, returned values are symmetric
+    :class:`ConflictEdge` objects and are never inserted into a precedence DAG.
+    """
+    return build_similarity_conflicts(subtasks, threshold, ignore_patterns)

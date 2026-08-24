@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import orchestune.dispatch.scoring as dispatch_scoring
+from orchestune.dag.models import ConflictEdge, ConflictGraph
 from orchestune.dispatch.scoring import (
     Task,
     compute_priority_score,
@@ -75,6 +76,25 @@ class TestParseTaskFromIssue:
         assert task.footprint == ("src/foo.py", "src/bar.py")
         assert task.symbols == ("foo.Foo",)
         assert task.subtask_id == "task-a"
+
+    def test_parses_shared_contract_metadata_from_body(self):
+        issue = _issue(16)
+        issue = IssueRecord(
+            number=issue.number,
+            title=issue.title,
+            body=issue.body.replace(
+                "depends_on:\n  []\n",
+                "depends_on:\n  []\nshared_contract: plugin-registry\n"
+                "writes_shared_contract: true\n",
+            ),
+            labels=issue.labels,
+            created_at=issue.created_at,
+        )
+
+        task = parse_task_from_issue(issue)
+
+        assert task.shared_contract == "plugin-registry"
+        assert task.writes_shared_contract is True
 
     def test_missing_footprint_block_defaults_to_empty(self):
         issue = IssueRecord(
@@ -428,6 +448,51 @@ class TestComputePriorityScore:
 
 
 class TestSelectNextTasks:
+    def test_greedily_selects_a_deterministic_non_conflicting_set(self):
+        state = RunState(active_worktrees={}, launch_history=[])
+        high = _task(1, priority="high")
+        conflicting = _task(2, priority="medium")
+        independent = _task(3, priority="low")
+        conflicts = ConflictGraph(
+            (ConflictEdge("task-1", "task-2", reason="similarity"),)
+        )
+
+        selected = select_next_tasks(
+            [independent, conflicting, high],
+            state,
+            now=1_700_000_000.0,
+            max_concurrent=3,
+            max_launches_per_window=3,
+            window_seconds=3600,
+            conflict_graph=conflicts,
+        )
+
+        assert selected == [high, independent]
+
+    def test_excludes_candidates_conflicting_with_an_active_task(self):
+        state = RunState(
+            active_worktrees={"1": ActiveWorktree(1, "b", "w", 1, 1_699_999_000.0, ())},
+            launch_history=[],
+        )
+        conflicting = _task(2, priority="high")
+        independent = _task(3)
+        conflicts = ConflictGraph(
+            (ConflictEdge("task-1", "task-2", reason="similarity"),)
+        )
+
+        selected = select_next_tasks(
+            [conflicting, independent],
+            state,
+            now=1_700_000_000.0,
+            max_concurrent=3,
+            max_launches_per_window=3,
+            window_seconds=3600,
+            conflict_graph=conflicts,
+            active_subtask_ids={"task-1"},
+        )
+
+        assert selected == [independent]
+
     def test_risk_flagged_tasks_remain_eligible_for_dispatch(self):
         # risk:flagged is documentation-only visibility (docs/en/architecture.md
         # Human Approval Points, docs/en/status-labels.md); it must not act as

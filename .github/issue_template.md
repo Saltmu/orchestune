@@ -18,5 +18,7 @@ subtask_id: {{subtask_id_yaml}}
 footprint: {{footprint}}
 symbols: {{symbols}}
 depends_on: {{depends_on}}
+shared_contract: {{shared_contract}}
+writes_shared_contract: {{writes_shared_contract}}
 parent_issue_number: {{parent_issue_number}}
 ```

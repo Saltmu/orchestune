@@ -72,7 +72,7 @@ Each subtask item supports the following fields:
 * **`proposed_changes`** (list of strings, optional, defaults to `[]`): Items copied into the "Proposed Changes" section of the created issue.
 * **`verification_plan`** (list of strings, optional, defaults to `[]`): Steps copied into the "Verification Plan" section of the created issue.
 * **`risk`** (boolean, optional, defaults to `false`): Setting `true` explicitly flags the subtask as risky regardless of automatic detection (adding `explicit` to its risk reasons). Setting `false` does not disable automatic path/keyword based detection.
-* **`shared_contract`** (string, optional, no default): A tag identifying a shared extension point such as a registry or CLI wiring. Sharing the tag alone does not produce a warning: `orchestune-dag` only compares subtasks judged to actually **write** to the shared file, and pure consumers (subtasks that merely `depends_on` the contract and only read/import it) are excluded. A warning is emitted when two writers are not ordered relative to each other (neither is reachable from the other in the DAG).
+* **`shared_contract`** (string, optional, no default): A tag identifying a shared extension point such as a registry or CLI wiring. `orchestune-dag` only compares subtasks judged to actually **write** to the shared file; pure consumers (subtasks that merely `depends_on` the contract and only read/import it) are excluded. Writer pairs become exclusions in the Conflict Graph, and an additional warning appears when they are not ordered in the Precedence DAG (neither is reachable from the other).
 * **`writes_shared_contract`** (boolean, optional, defaults to `false`): Declares that this subtask writes to the `shared_contract` file. Writer status is first auto-detected by matching `footprint` paths against these filename categories:
     * `registry`: filenames containing `registry` / `registration` / `registrar` (e.g. `src/format_registry.py`)
     * `cli-wiring`: `cli.*` / `__main__.*` / `main.*`
@@ -94,7 +94,7 @@ When `orchestune provision` (Stage 4) runs, the parent (EPIC) issue is created o
 - **Concurrent Big Rocks**:
   To manage multiple big rocks in parallel, specify separate plan paths (e.g. `orchestune provision --plan plans/rock-a.md`) or manage them in isolated worktrees. Since each big rock's plan is persisted directly in its corresponding parent issue body, they remain cleanly separated and never conflict.
 - **`orchestune-dispatch` Does Not Read Plan Files**:
-  `orchestune-dispatch` reconstructs the execution DAG exclusively from the Footprint YAML blocks embedded within the child GitHub Issue bodies (`subtask_id`, `depends_on`, `footprint`, etc.). It never reads `decomposition_plan.md`. Therefore, dispatching, parallel execution, self-healing, and merge integration remain completely intact even if the local plan file is absent.
+  `orchestune-dispatch` reconstructs the Precedence DAG and Conflict Graph exclusively from the Footprint YAML blocks embedded within the child GitHub Issue bodies (`subtask_id`, `depends_on`, `footprint`, `symbols`, `shared_contract`, `writes_shared_contract`, etc.). It never reads `decomposition_plan.md`. Therefore, dispatching, parallel execution, self-healing, and merge integration remain completely intact even if the local plan file is absent.
 
 > [!NOTE]
 > `id` is the only required field. Parsing fails with an error if `id` is missing or blank.
@@ -152,7 +152,7 @@ Running with `--parent-issue` automatically persists `parent_issue_source: adopt
 
 ## 3. DAG Validation (orchestune-dag)
 
-Validates that the tasks defined in `decomposition_plan.md` form a valid Directed Acyclic Graph (DAG) and have no conflicts.
+Builds a Precedence DAG from explicit `depends_on` declarations, validates that it is acyclic, and separately displays the symmetric Conflict Graph inferred from `footprint`, `symbols`, and shared-contract metadata.
 While AI agents normally run this check automatically, you can also run it manually:
 
 ```bash
@@ -167,7 +167,7 @@ orchestune dag --plan decomposition_plan.md
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
-| `--threshold <float>` | - | Similarity edge threshold in `[0, 1]`. When omitted, falls back to the `dag_similarity_threshold` config-file setting (see below) if set, otherwise to `0.2` (`orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD`). Values outside `[0, 1]` (including `nan`/`inf`) are rejected with an error. |
+| `--threshold <float>` | - | Similarity-conflict threshold in `[0, 1]`. When omitted, falls back to the `dag_similarity_threshold` config-file setting (see below) if set, otherwise to `0.2` (`orchestune.dag.similarity.DEFAULT_SIMILARITY_THRESHOLD`). Values outside `[0, 1]` (including `nan`/`inf`) are rejected with an error. |
 
 ### Configuration File Options
 
@@ -175,8 +175,8 @@ Like `orchestune-dispatch` (§4), `orchestune-dag` also reads `orchestune.toml` 
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
-| `dag_ignore_patterns` (or `dag-ignore-patterns`) | `[]` | List of regex strings, matched only against `footprint` paths — `symbols` entries are never filtered by this setting and always contribute to similarity scoring. A matching footprint path is excluded from the similarity-*scoring input* (in addition to the built-in ignore list: `pyproject.toml`, `poetry.lock`, `logging.py`, `logger.py`, `config.py`, `settings.py`) — it can no longer contribute to a pair's overlap score. This does not guarantee a pair's inferred similarity edge disappears: the pair can still form (or keep) an edge through another unignored footprint path or through a shared `symbols` entry. It also does not guarantee the "File/Symbol Conflict" check below is suppressed — that check reads each subtask's original, unfiltered footprint, so removing the edge that used to connect two same-category writers can just as easily *cause* that warning to newly appear as prevent it. It has no effect on `DagCycleError` itself — that's only raised when a cycle is made up entirely of explicit `depends_on` edges, which `dag_ignore_patterns` cannot influence — nor on the independent Existence Verification or Risk Flags checks below. Empty strings are rejected (an empty pattern matches every footprint path and would silently remove every footprint item from scoring, though shared `symbols` entries could still form an edge). |
-| `dag_similarity_threshold` (or `dag-similarity-threshold`) | `0.2` | Persisted fallback for `--threshold` (see above), a float in `[0, 1]`. Also read by `orchestune provision`'s own DAG recomputation from the same config file, so a threshold tuned here isn't silently ignored there. Note: both `orchestune-dag` and `orchestune provision` resolve the repository root via the shared `resolve_repo_root()` helper, which walks up to the enclosing Git repository — so even when `--plan` points to a file nested below the repository root, both tools locate the same repository-root config consistently. |
+| `dag_ignore_patterns` (or `dag-ignore-patterns`) | `[]` | List of regex strings matched only against `footprint` paths; `symbols` always remain in the similarity-scoring input. A matching path is excluded, in addition to the built-in ignore list (`pyproject.toml`, `poetry.lock`, `logging.py`, `logger.py`, `config.py`, `settings.py`), from similarity Conflict Edge scoring and heuristic shared-contract-hotspot conflicts. A pair can still conflict through another unignored path or a shared `symbols` entry. Explicit `shared_contract` writer conflicts and the independent writer warning are unaffected. The Precedence DAG contains only explicit `depends_on` edges, so this setting cannot affect `DagCycleError`. Empty strings are rejected because they match every path. |
+| `dag_similarity_threshold` (or `dag-similarity-threshold`) | `0.2` | Persisted fallback for `--threshold` (see above), a float in `[0, 1]`. Also read by `orchestune provision`'s own Conflict Graph computation from the same config file, so a threshold tuned here isn't silently ignored there. Note: both `orchestune-dag` and `orchestune provision` resolve the repository root via the shared `resolve_repo_root()` helper, which walks up to the enclosing Git repository — so even when `--plan` points to a file nested below the repository root, both tools locate the same repository-root config consistently. |
 
 #### Example Config (`orchestune.toml`)
 
@@ -192,7 +192,8 @@ dag_similarity_threshold = 0.35
 ### Key Checks & Warnings
 A single `Warnings:` output can combine more than one of the warning types below at once — check each entry against its own wording rather than assuming they're all the same kind.
 * **`DagCycleError`**: Raised if there is a circular dependency within `depends_on`.
-* **File/Symbol Conflict**: Warnings or errors are output if multiple subtasks overlap in `footprint` or `symbols` without a defined dependency order.
+* **Conflict edges**: Similarity across `footprint` / `symbols` and shared-contract writer detection produce symmetric exclusions independent of priority or ID. Text output separates `Precedence edges:` from `Conflict edges:`; `--json` separates `precedence_edges` from `conflict_edges` (the compatibility `edges` key contains precedence only).
+* **Shared-contract writer warning**: A non-blocking warning accompanies the Conflict Edge when writers are not ordered in the Precedence DAG.
 * **Existence Verification (`footprint`/`symbols`)**: Warns when a declared `footprint` path or `symbols` entry cannot be confirmed to exist in the current codebase (e.g. `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`). This is not necessarily an error — a `footprint` path about to be created for the first time is always reported this way, but a not-yet-existing `symbols` entry is only reported when verification actually ran, which requires an existing, successfully-parsed `.py` file in the footprint *and* no unparseable existing `.py` file anywhere in it (even one file with a syntax/encoding error means verification is silently skipped for the whole subtask). When verification didn't run, no `symbols` warning appears at all — that silence does not mean the symbol was confirmed. See the [`orchestune` skill](../../skills/orchestune/SKILL.md)'s Stage 2 for the full triage guidance (typo/wrong path vs. a missed `footprint` declaration).
 * **Risk Flags**: Flags are set if potential security risks (credentials, subprocesses) are detected.
 
@@ -226,7 +227,7 @@ orchestune-dispatch
 | `--window-seconds <int>` | `3600` | The sliding window duration in seconds for launch rate-limiting and token quotas (default is 1 hour). |
 | `--max-tokens-per-window <int>` | - | Quota limit: maximum total tokens consumed across completed tasks within `--window-seconds`. When reached, new task launches are paused. Unlimited if omitted. |
 | `--max-tokens-per-task <int>` | - | Per-task limit: maximum token consumption allowed for a single subtask. If exceeded upon completion, automatic completion is halted and escalated to `status:blocked-human-review`. Unlimited if omitted. |
-| `--max-recompute-retries <int>` | `2` | Maximum DAG recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
+| `--max-recompute-retries <int>` | `2` | Maximum runtime Conflict Graph recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
 | `--task-timeout-seconds <int>` | `0` | Seconds after which a running task is treated as timed out and reclaimed by the GC. `0` (the default) disables timeout reclamation and only detects zombies. Set a positive value before leaving a run unattended. |
 | `--max-task-reclaims <int>` | `3` | Maximum number of times the zombie/timeout GC may return the same task to `status:queued`. Once exceeded, the task moves to `status:blocked-human-review` and is no longer requeued. `0` means the very first reclaim escalates; there is no value that makes it unlimited. |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | Maximum number of seconds a pending `status:not-needed` independent review (Cloud Routine target only) is kept without either outcome label appearing. An entry past the limit escalates to `status:blocked-human-review`; there is no value that makes it unlimited. |
@@ -297,5 +298,4 @@ Without a parent issue, the Integrator is responsible only up to creating an int
 ### 4.4 Auto-Rebase
 
 Downstream dependent task branches are rebased automatically depending on the state of the tasks they depend on. The rebase target is **the branch of the dependency whose PR has already passed CI** (stacking), not "the latest main". No auto-rebase happens when the dependency cannot be narrowed down to a single branch, or when the dependency has not passed CI yet.
-
 

@@ -29,6 +29,7 @@ from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import (
     _determine_candidate_tasks,
     _finalize_launch,
+    run_scheduling_phase,
 )
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
@@ -163,6 +164,140 @@ def _sub_issue(number, labels=(), state="OPEN"):
         state=state,
         parent={"number": 100},
     )
+
+
+class TestConflictAwareSchedulingPhase:
+    def test_excludes_candidate_conflicting_with_active_task(
+        self, tmp_path, fake_forge
+    ):
+        active_task = _task(
+            issue_number=1,
+            subtask_id="active",
+            footprint=("src/shared.py",),
+        )
+        conflicting = _task(
+            issue_number=2,
+            subtask_id="conflicting",
+            footprint=("src/shared.py",),
+            status_labels=("status:queued",),
+        )
+        independent = _task(
+            issue_number=3,
+            subtask_id="independent",
+            footprint=("src/other.py",),
+            status_labels=("status:queued",),
+        )
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="task/active",
+                    worktree_path=str(tmp_path / "active"),
+                    pid=123,
+                    started_at=1.0,
+                    declared_footprint=active_task.footprint,
+                )
+            }
+        )
+        config = DispatcherConfig(
+            apply=False,
+            max_concurrent=3,
+            max_launches_per_window=3,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        ctx = _ctx(
+            run_state=run_state,
+            tasks_by_issue={
+                1: active_task,
+                2: conflicting,
+                3: independent,
+            },
+            config=config,
+        )
+        issues = IssuesByStatus(
+            queued=[
+                _issue(2, labels=("status:queued",)),
+                _issue(3, labels=("status:queued",)),
+            ],
+            locked=[],
+            in_progress=[_issue(1, labels=("status:in-progress",))],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+
+        selected, quota_slots = run_scheduling_phase(
+            ctx,
+            issues,
+            ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            completed_subtask_ids=set(),
+            any_forced_serial=False,
+            deviation_events=[],
+            now=2.0,
+            config=config,
+        )
+
+        assert quota_slots == 2
+        assert [task.subtask_id for task in selected] == ["independent"]
+
+    def test_selects_deterministic_independent_set(self, tmp_path, fake_forge):
+        tasks = [
+            _task(
+                issue_number=2,
+                subtask_id="first",
+                footprint=("src/shared.py",),
+                status_labels=("status:queued",),
+            ),
+            _task(
+                issue_number=3,
+                subtask_id="second",
+                footprint=("src/shared.py",),
+                status_labels=("status:queued",),
+            ),
+            _task(
+                issue_number=4,
+                subtask_id="independent",
+                footprint=("src/other.py",),
+                status_labels=("status:queued",),
+            ),
+        ]
+        config = DispatcherConfig(
+            apply=False,
+            max_concurrent=3,
+            max_launches_per_window=3,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        ctx = _ctx(
+            tasks_by_issue={task.issue_number: task for task in tasks},
+            config=config,
+        )
+        issues = IssuesByStatus(
+            queued=[
+                _issue(task.issue_number, labels=("status:queued",)) for task in tasks
+            ],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+
+        selected, _ = run_scheduling_phase(
+            ctx,
+            issues,
+            ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            completed_subtask_ids=set(),
+            any_forced_serial=False,
+            deviation_events=[],
+            now=2.0,
+            config=config,
+        )
+
+        assert [task.subtask_id for task in selected] == ["first", "independent"]
 
 
 class TestDetermineCandidateTasksExcludesDualStatus:

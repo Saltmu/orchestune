@@ -55,14 +55,14 @@ class DispatcherConfig:
     # 明示的に設定することを推奨する（セットアップガイドの「導入要件」参照）。
     ci_command: list[str] | None = None
     # #398/#404: orchestune-dag CLIと同じorchestune.toml/[tool.orchestune]の
-    # dag_ignore_patternsから読み込んだ追加の無視パターン。DAG再計算
+    # dag_ignore_patternsから読み込んだ追加の無視パターン。Conflict Graph再計算
     # （_decide_footprint_deviation_outcome/_collect_active_conflict_subtask_ids）
     # にも一貫して適用し、初回検証で無視されたファイルが実行中の再計算で
     # 誤って競合として検知されないようにする。
     dag_ignore_patterns: tuple[re.Pattern[str], ...] = ()
     # #407レビュー(#415): orchestune-dag CLIと同じorchestune.toml/[tool.orchestune]の
     # dag_similarity_thresholdから読み込んだ閾値。dag_ignore_patternsと同様、
-    # 実行時DAG再計算（_decide_footprint_deviation_outcome/
+    # 実行時Conflict Graph再計算（_decide_footprint_deviation_outcome/
     # _collect_active_conflict_subtask_ids）とpost-cycle integratorにも
     # 一貫して適用し、orchestune-dagで意図的に消したエッジが既定閾値の
     # 再計算で復活してしまわないようにする。

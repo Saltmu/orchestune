@@ -11,6 +11,7 @@ from orchestune.dispatch.actor_verification import (
     _decide_actor_verification,
 )
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
@@ -156,6 +157,17 @@ def run_scheduling_phase(
         config.max_launches_per_window,
         config.window_seconds,
         max_tokens_per_window=config.max_tokens_per_window,
+        conflict_graph=build_task_conflict_graph(
+            ctx.tasks_by_issue.values(),
+            threshold=config.dag_similarity_threshold,
+            ignore_patterns=config.dag_ignore_patterns,
+        ),
+        active_subtask_ids={
+            task.subtask_id
+            for active in ctx.run_state.active_worktrees.values()
+            if (task := ctx.tasks_by_issue.get(active.issue_number)) is not None
+            and task.subtask_id
+        },
     )
     selected = _finalize_launch(
         selected, task_to_base_branch, candidate_tasks, ctx, now, config

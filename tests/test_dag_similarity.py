@@ -1,4 +1,4 @@
-"""類似度スコア計算・候補ペア絞り込み・類似度エッジ生成のテスト。
+"""類似度スコア計算・候補ペア絞り込み・競合辺生成のテスト。
 
 test_dag.py (1050行) から類似度関連(#479)を分割。フロントマターパースは
 test_dag_parsing.py、グラフ構築は test_dag_graph.py を参照。
@@ -59,7 +59,7 @@ class TestBuildSimilarityEdges:
         ]
         edges = build_similarity_edges(subtasks, threshold=0.2)
         assert len(edges) == 1
-        assert {edges[0].source, edges[0].target} == {"a", "b"}
+        assert {edges[0].left, edges[0].right} == {"a", "b"}
         assert edges[0].reason == "similarity"
 
     def test_no_edge_below_threshold(self):

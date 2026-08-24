@@ -258,7 +258,7 @@ def _validated_recompute_count(value: object) -> int:
 def recovery_counters_from_body(body: str) -> tuple[int, bool]:
     """#513: Footprint YAMLフェンスへ永続化された`recompute_count`/
     `forced_serial`を読み取る。自己修復（`dispatch_recovery.py`）が
-    `run_state.json`消失時にDAG再計算のリトライ上限とforced_serial
+    `run_state.json`消失時にConflict Graph再計算のリトライ上限とforced_serial
     フォールバックを復元するために使う。
 
     フェンス欠落・壊れたYAML・フィールド欠落（本フィールド導入前に
@@ -527,10 +527,20 @@ def _resolve_depends_on(
 
 def _extract_footprint_metadata(
     issue: IssueRecord,
-) -> tuple[str, tuple[str, ...], tuple[str, ...], bool, re.Match[str] | None]:
+) -> tuple[
+    str,
+    tuple[str, ...],
+    tuple[str, ...],
+    str | None,
+    bool,
+    bool,
+    re.Match[str] | None,
+]:
     subtask_id = ""
     footprint: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
+    shared_contract: str | None = None
+    writes_shared_contract = False
     yaml_error = False
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if match:
@@ -540,13 +550,24 @@ def _extract_footprint_metadata(
                 subtask_id = str(data.get("subtask_id", ""))
                 footprint = tuple(str(f) for f in (data.get("footprint") or []))
                 symbols = tuple(str(s) for s in (data.get("symbols") or []))
+                if data.get("shared_contract"):
+                    shared_contract = str(data["shared_contract"])
+                writes_shared_contract = data.get("writes_shared_contract") is True
         except yaml.YAMLError as e:
             print(
                 f"Warning: Failed to parse YAML from issue #{issue.number}: {e}",
                 file=sys.stderr,
             )
             yaml_error = True
-    return subtask_id, footprint, symbols, yaml_error, match
+    return (
+        subtask_id,
+        footprint,
+        symbols,
+        shared_contract,
+        writes_shared_contract,
+        yaml_error,
+        match,
+    )
 
 
 def _extract_labels_metadata(
@@ -592,6 +613,8 @@ def parse_task_from_issue(
         subtask_id,
         footprint,
         symbols,
+        shared_contract,
+        writes_shared_contract,
         yaml_error,
         match,
     ) = _extract_footprint_metadata(issue)
@@ -616,4 +639,6 @@ def parse_task_from_issue(
         parent_number=parent_number,
         issue_state=issue.state,
         parent_state=parent_state,
+        shared_contract=shared_contract,
+        writes_shared_contract=writes_shared_contract,
     )

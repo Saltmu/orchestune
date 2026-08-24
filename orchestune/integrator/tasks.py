@@ -46,15 +46,10 @@ def get_sorted_done_tasks(
     `subtask_id`を抽出できなかった`status:done`タスクで、マージ対象のIDに紐付けられない
     ため統合できない。
 
-    `ignore_patterns`（#398/#404/#407）: `orchestune-dag`/`orchestune-dispatch`と
-    同じ`dag_ignore_patterns`設定を渡すことで、無視されるべきfootprint衝突が
-    明示的な依存関係と組み合わさって偽の`DagCycleError`を誘発しないようにする
-    （`dispatch_rebase.py`/`dispatch_reconciliation.py`/`provisioning.py`と同じ配線）。
-
-    `threshold`（#407/#415）: 同じ`dag_similarity_threshold`設定を渡すことで、
-    低い（または高い）閾値で意図的に作られた・消された類似度エッジが
-    既定閾値での再計算により復活・消失し、統合順序（topological_order）が
-    検証時と食い違わないようにする。
+    `ignore_patterns`と`threshold`は既存呼び出しとの互換性を維持し、
+    `orchestune-dag`/`orchestune-dispatch`と同じConflict Graphを構築するために
+    `build_dag`へ渡す。統合順序（`topological_order`）自体は明示的な
+    `depends_on`だけで決まり、類似度設定には左右されない。
     """
     forge = forge or GitHubForge()
     done_issues = forge.list_issues_by_label("status:done", state="all")

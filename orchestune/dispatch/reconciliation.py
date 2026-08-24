@@ -64,7 +64,8 @@ def _collect_active_conflict_subtask_ids(
                 if conflict.blocked_subtask_id:
                     active_conflict_subtask_ids.add(conflict.blocked_subtask_id)
         except Exception:
-            # DAG再計算中の例外発生時も fail-closed とし、自動復帰させない（＝全てのサブタスクを競合中とする）
+            # Conflict Graph再計算中の例外発生時も fail-closed とし、
+            # 自動復帰させない（＝全てのサブタスクを競合中とする）
             for subtask_id in subtasks_for_recompute:
                 active_conflict_subtask_ids.add(subtask_id)
     return active_conflict_subtask_ids

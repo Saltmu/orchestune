@@ -157,13 +157,10 @@ class TestSymbolVerificationWarning:
         assert result.applied is True
 
 
-class TestDagIgnorePatterns:
+class TestConflictGraphConfig:
     """#398/#404: provision_issuesもorchestune-dagと同じdag_ignore_patternsを
-    尊重すること。3件のsubtaskで、無視されるべき共有ファイル
-    （package.json）だけが理由の類似度エッジが、他の明示的な依存関係と
-    組み合わさって疑似的な循環参照を作ってしまうケースで検証する
-    （task-c -> task-a -> task-b は明示的依存、task-b <-> task-c の
-    package.json共有だけが類似度エッジの原因）。"""
+    尊重すること。#659以降、共有`package.json`はConflict Graphだけへ入り、
+    `task-c -> task-a -> task-b`というPrecedence DAGのcycle判定には影響しない。"""
 
     def _plan(self) -> str:
         return (
@@ -191,7 +188,7 @@ class TestDagIgnorePatterns:
             "# Decomposition Plan\n"
         )
 
-    def test_without_ignore_pattern_phantom_similarity_edge_triggers_cycle_warning(
+    def test_similarity_conflict_never_triggers_cycle_warning(
         self, tmp_path: Path, template_path: Path, caplog
     ):
         plan_path = tmp_path / "decomposition_plan.md"
@@ -203,9 +200,9 @@ class TestDagIgnorePatterns:
                 plan_path, forge=forge, template_path=template_path, repo_root=tmp_path
             )
 
-        assert any("循環参照" in record.message for record in caplog.records)
+        assert not any("循環参照" in record.message for record in caplog.records)
 
-    def test_dag_ignore_patterns_prevents_phantom_cycle(
+    def test_dag_ignore_patterns_remains_accepted_after_graph_split(
         self, tmp_path: Path, template_path: Path, caplog
     ):
         plan_path = tmp_path / "decomposition_plan.md"
@@ -216,17 +213,18 @@ class TestDagIgnorePatterns:
         forge = FakeForge()
 
         with caplog.at_level("WARNING"):
-            provision_issues(
+            result = provision_issues(
                 plan_path, forge=forge, template_path=template_path, repo_root=tmp_path
             )
 
+        assert result.applied is True
         assert not any("循環参照" in record.message for record in caplog.records)
 
     def test_empty_string_pattern_is_rejected(
         self, tmp_path: Path, template_path: Path
     ):
         # #404レビュー指摘: 空文字列はre.compile("")で常に全パスにマッチし、
-        # 診断なしに全ての類似度エッジを消してしまうため拒否する
+        # 診断なしに全ての類似度競合辺を消してしまうため拒否する
         plan_path = tmp_path / "decomposition_plan.md"
         plan_path.write_text(self._plan(), encoding="utf-8")
         (tmp_path / "orchestune.toml").write_text(
@@ -246,9 +244,8 @@ class TestDagIgnorePatterns:
     ):
         """#407: `orchestune-dag --threshold`で永続化された
         `dag_similarity_threshold`設定を`orchestune-provision`も読み、
-        同じ閾値で`build_dag`を呼ぶこと。伝搬しないと、`orchestune-dag`が
-        意図的に消したエッジが既定閾値で再計算されて復活し、
-        `topological_order`が検証時と食い違いうる。"""
+        同じ閾値で`build_dag`を呼ぶこと。#659以降はConflict Graphの再現性を
+        保ち、`topological_order`自体は明示依存だけから決まる。"""
         plan_path = tmp_path / "decomposition_plan.md"
         plan_path.write_text(self._plan(), encoding="utf-8")
         (tmp_path / "orchestune.toml").write_text(

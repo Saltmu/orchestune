@@ -263,9 +263,18 @@ class TestBranchStacking:
             apply=True,
         )
         blocked_issue = _issue(
-            2, labels=("status:blocked",), subtask_id="task-2", depends_on=("task-1",)
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-2",
+            depends_on=("task-1",),
+            footprint=("src/b.py",),
         )
-        parent_issue = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        parent_issue = _issue(
+            1,
+            labels=("status:in-progress",),
+            subtask_id="task-1",
+            footprint=("src/a.py",),
+        )
 
         with (
             patch(
@@ -339,12 +348,25 @@ class TestBranchStacking:
             log_dir=tmp_path / "logs",
             apply=True,
         )
-        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        issue_a = _issue(
+            1,
+            labels=("status:in-progress",),
+            subtask_id="task-1",
+            footprint=("src/a.py",),
+        )
         issue_b = _issue(
-            2, labels=("status:blocked",), subtask_id="task-2", depends_on=("task-1",)
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-2",
+            depends_on=("task-1",),
+            footprint=("src/b.py",),
         )
         issue_c = _issue(
-            3, labels=("status:blocked",), subtask_id="task-3", depends_on=("task-2",)
+            3,
+            labels=("status:blocked",),
+            subtask_id="task-3",
+            depends_on=("task-2",),
+            footprint=("src/c.py",),
         )
 
         with (
