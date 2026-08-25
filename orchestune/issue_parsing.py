@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -351,12 +352,24 @@ def launch_history_from_body(body: str) -> list[float]:
     数値化できない要素は、いずれも「起動履歴なし」＝空リストへ倒す:
     壊れた値で上限判定を誤らせるより、復元できなかった分だけ緩くなる方が
     安全側（既定の`max_concurrent`は別途効く）。
+
+    #666レビュー: CRLF本文でブロックが重複追記されていた期間は、読み取りが
+    毎回空を返していたため、追記された各ブロックはその時点の1回分しか
+    持たない。最後のブロックだけを読むとウィンドウ内の他の起動を取りこぼし、
+    次の永続化でその不完全な履歴が正本になって`max_launches_per_window`を
+    超過し得る。全ブロックを`reconciliation`と同じ多重集合マージ
+    （タイムスタンプ値ごとに最大個数を採用）で束ねてから返す。
     """
-    match = _last_block_match(LAUNCH_HISTORY_BLOCK_PATTERN, body)
-    if not match:
-        return []
+    merged: Counter[float] = Counter()
+    for match in LAUNCH_HISTORY_BLOCK_PATTERN.finditer(body):
+        merged |= Counter(_launch_history_from_block(match.group(1)))
+    return sorted(merged.elements())
+
+
+def _launch_history_from_block(raw_yaml: str) -> list[float]:
+    """`launch_history`ブロック1個分のタイムスタンプ列を取り出す。"""
     try:
-        data = yaml.safe_load(match.group(1))
+        data = yaml.safe_load(raw_yaml)
     except yaml.YAMLError:
         return []
     if not isinstance(data, dict):

@@ -183,6 +183,50 @@ def test_backfill_launch_history_does_not_duplicate_block_in_crlf_body():
     assert launch_history_from_body(updated) == [1000.0, 1002.0]
 
 
+def test_launch_history_merges_all_duplicated_blocks():
+    """#666レビュー: 重複ブロックは部分的な履歴しか持たないため束ねて読む。
+
+    CRLF期間中は読み取りが毎回空を返していたので、追記された各ブロックは
+    その時点の1回分しか持たない。最後のブロックだけを読むとウィンドウ内の
+    他の起動を取りこぼし、上限判定が緩くなる。
+    """
+    body = (
+        _launch_history_body([1000.0])
+        + "\n"
+        + _launch_history_body([1001.0])
+        + "\n"
+        + _launch_history_body([1002.0])
+    )
+
+    assert launch_history_from_body(body) == [1000.0, 1001.0, 1002.0]
+
+
+def test_launch_history_merge_does_not_double_count_the_same_timestamp():
+    """同じ起動が複数ブロックに現れても二重計上しない（値ごとに最大個数）。
+
+    `dispatch/reconciliation.py`の多重集合マージと同じ意味論。
+    """
+    body = (
+        _launch_history_body([1000.0, 1000.0, 1001.0])
+        + "\n"
+        + _launch_history_body([1000.0])
+    )
+
+    assert launch_history_from_body(body) == [1000.0, 1000.0, 1001.0]
+
+
+def test_backfill_after_merged_read_collapses_to_one_complete_block():
+    """束ねた履歴を書き戻すと、1ブロックへ収束しつつ取りこぼしが無い。"""
+    body = _launch_history_body([1000.0]) + "\n" + _launch_history_body([1001.0])
+
+    merged = launch_history_from_body(body)
+    updated = backfill_launch_history(body, [*merged, 1002.0])
+
+    assert updated is not None
+    assert updated.count(LAUNCH_HISTORY_MARKER) == 1
+    assert launch_history_from_body(updated) == [1000.0, 1001.0, 1002.0]
+
+
 def test_backfill_launch_history_returns_none_when_crlf_body_already_matches():
     """CRLF本文でも「同じ値なら書き込まない」最適化が効くこと。"""
     body = _launch_history_body([1000.0]).replace("\n", "\r\n")
