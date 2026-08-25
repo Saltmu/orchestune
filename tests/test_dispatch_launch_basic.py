@@ -104,6 +104,56 @@ class TestDecideTaskLaunchPlan:
         assert plans[0].base_branch_for_launch == "parent/issue-99"
         assert plans[0].base_branch_for_state == "parent/issue-99"
 
+    def test_resolves_execution_selection_in_plan(self, tmp_path):
+        from orchestune.dispatch.execution_profiles import (
+            ExecutionProfileConfig,
+            TargetExecutionConfig,
+        )
+
+        task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2023-01-01T00:00:00+00:00",
+            execution_profile="deep",
+        )
+        profile_config = ExecutionProfileConfig(
+            profiles={
+                "deep": {
+                    "claude-cli": TargetExecutionConfig(
+                        model="claude-3-7-sonnet-20250219", reasoning_effort="high"
+                    )
+                }
+            }
+        )
+        from orchestune.dispatch.targets import (
+            CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+            LocalProcessDispatchTarget,
+        )
+
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            execution_profile_config=profile_config,
+            dispatch_target=LocalProcessDispatchTarget(
+                log_dir=tmp_path / "logs",
+                local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+            ),
+        )
+
+        plans = _decide_task_launch_plan([task], {}, config)
+        assert len(plans) == 1
+        assert plans[0].execution_selection is not None
+        assert plans[0].execution_selection.profile == "deep"
+        assert plans[0].execution_selection.model == "claude-3-7-sonnet-20250219"
+        assert plans[0].execution_selection.reasoning_effort == "high"
+
 
 class TestDecideDuplicateCandidates:
     """decide層: git ls-remoteの読み取りのみで重複判定し、githubへの書き込みは行わない。"""
@@ -305,6 +355,71 @@ class TestApplyTaskLaunches:
         active = run_state.active_worktrees["1"]
         assert active.started_at == dispatch_boundary_time
         assert active.started_at != cycle_now
+
+    def test_active_worktree_records_execution_selection_fields(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.targets import (
+            LocalProcessDispatchTarget,
+            default_dry_run_command_builder,
+        )
+
+        task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2023-01-01T00:00:00+00:00",
+            execution_profile="deep",
+        )
+        selection = ExecutionSelection(
+            profile="deep",
+            model="claude-3-7-sonnet-20250219",
+            reasoning_effort="high",
+            reason="profile 'deep' resolved for target 'claude-cli'",
+        )
+        plans = [
+            TaskLaunchPlan(
+                task,
+                "claude/issue-1-task-1",
+                None,
+                "origin/main",
+                execution_selection=selection,
+            )
+        ]
+        dispatch_target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, 1000.0, config)
+
+        active = run_state.active_worktrees["1"]
+        assert active.profile == "deep"
+        assert active.model == "claude-3-7-sonnet-20250219"
+        assert active.reasoning_effort == "high"
+        assert (
+            active.selection_reason == "profile 'deep' resolved for target 'claude-cli'"
+        )
 
     def test_invalid_subtask_id_with_resolved_dependency_is_not_requeued_on_next_cycle(
         self, tmp_path

@@ -31,6 +31,7 @@ class _DummyDispatchTarget(DispatchTarget):
         worktree_path: Path,
         *,
         force_push: bool = False,
+        execution_selection=None,
     ):
         return DispatchHandle(branch_name=branch_name)
 

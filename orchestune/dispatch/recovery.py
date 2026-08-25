@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from orchestune.dispatch.execution_profiles import resolve_execution_profile
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
@@ -125,6 +126,17 @@ def _recovery_counters_for_issue(issue: IssueRecord) -> tuple[int, bool]:
     return (recompute_count, forced_serial)
 
 
+def _resolve_recovery_pr_and_branch(
+    issue: IssueRecord,
+    subtask_id: str,
+    open_prs: list[PrRecord],
+) -> tuple[str, str | None, str | None]:
+    for pr in open_prs:
+        if issue.number in pr.closes_issue_numbers:
+            return pr.head_ref, str(pr.number), f"PR#{pr.number}"
+    return f"claude/issue-{issue.number}-{subtask_id}", None, None
+
+
 def _build_restored_active_worktree(
     issue: IssueRecord,
     subtask_id: str,
@@ -135,25 +147,20 @@ def _build_restored_active_worktree(
     config: DispatcherConfig,
 ) -> ActiveWorktree:
     recompute_count, forced_serial = _recovery_counters_for_issue(issue)
-    associated_pr = None
-    for pr in open_prs:
-        if issue.number in pr.closes_issue_numbers:
-            associated_pr = pr
-            break
-
-    if associated_pr:
-        branch_name = associated_pr.head_ref
-        external_id = str(associated_pr.number)
-        external_url = f"PR#{associated_pr.number}"
-    else:
-        branch_name = f"claude/issue-{issue.number}-{subtask_id}"
-        external_id = None
-        external_url = None
-
+    branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
+        issue, subtask_id, open_prs
+    )
     slug = branch_name.replace("/", "-")
     worktree_path = Path(config.worktree_root) / slug
     restored_base = _restored_base_branch(
         issue, open_prs, issue_to_subtask_id, subtask_id_to_issue_number
+    )
+
+    task = parse_task_from_issue(issue, issue_to_subtask_id)
+    execution_selection = resolve_execution_profile(
+        task.execution_profile,
+        config.dispatch_target,
+        config.execution_profile_config,
     )
 
     return ActiveWorktree(
@@ -168,6 +175,10 @@ def _build_restored_active_worktree(
         external_id=external_id,
         external_url=external_url,
         base_branch=restored_base,
+        profile=execution_selection.profile,
+        model=execution_selection.model,
+        reasoning_effort=execution_selection.reasoning_effort,
+        selection_reason=execution_selection.reason,
     )
 
 

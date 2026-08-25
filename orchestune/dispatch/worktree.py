@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.scoring import Task
@@ -17,6 +19,9 @@ from orchestune.dispatch.targets import (
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import file_lock as file_lock
 from orchestune.validation import validate_ref_name
+
+if TYPE_CHECKING:
+    from orchestune.dispatch.execution_profiles import ExecutionSelection
 
 
 @dataclass
@@ -36,6 +41,7 @@ class LaunchResult:
     # worktree準備中に作成された無関係な既存PRを新sessionの成果物と
     # 誤認する窓を最小化する。launchが行われなかった場合はNone。
     dispatch_started_at: float | None = None
+    execution_selection: ExecutionSelection | None = None
 
 
 def _branch_exists(branch_name: str) -> bool:
@@ -118,15 +124,42 @@ def _create_worktree(
     run_git(cmd, cwd=None, check=True)
 
 
+def _target_supports_execution_selection(dispatch_target: DispatchTarget) -> bool:
+    try:
+        sig = inspect.signature(dispatch_target.launch)
+        return "execution_selection" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (ValueError, TypeError):
+        return False
+
+
 def _provision_and_launch(
     dispatch_target: DispatchTarget,
     task: Task,
     branch_name: str,
     worktree_path: Path,
+    *,
+    force_push: bool = False,
+    execution_selection: ExecutionSelection | None = None,
 ) -> tuple[DispatchHandle, float]:
     """#262レビュー対応: dispatch_target.launch()直前の時刻をstarted_atとして取得し起動する。"""
     dispatch_started_at = time.time()
-    handle = dispatch_target.launch(task, branch_name, worktree_path)
+    if _target_supports_execution_selection(dispatch_target):
+        handle = dispatch_target.launch(
+            task,
+            branch_name,
+            worktree_path,
+            force_push=force_push,
+            execution_selection=execution_selection,
+        )
+    else:
+        handle = dispatch_target.launch(
+            task,
+            branch_name,
+            worktree_path,
+            force_push=force_push,
+        )
     return handle, dispatch_started_at
 
 
@@ -152,13 +185,18 @@ def _prepare_and_launch(
     worktree_root: str | Path,
     dispatch_target: DispatchTarget,
     base_branch: str | None,
+    execution_selection: ExecutionSelection | None = None,
 ) -> LaunchResult:
     worktree_created = False
     try:
         _create_worktree(worktree_path, Path(worktree_root), branch_name, base_branch)
         worktree_created = True
         handle, dispatch_started_at = _provision_and_launch(
-            dispatch_target, task, branch_name, worktree_path
+            dispatch_target,
+            task,
+            branch_name,
+            worktree_path,
+            execution_selection=execution_selection,
         )
         return LaunchResult(
             issue_number=task.issue_number,
@@ -169,6 +207,7 @@ def _prepare_and_launch(
             external_id=handle.external_id,
             external_url=handle.external_url,
             dispatch_started_at=dispatch_started_at,
+            execution_selection=execution_selection,
         )
     except (subprocess.CalledProcessError, OSError, BranchReachabilityError) as e:
         if worktree_created:
@@ -187,6 +226,7 @@ def _prepare_and_launch(
             pid=None,
             launched=False,
             error_message=f"{e}{error_details}",
+            execution_selection=execution_selection,
         )
 
 
@@ -219,6 +259,7 @@ def create_worktree_and_launch(
     dispatch_target: DispatchTarget,
     apply: bool,
     base_branch: str | None = None,
+    execution_selection: ExecutionSelection | None = None,
 ) -> LaunchResult:
     try:
         worktree_path = _resolve_worktree_path(worktree_root, branch_name)
@@ -235,6 +276,7 @@ def create_worktree_and_launch(
             launched=False,
             error_message=str(e),
             validation_error=True,
+            execution_selection=execution_selection,
         )
 
     if not apply:
@@ -244,6 +286,7 @@ def create_worktree_and_launch(
             worktree_path=str(worktree_path),
             pid=None,
             launched=False,
+            execution_selection=execution_selection,
         )
 
     backup_error = _cleanup_existing_worktree(worktree_path, task.issue_number)
@@ -259,4 +302,5 @@ def create_worktree_and_launch(
         worktree_root,
         dispatch_target,
         base_branch,
+        execution_selection=execution_selection,
     )

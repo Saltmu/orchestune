@@ -97,6 +97,7 @@ def _execute_cycle_pipeline(
         promotion_events=promotion_events,
         applied=config.apply,
         scheduling_decisions=scheduling.decisions,
+        execution_selections=scheduling.execution_selections,
     )
 
 
