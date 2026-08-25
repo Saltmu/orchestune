@@ -161,6 +161,55 @@ score = base priority
 
 **観測性と切り戻し**: 選出されたかどうかに関わらず、全候補のスコア内訳・bottom level・解放数・推定コスト・rank精度フラグ・見送り理由（`conflict` / `quota-exhausted` / `token-budget` / `launch-failed`、およびスコアリング以前に外れた `yaml-error` / `external-lock` / `blocked-recompute` / `already-active`）がcycle report、`--json`出力、`events.jsonl`へ記録されます。スコアリング対象外となった候補（YAML不正・外部ロック・再計算ブロック・既に実行中）も、理由付きの未選出判定として残し、raw rankと推定コストにはダミーの0ではなく実値を記録します——特にYAML不正のタスクはapply時に実際に処理される（`status:blocked-*`へ落とされる）ため、レポートから消したり診断値を0で埋めたりすると有用な根拠が失われます。選出（scheduling）と実起動（launch）も別物です。起動枠の予約が取れなかった／`create_worktree_and_launch`が失敗したタスクは、`reconcile_decisions_with_launches`によって`launch-failed`へ落とされるため、レポートが`CycleReport.selected`と食い違うことはありません。`--scheduling-mode legacy`を指定すれば#660以前のスコアリングへ切り戻しつつ、これらの診断情報は維持できます。
 
+### Execution Profiles: 抽象プロファイルとモデル選定（Execution Profiles & Model Resolution）
+
+サブタスクの実行特性（「高精度な推論が必要」「定型的な高速コード生成」「標準的なバランス」）と、実行環境・利用可能なLLMモデル（Claude 3.7 Sonnet, GPT-4o, o3-miniなど）を疎結合に保つため、Orchestuneは**Execution Profiles**による抽象化機構を採用しています（#663 / #668 / #669 / #670）。
+
+```mermaid
+graph LR
+    subgraph Plan ["タスク定義 (Issue Footprint)"]
+        EP["execution_profile: deep-reasoning<br/>（抽象プロファイル名）"]
+    end
+
+    subgraph Config ["リポジトリ設定 (orchestune.toml)"]
+        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'claude-3-7-sonnet'<br/>codex-cli: model = 'o3-mini', reasoning = 'high'<br/>cloud-routine: model = 'claude-3-7-sonnet'"]
+    end
+
+    subgraph Resolver ["L2: resolve_execution_profile (決定論的解決)"]
+        RES["ExecutionSelection<br/>(profile, model, reasoning_effort, reason)"]
+    end
+
+    subgraph Target ["L2: DispatchTarget (起動)"]
+        T1["claude-cli / agy-cli: --model ..."]
+        T2["codex-cli: --model ... -c model_reasoning_effort=..."]
+        T3["cloud-routine / codex-cloud: API payload"]
+    end
+
+    EP --> Resolver
+    CFG --> Resolver
+    Resolver --> RES
+    RES --> Target
+```
+
+* **設計思想（関心の分離とポータビリティ）**:
+  `decomposition_plan.md` や GitHub IssueのFootprint YAMLには、特定ベンダーのモデル文字列（例: `claude-3-7-sonnet-20250219`）やCLIオプションを直接記述せず、`execution_profile: "deep-reasoning"` や `execution_profile: "fast-code"` といった抽象プロファイル名を指定します。これにより、開発者がローカル環境で `claude-cli` を使う場合でも、CI上で `cloud-routine` や `codex-cloud` へディスパッチする場合でも、Issueの再起票や計画ファイルの書き換えを行うことなく、リポジトリ設定に応じた最適なモデルへ決定論的にマッピングされます。
+* **ターゲット能力マッピング（Target Capability Mapping）**:
+  `orchestune/dispatch/execution_profiles.py` の `resolve_execution_profile` は純粋関数として決定論的に動作し、リポジトリの `[tool.orchestune.execution_profiles]`（または `[execution_profiles]`）定義に従って、対象ターゲットの能力に応じた具体的なモデル・推論強度を解決します。
+  * `claude-cli` / `agy-cli`: `--model <model>` をコマンドに付与。推論強度（`reasoning_effort`）はCLI仕様上非対応のため、警告ログを出力した上で安全にスキップします。
+  * `codex-cli`: `--model <model>` および `-c model_reasoning_effort=<effort>` を付与。
+  * `cloud-routine`: APIリクエストペイロードの `model` フィールドに設定。
+  * `codex-cloud`: Codex Cloudセッションのパラメータに設定。
+  非対応のターゲット固有フラグが指定された場合でも、ディスパッチサイクルを中断させることなく安全に縮退（警告ログの出力＋スキップ）します。
+* **#660 スケジューラとの明確な責務境界**:
+  * **#660 スケジューリングエンジン**: **「いつ（WHEN）」「どの（WHICH）」** タスクを起動するかを決定します。Precedence DAGのクリティカルパス（bottom level）、後続タスク解放数、過去履歴に基づくトークン消費見積もり、手戻りリスク、同時実行数上限、および時間窓トークン予算（Token Budget）の制約下で候補を選出します。
+  * **Execution Profiles**: 選出されたタスクを **「どのように（HOW）」** 実行するかを決定します。選ばれたタスクの抽象プロファイルに基づき、設定されたディスパッチターゲットに適合する具体的なLLMモデルと推論強度（`reasoning_effort`）を決定論的にマッピングして渡します。
+  * スケジューラはモデル固有の文字列や推論パラメータに関知せず、Execution Profilesはタスクの優先順位付けやクオータ消費判定に関知しません。
+* **フォールバックと縮退保証**:
+  * `execution_profile` が未指定または `null` の場合、`default_execution_profile`（既定は `balanced`）へ解決されます。
+  * 設定ファイルに存在しない未知のプロファイル名が指定された場合、警告ログを出力した上で安全に `default_execution_profile` へフォールバックします。
+  * リポジトリにプロファイル設定が存在しない場合、モデル・推論強度 `None` の `default_execution_profile`（ターゲット側の既定モデルに委譲）として解決されます。
+  * 選定されたプロファイル・モデル・推論強度・選定理由は `ActiveWorktree` および `CompletedWorktree`（`run_state.json`）に永続化され、CycleReport、GitHub Step Summary、イベントログ（`events.jsonl`）、親Issueコメントに記録されます。
+
 ### 通常のfootprint重複と「共有コントラクトゲート」の違い
 
 上記の重複分析（`dag/similarity.py`）は、サブタスクが**宣言済み**の`footprint`/`symbols`の文字列が一致する（または加重コサイン類似度が閾値を超える）場合にsimilarity由来の競合辺を追加します。これは既に存在するファイルを複数タスクが編集する通常のケースには有効ですが、グリーンフィールドな分解計画では別の失敗モードが起こり得ます。

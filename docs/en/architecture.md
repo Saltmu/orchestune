@@ -161,6 +161,55 @@ score = base priority
 
 **Observability and rollback**: every candidate — selected or not — contributes its score breakdown, bottom level, release counts, cost estimates, rank-exactness flags and skip reason (`conflict` / `quota-exhausted` / `token-budget` / `launch-failed`, plus `yaml-error` / `external-lock` / `blocked-recompute` / `already-active` for candidates dropped before scoring) to the cycle report, the `--json` output and `events.jsonl`. Candidates dropped before scoring (invalid YAML, external lock, recompute-blocked, already running) are kept as unselected decisions with their own reason and real raw rank/cost metadata — an invalid-YAML task in particular is still processed in apply mode (it is moved to `status:blocked-*`), so dropping it or filling its diagnostics with placeholder zeroes would hide useful evidence. Scheduling selection and actual launch are likewise distinct: a task whose launch slot could not be reserved, or whose `create_worktree_and_launch` failed, is downgraded to `launch-failed` by `reconcile_decisions_with_launches`, so the report never disagrees with `CycleReport.selected`. `--scheduling-mode legacy` restores the pre-#660 scoring while retaining these diagnostics.
 
+### Execution Profiles & Model Resolution
+
+To decouple a subtask's execution characteristics (e.g., "requires deep reasoning," "routine fast code generation," "standard balanced") from concrete LLM vendor models and runtime target environments (Claude 3.7 Sonnet, GPT-4o, o3-mini, etc.), Orchestune adopts an abstract **Execution Profiles** mechanism (#663 / #668 / #669 / #670).
+
+```mermaid
+graph LR
+    subgraph Plan ["Task Definition (Issue Footprint)"]
+        EP["execution_profile: deep-reasoning<br/>(Abstract profile name)"]
+    end
+
+    subgraph Config ["Repository Configuration (orchestune.toml)"]
+        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'claude-3-7-sonnet'<br/>codex-cli: model = 'o3-mini', reasoning = 'high'<br/>cloud-routine: model = 'claude-3-7-sonnet'"]
+    end
+
+    subgraph Resolver ["L2: resolve_execution_profile (Deterministic)"]
+        RES["ExecutionSelection<br/>(profile, model, reasoning_effort, reason)"]
+    end
+
+    subgraph Target ["L2: DispatchTarget (Launch)"]
+        T1["claude-cli / agy-cli: --model ..."]
+        T2["codex-cli: --model ... -c model_reasoning_effort=..."]
+        T3["cloud-routine / codex-cloud: API payload"]
+    end
+
+    EP --> Resolver
+    CFG --> Resolver
+    Resolver --> RES
+    RES --> Target
+```
+
+* **Design Philosophy (Separation of Concerns & Portability)**:
+  `decomposition_plan.md` and child issue Footprint YAML blocks specify abstract profile names such as `execution_profile: "deep-reasoning"` or `execution_profile: "fast-code"` rather than vendor-specific model strings (e.g., `claude-3-7-sonnet-20250219`) or target CLI flags. When running locally with `claude-cli` or `codex-cli`, or dispatching on CI via `cloud-routine` or `codex-cloud`, the abstract profile maps deterministically to target-appropriate models without rewriting issues or plan files.
+* **Target Capability Mapping**:
+  `orchestune/dispatch/execution_profiles.py`'s `resolve_execution_profile` is a pure deterministic function that resolves models and reasoning effort based on `[tool.orchestune.execution_profiles]` (or `[execution_profiles]`):
+  * `claude-cli` / `agy-cli`: Attaches `--model <model>` to CLI invocations. If `reasoning_effort` is configured, logs a warning and safely skips the unsupported setting.
+  * `codex-cli`: Attaches `--model <model>` and `-c model_reasoning_effort=<effort>`.
+  * `cloud-routine`: Sets `model` in the API fire payload.
+  * `codex-cloud`: Configures Codex Cloud task parameters.
+  Unsupported target options degrade safely (warning logged, parameter omitted) without aborting the dispatch cycle.
+* **Responsibility Boundary with the #660 Scheduler**:
+  * **#660 Scheduling Engine**: Decides **"WHEN" and "WHICH"** candidate tasks to launch based on DAG topology, Precedence DAG bottom level (critical path), downstream release count, token cost estimation, rework risk, concurrency limits, and token window budgets.
+  * **Execution Profiles**: Decides **"HOW"** the selected tasks execute by deterministically resolving the abstract profile into concrete model and reasoning effort parameters for the target.
+  * The scheduler operates without knowledge of model strings or reasoning tiers, and the profile resolver does not influence candidate ranking or quota gating.
+* **Fallback & Degradation Guarantees**:
+  * Unspecified or `null` execution profiles resolve to `default_execution_profile` (default: `balanced`).
+  * Unknown profile names log a warning and deterministically fall back to `default_execution_profile`.
+  * When no execution profile configuration is present, resolves to `default_execution_profile` with `None` (delegating to the target's built-in default).
+  * Selected profile, model, reasoning effort, and resolution reasons are persisted in `ActiveWorktree` and `CompletedWorktree` (`run_state.json`), and recorded in CycleReports, GitHub Step Summaries, event logs (`events.jsonl`), and parent issue comments.
+
 ### Ordinary Footprint Overlap vs. the Shared-Contract Gate
 
 The overlap analysis above (`dag/similarity.py`) adds a similarity conflict edge only when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.

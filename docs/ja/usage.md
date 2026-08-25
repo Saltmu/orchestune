@@ -249,6 +249,30 @@ max-concurrent = 2
 dispatch-target = "claude-cli"
 parent-issue = 181
 run-state-path = "run_state.json"
+default_execution_profile = "balanced"
+
+[execution_profiles.balanced.claude-cli]
+model = "claude-3-5-haiku-20241022"
+
+[execution_profiles.balanced.codex-cli]
+model = "gpt-4o-mini"
+reasoning_effort = "low"
+
+[execution_profiles.deep-reasoning.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+
+[execution_profiles.deep-reasoning.codex-cli]
+model = "o3-mini"
+reasoning_effort = "high"
+
+[execution_profiles.deep-reasoning.cloud-routine]
+model = "claude-3-7-sonnet-20250219"
+
+[execution_profiles.fast-code.claude-cli]
+model = "claude-3-5-sonnet-20241022"
+
+[execution_profiles.fast-code.codex-cli]
+model = "gpt-4o"
 ```
 
 #### 設定ファイルの記述例 (`pyproject.toml`)
@@ -258,12 +282,29 @@ max-concurrent = 2
 dispatch-target = "claude-cli"
 parent-issue = 181
 run-state-path = "run_state.json"
+default_execution_profile = "balanced"
+
+[tool.orchestune.execution_profiles.balanced.claude-cli]
+model = "claude-3-5-haiku-20241022"
+
+[tool.orchestune.execution_profiles.balanced.codex-cli]
+model = "gpt-4o-mini"
+reasoning_effort = "low"
+
+[tool.orchestune.execution_profiles.deep-reasoning.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+
+[tool.orchestune.execution_profiles.deep-reasoning.codex-cli]
+model = "o3-mini"
+reasoning_effort = "high"
 ```
 
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
 > 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
+>
+> `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 
 ---
 
