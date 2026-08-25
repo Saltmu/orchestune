@@ -1124,3 +1124,20 @@ def test_relative_import_resolution_multilevel() -> None:
         )
         == "orchestune.forge.issues"
     )
+
+
+def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
+    """#670: Both architecture documents explain Execution Profiles and their boundary with #660 scheduler."""
+    for lang in DOC_LANGUAGES:
+        lines = _architecture_doc(lang)
+        doc_text = "\n".join(lines)
+        assert (
+            "Execution Profiles" in doc_text
+        ), f"{lang}: Execution Profiles section missing"
+        assert "#660" in doc_text, f"{lang}: #660 scheduler reference missing"
+        assert (
+            "resolve_execution_profile" in doc_text
+        ), f"{lang}: resolve_execution_profile reference missing"
+        assert (
+            "ExecutionSelection" in doc_text
+        ), f"{lang}: ExecutionSelection reference missing"

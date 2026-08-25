@@ -249,6 +249,30 @@ max-concurrent = 2
 dispatch-target = "claude-cli"
 parent-issue = 181
 run-state-path = "run_state.json"
+default_execution_profile = "balanced"
+
+[execution_profiles.balanced.claude-cli]
+model = "claude-3-5-haiku-20241022"
+
+[execution_profiles.balanced.codex-cli]
+model = "gpt-4o-mini"
+reasoning_effort = "low"
+
+[execution_profiles.deep-reasoning.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+
+[execution_profiles.deep-reasoning.codex-cli]
+model = "o3-mini"
+reasoning_effort = "high"
+
+[execution_profiles.deep-reasoning.cloud-routine]
+model = "claude-3-7-sonnet-20250219"
+
+[execution_profiles.fast-code.claude-cli]
+model = "claude-3-5-sonnet-20241022"
+
+[execution_profiles.fast-code.codex-cli]
+model = "gpt-4o"
 ```
 
 #### Example Config (`pyproject.toml`)
@@ -258,12 +282,29 @@ max-concurrent = 2
 dispatch-target = "claude-cli"
 parent-issue = 181
 run-state-path = "run_state.json"
+default_execution_profile = "balanced"
+
+[tool.orchestune.execution_profiles.balanced.claude-cli]
+model = "claude-3-5-haiku-20241022"
+
+[tool.orchestune.execution_profiles.balanced.codex-cli]
+model = "gpt-4o-mini"
+reasoning_effort = "low"
+
+[tool.orchestune.execution_profiles.deep-reasoning.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+
+[tool.orchestune.execution_profiles.deep-reasoning.codex-cli]
+model = "o3-mini"
+reasoning_effort = "high"
 ```
 
 > [!NOTE]
 > Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
 > Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
+>
+> In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 
 ---
 
