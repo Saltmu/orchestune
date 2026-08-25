@@ -329,6 +329,25 @@ def _build_scoring_inputs(
     )
 
 
+def _token_penalty_factor(estimate: CostEstimate, max_tokens: float) -> float:
+    """推定トークン量のpenalty係数。不明（`None`）なら`0.0`。
+
+    PR#665レビュー指摘(Claude): `tokens or 0`という書き方は「不明＝無料」と
+    読めてしまい、「0と推定して無料扱いにしない」という`cost_model`の設計意図と
+    矛盾して見える。実際には矛盾しない——`CostModel.estimate`の縮退は
+    「そのタスクの履歴 → fleet全体の履歴」であり、fleetに1件でもusage記録が
+    あれば全候補が中央値を受け取る。つまり`tokens is None`は候補集合の全員で
+    同時にしか成立せず（`max_tokens`も0になり）、penaltyは全員0で打ち消し合う
+    ため順位に影響しない。「不明な候補だけが得をする」混在状態は起こらない。
+
+    その前提が将来の変更で崩れないよう、`None`を明示的に分岐したうえで、
+    混在が起きないことを`tests/test_dispatch_scheduling.py`で固定する。
+    """
+    if estimate.tokens is None:
+        return 0.0
+    return _normalized(float(estimate.tokens), max_tokens)
+
+
 def _critical_path_decision(
     task: Task, run_state: RunState, now: float, inputs: _ScoringInputs
 ) -> SchedulingDecision:
@@ -344,7 +363,7 @@ def _critical_path_decision(
         unlock=UNLOCK_WEIGHT * _normalized(downstream, inputs.max_downstream),
         progress=PROGRESS_BONUS if task.progress_partial else 0.0,
         token_penalty=TOKEN_COST_WEIGHT
-        * _normalized(float(estimate.tokens or 0), inputs.max_tokens),
+        * _token_penalty_factor(estimate, inputs.max_tokens),
         rework_penalty=REWORK_WEIGHT * estimate.rework_risk,
     )
     return SchedulingDecision(

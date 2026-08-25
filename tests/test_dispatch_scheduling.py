@@ -488,3 +488,43 @@ class TestLaunchReconciliation:
             reconcile_decisions_with_launches(decisions, [_task(1), _task(2)])
             == decisions
         )
+
+
+class TestUnknownTokenCostInvariant:
+    """PR#665レビュー指摘(Claude)の回帰防止。
+
+    「トークン量が不明な候補だけがpenalty 0で得をする」状態が起こらないこと。
+    `CostModel`はfleet全体の中央値へ縮退するため、`tokens is None`は候補集合の
+    全員で同時にしか成立しない——この前提が崩れると不明であることが有利に働く。
+    """
+
+    def test_a_task_without_its_own_usage_history_still_gets_a_fleet_estimate(self):
+        # issue 1にだけusage記録があり、issue 2には無い状態でも「片方だけ不明」に
+        # はならない（issue 2はfleet中央値を受け取る）。
+        state = RunState(
+            completed_worktrees=[_completed(1, NOW - 300, total_tokens=500)]
+        )
+
+        result = _select([_task(1), _task(2)], run_state=state)
+
+        assert [d.estimated_tokens for d in result.decisions] == [500, 500]
+
+    def test_when_no_usage_was_ever_recorded_every_token_penalty_is_zero(self):
+        state = RunState(completed_worktrees=[_completed(1, NOW - 300)])
+
+        result = _select([_task(1), _task(2)], run_state=state)
+
+        assert all(d.estimated_tokens is None for d in result.decisions)
+        assert all(d.components.token_penalty == 0.0 for d in result.decisions)
+
+    def test_unknown_token_cost_is_never_mixed_with_known_ones(self):
+        for state in (
+            RunState(),
+            RunState(completed_worktrees=[_completed(1, NOW - 300)]),
+            RunState(completed_worktrees=[_completed(1, NOW - 300, total_tokens=900)]),
+        ):
+            decisions = _select(
+                [_task(1), _task(2), _task(3)], run_state=state
+            ).decisions
+            unknown = [d.estimated_tokens is None for d in decisions]
+            assert all(unknown) or not any(unknown)
