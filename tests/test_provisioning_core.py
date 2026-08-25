@@ -269,6 +269,21 @@ class TestValidateTemplateIdentityMarker:
         with pytest.raises(ValueError, match="execution_profile"):
             _validate_template_identity_marker(template, tmp_path / "t.md")
 
+    def test_rejects_template_with_quoted_execution_profile_placeholder(
+        self, tmp_path: Path
+    ):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            'execution_profile: "{{execution_profile}}"\n'
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="execution_profile"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
 
 class TestIsEpicIssue:
     """`--parent-issue`検証用: `is_epic_issue`がEPIC構造（タイトル接頭辞+本文

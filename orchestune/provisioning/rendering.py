@@ -176,30 +176,36 @@ def _execution_profile_from_body(body: str) -> str | None:
     return str(profile) if profile is not None else None
 
 
-def _validate_template_identity_marker(
-    template: str, template_path: str | Path
-) -> None:
-    probe_id = "orchestune-template-probe: needs-quoting #1"
-    probe_depends_on = ("orchestune-template-probe-dep",)
-    probe_profile = "probe-profile"
-    probe = SubTask(
+def _make_probe(
+    probe_id: str, probe_deps: tuple[str, ...], profile: str | None
+) -> SubTask:
+    return SubTask(
         id=probe_id,
         description="",
         footprint=(),
         symbols=(),
-        depends_on=probe_depends_on,
+        depends_on=probe_deps,
         risk=False,
         risk_reasons=(),
-        execution_profile=probe_profile,
+        execution_profile=profile,
     )
+
+
+def _validate_template_identity_marker(
+    template: str, template_path: str | Path
+) -> None:
+    probe_id = "orchestune-template-probe: needs-quoting #1"
+    probe_deps = ("orchestune-template-probe-dep",)
+    probe = _make_probe(probe_id, probe_deps, "probe-profile")
     rendered = _render_issue_body(probe, template)
+
     if _subtask_id_from_body(rendered) != probe_id:
         raise ValueError(
             f"{template_path} から subtask_id を再照合できません"
             "（'{{subtask_id_yaml}}' がFootprint YAMLフェンス内の"
             "'subtask_id:' として描画されていません）。冪等性が壊れます"
         )
-    if _depends_on_from_body(rendered) != probe_depends_on:
+    if _depends_on_from_body(rendered) != probe_deps:
         raise ValueError(
             f"{template_path} から depends_on を再照合できません"
             "（'{{depends_on}}' がFootprint YAMLフェンス内の"
@@ -216,9 +222,17 @@ def _validate_template_identity_marker(
             "'parent_issue_number:' として描画されていません）。ネイティブ"
             "Sub-issue関係が使えない環境でDispatcherが子Issueを発見できなくなります"
         )
-    if _execution_profile_from_body(rendered) != probe_profile:
+    if _execution_profile_from_body(rendered) != "probe-profile":
         raise ValueError(
             f"{template_path} から execution_profile を再照合できません"
             "（'{{execution_profile}}' がFootprint YAMLフェンス内の"
             "'execution_profile:' として描画されていません）。実行プロファイルが永続化されません"
+        )
+    rendered_none = _render_issue_body(
+        _make_probe(probe_id, probe_deps, None), template
+    )
+    if _execution_profile_from_body(rendered_none) is not None:
+        raise ValueError(
+            f"{template_path} から execution_profile(null) を再照合できません"
+            "（'{{execution_profile}}' が引用符等で囲まれているため、未指定時に'null'文字列として解釈されます）"
         )
