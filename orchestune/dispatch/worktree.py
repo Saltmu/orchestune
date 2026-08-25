@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import shutil
 import subprocess
 import sys
@@ -123,6 +124,16 @@ def _create_worktree(
     run_git(cmd, cwd=None, check=True)
 
 
+def _target_supports_execution_selection(dispatch_target: DispatchTarget) -> bool:
+    try:
+        sig = inspect.signature(dispatch_target.launch)
+        return "execution_selection" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (ValueError, TypeError):
+        return False
+
+
 def _provision_and_launch(
     dispatch_target: DispatchTarget,
     task: Task,
@@ -134,7 +145,7 @@ def _provision_and_launch(
 ) -> tuple[DispatchHandle, float]:
     """#262レビュー対応: dispatch_target.launch()直前の時刻をstarted_atとして取得し起動する。"""
     dispatch_started_at = time.time()
-    try:
+    if _target_supports_execution_selection(dispatch_target):
         handle = dispatch_target.launch(
             task,
             branch_name,
@@ -142,7 +153,7 @@ def _provision_and_launch(
             force_push=force_push,
             execution_selection=execution_selection,
         )
-    except TypeError:
+    else:
         handle = dispatch_target.launch(
             task,
             branch_name,

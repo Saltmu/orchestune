@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -785,6 +786,44 @@ class TestProvisionAndLaunch:
                 force_push=False,
                 execution_selection=None,
             )
+
+    def test_legacy_dispatch_target_signature_fallback_in_provision_and_launch(
+        self, tmp_path
+    ):
+        """execution_selection引数を持たないレガシーDispatchTargetでも安全に起動できる。"""
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        task = _task(1)
+        worktree_path = tmp_path / "worktrees" / "feature-1"
+
+        class _CustomLegacyTarget:
+            def __init__(self):
+                self.called_with = None
+
+            def launch(
+                self,
+                task: Task,
+                branch_name: str,
+                worktree_path: Path,
+                *,
+                force_push: bool = False,
+            ) -> DispatchHandle:
+                self.called_with = (task, branch_name, worktree_path, force_push)
+                return DispatchHandle(branch_name=branch_name, pid=123)
+
+        legacy_target = _CustomLegacyTarget()
+        selection = ExecutionSelection(
+            profile="deep", model="gpt-4o", reasoning_effort=None, reason="test"
+        )
+        handle, _ = _provision_and_launch(
+            legacy_target,  # type: ignore[arg-type]
+            task,
+            "feature/1",
+            worktree_path,
+            execution_selection=selection,
+        )
+        assert handle.pid == 123
+        assert legacy_target.called_with == (task, "feature/1", worktree_path, False)
 
 
 class TestCleanupFailedWorktree:
