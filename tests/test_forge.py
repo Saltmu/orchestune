@@ -410,7 +410,7 @@ class TestGitHubForgeRun:
     def test_run_passes_input_text_with_utf8(self):
         with patch("orchestune.forge.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="created", stderr=""
+                args=[], returncode=0, stdout=b"created", stderr=b""
             )
             res = GitHubForge()._run(
                 ["gh", "issue", "create", "--body-file", "-"],
@@ -418,18 +418,23 @@ class TestGitHubForgeRun:
             )
 
         assert res == "created"
-        assert mock_run.call_args.kwargs.get("input") == "日本語本文とタイトル\n🌟"
-        assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
-        assert mock_run.call_args.kwargs.get("errors") == "replace"
+        # #664: stdinを渡す経路はUTF-8バイト列で書き込み、出力は自前で復号する
+        # （OSによる改行変換を避けるため）。
+        assert (
+            mock_run.call_args.kwargs.get("input")
+            == "日本語本文とタイトル\n🌟".encode()
+        )
+        assert mock_run.call_args.kwargs.get("text") is not True
 
     def test_run_normalizes_crlf_in_input_text_to_prevent_cr_accumulation(self):
         # Issue #558: Windows上ではtext=Trueでのsubprocess stdin書き込み時に
         # \nが\r\nへ変換される。既にCRLFを含む本文(GitHubから再取得した既存
         # Issue本文など)をそのまま渡すと、書き込みのたびに\rが積み上がる。
         # _run()側で事前にCRLF/CRをLFへ正規化することで、この蓄積を防ぐ。
+        # #664: さらにバイト列で書き込むことで、OS側の再変換も断つ。
         with patch("orchestune.forge.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="ok", stderr=""
+                args=[], returncode=0, stdout=b"ok", stderr=b""
             )
             GitHubForge()._run(
                 ["gh", "issue", "edit", "1", "--body-file", "-"],
@@ -437,8 +442,8 @@ class TestGitHubForgeRun:
             )
 
         sent_input = mock_run.call_args.kwargs.get("input")
-        assert sent_input == "line1\nline2\nline3\n"
-        assert "\r" not in sent_input
+        assert sent_input == b"line1\nline2\nline3\n"
+        assert b"\r" not in sent_input
 
     def test_run_handles_invalid_utf8_bytes_via_replace_errors(self, monkeypatch):
         # 実際にsubprocess.runを実行した際に、不正バイト列が含まれていても

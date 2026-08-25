@@ -7,7 +7,7 @@ import subprocess
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from orchestune.models import IssueRecord
+from orchestune.models import IssueRecord, normalize_newlines
 from orchestune.validation import (
     validate_issue_number,
     validate_label,
@@ -177,7 +177,9 @@ class GitHubIssueMixin:
         comments = raw.get("comments", [])
         return [
             {
-                "body": c.get("body", ""),
+                # #664: 本文と同様、コメントもGitHubからCRLFで返る。読み出しの
+                # 時点でLFへ揃え、マーカー検索を改行コードに依存させない。
+                "body": normalize_newlines(c.get("body", "")),
                 "created_at": c.get("createdAt") or c.get("created_at") or "",
                 "author": c.get("author", {}).get("login", "")
                 if isinstance(c.get("author"), dict)

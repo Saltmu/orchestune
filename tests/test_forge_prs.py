@@ -592,7 +592,7 @@ class TestCreatePullRequest:
             "--body-file",
             "-",
         ]
-        assert gh_run.call_args.kwargs.get("input") == "body text"
+        assert gh_run.call_args.kwargs.get("input") == b"body text"
 
     def test_rejects_invalid_head_ref(self, forge: GitHubForge, gh_run):
         with pytest.raises(ValueError):
@@ -628,7 +628,7 @@ class TestUpdatePullRequest:
             "--body-file",
             "-",
         ]
-        assert gh_run.call_args.kwargs.get("input") == "body text"
+        assert gh_run.call_args.kwargs.get("input") == b"body text"
 
     def test_rejects_invalid_pr_number(self, forge: GitHubForge, gh_run):
         with pytest.raises(ValueError):

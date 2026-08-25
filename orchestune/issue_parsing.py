@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune.forge import MetadataSearchUnavailableError
-from orchestune.models import IssueRecord, Task
+from orchestune.models import IssueRecord, Task, normalize_newlines
 
 if TYPE_CHECKING:
     from orchestune.forge import IssueForge
@@ -37,7 +37,7 @@ PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
 # 誤って読み書きすることも防ぐ。
 LAUNCH_HISTORY_MARKER = "<!-- orchestune:launch-history -->"
 LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
-    re.escape(LAUNCH_HISTORY_MARKER) + r"\n```yaml\s*\n(.*?)```\n?",
+    re.escape(LAUNCH_HISTORY_MARKER) + r"\r?\n```yaml\s*\n(.*?)```[ \t]*\r?\n?",
     re.DOTALL,
 )
 
@@ -46,9 +46,47 @@ LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
 # 親Issue本文から計画全体と各サブタスクのissue_number等のメタデータを復元できるようにする。
 DECOMPOSITION_PLAN_MARKER = "<!-- orchestune:decomposition-plan -->"
 DECOMPOSITION_PLAN_BLOCK_PATTERN = re.compile(
-    re.escape(DECOMPOSITION_PLAN_MARKER) + r"\n```yaml[^\n]*\n(.*?)\n```[ \t]*(?:\n|$)",
+    re.escape(DECOMPOSITION_PLAN_MARKER)
+    + r"\r?\n```yaml[^\n]*\n(.*?)\r?\n```[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
+_BLANK_LINE_RUN_PATTERN = re.compile(r"\n{3,}")
+
+
+def _last_block_match(pattern: re.Pattern[str], body: str) -> re.Match[str] | None:
+    """#664: マーカーブロックの**最後**の出現を返す。
+
+    先頭固定（`search`）だと、過去の不具合で重複追記された本文から最も古い
+    コピーを読んでしまう（`issue_number`未充填の計画を復元し、再provisionで
+    Issueを重複作成する）。最後＝最新の状態を採用する。
+    """
+    matches = list(pattern.finditer(body))
+    return matches[-1] if matches else None
+
+
+def _replace_all_blocks(
+    pattern: re.Pattern[str], body: str, new_block: str
+) -> str | None:
+    """#664: 本文中の該当ブロックを**すべて**取り除き、先頭があった位置へ
+    `new_block`を1つだけ置いた本文を返す。ブロックが無ければNone。
+
+    追記ではなく置換に倒すことで更新を冪等にし、既に重複してしまった本文
+    （Issue #486は8個まで増殖した）も次回の書き込みで1つへ自己修復する。
+    ブロック以外の本文は、重複除去で生じた余分な空行を畳む以外は不変。
+    """
+    matches = list(pattern.finditer(body))
+    if not matches:
+        return None
+    pieces = [body[: matches[0].start()], new_block]
+    cursor = matches[0].end()
+    for match in matches[1:]:
+        pieces.append(body[cursor : match.start()])
+        cursor = match.end()
+    pieces.append(body[cursor:])
+    updated = "".join(pieces)
+    if len(matches) > 1:
+        updated = _BLANK_LINE_RUN_PATTERN.sub("\n\n", updated)
+    return updated
 
 
 def decomposition_plan_from_parent_body(body: str) -> dict | None:
@@ -56,7 +94,7 @@ def decomposition_plan_from_parent_body(body: str) -> dict | None:
 
     マーカー欠落・壊れたYAML・辞書形式でないものはNoneを返す。
     """
-    match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)
+    match = _last_block_match(DECOMPOSITION_PLAN_BLOCK_PATTERN, body)
     if not match:
         return None
     try:
@@ -83,10 +121,9 @@ def embed_decomposition_plan_in_parent_body(body: str, plan_data: dict | str) ->
     else:
         block_body = plan_data.strip() + "\n"
     new_block = f"{DECOMPOSITION_PLAN_MARKER}\n```yaml\n{block_body}```\n"
-    match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)
-    if match:
-        start, end = match.span()
-        return body[:start] + new_block + body[end:]
+    updated = _replace_all_blocks(DECOMPOSITION_PLAN_BLOCK_PATTERN, body, new_block)
+    if updated is not None:
+        return updated
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}\n{new_block}"
 
@@ -120,6 +157,9 @@ def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     plan_dict = decomposition_plan_from_parent_body(body)
     if not plan_dict:
         return None
+    # #664: 復元先はローカルの`decomposition_plan.md`なので、GitHub由来のCRLFを
+    # 持ち込まずLFへ揃える。
+    body = normalize_newlines(body)
     # Extract prose before the decomposition plan marker specifically
     parts = re.split(re.escape(DECOMPOSITION_PLAN_MARKER), body, maxsplit=1)
     prose_body = None
@@ -309,7 +349,7 @@ def launch_history_from_body(body: str) -> list[float]:
     壊れた値で上限判定を誤らせるより、復元できなかった分だけ緩くなる方が
     安全側（既定の`max_concurrent`は別途効く）。
     """
-    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
+    match = _last_block_match(LAUNCH_HISTORY_BLOCK_PATTERN, body)
     if not match:
         return []
     try:
@@ -390,10 +430,9 @@ def backfill_launch_history(body: str, launch_history: list[float]) -> str | Non
         default_flow_style=False,
     )
     new_block = f"{LAUNCH_HISTORY_MARKER}\n```yaml\n{block_body}```\n"
-    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
-    if match:
-        start, end = match.span()
-        return body[:start] + new_block + body[end:]
+    updated = _replace_all_blocks(LAUNCH_HISTORY_BLOCK_PATTERN, body, new_block)
+    if updated is not None:
+        return updated
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}\n{new_block}"
 

@@ -179,7 +179,11 @@ def _provision_subtasks_loop(
         if is_degraded:
             degraded_subtask_ids.append(subtask_id)
         resolved_numbers[subtask_id] = number
-        write_issue_numbers(plan_path, {subtask_id: number})
+        # #664: 新規作成分は`_provision_subtask`が（関係づけの前に）既に書き戻して
+        # いるため、ここで書くのは再利用分だけでよい。両方書くと同じ値で計画
+        # ファイルを2回書き換えることになる。
+        if is_reused:
+            write_issue_numbers(plan_path, {subtask_id: number})
         if not sync_parent_decomposition_plan(
             resolved_forge, parent_issue_number, plan_path
         ):
