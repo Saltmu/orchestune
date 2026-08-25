@@ -23,8 +23,8 @@
 順序が存在しないため1回の走査ではrankを正しく積み上げられず、bottom levelも
 downstreamも過小評価になる。この場合はbottom levelを0へ中立化して不正確な
 critical-path bonusによる並べ替えを止め、downstreamは直接の後続数へ縮退させる。
-あわせて`exact_downstream`を`False`にし、壊れたメタデータのために正確な到達
-可能性計算を持ち込むより、安全かつ観測可能に縮退する（PR#665レビュー指摘）。
+`exact_bottom_level`と`exact_downstream`を個別に公開し、大規模な非循環グラフと
+循環グラフを区別して、安全かつ観測可能に縮退する（PR#665レビュー指摘）。
 
 Conflict Graphはここでは扱わない。#659で分離したとおり、競合は対称な排他制約で
 あって因果順序ではなく、rankの計算根拠にしてはならないため。
@@ -70,12 +70,10 @@ class PrecedenceRanks:
     bottom_level: Mapping[str, float]
     unlocked: Mapping[str, int]
     downstream: Mapping[str, int]
-    # rankを厳密に求められたかどうか。`False`になるのは、探索上限
-    # （`MAX_TRANSITIVE_CLOSURE_NODES`）を超えたときと、`depends_on`に循環が
-    # あったとき。循環時は逆トポロジカル順序が存在せず、1回の走査では
-    # `bottom_level`も`downstream`も過小評価になるため、bottom levelは0へ
-    # 中立化し、`downstream`は直接の後続数へ縮退させたうえでこのフラグで通知する
-    # （PR#665レビュー指摘）。
+    # bottom levelはO(V+E)なので、非循環ならノード数に関係なく厳密。downstream
+    # だけは探索上限超過でも`False`になり、直接後続数へ縮退する。循環時は両方が
+    # 不正確になるため、bottom levelを0へ中立化して両フラグを`False`にする。
+    exact_bottom_level: bool = True
     exact_downstream: bool = True
 
     def bottom_level_of(self, subtask_id: str) -> float:
@@ -197,5 +195,6 @@ def compute_precedence_ranks(
         ),
         unlocked={node: len(targets) for node, targets in successors.items()},
         downstream=_downstream_counts(order, successors, exact),
+        exact_bottom_level=not has_cycle,
         exact_downstream=exact,
     )

@@ -7,7 +7,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import CompletedWorktree, RunState
-from orchestune.models import PrRecord
+from orchestune.models import PrRecord, Usage
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -109,6 +109,48 @@ class TestApplyTaskLaunchesRunStatePersistence:
         # デフォルト24時間で誤って刈り込まれていないこと。
         persisted = load_run_state(run_state_path)
         assert launch_36h_ago in persisted.launch_history
+
+    def test_persists_the_launch_time_token_estimate(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.state import load_run_state
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        run_state_path = tmp_path / "run_state.json"
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        run_state = RunState(
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=99,
+                    subtask_id="task-99",
+                    branch="b99",
+                    started_at=100.0,
+                    completed_at=200.0,
+                    usage=Usage(input_tokens=0, output_tokens=0, total_tokens=400),
+                )
+            ]
+        )
+
+        with (
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, 1000.0, config)
+
+        active = load_run_state(run_state_path).active_worktrees["1"]
+        assert active.estimated_tokens == 400
+        assert active.token_estimate_recorded is True
 
     def test_protects_open_pr_completed_worktree_via_open_prs(self, tmp_path):
         from unittest.mock import MagicMock, patch

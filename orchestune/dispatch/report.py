@@ -84,16 +84,23 @@ def _format_scheduling_decisions(cycle_report: CycleReport) -> list[str]:
     lines = [
         "### 🧮 スケジューリング判定（Scheduling Decisions）",
         f"モード: `{cycle_report.scheduling_decisions[0].mode}`\n",
-        "| サブタスクID | Issue番号 | スコア | bottom level | 解放数 | 推定トークン | 結果 |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| サブタスクID | Issue番号 | スコア | bottom level | 解放数 | rank精度 | 推定トークン | 結果 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for decision in cycle_report.scheduling_decisions:
         tokens = "-" if decision.estimated_tokens is None else decision.estimated_tokens
+        rank_accuracy = (
+            "cyclic-fallback"
+            if not decision.exact_bottom_level
+            else "downstream-fallback"
+            if not decision.exact_downstream
+            else "exact"
+        )
         outcome = "✅ 起動" if decision.selected else f"⏸️ 見送り (`{decision.reason}`)"
         lines.append(
             f"| `{decision.subtask_id}` | #{decision.issue_number} | "
             f"{decision.score:.3f} | {decision.bottom_level:.0f} | "
-            f"{decision.downstream_count} | {tokens} | {outcome} |"
+            f"{decision.downstream_count} | {rank_accuracy} | {tokens} | {outcome} |"
         )
     lines.append("")
     return lines

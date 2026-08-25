@@ -160,6 +160,8 @@ class SchedulingDecision:
     estimated_tokens: int | None = None
     estimated_duration_seconds: float = 0.0
     estimate_source: str = ESTIMATE_SOURCE_DEFAULT
+    exact_bottom_level: bool = True
+    exact_downstream: bool = True
     selected: bool = False
     reason: str = ""
 
@@ -229,7 +231,14 @@ def _reserved_token_estimate(run_state: RunState, cost_model: CostModel) -> int:
     return sum(
         tokens
         for active in run_state.active_worktrees.values()
-        if (tokens := cost_model.tokens_for_issue(active.issue_number)) is not None
+        if (
+            tokens := (
+                active.estimated_tokens
+                if active.token_estimate_recorded
+                else cost_model.tokens_for_issue(active.issue_number)
+            )
+        )
+        is not None
     )
 
 
@@ -367,13 +376,19 @@ def _normalized(value: float, maximum: float) -> float:
 
 def _build_scoring_inputs(
     eligible: list[Task],
+    candidate_tasks: list[Task],
     run_state: RunState,
     now: float,
     window_seconds: int,
     known_tasks: Iterable[Task] | None,
     cost_model: CostModel,
 ) -> _ScoringInputs:
-    graph_tasks = pending_tasks(known_tasks if known_tasks is not None else eligible)
+    graph_tasks_by_id = {
+        task.subtask_id: task
+        for task in [*(known_tasks or ()), *candidate_tasks]
+        if task.subtask_id
+    }
+    graph_tasks = pending_tasks(graph_tasks_by_id.values())
     estimates = {task.subtask_id: cost_model.estimate(task) for task in graph_tasks}
     ranks = compute_precedence_ranks(
         graph_tasks,
@@ -434,12 +449,20 @@ def _critical_path_decision(
     bottom_level = inputs.ranks.bottom_level_of(task.subtask_id)
     downstream = inputs.ranks.downstream_count(task.subtask_id)
     wait = _wait_seconds(task, run_state, now)
+    rank_bonus_enabled = inputs.ranks.exact_bottom_level
     components = ScoreComponents(
         base_priority=BASE_PRIORITY.get(task.priority, BASE_PRIORITY["medium"]),
         aging=AGING_WEIGHT * (wait - inputs.min_wait) / inputs.window_seconds,
-        critical_path=CRITICAL_PATH_WEIGHT
-        * _normalized(bottom_level, inputs.max_bottom_level),
-        unlock=UNLOCK_WEIGHT * _normalized(downstream, inputs.max_downstream),
+        critical_path=(
+            CRITICAL_PATH_WEIGHT * _normalized(bottom_level, inputs.max_bottom_level)
+            if rank_bonus_enabled
+            else 0.0
+        ),
+        unlock=(
+            UNLOCK_WEIGHT * _normalized(downstream, inputs.max_downstream)
+            if rank_bonus_enabled
+            else 0.0
+        ),
         progress=PROGRESS_BONUS if task.progress_partial else 0.0,
         token_penalty=TOKEN_COST_WEIGHT
         * _token_penalty_factor(estimate, inputs.max_tokens),
@@ -457,19 +480,34 @@ def _critical_path_decision(
         estimated_tokens=estimate.tokens,
         estimated_duration_seconds=estimate.duration_seconds,
         estimate_source=estimate.source,
+        exact_bottom_level=inputs.ranks.exact_bottom_level,
+        exact_downstream=inputs.ranks.exact_downstream,
     )
 
 
 def _legacy_decision(
-    task: Task, eligible: list[Task], run_state: RunState, now: float
+    task: Task,
+    eligible: list[Task],
+    run_state: RunState,
+    now: float,
+    inputs: _ScoringInputs,
 ) -> SchedulingDecision:
     components = _legacy_components(task, eligible, run_state, now)
+    estimate = inputs.estimates.get(task.subtask_id) or inputs.cost_model.estimate(task)
     return SchedulingDecision(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id,
         mode=SCHEDULING_MODE_LEGACY,
         score=components.total,
         components=components,
+        bottom_level=inputs.ranks.bottom_level_of(task.subtask_id),
+        unlocked_count=inputs.ranks.unlocked_count(task.subtask_id),
+        downstream_count=inputs.ranks.downstream_count(task.subtask_id),
+        estimated_tokens=estimate.tokens,
+        estimated_duration_seconds=estimate.duration_seconds,
+        estimate_source=estimate.source,
+        exact_bottom_level=inputs.ranks.exact_bottom_level,
+        exact_downstream=inputs.ranks.exact_downstream,
     )
 
 
@@ -489,10 +527,8 @@ def _rank_candidates(
     eligible: list[Task],
     run_state: RunState,
     now: float,
-    window_seconds: int,
     scheduling_mode: str,
-    known_tasks: Iterable[Task] | None,
-    cost_model: CostModel,
+    inputs: _ScoringInputs,
 ) -> list[tuple[Task, SchedulingDecision]]:
     """候補をスコア降順（同点はissue番号昇順）に並べる。
 
@@ -501,11 +537,10 @@ def _rank_candidates(
     未知の値のために追加のエラー経路を作らない。
     """
     if _normalized_mode(scheduling_mode) == SCHEDULING_MODE_LEGACY:
-        decisions = [_legacy_decision(t, eligible, run_state, now) for t in eligible]
+        decisions = [
+            _legacy_decision(t, eligible, run_state, now, inputs) for t in eligible
+        ]
     else:
-        inputs = _build_scoring_inputs(
-            eligible, run_state, now, window_seconds, known_tasks, cost_model
-        )
         decisions = [
             _critical_path_decision(t, run_state, now, inputs) for t in eligible
         ]
@@ -529,8 +564,8 @@ def _ineligibility_reason(task: Task, active_issue_numbers: set[int]) -> str | N
 
 
 def _partition_candidates(
-    candidate_tasks: list[Task], run_state: RunState, scheduling_mode: str
-) -> tuple[list[Task], list[SchedulingDecision]]:
+    candidate_tasks: list[Task], run_state: RunState
+) -> tuple[list[Task], list[tuple[Task, str]]]:
     """候補を「スコアリング対象」と「対象外＋その理由」に分ける。
 
     PR#665レビュー指摘(Codex P2): 対象外の候補を単に捨てると、`yaml_error`の
@@ -541,23 +576,37 @@ def _partition_candidates(
     """
     active_issue_numbers = {int(k) for k in run_state.active_worktrees}
     eligible: list[Task] = []
-    excluded: list[SchedulingDecision] = []
+    excluded: list[tuple[Task, str]] = []
     for task in candidate_tasks:
         reason = _ineligibility_reason(task, active_issue_numbers)
         if reason is None:
             eligible.append(task)
             continue
-        excluded.append(
-            SchedulingDecision(
-                issue_number=task.issue_number,
-                subtask_id=task.subtask_id,
-                mode=_normalized_mode(scheduling_mode),
-                score=0.0,
-                components=ScoreComponents(),
-                reason=reason,
-            )
-        )
-    return eligible, sorted(excluded, key=lambda decision: decision.issue_number)
+        excluded.append((task, reason))
+    return eligible, sorted(excluded, key=lambda item: item[0].issue_number)
+
+
+def _excluded_decision(
+    task: Task, reason: str, scheduling_mode: str, inputs: _ScoringInputs
+) -> SchedulingDecision:
+    """スコア対象外でも、診断に使うrankとcostは実値を保持する。"""
+    estimate = inputs.estimates.get(task.subtask_id) or inputs.cost_model.estimate(task)
+    return SchedulingDecision(
+        issue_number=task.issue_number,
+        subtask_id=task.subtask_id,
+        mode=_normalized_mode(scheduling_mode),
+        score=0.0,
+        components=ScoreComponents(),
+        bottom_level=inputs.ranks.bottom_level_of(task.subtask_id),
+        unlocked_count=inputs.ranks.unlocked_count(task.subtask_id),
+        downstream_count=inputs.ranks.downstream_count(task.subtask_id),
+        estimated_tokens=estimate.tokens,
+        estimated_duration_seconds=estimate.duration_seconds,
+        estimate_source=estimate.source,
+        exact_bottom_level=inputs.ranks.exact_bottom_level,
+        exact_downstream=inputs.ranks.exact_downstream,
+        reason=reason,
+    )
 
 
 def _apply_resource_constraints(
@@ -566,6 +615,7 @@ def _apply_resource_constraints(
     token_budget: _TokenBudget,
     conflict_graph: ConflictGraph | None,
     active_subtask_ids: set[str] | None,
+    slot_exhausted_reason: str = REASON_QUOTA_EXHAUSTED,
 ) -> SchedulingResult:
     """クオータ・競合・トークン予算の順に制約を当てて貪欲に選ぶ。"""
     unavailable = set(active_subtask_ids or ())
@@ -575,14 +625,19 @@ def _apply_resource_constraints(
 
     for task, decision in ranked:
         if len(selected) >= slots:
-            decisions.append(replace(decision, reason=REASON_QUOTA_EXHAUSTED))
+            decisions.append(replace(decision, reason=slot_exhausted_reason))
             continue
         if conflict_graph is not None and any(
             conflict_graph.has_conflict(task.subtask_id, other) for other in unavailable
         ):
             decisions.append(replace(decision, reason=REASON_CONFLICT))
             continue
-        cost = decision.estimated_tokens
+        # legacyは#660以前と同じ選出を維持し、バッチ内の推定token gateを使わない。
+        cost = (
+            None
+            if decision.mode == SCHEDULING_MODE_LEGACY
+            else decision.estimated_tokens
+        )
         # 先頭1件はトークン予算で弾かない。単体で残予算を超える見積りのタスク
         # しか無いときにキューが永久に進まなくなる（終端の無い経路になる）ため。
         # ただし実行中の起動が既にある場合（`exempt_first`が偽）はその完了が
@@ -605,6 +660,56 @@ def _apply_resource_constraints(
     return SchedulingResult(selected=selected, decisions=decisions)
 
 
+def _prepare_ranked_candidates(
+    eligible: list[Task],
+    candidate_tasks: list[Task],
+    run_state: RunState,
+    now: float,
+    window_seconds: int,
+    scheduling_mode: str,
+    known_tasks: Iterable[Task] | None,
+) -> tuple[list[tuple[Task, SchedulingDecision]], _ScoringInputs, CostModel]:
+    cost_model = build_cost_model(run_state)
+    inputs = _build_scoring_inputs(
+        eligible,
+        candidate_tasks,
+        run_state,
+        now,
+        window_seconds,
+        known_tasks,
+        cost_model,
+    )
+    ranked = _rank_candidates(eligible, run_state, now, scheduling_mode, inputs)
+    return ranked, inputs, cost_model
+
+
+def _slot_exhausted_reason(
+    run_state: RunState,
+    now: float,
+    window_seconds: int,
+    max_tokens_per_window: int | None,
+) -> str:
+    hard_token_budget = remaining_token_budget(
+        run_state, now, window_seconds, max_tokens_per_window
+    )
+    if hard_token_budget is not None and hard_token_budget <= 0:
+        return REASON_TOKEN_BUDGET
+    return REASON_QUOTA_EXHAUSTED
+
+
+def _append_excluded_decisions(
+    result: SchedulingResult,
+    excluded: list[tuple[Task, str]],
+    scheduling_mode: str,
+    inputs: _ScoringInputs,
+) -> SchedulingResult:
+    decisions = result.decisions + [
+        _excluded_decision(task, reason, scheduling_mode, inputs)
+        for task, reason in excluded
+    ]
+    return SchedulingResult(selected=result.selected, decisions=decisions)
+
+
 def select_tasks_with_decisions(
     candidate_tasks: list[Task],
     run_state: RunState,
@@ -623,9 +728,7 @@ def select_tasks_with_decisions(
     `known_tasks`はPrecedence DAGを組み立てる母集団（通常はサイクルが見ている
     全タスク）。省略時は候補集合そのものを使う。
     """
-    eligible, excluded = _partition_candidates(
-        candidate_tasks, run_state, scheduling_mode
-    )
+    eligible, excluded = _partition_candidates(candidate_tasks, run_state)
     slots = quota_available(
         run_state,
         now,
@@ -634,15 +737,14 @@ def select_tasks_with_decisions(
         window_seconds,
         max_tokens_per_window=max_tokens_per_window,
     )
-    cost_model = build_cost_model(run_state)
-    ranked = _rank_candidates(
+    ranked, inputs, cost_model = _prepare_ranked_candidates(
         eligible,
+        candidate_tasks,
         run_state,
         now,
         window_seconds,
         scheduling_mode,
         known_tasks,
-        cost_model,
     )
     result = _apply_resource_constraints(
         ranked,
@@ -652,11 +754,12 @@ def select_tasks_with_decisions(
         ),
         conflict_graph,
         active_subtask_ids,
+        slot_exhausted_reason=_slot_exhausted_reason(
+            run_state, now, window_seconds, max_tokens_per_window
+        ),
     )
     # スコアリング対象外の候補は、ランク付き判定の後ろにissue番号順で並べる。
-    return SchedulingResult(
-        selected=result.selected, decisions=result.decisions + excluded
-    )
+    return _append_excluded_decisions(result, excluded, scheduling_mode, inputs)
 
 
 def select_next_tasks(

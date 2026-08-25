@@ -154,6 +154,8 @@ class TestAppendEventLog:
             estimated_tokens=900,
             estimated_duration_seconds=1800.0,
             estimate_source="task-history",
+            exact_bottom_level=True,
+            exact_downstream=False,
             selected=False,
             reason="quota-exhausted",
         )
@@ -191,6 +193,8 @@ class TestAppendEventLog:
                 "estimated_tokens": 900,
                 "estimated_duration_seconds": 1800.0,
                 "estimate_source": "task-history",
+                "exact_bottom_level": True,
+                "exact_downstream": False,
                 "selected": False,
                 "reason": "quota-exhausted",
             }

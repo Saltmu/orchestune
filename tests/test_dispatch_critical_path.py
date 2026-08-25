@@ -153,6 +153,7 @@ class TestSearchBound:
         ranks = compute_precedence_ranks(tasks, {})
 
         assert ranks.exact_downstream is False
+        assert ranks.exact_bottom_level is True
         assert ranks.downstream_count("n0") == 1
         # bottom levelは打ち切りの対象外（O(V+E)なので常に厳密）。
         assert ranks.bottom_level_of("n0") > ranks.bottom_level_of("n1")
@@ -163,6 +164,7 @@ class TestSearchBound:
         ranks = compute_precedence_ranks(tasks, {})
 
         assert ranks.exact_downstream is True
+        assert ranks.exact_bottom_level is True
         assert ranks.downstream_count("n0") == 2
 
 
@@ -220,6 +222,7 @@ class TestCyclicGraphsDegradeHonestly:
         ranks = compute_precedence_ranks(tasks, {})
 
         assert ranks.exact_downstream is False
+        assert ranks.exact_bottom_level is False
         # 縮退後は直接の後続数（p -> b の1件）を報告する。
         assert ranks.downstream_count("p") == 1
 
@@ -236,11 +239,13 @@ class TestCyclicGraphsDegradeHonestly:
         ranks = compute_precedence_ranks(tasks, {})
 
         assert set(ranks.bottom_level.values()) == {0.0}
+        assert ranks.exact_bottom_level is False
 
     def test_a_self_contained_cycle_also_degrades(self):
         ranks = compute_precedence_ranks([_task("a", ("b",)), _task("b", ("a",))], {})
 
         assert ranks.exact_downstream is False
+        assert ranks.exact_bottom_level is False
 
     def test_acyclic_graphs_stay_exact(self):
         tasks = [_task("a"), _task("b", ("a",)), _task("c", ("b",))]
@@ -248,4 +253,5 @@ class TestCyclicGraphsDegradeHonestly:
         ranks = compute_precedence_ranks(tasks, {})
 
         assert ranks.exact_downstream is True
+        assert ranks.exact_bottom_level is True
         assert ranks.downstream_count("a") == 2

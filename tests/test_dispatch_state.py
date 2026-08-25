@@ -63,6 +63,8 @@ class TestRunState:
                     pid=12345,
                     started_at=1700000000.0,
                     declared_footprint=("src/foo.py",),
+                    estimated_tokens=400,
+                    token_estimate_recorded=True,
                 )
             },
             launch_history=[1700000000.0],
@@ -70,7 +72,41 @@ class TestRunState:
         save_run_state(state, path, now=now)
         loaded = load_run_state(path)
         assert loaded.active_worktrees["10"].branch == "claude/issue-10-x"
+        assert loaded.active_worktrees["10"].estimated_tokens == 400
+        assert loaded.active_worktrees["10"].token_estimate_recorded is True
         assert loaded.launch_history == [1700000000.0]
+
+    def test_old_active_worktree_without_token_estimate_loads_compatibly(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {
+                        "10": {
+                            "issue_number": 10,
+                            "branch": "claude/issue-10-x",
+                            "worktree_path": "worktrees/claude-issue-10-x",
+                            "pid": 12345,
+                            "started_at": 1700000000.0,
+                            "declared_footprint": [],
+                        }
+                    },
+                    "launch_history": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        active = load_run_state(path).active_worktrees["10"]
+        assert active.estimated_tokens is None
+        assert active.token_estimate_recorded is False
+
+        save_run_state(RunState(active_worktrees={"10": active}), path)
+        assert (
+            load_run_state(path).active_worktrees["10"].token_estimate_recorded is False
+        )
 
     def test_save_and_load_roundtrip_with_unknown_active_start_time(self, tmp_path):
         path = tmp_path / "run_state.json"

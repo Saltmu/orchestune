@@ -26,6 +26,12 @@ class ActiveWorktree:
     external_id: str | None = None
     external_url: str | None = None
     base_branch: str = "origin/main"
+    # 起動時点のcost modelで見積もったトークン量。実行中にfleet中央値が変化しても
+    # 予約量を変動させず、複数サイクルを跨ぐ予算判定を安定させる。
+    estimated_tokens: int | None = None
+    # `estimated_tokens=None`が「起動時に不明として記録済み」なのか、本フィールド
+    # 導入前の状態で未記録なのかを区別する。後者だけ現行cost modelへ縮退する。
+    token_estimate_recorded: bool = False
 
 
 @dataclass
@@ -159,6 +165,10 @@ def load_run_state(path: str | Path) -> RunState:
             external_id=value.get("external_id"),
             external_url=value.get("external_url"),
             base_branch=value.get("base_branch", "origin/main"),
+            estimated_tokens=value.get("estimated_tokens"),
+            token_estimate_recorded=value.get(
+                "token_estimate_recorded", "estimated_tokens" in value
+            ),
         )
         for key, value in data.get("active_worktrees", {}).items()
     }

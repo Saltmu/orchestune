@@ -218,6 +218,8 @@ class TestSchedulingDecisionsSection:
             estimated_tokens=1200,
             estimated_duration_seconds=1800.0,
             estimate_source="task-history",
+            exact_bottom_level=True,
+            exact_downstream=False,
             selected=True,
             reason="selected",
         )
@@ -244,9 +246,12 @@ class TestSchedulingDecisionsSection:
         content = summary_file.read_text(encoding="utf-8")
         assert "スケジューリング判定" in content
         assert "`critical-path`" in content
-        assert "| `task-a` | #1 | 2.500 | 3600 | 2 | 1200 | ✅ 起動 |" in content
         assert (
-            "| `task-b` | #2 | 2.500 | 3600 | 2 | - | ⏸️ 見送り (`token-budget`) |"
+            "| `task-a` | #1 | 2.500 | 3600 | 2 | downstream-fallback | 1200 | ✅ 起動 |"
+            in content
+        )
+        assert (
+            "| `task-b` | #2 | 2.500 | 3600 | 2 | downstream-fallback | - | ⏸️ 見送り (`token-budget`) |"
             in content
         )
 

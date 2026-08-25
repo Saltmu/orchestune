@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from orchestune.dispatch.cost_model import build_cost_model
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task, parse_task_from_issue
@@ -380,6 +381,10 @@ def _record_successful_launch(
         external_id=launch.external_id,
         external_url=launch.external_url,
         base_branch=plan.base_branch_for_state,
+        estimated_tokens=build_cost_model(run_state).tokens_for_issue(
+            task.issue_number
+        ),
+        token_estimate_recorded=True,
     )
     run_state.launch_history.append(now)
     reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)

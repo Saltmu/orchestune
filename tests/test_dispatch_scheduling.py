@@ -178,6 +178,11 @@ class TestCriticalPathPriority:
         assert all(
             decision.components.critical_path == 0.0 for decision in result.decisions
         )
+        assert all(decision.components.unlock == 0.0 for decision in result.decisions)
+        assert all(
+            decision.exact_bottom_level is False for decision in result.decisions
+        )
+        assert all(decision.exact_downstream is False for decision in result.decisions)
 
 
 class TestResourceConstraints:
@@ -236,6 +241,7 @@ class TestResourceConstraints:
         result = _select([_task(2)], run_state=state, max_tokens_per_window=1000)
 
         assert result.selected == []
+        assert result.decisions[0].reason == "token-budget"
 
     def test_unknown_token_costs_degrade_to_no_filtering(self):
         state = RunState(completed_worktrees=[_completed(1, NOW - 300)])
@@ -574,6 +580,29 @@ class TestIneligibleCandidatesAreStillReported:
         assert excluded.reason == "yaml-error"
         assert excluded.score == 0.0
 
+    def test_ineligible_candidate_keeps_real_rank_and_cost_metadata(self):
+        broken = _task(2, subtask_id="broken", yaml_error=True)
+        child = _task(3, subtask_id="child", depends_on=("broken",))
+        state = RunState(
+            completed_worktrees=[
+                _completed(99, NOW - 300, total_tokens=600, duration=900.0)
+            ]
+        )
+
+        # known_tasksのスナップショットに候補自身が欠けていても、candidateとの和集合で
+        # rank入力を作り、broken -> child の辺を復元する。
+        result = _select([broken], run_state=state, known_tasks=[child])
+
+        excluded = result.decisions[0]
+        assert excluded.bottom_level == 1800.0
+        assert excluded.unlocked_count == 1
+        assert excluded.downstream_count == 1
+        assert excluded.estimated_tokens == 600
+        assert excluded.estimated_duration_seconds == 900.0
+        assert excluded.estimate_source == "fleet-history"
+        assert excluded.exact_bottom_level is True
+        assert excluded.exact_downstream is True
+
     def test_externally_locked_candidate_is_reported(self):
         locked = _task(2, status_labels=("status:queued", "status:external-lock"))
 
@@ -735,6 +764,43 @@ class TestTokenBudgetAcrossCycles:
         assert result.selected == []
         assert result.decisions[0].reason == "token-budget"
 
+    def test_launch_time_reservation_does_not_shrink_with_a_mutating_fleet_median(self):
+        # 起動時点ではtoken samples=[1000, 400, 0]で中央値400。その後、別の
+        # タスクが0 tokenで完了してfleet中央値が200へ下がっても、実行中task-1の
+        # 予約は起動時の400を維持する。候補task-2の固有見積り400を足すと上限600を
+        # 超えるため、次サイクルでは起動しない。
+        state = RunState(
+            completed_worktrees=[
+                _completed(90, NOW - 7200, total_tokens=1000),
+                _completed(2, NOW - 7200, total_tokens=400),
+                _completed(91, NOW - 7200, total_tokens=0),
+                _completed(92, NOW - 300, total_tokens=0),
+            ],
+            active_worktrees={
+                "1": ActiveWorktree(
+                    1,
+                    "b",
+                    "w",
+                    1,
+                    NOW - 120,
+                    (),
+                    estimated_tokens=400,
+                    token_estimate_recorded=True,
+                )
+            },
+        )
+
+        result = _select(
+            [_task(2)],
+            run_state=state,
+            max_concurrent=3,
+            max_tokens_per_window=600,
+        )
+
+        assert result.selected == []
+        assert result.decisions[0].estimated_tokens == 400
+        assert result.decisions[0].reason == "token-budget"
+
     def test_without_in_flight_launches_the_first_selection_is_still_exempt(self):
         result = _select(
             [_task(2)],
@@ -771,6 +837,34 @@ class TestTokenBudgetAcrossCycles:
             run_state=state,
             max_concurrent=3,
             max_tokens_per_window=1000,
+        )
+
+        assert [t.issue_number for t in result.selected] == [2]
+
+    def test_recorded_unknown_reservation_stays_unknown_when_history_appears(self):
+        # task-1の起動時には履歴が無く見積り不能だった。その後task-9のusageが
+        # 記録されても、起動済みtask-1へfleet中央値400を遡及適用しない。
+        state = RunState(
+            completed_worktrees=[_completed(9, NOW - 300, total_tokens=400)],
+            active_worktrees={
+                "1": ActiveWorktree(
+                    1,
+                    "b",
+                    "w",
+                    1,
+                    NOW - 120,
+                    (),
+                    estimated_tokens=None,
+                    token_estimate_recorded=True,
+                )
+            },
+        )
+
+        result = _select(
+            [_task(2)],
+            run_state=state,
+            max_concurrent=3,
+            max_tokens_per_window=500,
         )
 
         assert [t.issue_number for t in result.selected] == [2]
