@@ -585,6 +585,17 @@ def _resolve_depends_on(
     return depends_on
 
 
+_EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def _validated_execution_profile(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if _EXECUTION_PROFILE_PATTERN.fullmatch(value):
+        return value
+    return None
+
+
 def _extract_footprint_metadata(
     issue: IssueRecord,
 ) -> tuple[
@@ -593,6 +604,7 @@ def _extract_footprint_metadata(
     tuple[str, ...],
     str | None,
     bool,
+    str | None,
     bool,
     re.Match[str] | None,
 ]:
@@ -601,6 +613,7 @@ def _extract_footprint_metadata(
     symbols: tuple[str, ...] = ()
     shared_contract: str | None = None
     writes_shared_contract = False
+    execution_profile: str | None = None
     yaml_error = False
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if match:
@@ -613,6 +626,9 @@ def _extract_footprint_metadata(
                 if data.get("shared_contract"):
                     shared_contract = str(data["shared_contract"])
                 writes_shared_contract = data.get("writes_shared_contract") is True
+                execution_profile = _validated_execution_profile(
+                    data.get("execution_profile")
+                )
         except yaml.YAMLError as e:
             print(
                 f"Warning: Failed to parse YAML from issue #{issue.number}: {e}",
@@ -625,6 +641,7 @@ def _extract_footprint_metadata(
         symbols,
         shared_contract,
         writes_shared_contract,
+        execution_profile,
         yaml_error,
         match,
     )
@@ -675,6 +692,7 @@ def parse_task_from_issue(
         symbols,
         shared_contract,
         writes_shared_contract,
+        execution_profile,
         yaml_error,
         match,
     ) = _extract_footprint_metadata(issue)
@@ -701,4 +719,5 @@ def parse_task_from_issue(
         parent_state=parent_state,
         shared_contract=shared_contract,
         writes_shared_contract=writes_shared_contract,
+        execution_profile=execution_profile,
     )

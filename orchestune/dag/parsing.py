@@ -23,6 +23,8 @@ _RISK_KEYWORDS = ("subprocess", "auth", "credential")
 _FRONTMATTER_PATTERN = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*\n?", re.DOTALL)
 _LEADING_BLANK_LINES_PATTERN = re.compile(r"\A(?:[ \t]*\n)+")
 _VALID_PRIORITIES = frozenset(("high", "medium", "low"))
+_EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+_MAX_EXECUTION_PROFILE_LENGTH = 32
 
 
 def detect_risk_from_values(
@@ -109,31 +111,72 @@ def _warn_on_degraded_fields(
         )
 
 
+def _parse_sequence_field(
+    val: object, field_name: str, subtask_id: str
+) -> tuple[str, ...]:
+    if val is None:
+        return ()
+    if isinstance(val, str) or not isinstance(val, list | tuple):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の '{field_name}' はリストである必要があります: {val!r}"
+        )
+    return tuple(str(x) for x in val if x is not None)
+
+
+def _parse_footprint(val: object, subtask_id: str) -> tuple[str, ...]:
+    if val is None:
+        return ()
+    if isinstance(val, str) or not isinstance(val, list | tuple):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'footprint' はリストである必要があります: {val!r}"
+        )
+    return tuple(normalize_footprint_path(str(x)) for x in val if x is not None)
+
+
+def _parse_execution_profile(raw_profile: object, subtask_id: str) -> str | None:
+    if raw_profile is None:
+        return None
+    if not isinstance(raw_profile, str):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'execution_profile' は文字列である必要があります: {raw_profile!r}"
+        )
+    if (
+        not _EXECUTION_PROFILE_PATTERN.fullmatch(raw_profile)
+        or len(raw_profile) > _MAX_EXECUTION_PROFILE_LENGTH
+    ):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'execution_profile' が不正です: {raw_profile!r} "
+            "(英小文字・数字・ハイフン・アンダースコアで32文字以内)"
+        )
+    return raw_profile
+
+
 def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     subtask_id = _parse_subtask_id(raw)
-    footprint = tuple(
-        normalize_footprint_path(str(item)) for item in raw.get("footprint", []) or []
-    )
-    symbols = tuple(str(item) for item in raw.get("symbols", []) or [])
-    depends_on = tuple(str(item) for item in raw.get("depends_on", []) or [])
+    footprint = _parse_footprint(raw.get("footprint"), subtask_id)
+    symbols = _parse_sequence_field(raw.get("symbols"), "symbols", subtask_id)
+    depends_on = _parse_sequence_field(raw.get("depends_on"), "depends_on", subtask_id)
     description = str(raw.get("description", ""))
     priority = str(raw.get("priority", "medium")).lower()
     if priority not in _VALID_PRIORITIES:
         priority = "medium"
     overview = str(raw.get("overview", ""))
-    acceptance_criteria = tuple(
-        str(item) for item in raw.get("acceptance_criteria", []) or []
+    acceptance_criteria = _parse_sequence_field(
+        raw.get("acceptance_criteria"), "acceptance_criteria", subtask_id
     )
-    proposed_changes = tuple(
-        str(item) for item in raw.get("proposed_changes", []) or []
+    proposed_changes = _parse_sequence_field(
+        raw.get("proposed_changes"), "proposed_changes", subtask_id
     )
-    verification_plan = tuple(
-        str(item) for item in raw.get("verification_plan", []) or []
+    verification_plan = _parse_sequence_field(
+        raw.get("verification_plan"), "verification_plan", subtask_id
     )
     shared_contract = (
         str(raw["shared_contract"]) if raw.get("shared_contract") else None
     )
     writes_shared_contract = bool(raw.get("writes_shared_contract", False))
+    execution_profile = _parse_execution_profile(
+        raw.get("execution_profile"), subtask_id
+    )
 
     _warn_on_degraded_fields(subtask_id, description, footprint)
 
@@ -158,6 +201,7 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         verification_plan=verification_plan,
         shared_contract=shared_contract,
         writes_shared_contract=writes_shared_contract,
+        execution_profile=execution_profile,
     )
 
 

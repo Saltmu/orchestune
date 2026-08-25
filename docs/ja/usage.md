@@ -80,6 +80,7 @@ subtasks:
     * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
+* **`execution_profile`** (文字列または`null`, 任意, 既定値 `null`): サブタスクを実行するエージェントの抽象実行プロファイル名（例: `fast-code`、`deep-reasoning`）。英小文字・数字・ハイフン・アンダースコアで構成され、32文字以内である必要があります。
 * **`issue_number`** (整数または`null`, 任意, 既定値 `null`): このサブタスクのIssue番号。**手動で設定しないでください** — `orchestune provision`がこのサブタスクのIssue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。設定済みの場合、`orchestune provision`はそのサブタスクのIssueを再作成せず再利用します。
 
 ### 計画ファイルのライフサイクルと親Issueへの永続化（方針 (b)）

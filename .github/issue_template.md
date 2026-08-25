@@ -21,4 +21,5 @@ depends_on: {{depends_on}}
 shared_contract: {{shared_contract}}
 writes_shared_contract: {{writes_shared_contract}}
 parent_issue_number: {{parent_issue_number}}
+execution_profile: {{execution_profile}}
 ```

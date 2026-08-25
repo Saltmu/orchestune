@@ -80,6 +80,7 @@ Each subtask item supports the following fields:
     * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
 
     Auto-detection does not apply to custom filenames outside those categories (e.g. `src/db/connection.py`, `src/custom_hook.py`), so for those you **must set `writes_shared_contract: true`**. Omitting it makes both subtasks count as consumers even when they share the same `shared_contract` tag, and no warning is emitted at all.
+* **`execution_profile`** (string or `null`, optional, defaults to `null`): An abstract execution profile name for the agent executing this subtask (e.g. `fast-code`, `deep-reasoning`). Must be up to 32 characters consisting of lowercase alphanumeric characters, hyphens, and underscores.
 * **`issue_number`** (integer or `null`, optional, defaults to `null`): This subtask's issue number. **Do not set this by hand** — `orchestune provision` writes it back after creating (or reusing) this subtask's issue. If it is already set, `orchestune provision` reuses that issue instead of creating a new one.
 
 ### Plan Lifecycle and Parent Issue Persistence (Option b)

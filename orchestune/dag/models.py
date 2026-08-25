@@ -287,6 +287,7 @@ class SubTask:
     shared_contract: str | None = None
     writes_shared_contract: bool = False
     issue_number: int | None = None
+    execution_profile: str | None = None
 
     def __post_init__(self) -> None:
         normalized = tuple(normalize_footprint_path(p) for p in self.footprint)
@@ -422,6 +423,7 @@ class DagResult:
                     "verification_plan": list(subtask.verification_plan),
                     "shared_contract": subtask.shared_contract,
                     "writes_shared_contract": subtask.writes_shared_contract,
+                    "execution_profile": subtask.execution_profile,
                 }
                 for subtask_id, subtask in self.subtasks.items()
             },

@@ -43,6 +43,45 @@ class TestProvisionIssuesApply:
         assert parent_call[0] == "[EPIC] Example big rock"
         assert "# Decomposition Plan" in parent_call[1]
 
+    def test_provisions_subtasks_with_execution_profile(
+        self, tmp_path: Path, template_path: Path
+    ):
+        import yaml
+
+        from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+
+        plan = tmp_path / "decomposition_plan.md"
+        plan.write_text(
+            "---\n"
+            'title: "Profile test"\n'
+            "subtasks:\n"
+            '  - id: "task-with-profile"\n'
+            '    description: "desc 1"\n'
+            '    execution_profile: "deep-reasoning"\n'
+            '  - id: "task-without-profile"\n'
+            '    description: "desc 2"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+        result = provision_issues(plan, forge=forge, template_path=template_path)
+
+        assert result.applied is True
+        task1_num = result.created["task-with-profile"]
+        task2_num = result.created["task-without-profile"]
+
+        body1 = forge.issues[task1_num]["body"]
+        match1 = FOOTPRINT_BLOCK_PATTERN.search(body1)
+        assert match1
+        data1 = yaml.safe_load(match1.group(1))
+        assert data1["execution_profile"] == "deep-reasoning"
+
+        body2 = forge.issues[task2_num]["body"]
+        match2 = FOOTPRINT_BLOCK_PATTERN.search(body2)
+        assert match2
+        data2 = yaml.safe_load(match2.group(1))
+        assert data2["execution_profile"] is None
+
     def test_parent_body_extraction_handles_embedded_dashes_in_yaml(
         self, tmp_path: Path, template_path: Path
     ):
