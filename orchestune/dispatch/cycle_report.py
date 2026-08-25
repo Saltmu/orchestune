@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.scoring import SchedulingDecision, Task, decision_to_dict
 
 
 @dataclass
@@ -18,6 +18,10 @@ class CycleReport:
     completion_events: list[dict]
     promotion_events: list[dict]
     applied: bool
+    # #660: 全候補分の選定理由・rank・推定cost。既定値を持つのは、
+    # スケジューリング以外の関心事でCycleReportを組み立てる呼び出し側
+    # （レポート整形テスト等）に無関係な引数を強いないため。
+    scheduling_decisions: list[SchedulingDecision] = field(default_factory=list)
 
 
 def build_event_log_entry(report: CycleReport, now: float) -> dict:
@@ -32,6 +36,9 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
         "deviation_events": report.deviation_events,
         "completion_events": report.completion_events,
         "promotion_events": report.promotion_events,
+        "scheduling_decisions": [
+            decision_to_dict(decision) for decision in report.scheduling_decisions
+        ],
     }
 
 

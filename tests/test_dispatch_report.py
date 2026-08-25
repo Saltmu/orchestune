@@ -9,7 +9,7 @@
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.report import write_github_step_summary
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents, Task
 
 
 def _task(**overrides):
@@ -200,3 +200,59 @@ class TestWriteFailureFallback:
         captured = capsys.readouterr()
         assert "Warning: Failed to write to GITHUB_STEP_SUMMARY" in captured.err
         assert not unwritable_path.exists()
+
+
+class TestSchedulingDecisionsSection:
+    """#660: 全候補の選定理由・rank・推定costがStep Summaryへ出ること。"""
+
+    def _decision(self, **overrides):
+        defaults = dict(
+            issue_number=1,
+            subtask_id="task-a",
+            mode="critical-path",
+            score=2.5,
+            components=ScoreComponents(base_priority=2.0, critical_path=0.5),
+            bottom_level=3600.0,
+            unlocked_count=1,
+            downstream_count=2,
+            estimated_tokens=1200,
+            estimated_duration_seconds=1800.0,
+            estimate_source="task-history",
+            selected=True,
+            reason="selected",
+        )
+        defaults.update(overrides)
+        return SchedulingDecision(**defaults)
+
+    def test_renders_selected_and_skipped_candidates_with_reasons(self, tmp_path):
+        summary_file = tmp_path / "step_summary.md"
+        report = _cycle_report(
+            scheduling_decisions=[
+                self._decision(),
+                self._decision(
+                    issue_number=2,
+                    subtask_id="task-b",
+                    estimated_tokens=None,
+                    selected=False,
+                    reason="token-budget",
+                ),
+            ]
+        )
+
+        write_github_step_summary(report, None, str(summary_file))
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "スケジューリング判定" in content
+        assert "`critical-path`" in content
+        assert "| `task-a` | #1 | 2.500 | 3600 | 2 | 1200 | ✅ 起動 |" in content
+        assert (
+            "| `task-b` | #2 | 2.500 | 3600 | 2 | - | ⏸️ 見送り (`token-budget`) |"
+            in content
+        )
+
+    def test_section_is_omitted_when_there_were_no_candidates(self, tmp_path):
+        summary_file = tmp_path / "step_summary.md"
+
+        write_github_step_summary(_cycle_report(), None, str(summary_file))
+
+        assert "スケジューリング判定" not in summary_file.read_text(encoding="utf-8")

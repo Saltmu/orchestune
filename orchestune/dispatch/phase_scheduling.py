@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
@@ -26,8 +28,27 @@ from orchestune.dispatch.launch import (
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.scoring import Task, quota_available, select_next_tasks
+from orchestune.dispatch.scoring import (
+    SchedulingDecision,
+    SchedulingResult,
+    Task,
+    quota_available,
+    select_tasks_with_decisions,
+)
 from orchestune.dispatch.state import save_run_state
+
+
+@dataclass(frozen=True)
+class SchedulingPhaseResult:
+    """1サイクル分の選出結果。
+
+    #660: 起動されたタスクだけでなく、全候補分の選定理由・rank・推定costを
+    `decisions`として持ち帰り、cycle reportとイベントログから観測できるようにする。
+    """
+
+    selected: list[Task]
+    quota_slots_available: int
+    decisions: list[SchedulingDecision]
 
 
 def _filter_queued_candidates(
@@ -116,6 +137,40 @@ def _finalize_launch(
     return selected
 
 
+def _select_tasks_for_cycle(
+    ctx: CycleContext,
+    candidate_tasks: list[Task],
+    now: float,
+    config: DispatcherConfig,
+) -> SchedulingResult:
+    """クオータ・競合・トークン予算の下で起動タスクを選出する。"""
+    return select_tasks_with_decisions(
+        candidate_tasks,
+        ctx.run_state,
+        now,
+        config.max_concurrent,
+        config.max_launches_per_window,
+        config.window_seconds,
+        max_tokens_per_window=config.max_tokens_per_window,
+        conflict_graph=build_task_conflict_graph(
+            ctx.tasks_by_issue.values(),
+            threshold=config.dag_similarity_threshold,
+            ignore_patterns=config.dag_ignore_patterns,
+        ),
+        active_subtask_ids={
+            task.subtask_id
+            for active in ctx.run_state.active_worktrees.values()
+            if (task := ctx.tasks_by_issue.get(active.issue_number)) is not None
+            and task.subtask_id
+        },
+        scheduling_mode=config.scheduling_mode,
+        # Precedence DAGの母集団はサイクルが見ている全タスク。候補集合だけで
+        # 組むと、まだ依存待ちで候補に入っていない後続が数えられず、共有契約
+        # タスクのcritical-path rankが過小評価される。
+        known_tasks=ctx.tasks_by_issue.values(),
+    )
+
+
 def run_scheduling_phase(
     ctx: CycleContext,
     issues: IssuesByStatus,
@@ -125,7 +180,7 @@ def run_scheduling_phase(
     deviation_events: list[dict],
     now: float,
     config: DispatcherConfig,
-) -> tuple[list[Task], int]:
+) -> SchedulingPhaseResult:
     """起動候補の確定からクオータ判定・実起動までの一連を行う。
 
     `_filter_deviation_blocked_candidates`（deviation_eventsによる絞り込み）
@@ -149,27 +204,12 @@ def run_scheduling_phase(
         config.window_seconds,
         max_tokens_per_window=config.max_tokens_per_window,
     )
-    selected = select_next_tasks(
-        candidate_tasks,
-        ctx.run_state,
-        now,
-        config.max_concurrent,
-        config.max_launches_per_window,
-        config.window_seconds,
-        max_tokens_per_window=config.max_tokens_per_window,
-        conflict_graph=build_task_conflict_graph(
-            ctx.tasks_by_issue.values(),
-            threshold=config.dag_similarity_threshold,
-            ignore_patterns=config.dag_ignore_patterns,
-        ),
-        active_subtask_ids={
-            task.subtask_id
-            for active in ctx.run_state.active_worktrees.values()
-            if (task := ctx.tasks_by_issue.get(active.issue_number)) is not None
-            and task.subtask_id
-        },
-    )
+    scheduling = _select_tasks_for_cycle(ctx, candidate_tasks, now, config)
     selected = _finalize_launch(
-        selected, task_to_base_branch, candidate_tasks, ctx, now, config
+        scheduling.selected, task_to_base_branch, candidate_tasks, ctx, now, config
     )
-    return selected, quota_slots
+    return SchedulingPhaseResult(
+        selected=selected,
+        quota_slots_available=quota_slots,
+        decisions=scheduling.decisions,
+    )

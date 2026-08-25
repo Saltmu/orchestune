@@ -356,7 +356,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=([blocked_task, normal_task], {}),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling.select_next_tasks"
+                "orchestune.dispatch.phase_scheduling.select_tasks_with_decisions"
             ) as mock_select,
         ):
             run_dispatch_cycle(config)

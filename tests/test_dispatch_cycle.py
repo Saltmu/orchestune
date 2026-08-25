@@ -228,7 +228,7 @@ class TestConflictAwareSchedulingPhase:
             not_needed=[],
         )
 
-        selected, quota_slots = run_scheduling_phase(
+        scheduling = run_scheduling_phase(
             ctx,
             issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
@@ -239,8 +239,8 @@ class TestConflictAwareSchedulingPhase:
             config=config,
         )
 
-        assert quota_slots == 2
-        assert [task.subtask_id for task in selected] == ["independent"]
+        assert scheduling.quota_slots_available == 2
+        assert [task.subtask_id for task in scheduling.selected] == ["independent"]
 
     def test_selects_deterministic_independent_set(self, tmp_path, fake_forge):
         tasks = [
@@ -286,7 +286,7 @@ class TestConflictAwareSchedulingPhase:
             not_needed=[],
         )
 
-        selected, _ = run_scheduling_phase(
+        scheduling = run_scheduling_phase(
             ctx,
             issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
@@ -297,7 +297,80 @@ class TestConflictAwareSchedulingPhase:
             config=config,
         )
 
-        assert [task.subtask_id for task in selected] == ["first", "independent"]
+        assert [task.subtask_id for task in scheduling.selected] == [
+            "first",
+            "independent",
+        ]
+
+    def test_reports_a_decision_for_every_candidate(self, tmp_path, fake_forge):
+        """#660: 起動されなかった候補も含め、選定理由がフェーズ結果に残ること。"""
+        tasks = [
+            _task(
+                issue_number=2,
+                subtask_id="first",
+                footprint=("src/shared.py",),
+                status_labels=("status:queued",),
+            ),
+            _task(
+                issue_number=3,
+                subtask_id="second",
+                footprint=("src/shared.py",),
+                status_labels=("status:queued",),
+            ),
+            _task(
+                issue_number=4,
+                subtask_id="independent",
+                footprint=("src/other.py",),
+                status_labels=("status:queued",),
+            ),
+            _task(
+                issue_number=5,
+                subtask_id="surplus",
+                footprint=("src/fourth.py",),
+                status_labels=("status:queued",),
+            ),
+        ]
+        config = DispatcherConfig(
+            apply=False,
+            max_concurrent=2,
+            max_launches_per_window=4,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        ctx = _ctx(
+            tasks_by_issue={task.issue_number: task for task in tasks},
+            config=config,
+        )
+        issues = IssuesByStatus(
+            queued=[
+                _issue(task.issue_number, labels=("status:queued",)) for task in tasks
+            ],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+
+        scheduling = run_scheduling_phase(
+            ctx,
+            issues,
+            ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            completed_subtask_ids=set(),
+            any_forced_serial=False,
+            deviation_events=[],
+            now=2.0,
+            config=config,
+        )
+
+        by_subtask = {d.subtask_id: d for d in scheduling.decisions}
+        assert set(by_subtask) == {"first", "second", "independent", "surplus"}
+        assert by_subtask["first"].reason == "selected"
+        assert by_subtask["second"].reason == "conflict"
+        assert by_subtask["independent"].reason == "selected"
+        assert by_subtask["surplus"].reason == "quota-exhausted"
+        assert all(d.mode == "critical-path" for d in scheduling.decisions)
 
 
 class TestDetermineCandidateTasksExcludesDualStatus:

@@ -8,6 +8,7 @@ import sys
 
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.scoring import decision_to_dict
 
 
 def _format_post_cycle_summary(
@@ -72,6 +73,32 @@ def _format_integrator_summary(integrator_report: dict) -> list[str]:
     return lines
 
 
+def _format_scheduling_decisions(cycle_report: CycleReport) -> list[str]:
+    """#660: 全候補の選定理由・rank・推定costを表として出す。
+
+    起動されなかった候補こそ「なぜ選ばれなかったか」が運用上の関心事なので、
+    選出分だけでなく候補全件を載せる。
+    """
+    if not cycle_report.scheduling_decisions:
+        return []
+    lines = [
+        "### 🧮 スケジューリング判定（Scheduling Decisions）",
+        f"モード: `{cycle_report.scheduling_decisions[0].mode}`\n",
+        "| サブタスクID | Issue番号 | スコア | bottom level | 解放数 | 推定トークン | 結果 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for decision in cycle_report.scheduling_decisions:
+        tokens = "-" if decision.estimated_tokens is None else decision.estimated_tokens
+        outcome = "✅ 起動" if decision.selected else f"⏸️ 見送り (`{decision.reason}`)"
+        lines.append(
+            f"| `{decision.subtask_id}` | #{decision.issue_number} | "
+            f"{decision.score:.3f} | {decision.bottom_level:.0f} | "
+            f"{decision.downstream_count} | {tokens} | {outcome} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
     lines = ["### 🚀 新規起動タスク"]
     if not cycle_report.selected:
@@ -102,7 +129,7 @@ def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
                 f"| `{task.subtask_id}` | #{task.issue_number} | 🔓 ロック解除 |"
             )
         lines.append("")
-    return lines
+    return lines + _format_scheduling_decisions(cycle_report)
 
 
 def write_github_step_summary(
@@ -140,4 +167,7 @@ def _report_to_dict(report: CycleReport) -> dict:
         "deviation_events": report.deviation_events,
         "completion_events": report.completion_events,
         "promotion_events": report.promotion_events,
+        "scheduling_decisions": [
+            decision_to_dict(decision) for decision in report.scheduling_decisions
+        ],
     }

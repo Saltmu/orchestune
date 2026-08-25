@@ -137,6 +137,30 @@ graph TD
 
 cycle検出とトポロジカルソートが参照するのはPrecedence DAGだけです。Conflict Graphは無向なのでcycleという概念を持たず、明示依存と競合が同じpairに共存しても競合情報は削除されません。`orchestune-dag --json`は`precedence_edges`と`conflict_edges`を別々に出力し、後方互換の`edges`キーはprecedence edgeだけを表します。
 
+### スケジューリング: クリティカルパスとリソース制約
+
+Ready集合の中からどれを起動するかは、単純なwall-clock短縮ではなく「AIクオータ1単位あたりの、完成したマージ可能な成果物」を最大化する問題として扱います（#660）。Dispatcherは候補ごとに次のスコアを求め、降順（同点はIssue番号昇順）に貪欲選択します。
+
+```text
+score = base priority
+      + aging
+      + critical path bonus
+      + 後続解放 bonus
+      + partial progress bonus
+      − 推定トークン penalty
+      − 手戻りリスク penalty
+```
+
+* **critical path bonus / 後続解放 bonus**: Precedence DAGから求めた**bottom level**（自身の推定所要時間＋後続チェーンの最長経路）と、到達可能な後続数を、候補集合内で正規化した`[0, 1]`の値です（`orchestune/dispatch/critical_path.py`）。bottom levelと直接後続数は辺を一度ずつ辿るだけなので`O(V + E)`で常に厳密に求めます。到達可能な後続数は推移閉包であり最悪`O(V * E)`になるため、ノード数が`MAX_TRANSITIVE_CLOSURE_NODES`（512）を超えたら打ち切り、直接の後続数へ決定論的に縮退します（縮退したかどうかは`PrecedenceRanks.exact_downstream`で観測できます）。`depends_on`が手編集で循環していても例外を投げず、閉路のノードを辞書順で末尾へ回して停止します。
+* **推定コスト**: 所要時間・トークン量・手戻りリスクは、既にKPI集計用に保持している完了履歴（`RunState.completed_worktrees`）の中央値から推定します（`orchestune/dispatch/cost_model.py`）。そのタスク自身の履歴 → 全体（fleet）の履歴 → 決定論的な既定値、の順に縮退します。トークンだけは不明なら`None`のまま残します——0と推定すると「無料のタスク」として扱われ、逆に既定値を捏造すると根拠の無い数値で上限判定が動いてしまうためです。手戻りリスクは「既に`n`回試行されたのにまだキューに居る」ことを`n / (n + 1)`へ写した値で、単調増加ですが1には達しません。
+* **priorityとの関係**: bonusとpenaltyの重みの総和は、`BASE_PRIORITY`の1段階分（`1.0`）より小さく設定されています。したがってcritical path上の位置は`priority:*`ラベルを上書きせず、同priorityタスク同士の決め手として働きます。
+
+**リソース制約**: 同時実行数（`--max-concurrent`）と起動レート（`--max-launches-per-window`）の上限は従来どおり`quota_available`が守ります。`--max-tokens-per-window`が設定されている場合はさらに、同一バッチ内の推定トークン量の合計がウィンドウ残予算を超える候補を見送ります。ただしバッチの先頭1件だけはこの判定から除外します——単体で残予算を超える見積りのタスクしか無いときにキューが永久に進まなくなる（終端の無い経路になる）ためです。ウィンドウ上限そのものは`quota_available`のハードゲートが守り、トークン情報が取得できない候補（推定が`None`）は予算判定の対象外として安全側に縮退します。同時実行できない組み合わせは、これまでどおりConflict Graphが同一バッチから排除します。
+
+**飢餓回避**: aging項は「候補集合内の最小待ち時間との差が、起動ウィンドウ何個分か」であり非有界です。他の全成分が取り得る幅は有限（`BOUNDED_SCORE_SPAN`）なので、resourceが供給され続ける限り、継続的にeligibleなタスクはいつか必ず他のどの候補よりも高いスコアになります。これが「critical path優先だけでは低rankタスクが飢餓状態になり得る」という問題への終端保証です。
+
+**観測性と切り戻し**: 選出されたかどうかに関わらず、全候補のスコア内訳・bottom level・解放数・推定コスト・見送り理由（`conflict` / `quota-exhausted` / `token-budget`）がcycle report、`--json`出力、`events.jsonl`へ記録されます。`--scheduling-mode legacy`を指定すれば#660以前のスコアリングへ切り戻せます。
+
 ### 通常のfootprint重複と「共有コントラクトゲート」の違い
 
 上記の重複分析（`dag/similarity.py`）は、サブタスクが**宣言済み**の`footprint`/`symbols`の文字列が一致する（または加重コサイン類似度が閾値を超える）場合にsimilarity由来の競合辺を追加します。これは既に存在するファイルを複数タスクが編集する通常のケースには有効ですが、グリーンフィールドな分解計画では別の失敗モードが起こり得ます。
@@ -321,7 +345,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 | --- | --- | --- |
 | **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning.cli` |
 | **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow` |
-| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.conflicts`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
+| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **アダプタ**<br/>`git` / `gh` を実行する唯一のモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
 | **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `setup_skills`, `validation`, `version` |
 

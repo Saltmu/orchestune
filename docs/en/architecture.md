@@ -137,6 +137,30 @@ graph TD
 
 Cycle detection and topological sorting inspect only the Precedence DAG. The undirected Conflict Graph has no cycle error, and conflict information is never discarded when the same pair also has an explicit dependency. `orchestune-dag --json` exposes `precedence_edges` and `conflict_edges` separately; the backward-compatible `edges` key now aliases precedence edges only.
 
+### Scheduling: Critical Path and Resource Constraints
+
+Which member of the ready set to launch is treated as maximizing "finished, mergeable work per unit of AI quota" rather than as minimizing wall-clock time (#660). The dispatcher scores every candidate and selects greedily in descending order (ties broken by ascending issue number).
+
+```text
+score = base priority
+      + aging
+      + critical path bonus
+      + successor release bonus
+      + partial progress bonus
+      - estimated token penalty
+      - rework risk penalty
+```
+
+* **Critical path / successor release bonus**: the **bottom level** derived from the Precedence DAG (a task's own estimated duration plus the longest chain of successors) and the number of reachable successors, each normalized to `[0, 1]` across the candidate set (`orchestune/dispatch/critical_path.py`). Bottom levels and direct successor counts walk every edge once, so they are always computed exactly in `O(V + E)`. Reachable successor counts are a transitive closure and therefore `O(V * E)` in the worst case, so above `MAX_TRANSITIVE_CLOSURE_NODES` (512) nodes the closure is abandoned and degrades deterministically to direct successor counts (observable through `PrecedenceRanks.exact_downstream`). Hand-edited `depends_on` cycles never raise: cycle members are pushed to the end in lexicographic order and the computation terminates.
+* **Cost estimates**: duration, token consumption and rework risk are estimated from the medians of the completion history the dispatcher already keeps for KPI aggregation (`RunState.completed_worktrees`, see `orchestune/dispatch/cost_model.py`). The estimate degrades in three steps: the task's own history, then fleet-wide history, then a deterministic default. Tokens alone stay `None` when unknown — estimating 0 would make the task look free, and inventing a default would drive the quota check from a number with no evidence behind it. Rework risk maps "attempted `n` times and still queued" to `n / (n + 1)`: monotonic, but never reaching 1.
+* **Relationship to priority**: the weights of the bonuses and penalties sum to less than one `BASE_PRIORITY` step (`1.0`). A task's position on the critical path therefore never overrides a `priority:*` label; it decides between tasks of equal priority.
+
+**Resource constraints**: the concurrency (`--max-concurrent`) and launch-rate (`--max-launches-per-window`) ceilings are still enforced by `quota_available`. When `--max-tokens-per-window` is set, a candidate whose estimated token cost would push the batch's projected spend past the window's remaining budget is additionally skipped. The first selection of a batch is exempt from that check: otherwise a queue whose only candidates each estimate above the remaining budget would never progress (a path with no terminal). The window ceiling itself is held by `quota_available`'s hard gate, and candidates whose token cost is unknown (`None`) are excluded from budget filtering rather than guessed at. Combinations that cannot run concurrently are still excluded from the same batch by the Conflict Graph.
+
+**Starvation freedom**: the aging term measures how many launch windows separate a candidate's wait from the shortest wait in the candidate set, and is unbounded. Every other component spans a finite range (`BOUNDED_SCORE_SPAN`), so as long as resources keep being supplied, a continuously eligible task eventually outscores every other candidate. That is the terminal guarantee against "critical-path-first starves low-rank tasks".
+
+**Observability and rollback**: every candidate — selected or not — contributes its score breakdown, bottom level, release counts, cost estimates and skip reason (`conflict` / `quota-exhausted` / `token-budget`) to the cycle report, the `--json` output and `events.jsonl`. `--scheduling-mode legacy` restores the pre-#660 scoring.
+
 ### Ordinary Footprint Overlap vs. the Shared-Contract Gate
 
 The overlap analysis above (`dag/similarity.py`) adds a similarity conflict edge only when subtasks' **declared** `footprint`/`symbols` strings actually match (or score above the weighted cosine-similarity threshold). That works well for the common case of multiple tasks editing an already-existing file, but greenfield decomposition plans have a different failure mode.
@@ -301,7 +325,7 @@ from its own layer or from any layer below it, never from a layer above.
 | --- | --- | --- |
 | **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning.cli` |
 | **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.conflicts`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.config`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.escalation`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.git_ops`, `integrator.pr`, `integrator.tasks`, `integrator.worktree`, `issue_parsing`, `provisioning.parent`, `provisioning.plan`, `provisioning.rendering`, `provisioning.subtasks`, `status_snapshot`, `symbol_verification` |
 | **L1** | **Adapters**<br/>the only modules that run `git` or `gh` | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli` |
 | **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `setup_skills`, `validation`, `version` |
 
