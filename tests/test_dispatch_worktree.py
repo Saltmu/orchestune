@@ -799,6 +799,7 @@ class TestProvisionAndLaunch:
         class _CustomLegacyTarget:
             def __init__(self):
                 self.called_with = None
+                self.call_count = 0
 
             def launch(
                 self,
@@ -808,6 +809,7 @@ class TestProvisionAndLaunch:
                 *,
                 force_push: bool = False,
             ) -> DispatchHandle:
+                self.call_count += 1
                 self.called_with = (task, branch_name, worktree_path, force_push)
                 return DispatchHandle(branch_name=branch_name, pid=123)
 
@@ -823,6 +825,7 @@ class TestProvisionAndLaunch:
             execution_selection=selection,
         )
         assert handle.pid == 123
+        assert legacy_target.call_count == 1
         assert legacy_target.called_with == (task, "feature/1", worktree_path, False)
 
 
