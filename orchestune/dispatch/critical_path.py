@@ -13,11 +13,18 @@
 
 計算量と探索上限:
 
-- bottom levelとunlockedは辺を一度ずつ辿るだけなのでO(V + E)。ノード数に関わらず
-  常に厳密に計算する。
+- bottom levelとunlockedは辺を一度ずつ辿るだけなのでO(V + E)。非循環である限り、
+  ノード数に関わらず常に厳密に計算する（探索上限の対象外）。
 - downstreamは推移閉包なので最悪O(V * E)。候補集合が大きい場合に暴走しないよう、
   ノード数が`MAX_TRANSITIVE_CLOSURE_NODES`を超えたら推移閉包を打ち切り、直接の
   後続数へ決定論的に縮退する（`PrecedenceRanks.exact_downstream`で観測可能）。
+
+`depends_on`に循環がある場合（Issue本文の手編集などで起こり得る）、逆トポロジカル
+順序が存在しないため1回の走査ではrankを正しく積み上げられず、bottom levelも
+downstreamも過小評価になる。この場合も探索上限超過と同じく`exact_downstream`を
+`False`にし、downstreamは直接の後続数へ縮退させる。壊れたメタデータのために
+正確な到達可能性計算を持ち込むより、正直に縮退したことを通知する方が良い
+（PR#665レビュー指摘）。
 
 Conflict Graphはここでは扱わない。#659で分離したとおり、競合は対称な排他制約で
 あって因果順序ではなく、rankの計算根拠にしてはならないため。
@@ -63,6 +70,11 @@ class PrecedenceRanks:
     bottom_level: Mapping[str, float]
     unlocked: Mapping[str, int]
     downstream: Mapping[str, int]
+    # rankを厳密に求められたかどうか。`False`になるのは、探索上限
+    # （`MAX_TRANSITIVE_CLOSURE_NODES`）を超えたときと、`depends_on`に循環が
+    # あったとき。循環時は逆トポロジカル順序が存在せず、1回の走査では
+    # `bottom_level`も`downstream`も過小評価になるため、`downstream`は直接の
+    # 後続数へ縮退させたうえでこのフラグで通知する（PR#665レビュー指摘）。
     exact_downstream: bool = True
 
     def bottom_level_of(self, subtask_id: str) -> float:
@@ -96,13 +108,17 @@ def _successor_map(tasks: list[Task]) -> tuple[list[str], dict[str, list[str]]]:
 
 def _topological_order(
     node_ids: list[str], successors: Mapping[str, list[str]]
-) -> list[str]:
-    """辞書順で正規化したトポロジカル順序を返す（循環があっても停止する）。
+) -> tuple[list[str], bool]:
+    """辞書順で正規化したトポロジカル順序と、循環を検出したかどうかを返す。
 
     Precedence DAGは`orchestune-dag`が起票前に循環検査済みだが、ディスパッチャー
     が読むのはIssue本文というユーザーが編集できる経路であり、循環が入り得る。
     ここで例外を投げるとサイクル全体が落ちてしまうため、閉路に残ったノードは
     辞書順で末尾へ回し、rank計算では0寄与として決定論的に縮退させる。
+
+    PR#665レビュー指摘(Codex P2): その縮退はrankを**過小評価**するため、循環の
+    有無を呼び出し側へ返す必要がある。返された順序は閉路部分では逆トポロジカル
+    順序になっておらず、1回の逆順走査ではrankを正しく積み上げられない。
     """
     indegree = dict.fromkeys(node_ids, 0)
     for targets in successors.values():
@@ -121,7 +137,8 @@ def _topological_order(
                 heapq.heappush(ready, target)
 
     placed = set(order)
-    return order + [node for node in node_ids if node not in placed]
+    remaining = [node for node in node_ids if node not in placed]
+    return order + remaining, bool(remaining)
 
 
 def _duration_of(durations: Mapping[str, float], node: str) -> float:
@@ -169,8 +186,8 @@ def compute_precedence_ranks(
     """
     task_list = list(tasks)
     node_ids, successors = _successor_map(task_list)
-    order = _topological_order(node_ids, successors)
-    exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES
+    order, has_cycle = _topological_order(node_ids, successors)
+    exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES and not has_cycle
     return PrecedenceRanks(
         bottom_level=_bottom_levels(order, successors, durations or {}),
         unlocked={node: len(targets) for node, targets in successors.items()},

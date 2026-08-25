@@ -196,3 +196,41 @@ class TestDefensiveInputs:
         assert ranks.bottom_level_of("a") == 1.0
         assert ranks.bottom_level_of("b") == 1.0
         assert ranks.bottom_level_of("c") == 1.0
+
+
+class TestCyclicGraphsDegradeHonestly:
+    """PR#665レビュー指摘(Codex P2)の回帰防止。
+
+    循環がある場合、1回の逆順走査ではrankを正しく積み上げられない（過小評価に
+    なる）ため、探索上限超過と同じく`exact_downstream=False`で通知したうえで
+    直接の後続数へ縮退しなければならない。
+    """
+
+    def test_a_cycle_marks_the_ranks_inexact(self):
+        # レビュー指摘の反例: p -> b, a <-> b, a -> x。
+        # pは b/a/x の3ノードへ到達できるが、1回走査では2しか数えられない。
+        tasks = [
+            _task("p"),
+            _task("b", ("p", "a")),
+            _task("a", ("b",)),
+            _task("x", ("a",)),
+        ]
+
+        ranks = compute_precedence_ranks(tasks, {})
+
+        assert ranks.exact_downstream is False
+        # 縮退後は直接の後続数（p -> b の1件）を報告する。
+        assert ranks.downstream_count("p") == 1
+
+    def test_a_self_contained_cycle_also_degrades(self):
+        ranks = compute_precedence_ranks([_task("a", ("b",)), _task("b", ("a",))], {})
+
+        assert ranks.exact_downstream is False
+
+    def test_acyclic_graphs_stay_exact(self):
+        tasks = [_task("a"), _task("b", ("a",)), _task("c", ("b",))]
+
+        ranks = compute_precedence_ranks(tasks, {})
+
+        assert ranks.exact_downstream is True
+        assert ranks.downstream_count("a") == 2
