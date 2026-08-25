@@ -144,6 +144,44 @@ class TestRenderIssueBodySubtaskIdSafety:
         assert data["shared_contract"] == "plugin-registry"
         assert data["writes_shared_contract"] is True
 
+    def test_execution_profile_metadata_round_trips_in_real_template(
+        self, template_path: Path
+    ):
+        subtask = SubTask(
+            id="task-profile",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            execution_profile="fast-code_1",
+        )
+
+        body = _render_issue_body(subtask, template_path.read_text(encoding="utf-8"))
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["execution_profile"] == "fast-code_1"
+
+    def test_execution_profile_renders_null_when_none(self, template_path: Path):
+        subtask = SubTask(
+            id="task-profile-none",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            execution_profile=None,
+        )
+
+        body = _render_issue_body(subtask, template_path.read_text(encoding="utf-8"))
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["execution_profile"] is None
+
     def test_a_fields_own_value_is_not_reprocessed_as_a_template_token(self):
         """#323 review (P2): substituting one field at a time (as opposed to
         a single pass over the original template) means an earlier field's

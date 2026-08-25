@@ -335,3 +335,64 @@ class TestSubtaskFieldContract:
 
         assert subtask.shared_contract == "plugin-registry"
         assert subtask.writes_shared_contract is True
+
+    def test_parses_execution_profile(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+            execution_profile: fast-code_1
+          - id: task-b
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        subtasks = parse_decomposition_plan(path)
+
+        assert subtasks[0].execution_profile == "fast-code_1"
+        assert subtasks[1].execution_profile is None
+
+        from orchestune.dag.models import DagResult
+
+        res = DagResult(
+            subtasks={subtasks[0].id: subtasks[0], subtasks[1].id: subtasks[1]},
+            edges=[],
+            topological_order=["task-a", "task-b"],
+            parallel_leaves=["task-a", "task-b"],
+            risky_subtask_ids=[],
+        )
+        d = res.to_dict()
+        assert d["subtasks"]["task-a"]["execution_profile"] == "fast-code_1"
+        assert d["subtasks"]["task-b"]["execution_profile"] is None
+
+    @pytest.mark.parametrize(
+        "invalid_profile",
+        [
+            "Fast-code",
+            "fast code",
+            "fast.code",
+            "fast@code",
+            "",
+            "a" * 33,
+            123,
+            True,
+            [],
+            {},
+        ],
+    )
+    def test_invalid_execution_profile_raises_value_error(
+        self, tmp_path, invalid_profile
+    ):
+        plan = {
+            "subtasks": [
+                {
+                    "id": "task-a",
+                    "execution_profile": invalid_profile,
+                }
+            ]
+        }
+        import yaml
+
+        plan_yaml = f"---\n{yaml.dump(plan)}---\n"
+        path = _write_plan(tmp_path, plan_yaml)
+        with pytest.raises(ValueError, match="execution_profile"):
+            parse_decomposition_plan(path)

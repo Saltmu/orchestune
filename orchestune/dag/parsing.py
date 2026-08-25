@@ -23,6 +23,8 @@ _RISK_KEYWORDS = ("subprocess", "auth", "credential")
 _FRONTMATTER_PATTERN = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*\n?", re.DOTALL)
 _LEADING_BLANK_LINES_PATTERN = re.compile(r"\A(?:[ \t]*\n)+")
 _VALID_PRIORITIES = frozenset(("high", "medium", "low"))
+_EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+_MAX_EXECUTION_PROFILE_LENGTH = 32
 
 
 def detect_risk_from_values(
@@ -109,31 +111,51 @@ def _warn_on_degraded_fields(
         )
 
 
+def _str_tuple(items: object) -> tuple[str, ...]:
+    if not isinstance(items, list | tuple):
+        return ()
+    return tuple(str(x) for x in items if x is not None)
+
+
+def _parse_execution_profile(raw_profile: object, subtask_id: str) -> str | None:
+    if raw_profile is None:
+        return None
+    if not isinstance(raw_profile, str):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'execution_profile' は文字列である必要があります: {raw_profile!r}"
+        )
+    if (
+        not _EXECUTION_PROFILE_PATTERN.fullmatch(raw_profile)
+        or len(raw_profile) > _MAX_EXECUTION_PROFILE_LENGTH
+    ):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'execution_profile' が不正です: {raw_profile!r} "
+            "(英小文字・数字・ハイフン・アンダースコアで32文字以内)"
+        )
+    return raw_profile
+
+
 def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     subtask_id = _parse_subtask_id(raw)
-    footprint = tuple(
-        normalize_footprint_path(str(item)) for item in raw.get("footprint", []) or []
-    )
-    symbols = tuple(str(item) for item in raw.get("symbols", []) or [])
-    depends_on = tuple(str(item) for item in raw.get("depends_on", []) or [])
+    raw_footprint = raw.get("footprint") or []
+    footprint = tuple(normalize_footprint_path(str(i)) for i in raw_footprint)
+    symbols = _str_tuple(raw.get("symbols"))
+    depends_on = _str_tuple(raw.get("depends_on"))
     description = str(raw.get("description", ""))
     priority = str(raw.get("priority", "medium")).lower()
     if priority not in _VALID_PRIORITIES:
         priority = "medium"
     overview = str(raw.get("overview", ""))
-    acceptance_criteria = tuple(
-        str(item) for item in raw.get("acceptance_criteria", []) or []
-    )
-    proposed_changes = tuple(
-        str(item) for item in raw.get("proposed_changes", []) or []
-    )
-    verification_plan = tuple(
-        str(item) for item in raw.get("verification_plan", []) or []
-    )
+    acceptance_criteria = _str_tuple(raw.get("acceptance_criteria"))
+    proposed_changes = _str_tuple(raw.get("proposed_changes"))
+    verification_plan = _str_tuple(raw.get("verification_plan"))
     shared_contract = (
         str(raw["shared_contract"]) if raw.get("shared_contract") else None
     )
     writes_shared_contract = bool(raw.get("writes_shared_contract", False))
+    execution_profile = _parse_execution_profile(
+        raw.get("execution_profile"), subtask_id
+    )
 
     _warn_on_degraded_fields(subtask_id, description, footprint)
 
@@ -158,6 +180,7 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         verification_plan=verification_plan,
         shared_contract=shared_contract,
         writes_shared_contract=writes_shared_contract,
+        execution_profile=execution_profile,
     )
 
 

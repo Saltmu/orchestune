@@ -36,6 +36,7 @@ class Task:
     parent_state: str | None = None
     shared_contract: str | None = None
     writes_shared_contract: bool = False
+    execution_profile: str | None = None
 
 
 def normalize_newlines(text: str) -> str:

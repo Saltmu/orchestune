@@ -29,6 +29,7 @@ _PLACEHOLDERS = (
     "shared_contract",
     "writes_shared_contract",
     "parent_issue_number",
+    "execution_profile",
 )
 _PLACEHOLDER_PATTERN = re.compile(
     "{{(" + "|".join(re.escape(name) for name in _PLACEHOLDERS) + ")}}"
@@ -98,6 +99,11 @@ def _render_issue_body(
         "parent_issue_number": "null"
         if parent_issue_number is None
         else str(parent_issue_number),
+        "execution_profile": (
+            "null"
+            if subtask.execution_profile is None
+            else _yaml_scalar(subtask.execution_profile)
+        ),
     }
     return _PLACEHOLDER_PATTERN.sub(lambda match: values[match.group(1)], template)
 
