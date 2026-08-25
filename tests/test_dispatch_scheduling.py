@@ -680,3 +680,83 @@ class TestLegacyComponentBreakdown:
             assert decision.components.total == pytest.approx(
                 compute_priority_score(task, candidates, state, NOW)
             )
+
+
+class TestTokenBudgetAcrossCycles:
+    """PR#665レビュー指摘(Codex P2)の回帰防止。
+
+    `remaining_token_budget`が数えるのは完了済みworktreeの実測消費だけ（#438
+    からの既存仕様）なので、同じウィンドウ内でディスパッチャーが再実行されると
+    前サイクルで起動した実行中タスクの消費が忘れられ、しかも毎回新しい
+    「先頭1件の免除」が発行されてしまう。実行中の見込み消費を予約分として
+    差し引き、予約がある間は免除枠を発行しないこと。
+    """
+
+    def _state(self, active=False):
+        return RunState(
+            # ウィンドウ内で実測400消費済み（上限1000に対して残600）。
+            completed_worktrees=[_completed(9, NOW - 300, total_tokens=400)],
+            active_worktrees=(
+                {"1": ActiveWorktree(1, "b", "w", 1, NOW - 120, ())} if active else {}
+            ),
+        )
+
+    def test_in_flight_launches_are_reserved_against_the_window(self):
+        # 実行中のissue 1はfleet中央値400を消費すると見込まれるため、
+        # バッチの残予算は 600 - 400 = 200。候補の見積り400は収まらない。
+        result = _select(
+            [_task(2)],
+            run_state=self._state(active=True),
+            max_concurrent=3,
+            max_tokens_per_window=1000,
+        )
+
+        assert result.selected == []
+        assert result.decisions[0].reason == "token-budget"
+
+    def test_without_in_flight_launches_the_first_selection_is_still_exempt(self):
+        result = _select(
+            [_task(2)],
+            run_state=self._state(active=False),
+            max_concurrent=3,
+            max_tokens_per_window=1000,
+        )
+
+        assert [t.issue_number for t in result.selected] == [2]
+
+    def test_reservations_shrink_the_batch_rather_than_blocking_it_outright(self):
+        # 予約400を引いても残る予算（上限2000 → 600+1000=1600のうち予約400で1200）
+        # では、収まる範囲だけ起動する。
+        result = _select(
+            [_task(2), _task(3), _task(4), _task(5)],
+            run_state=self._state(active=True),
+            max_concurrent=5,
+            max_tokens_per_window=2000,
+        )
+
+        # 残予算1200 / 見積り400 → 3件まで。
+        assert [t.issue_number for t in result.selected] == [2, 3, 4]
+        assert result.decisions[-1].reason == "token-budget"
+
+    def test_an_in_flight_task_with_unknown_cost_reserves_nothing(self):
+        # usage記録が皆無なら見積りも不明。根拠の無い予約で枠を潰さない。
+        state = RunState(
+            completed_worktrees=[_completed(9, NOW - 300)],
+            active_worktrees={"1": ActiveWorktree(1, "b", "w", 1, NOW - 120, ())},
+        )
+
+        result = _select(
+            [_task(2)],
+            run_state=state,
+            max_concurrent=3,
+            max_tokens_per_window=1000,
+        )
+
+        assert [t.issue_number for t in result.selected] == [2]
+
+    def test_no_token_ceiling_leaves_the_exemption_intact(self):
+        result = _select(
+            [_task(2)], run_state=self._state(active=True), max_concurrent=3
+        )
+
+        assert [t.issue_number for t in result.selected] == [2]

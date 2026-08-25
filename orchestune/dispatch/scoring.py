@@ -214,6 +214,58 @@ def remaining_token_budget(
     return max(0, max_tokens_per_window - consumed)
 
 
+@dataclass(frozen=True)
+class _TokenBudget:
+    """1サイクル分のバッチが使ってよいトークン量と、免除枠の可否。"""
+
+    # 残予算。`None`は上限未設定（無制限）。
+    remaining: int | None
+    # 先頭1件を予算判定から除外してよいか。
+    exempt_first: bool
+
+
+def _reserved_token_estimate(run_state: RunState, cost_model: CostModel) -> int:
+    """まだ完了していない起動が、このウィンドウで消費すると見込まれるトークン量。"""
+    return sum(
+        tokens
+        for active in run_state.active_worktrees.values()
+        if (tokens := cost_model.tokens_for_issue(active.issue_number)) is not None
+    )
+
+
+def _token_budget(
+    run_state: RunState,
+    now: float,
+    window_seconds: int,
+    max_tokens_per_window: int | None,
+    cost_model: CostModel,
+) -> _TokenBudget:
+    """バッチのトークン予算を、実行中の起動の見込み消費を差し引いて求める。
+
+    PR#665レビュー指摘(Codex P2): `remaining_token_budget`が数えるのは**完了した**
+    worktreeの実測消費だけである（#438からの既存仕様で、`quota_available`の
+    ハードゲートもこれに基づく）。そのため、同じウィンドウ内で
+    ディスパッチャーが再実行されると、前サイクルで起動してまだ動いている
+    タスクの消費が丸ごと忘れられ、しかも毎回新しい「先頭1件の免除」が
+    発行されてしまう。上限500・見積り400なら、サイクル1でA、サイクル2でBを
+    起動して見込み800とウィンドウ上限を超え得る。
+
+    そこで、実行中タスクの推定消費を予約分として差し引き、予約がある間は
+    免除枠を発行しない。免除枠は「単体で残予算を超える見積りのタスクしか
+    無いときにキューが止まる」ことを防ぐためのものであり、既に何かが動いて
+    いるならその完了自体が前進を保証するため、ここで免除する必要はない。
+    """
+    remaining = remaining_token_budget(
+        run_state, now, window_seconds, max_tokens_per_window
+    )
+    if remaining is None:
+        return _TokenBudget(remaining=None, exempt_first=True)
+    reserved = _reserved_token_estimate(run_state, cost_model)
+    return _TokenBudget(
+        remaining=max(0, remaining - reserved), exempt_first=reserved == 0
+    )
+
+
 def quota_available(
     run_state: RunState,
     now: float,
@@ -319,9 +371,9 @@ def _build_scoring_inputs(
     now: float,
     window_seconds: int,
     known_tasks: Iterable[Task] | None,
+    cost_model: CostModel,
 ) -> _ScoringInputs:
     graph_tasks = pending_tasks(known_tasks if known_tasks is not None else eligible)
-    cost_model = build_cost_model(run_state)
     estimates = {task.subtask_id: cost_model.estimate(task) for task in graph_tasks}
     ranks = compute_precedence_ranks(
         graph_tasks,
@@ -440,6 +492,7 @@ def _rank_candidates(
     window_seconds: int,
     scheduling_mode: str,
     known_tasks: Iterable[Task] | None,
+    cost_model: CostModel,
 ) -> list[tuple[Task, SchedulingDecision]]:
     """候補をスコア降順（同点はissue番号昇順）に並べる。
 
@@ -451,7 +504,7 @@ def _rank_candidates(
         decisions = [_legacy_decision(t, eligible, run_state, now) for t in eligible]
     else:
         inputs = _build_scoring_inputs(
-            eligible, run_state, now, window_seconds, known_tasks
+            eligible, run_state, now, window_seconds, known_tasks, cost_model
         )
         decisions = [
             _critical_path_decision(t, run_state, now, inputs) for t in eligible
@@ -510,7 +563,7 @@ def _partition_candidates(
 def _apply_resource_constraints(
     ranked: list[tuple[Task, SchedulingDecision]],
     slots: int,
-    token_budget: int | None,
+    token_budget: _TokenBudget,
     conflict_graph: ConflictGraph | None,
     active_subtask_ids: set[str] | None,
 ) -> SchedulingResult:
@@ -532,12 +585,15 @@ def _apply_resource_constraints(
         cost = decision.estimated_tokens
         # 先頭1件はトークン予算で弾かない。単体で残予算を超える見積りのタスク
         # しか無いときにキューが永久に進まなくなる（終端の無い経路になる）ため。
+        # ただし実行中の起動が既にある場合（`exempt_first`が偽）はその完了が
+        # 前進を保証するので免除しない——サイクルごとに免除枠を発行すると、
+        # ウィンドウ内の見込み消費が上限を超え得る（PR#665レビュー指摘）。
         # ウィンドウ上限そのものは`quota_available`のハードゲートが守る。
         if (
-            token_budget is not None
-            and selected
+            token_budget.remaining is not None
+            and (selected or not token_budget.exempt_first)
             and cost is not None
-            and projected_tokens + cost > token_budget
+            and projected_tokens + cost > token_budget.remaining
         ):
             decisions.append(replace(decision, reason=REASON_TOKEN_BUDGET))
             continue
@@ -578,13 +634,22 @@ def select_tasks_with_decisions(
         window_seconds,
         max_tokens_per_window=max_tokens_per_window,
     )
+    cost_model = build_cost_model(run_state)
     ranked = _rank_candidates(
-        eligible, run_state, now, window_seconds, scheduling_mode, known_tasks
+        eligible,
+        run_state,
+        now,
+        window_seconds,
+        scheduling_mode,
+        known_tasks,
+        cost_model,
     )
     result = _apply_resource_constraints(
         ranked,
         slots,
-        remaining_token_budget(run_state, now, window_seconds, max_tokens_per_window),
+        _token_budget(
+            run_state, now, window_seconds, max_tokens_per_window, cost_model
+        ),
         conflict_graph,
         active_subtask_ids,
     )

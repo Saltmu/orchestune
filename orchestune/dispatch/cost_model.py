@@ -61,10 +61,20 @@ class CostModel:
         tokens = self.tokens.get(task.issue_number)
         return CostEstimate(
             duration_seconds=self._resolve_duration(duration),
-            tokens=tokens if tokens is not None else self.fleet_tokens,
+            tokens=self.tokens_for_issue(task.issue_number),
             rework_risk=self._rework_risk(task.issue_number),
             source=self._source(duration, tokens),
         )
+
+    def tokens_for_issue(self, issue_number: int) -> int | None:
+        """Issue番号だけで引ける推定トークン量。不明なら`None`。
+
+        実行中（`ActiveWorktree`）のタスクは`Task`が手元に無いこともあるため、
+        `estimate`と同じ縮退（そのタスクの履歴 → fleet全体の中央値）をIssue番号
+        だけで引けるようにしておく（#660 / PR#665レビュー指摘）。
+        """
+        tokens = self.tokens.get(issue_number)
+        return tokens if tokens is not None else self.fleet_tokens
 
     def _resolve_duration(self, duration: float | None) -> float:
         if duration is not None:
