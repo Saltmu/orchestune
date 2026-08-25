@@ -162,11 +162,26 @@ def _depends_on_from_body(body: str) -> tuple[str, ...]:
     )
 
 
+def _execution_profile_from_body(body: str) -> str | None:
+    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    profile = data.get("execution_profile")
+    return str(profile) if profile is not None else None
+
+
 def _validate_template_identity_marker(
     template: str, template_path: str | Path
 ) -> None:
     probe_id = "orchestune-template-probe: needs-quoting #1"
     probe_depends_on = ("orchestune-template-probe-dep",)
+    probe_profile = "probe-profile"
     probe = SubTask(
         id=probe_id,
         description="",
@@ -175,6 +190,7 @@ def _validate_template_identity_marker(
         depends_on=probe_depends_on,
         risk=False,
         risk_reasons=(),
+        execution_profile=probe_profile,
     )
     rendered = _render_issue_body(probe, template)
     if _subtask_id_from_body(rendered) != probe_id:
@@ -199,4 +215,10 @@ def _validate_template_identity_marker(
             "（'{{parent_issue_number}}' がFootprint YAMLフェンス内の"
             "'parent_issue_number:' として描画されていません）。ネイティブ"
             "Sub-issue関係が使えない環境でDispatcherが子Issueを発見できなくなります"
+        )
+    if _execution_profile_from_body(rendered) != probe_profile:
+        raise ValueError(
+            f"{template_path} から execution_profile を再照合できません"
+            "（'{{execution_profile}}' がFootprint YAMLフェンス内の"
+            "'execution_profile:' として描画されていません）。実行プロファイルが永続化されません"
         )

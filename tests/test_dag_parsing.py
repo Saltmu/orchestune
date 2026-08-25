@@ -396,3 +396,33 @@ class TestSubtaskFieldContract:
         path = _write_plan(tmp_path, plan_yaml)
         with pytest.raises(ValueError, match="execution_profile"):
             parse_decomposition_plan(path)
+
+    @pytest.mark.parametrize(
+        ("field_name", "scalar_value"),
+        [
+            ("depends_on", "task-a"),
+            ("depends_on", 123),
+            ("footprint", "src/foo.py"),
+            ("symbols", "foo_func"),
+            ("acceptance_criteria", "passes"),
+            ("proposed_changes", "change"),
+            ("verification_plan", "test"),
+        ],
+    )
+    def test_scalar_sequence_fields_raise_value_error(
+        self, tmp_path, field_name, scalar_value
+    ):
+        plan = {
+            "subtasks": [
+                {
+                    "id": "task-a",
+                    field_name: scalar_value,
+                }
+            ]
+        }
+        import yaml
+
+        plan_yaml = f"---\n{yaml.dump(plan)}---\n"
+        path = _write_plan(tmp_path, plan_yaml)
+        with pytest.raises(ValueError, match=field_name):
+            parse_decomposition_plan(path)

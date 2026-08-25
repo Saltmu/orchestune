@@ -158,6 +158,7 @@ def test_provision_persists_plan_into_parent_issue_body(tmp_path: Path):
         "subtask_id: {{subtask_id_yaml}}\n"
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
+        "execution_profile: {{execution_profile}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -252,6 +253,7 @@ def test_provision_with_explicit_parent_persists_plan(tmp_path: Path):
         "subtask_id: {{subtask_id_yaml}}\n"
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
+        "execution_profile: {{execution_profile}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -309,6 +311,7 @@ def test_incremental_parent_sync_on_partial_failure(tmp_path: Path):
         "subtask_id: {{subtask_id_yaml}}\n"
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
+        "execution_profile: {{execution_profile}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -377,6 +380,7 @@ def test_provision_reports_plan_synced_false_on_sync_failure(tmp_path: Path):
         "subtask_id: {{subtask_id_yaml}}\n"
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
+        "execution_profile: {{execution_profile}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -462,6 +466,7 @@ def test_provision_initial_sync_failure_sticks_even_when_subtask_sync_succeeds(
         "subtask_id: {{subtask_id_yaml}}\n"
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
+        "execution_profile: {{execution_profile}}\n"
         "```\n",
         encoding="utf-8",
     )

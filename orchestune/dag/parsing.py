@@ -111,10 +111,26 @@ def _warn_on_degraded_fields(
         )
 
 
-def _str_tuple(items: object) -> tuple[str, ...]:
-    if not isinstance(items, list | tuple):
+def _parse_sequence_field(
+    val: object, field_name: str, subtask_id: str
+) -> tuple[str, ...]:
+    if val is None:
         return ()
-    return tuple(str(x) for x in items if x is not None)
+    if isinstance(val, str) or not isinstance(val, list | tuple):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の '{field_name}' はリストである必要があります: {val!r}"
+        )
+    return tuple(str(x) for x in val if x is not None)
+
+
+def _parse_footprint(val: object, subtask_id: str) -> tuple[str, ...]:
+    if val is None:
+        return ()
+    if isinstance(val, str) or not isinstance(val, list | tuple):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'footprint' はリストである必要があります: {val!r}"
+        )
+    return tuple(normalize_footprint_path(str(x)) for x in val if x is not None)
 
 
 def _parse_execution_profile(raw_profile: object, subtask_id: str) -> str | None:
@@ -137,18 +153,23 @@ def _parse_execution_profile(raw_profile: object, subtask_id: str) -> str | None
 
 def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     subtask_id = _parse_subtask_id(raw)
-    raw_footprint = raw.get("footprint") or []
-    footprint = tuple(normalize_footprint_path(str(i)) for i in raw_footprint)
-    symbols = _str_tuple(raw.get("symbols"))
-    depends_on = _str_tuple(raw.get("depends_on"))
+    footprint = _parse_footprint(raw.get("footprint"), subtask_id)
+    symbols = _parse_sequence_field(raw.get("symbols"), "symbols", subtask_id)
+    depends_on = _parse_sequence_field(raw.get("depends_on"), "depends_on", subtask_id)
     description = str(raw.get("description", ""))
     priority = str(raw.get("priority", "medium")).lower()
     if priority not in _VALID_PRIORITIES:
         priority = "medium"
     overview = str(raw.get("overview", ""))
-    acceptance_criteria = _str_tuple(raw.get("acceptance_criteria"))
-    proposed_changes = _str_tuple(raw.get("proposed_changes"))
-    verification_plan = _str_tuple(raw.get("verification_plan"))
+    acceptance_criteria = _parse_sequence_field(
+        raw.get("acceptance_criteria"), "acceptance_criteria", subtask_id
+    )
+    proposed_changes = _parse_sequence_field(
+        raw.get("proposed_changes"), "proposed_changes", subtask_id
+    )
+    verification_plan = _parse_sequence_field(
+        raw.get("verification_plan"), "verification_plan", subtask_id
+    )
     shared_contract = (
         str(raw["shared_contract"]) if raw.get("shared_contract") else None
     )

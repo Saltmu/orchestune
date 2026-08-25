@@ -223,6 +223,7 @@ class TestValidateTemplateIdentityMarker:
             "```yaml\n"
             "subtask_id: {{subtask_id_yaml}}\n"
             "parent_issue_number: {{parent_issue_number}}\n"
+            "execution_profile: {{execution_profile}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="depends_on"):
@@ -236,6 +237,7 @@ class TestValidateTemplateIdentityMarker:
             "```yaml\n"
             "subtask_id: {{subtask_id_yaml}}\n"
             "depends_on: {{depends_on}}\n"
+            "execution_profile: {{execution_profile}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="parent_issue_number"):
@@ -247,9 +249,24 @@ class TestValidateTemplateIdentityMarker:
             "```yaml\n"
             "parent_issue_number: {{parent_issue_number}}\n"
             "depends_on: {{depends_on}}\n"
+            "execution_profile: {{execution_profile}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="subtask_id"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_missing_execution_profile_placeholder(
+        self, tmp_path: Path
+    ):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="execution_profile"):
             _validate_template_identity_marker(template, tmp_path / "t.md")
 
 
