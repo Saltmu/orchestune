@@ -14,7 +14,7 @@ from orchestune.dispatch.scoring import (
     select_next_tasks,
     select_tasks_with_decisions,
 )
-from orchestune.dispatch.state import CompletedWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import Task, Usage
 
 NOW = 1_800_000_000.0
@@ -28,6 +28,7 @@ def _task(
     depends_on=(),
     created_at=CREATED_AT,
     status_labels=("status:queued",),
+    yaml_error=False,
 ):
     return Task(
         issue_number=issue_number,
@@ -40,6 +41,7 @@ def _task(
         status_labels=status_labels,
         created_at=created_at,
         depends_on=depends_on,
+        yaml_error=yaml_error,
     )
 
 
@@ -528,3 +530,96 @@ class TestUnknownTokenCostInvariant:
             ).decisions
             unknown = [d.estimated_tokens is None for d in decisions]
             assert all(unknown) or not any(unknown)
+
+
+class TestIneligibleCandidatesAreStillReported:
+    """PR#665レビュー指摘(Codex P2)の回帰防止。
+
+    スコアリング以前に候補から外れたタスクも、理由付きの未選出判定として
+    レポートへ残さなければならない（特に`yaml_error`のタスクはapply時に
+    実際に処理されるため、レポートから消えると運用者が追えなくなる）。
+    """
+
+    def test_yaml_error_candidate_is_reported_with_its_reason(self):
+        broken = _task(2, yaml_error=True)
+
+        result = _select([_task(1), broken])
+
+        assert [t.issue_number for t in result.selected] == [1]
+        excluded = next(d for d in result.decisions if d.issue_number == 2)
+        assert excluded.selected is False
+        assert excluded.reason == "yaml-error"
+        assert excluded.score == 0.0
+
+    def test_externally_locked_candidate_is_reported(self):
+        locked = _task(2, status_labels=("status:queued", "status:external-lock"))
+
+        result = _select([_task(1), locked])
+
+        assert result.selected == [_task(1)]
+        assert (
+            next(d for d in result.decisions if d.issue_number == 2).reason
+            == "external-lock"
+        )
+
+    def test_blocked_recompute_candidate_is_reported(self):
+        blocked = _task(2, status_labels=("status:queued", "status:blocked-recompute"))
+
+        result = _select([_task(1), blocked])
+
+        assert (
+            next(d for d in result.decisions if d.issue_number == 2).reason
+            == "blocked-recompute"
+        )
+
+    def test_already_active_candidate_is_reported(self):
+        state = RunState(
+            active_worktrees={
+                "2": ActiveWorktree(2, "b", "w", 1, NOW - 600, ()),
+            }
+        )
+
+        result = _select([_task(1), _task(2)], run_state=state)
+
+        assert [t.issue_number for t in result.selected] == [1]
+        assert (
+            next(d for d in result.decisions if d.issue_number == 2).reason
+            == "already-active"
+        )
+
+    def test_every_candidate_including_ineligible_ones_appears_exactly_once(self):
+        candidates = [
+            _task(1),
+            _task(2, yaml_error=True),
+            _task(3, status_labels=("status:queued", "status:external-lock")),
+            _task(4),
+        ]
+
+        result = _select(candidates, max_concurrent=1)
+
+        assert sorted(d.issue_number for d in result.decisions) == [1, 2, 3, 4]
+        assert {d.reason for d in result.decisions} == {
+            "selected",
+            "yaml-error",
+            "external-lock",
+            "quota-exhausted",
+        }
+
+    def test_ineligible_candidates_do_not_consume_quota_slots(self):
+        candidates = [
+            _task(1, yaml_error=True),
+            _task(2, yaml_error=True),
+            _task(3),
+            _task(4),
+        ]
+
+        result = _select(candidates, max_concurrent=2)
+
+        assert [t.issue_number for t in result.selected] == [3, 4]
+
+    def test_ineligible_decisions_carry_the_configured_mode(self):
+        result = _select(
+            [_task(1, yaml_error=True)], scheduling_mode=SCHEDULING_MODE_LEGACY
+        )
+
+        assert result.decisions[0].mode == SCHEDULING_MODE_LEGACY

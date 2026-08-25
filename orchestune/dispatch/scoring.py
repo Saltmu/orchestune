@@ -113,6 +113,11 @@ REASON_TOKEN_BUDGET = "token-budget"
 # PR#665レビュー指摘(Codex P2): 選出されたが実起動に失敗した（起動枠の予約が
 # 取れなかった／`create_worktree_and_launch`が失敗した）タスクの理由。
 REASON_LAUNCH_FAILED = "launch-failed"
+# PR#665レビュー指摘(Codex P2): スコアリング以前に候補から外れる理由。
+REASON_YAML_ERROR = "yaml-error"
+REASON_EXTERNAL_LOCK = "external-lock"
+REASON_BLOCKED_RECOMPUTE = "blocked-recompute"
+REASON_ALREADY_ACTIVE = "already-active"
 
 
 @dataclass(frozen=True)
@@ -394,6 +399,18 @@ def _legacy_decision(
     )
 
 
+def _normalized_mode(scheduling_mode: str) -> str:
+    """設定値をスコアリングモードへ正規化する。
+
+    `legacy`以外は`critical-path`として扱う。設定ファイル・CLIの両方が
+    `SCHEDULING_MODES`で値を検証済みのため、ここで未知の値のために追加の
+    エラー経路を作らない。
+    """
+    if scheduling_mode == SCHEDULING_MODE_LEGACY:
+        return SCHEDULING_MODE_LEGACY
+    return SCHEDULING_MODE_CRITICAL_PATH
+
+
 def _rank_candidates(
     eligible: list[Task],
     run_state: RunState,
@@ -408,7 +425,7 @@ def _rank_candidates(
     設定ファイル・CLIの両方が`SCHEDULING_MODES`で値を検証済みのため、ここで
     未知の値のために追加のエラー経路を作らない。
     """
-    if scheduling_mode == SCHEDULING_MODE_LEGACY:
+    if _normalized_mode(scheduling_mode) == SCHEDULING_MODE_LEGACY:
         decisions = [_legacy_decision(t, eligible, run_state, now) for t in eligible]
     else:
         inputs = _build_scoring_inputs(
@@ -423,16 +440,49 @@ def _rank_candidates(
     )
 
 
-def _eligible_tasks(candidate_tasks: list[Task], run_state: RunState) -> list[Task]:
+def _ineligibility_reason(task: Task, active_issue_numbers: set[int]) -> str | None:
+    """スコアリング以前に候補から外れる理由。外れないなら`None`。"""
+    if task.yaml_error:
+        return REASON_YAML_ERROR
+    if "status:external-lock" in task.status_labels:
+        return REASON_EXTERNAL_LOCK
+    if "status:blocked-recompute" in task.status_labels:
+        return REASON_BLOCKED_RECOMPUTE
+    if task.issue_number in active_issue_numbers:
+        return REASON_ALREADY_ACTIVE
+    return None
+
+
+def _partition_candidates(
+    candidate_tasks: list[Task], run_state: RunState, scheduling_mode: str
+) -> tuple[list[Task], list[SchedulingDecision]]:
+    """候補を「スコアリング対象」と「対象外＋その理由」に分ける。
+
+    PR#665レビュー指摘(Codex P2): 対象外の候補を単に捨てると、`yaml_error`の
+    タスクのようにapply時には実際に処理される（`_launch_selected_tasks`が
+    `status:blocked-*`へ落とす）ものまでレポートから消え、「全候補の選定理由が
+    観測できる」という本機能の主張が崩れる。運用者が「なぜ起動しなかったのか」を
+    追えるよう、対象外も理由付きの未選出判定として残す。
+    """
     active_issue_numbers = {int(k) for k in run_state.active_worktrees}
-    return [
-        t
-        for t in candidate_tasks
-        if not t.yaml_error
-        and "status:external-lock" not in t.status_labels
-        and "status:blocked-recompute" not in t.status_labels
-        and t.issue_number not in active_issue_numbers
-    ]
+    eligible: list[Task] = []
+    excluded: list[SchedulingDecision] = []
+    for task in candidate_tasks:
+        reason = _ineligibility_reason(task, active_issue_numbers)
+        if reason is None:
+            eligible.append(task)
+            continue
+        excluded.append(
+            SchedulingDecision(
+                issue_number=task.issue_number,
+                subtask_id=task.subtask_id,
+                mode=_normalized_mode(scheduling_mode),
+                score=0.0,
+                components=ScoreComponents(),
+                reason=reason,
+            )
+        )
+    return eligible, sorted(excluded, key=lambda decision: decision.issue_number)
 
 
 def _apply_resource_constraints(
@@ -495,7 +545,9 @@ def select_tasks_with_decisions(
     `known_tasks`はPrecedence DAGを組み立てる母集団（通常はサイクルが見ている
     全タスク）。省略時は候補集合そのものを使う。
     """
-    eligible = _eligible_tasks(candidate_tasks, run_state)
+    eligible, excluded = _partition_candidates(
+        candidate_tasks, run_state, scheduling_mode
+    )
     slots = quota_available(
         run_state,
         now,
@@ -507,12 +559,16 @@ def select_tasks_with_decisions(
     ranked = _rank_candidates(
         eligible, run_state, now, window_seconds, scheduling_mode, known_tasks
     )
-    return _apply_resource_constraints(
+    result = _apply_resource_constraints(
         ranked,
         slots,
         remaining_token_budget(run_state, now, window_seconds, max_tokens_per_window),
         conflict_graph,
         active_subtask_ids,
+    )
+    # スコアリング対象外の候補は、ランク付き判定の後ろにissue番号順で並べる。
+    return SchedulingResult(
+        selected=result.selected, decisions=result.decisions + excluded
     )
 
 
