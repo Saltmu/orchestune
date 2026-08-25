@@ -23,10 +23,25 @@ from orchestune.issue_parsing import is_epic_issue
 from orchestune.models import PrRecord
 
 
+def _is_base_or_parent_branch(
+    branch_name: str, config: DispatcherConfig | None = None
+) -> bool:
+    name = _strip_remote_prefix(branch_name)
+    if name in {"main", "master", "HEAD"} or name.endswith("/HEAD"):
+        return True
+    if name.startswith("parent/issue-"):
+        return True
+    if config and config.parent_issue_number is not None:
+        if name == f"parent/issue-{config.parent_issue_number}":
+            return True
+    return False
+
+
 def _decide_external_lock_sync(
     tasks_by_issue: dict[int, Task],
     prs: list[PrRecord],
     run_state: RunState,
+    config: DispatcherConfig | None = None,
 ) -> ExternalLockScanResult:
     """githubからの読み取り(list_remote_branches/branch_changed_files)と
     scan_external_locksの純粋計算のみを行い、ラベルの書き込みは行わない。"""
@@ -38,6 +53,7 @@ def _decide_external_lock_sync(
         for b in remote_branch_names
         if _strip_remote_prefix(b) not in pr_head_refs
         and _strip_remote_prefix(b) not in active_branches
+        and not _is_base_or_parent_branch(b, config)
     ]
     # #245: 差分取得不能(None)はtupleへ潰さずそのまま渡し、
     # scan_external_locks側でfail closed（lock維持・新規lock）に判定させる。
@@ -82,7 +98,7 @@ def _sync_external_locks(
     config: DispatcherConfig,
 ) -> ExternalLockScanResult:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state)
+    lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state, config)
     _apply_external_lock_sync(lock_result, config)
     return lock_result
 
