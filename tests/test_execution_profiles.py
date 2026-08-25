@@ -306,6 +306,15 @@ reasoning-effort = "high"
                 },
                 "must be a string",
             ),
+            (
+                {
+                    "default_execution_profile": "deap",
+                    "execution_profiles": {
+                        "deep": {"claude-cli": {"model": "claude-3-7-sonnet-20250219"}}
+                    },
+                },
+                "is not defined under 'execution_profiles'",
+            ),
         ],
     )
     def test_rejects_invalid_configs(
@@ -314,6 +323,23 @@ reasoning-effort = "high"
         with pytest.raises(ConfigError) as exc_info:
             extract_execution_profile_config(invalid_data)
         assert expected_err in str(exc_info.value)
+
+    def test_target_name_normalized_at_parse_time(self) -> None:
+        raw_config = {
+            "execution_profiles": {
+                "deep": {
+                    "claude_cli": {
+                        "model": "claude-3-7-sonnet-20250219",
+                        "reasoning_effort": "high",
+                    }
+                }
+            }
+        }
+        config = extract_execution_profile_config(raw_config)
+        assert "claude-cli" in config.profiles["deep"]
+        selection = resolve_execution_profile("deep", "claude-cli", config)
+        assert selection.model == "claude-3-7-sonnet-20250219"
+        assert selection.reasoning_effort == "high"
 
 
 class TestResolveExecutionProfile:
@@ -556,6 +582,7 @@ class TestResolveExecutionProfile:
         other_target = LocalProcessDispatchTarget(
             log_dir=tmp_path, local_cmd='echo "{issue_number}"'
         )
+        no_cmd_target = LocalProcessDispatchTarget(log_dir=tmp_path, local_cmd=None)
 
         custom_cfg = ExecutionProfileConfig(
             profiles={
@@ -585,14 +612,52 @@ class TestResolveExecutionProfile:
             resolve_execution_profile("balanced", other_target, custom_cfg).model
             == "dummy-local"
         )
+        assert (
+            resolve_execution_profile("balanced", no_cmd_target, custom_cfg).model
+            == "dummy-local"
+        )
 
         class UnknownTarget:
             pass
 
+        class TargetWithExplicitTargetName:
+            target_name = "claude-cli"
+
         assert (
-            resolve_execution_profile("balanced", UnknownTarget(), custom_cfg).model
-            == "dummy-local"
+            resolve_execution_profile(
+                "balanced", TargetWithExplicitTargetName(), custom_cfg
+            ).model
+            == "claude-3-7-sonnet-20250219"
         )
+
+        class TargetWithExplicitName:
+            name = "codex-cli"
+
+        assert (
+            resolve_execution_profile(
+                "balanced", TargetWithExplicitName(), custom_cfg
+            ).model
+            == "o3-mini"
+        )
+
+    def test_unmapped_default_profile_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        custom_cfg = ExecutionProfileConfig(
+            default_execution_profile="balanced",
+            profiles={
+                "deep": {
+                    "claude-cli": TargetExecutionConfig(
+                        model="claude-3-7-sonnet-20250219"
+                    )
+                }
+            },
+        )
+        with caplog.at_level(logging.WARNING):
+            selection = resolve_execution_profile(None, "claude-cli", custom_cfg)
+        assert selection.profile == "balanced"
+        assert selection.model is None
+        assert "not configured in profiles" in caplog.text
 
     def test_validate_target_name(self) -> None:
         from orchestune.dispatch.execution_profiles import validate_target_name

@@ -271,6 +271,11 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
 # `DAG_TOOL_CONFIG_KEYS`、extract_*関数のすぐ側で一元管理）との完全一致で
 # のみ無視し、それ以外の`dag_`始まりキーは引き続き"unknown key"として
 # 拒否する。
+#
+# #668: execution_profiles および default_execution_profile は dispatcher 独自の設定だが、
+# 単純なスカラー値の argparse CLI フラグではなく階層的な TOML テーブル（dict）として
+# extract_execution_profile_config() で個別に検証・抽出されるため、
+# _config_defaults() のフラットな argparse 型チェックをバイパスする。
 _EXECUTION_PROFILE_CONFIG_KEYS = frozenset(
     {
         "execution_profiles",

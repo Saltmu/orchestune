@@ -112,6 +112,14 @@ class ExecutionSelection:
     reason: str
 
 
+def _get_aliased_value(table: dict[str, Any], key_underscore: str) -> Any:
+    """Retrieve value for key using either underscore or hyphen notation."""
+    if key_underscore in table:
+        return table[key_underscore]
+    key_hyphen = key_underscore.replace("_", "-")
+    return table.get(key_hyphen)
+
+
 def _parse_target_execution_config(
     profile_name: str, target_name: str, target_settings: Any
 ) -> TargetExecutionConfig:
@@ -125,19 +133,17 @@ def _parse_target_execution_config(
                 f"unknown key {key!r} in target {target_name!r} of profile {profile_name!r}"
             )
 
+    raw_model = _get_aliased_value(target_settings, "model")
     model_val: str | None = None
-    if "model" in target_settings:
-        raw_model = target_settings["model"]
+    if raw_model is not None:
         if not isinstance(raw_model, str) or isinstance(raw_model, bool):
             raise ConfigError(
                 f"'model' in profile {profile_name!r}, target {target_name!r} must be a string"
             )
         model_val = validate_model_name(raw_model)
 
+    raw_effort = _get_aliased_value(target_settings, "reasoning_effort")
     effort_val: str | None = None
-    raw_effort = target_settings.get("reasoning_effort")
-    if raw_effort is None:
-        raw_effort = target_settings.get("reasoning-effort")
     if raw_effort is not None:
         if not isinstance(raw_effort, str) or isinstance(raw_effort, bool):
             raise ConfigError(
@@ -158,8 +164,9 @@ def _parse_profile_targets(
     parsed_targets: dict[str, TargetExecutionConfig] = {}
     for target_name, target_settings in targets_map.items():
         validated_target_name = validate_target_name(target_name)
-        parsed_targets[validated_target_name] = _parse_target_execution_config(
-            profile_name, validated_target_name, target_settings
+        normalized_target_name = validated_target_name.replace("_", "-")
+        parsed_targets[normalized_target_name] = _parse_target_execution_config(
+            profile_name, normalized_target_name, target_settings
         )
     return parsed_targets
 
@@ -168,9 +175,7 @@ def extract_execution_profile_config(
     config_data: dict[str, Any],
 ) -> ExecutionProfileConfig:
     """Extract and validate execution profiles configuration from a loaded TOML dict."""
-    default_profile = config_data.get("default_execution_profile")
-    if default_profile is None:
-        default_profile = config_data.get("default-execution-profile")
+    default_profile = _get_aliased_value(config_data, "default_execution_profile")
     if default_profile is not None:
         if not isinstance(default_profile, str) or isinstance(default_profile, bool):
             raise ConfigError(
@@ -180,10 +185,7 @@ def extract_execution_profile_config(
     else:
         default_profile = DEFAULT_EXECUTION_PROFILE
 
-    raw_profiles = config_data.get("execution_profiles")
-    if raw_profiles is None:
-        raw_profiles = config_data.get("execution-profiles")
-
+    raw_profiles = _get_aliased_value(config_data, "execution_profiles")
     if raw_profiles is None:
         return ExecutionProfileConfig(
             default_execution_profile=default_profile, profiles={}
@@ -199,6 +201,15 @@ def extract_execution_profile_config(
         validated_profile_name = validate_profile_name(profile_name)
         parsed_profiles[validated_profile_name] = _parse_profile_targets(
             validated_profile_name, targets_map
+        )
+
+    if (
+        default_profile != DEFAULT_EXECUTION_PROFILE
+        and parsed_profiles
+        and default_profile not in parsed_profiles
+    ):
+        raise ConfigError(
+            f"default_execution_profile {default_profile!r} is not defined under 'execution_profiles'"
         )
 
     return ExecutionProfileConfig(
@@ -221,6 +232,14 @@ def _extract_target_name(target: str | Any) -> str:
     if isinstance(target, str):
         return target.strip().lower().replace("_", "-")
 
+    explicit_name = getattr(
+        target,
+        "target_name",
+        getattr(target, "name", getattr(target, "_target_name", None)),
+    )
+    if isinstance(explicit_name, str) and explicit_name.strip():
+        return explicit_name.strip().lower().replace("_", "-")
+
     type_name = type(target).__name__
     if type_name == "ClaudeCodeCloudRoutineDispatchTarget":
         return "cloud-routine"
@@ -236,7 +255,6 @@ def _extract_target_name(target: str | Any) -> str:
                 return "agy-cli"
             if "codex" in cmd_lower:
                 return "codex-cli"
-        return "local"
     return "local"
 
 
@@ -255,8 +273,45 @@ _TARGET_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _target_lookup_candidates(target_name: str) -> list[str]:
-    norm = target_name.strip().lower().replace("_", "-")
-    return list(_TARGET_ALIASES.get(norm, (norm,)))
+    return list(_TARGET_ALIASES.get(target_name, (target_name,)))
+
+
+def _normalize_profile_config(
+    config: ExecutionProfileConfig | Any | None,
+) -> ExecutionProfileConfig:
+    if config is None:
+        return ExecutionProfileConfig()
+    if isinstance(config, ExecutionProfileConfig):
+        return config
+    cfg = getattr(config, "execution_profile_config", None)
+    return cfg if isinstance(cfg, ExecutionProfileConfig) else ExecutionProfileConfig()
+
+
+def _select_profile_and_reason(
+    profile: str | None, target_name: str, config: ExecutionProfileConfig
+) -> tuple[str, str]:
+    default_profile = config.default_execution_profile
+    if not profile:
+        if config.profiles and default_profile not in config.profiles:
+            logger.warning(
+                "Default execution profile %r is not configured in profiles; proceeding with empty profile settings",
+                default_profile,
+            )
+        return (
+            default_profile,
+            f"default profile '{default_profile}' applied (no profile specified)",
+        )
+    if profile in config.profiles:
+        return profile, f"profile '{profile}' resolved for target '{target_name}'"
+    logger.warning(
+        "Unknown execution profile %r specified; falling back to default profile %r",
+        profile,
+        default_profile,
+    )
+    return (
+        default_profile,
+        f"unknown profile '{profile}', fell back to default profile '{default_profile}'",
+    )
 
 
 def resolve_execution_profile(
@@ -271,49 +326,22 @@ def resolve_execution_profile(
     with a warning log.
     """
     target_name = _extract_target_name(target)
-    lookup_order = _target_lookup_candidates(target_name)
-
-    if config is None:
-        profile_config = ExecutionProfileConfig()
-    elif isinstance(config, ExecutionProfileConfig):
-        profile_config = config
-    else:
-        profile_config = getattr(
-            config, "execution_profile_config", ExecutionProfileConfig()
-        )
-        if profile_config is None:
-            profile_config = ExecutionProfileConfig()
-
-    default_profile = profile_config.default_execution_profile
-
-    if not profile:
-        selected_profile = default_profile
-        reason = f"default profile '{default_profile}' applied (no profile specified)"
-    elif profile in profile_config.profiles:
-        selected_profile = profile
-        reason = f"profile '{profile}' resolved for target '{target_name}'"
-    else:
-        logger.warning(
-            "Unknown execution profile %r specified; falling back to default profile %r",
-            profile,
-            default_profile,
-        )
-        selected_profile = default_profile
-        reason = f"unknown profile '{profile}', fell back to default profile '{default_profile}'"
+    profile_config = _normalize_profile_config(config)
+    selected_profile, reason = _select_profile_and_reason(
+        profile, target_name, profile_config
+    )
 
     profile_targets = profile_config.profiles.get(selected_profile, {})
     matched_target_config: TargetExecutionConfig | None = None
-    for candidate in lookup_order:
+    for candidate in _target_lookup_candidates(target_name):
         if candidate in profile_targets:
             matched_target_config = profile_targets[candidate]
             break
 
-    if matched_target_config is not None:
-        model = matched_target_config.model
-        reasoning_effort = matched_target_config.reasoning_effort
-    else:
-        model = None
-        reasoning_effort = None
+    model = matched_target_config.model if matched_target_config else None
+    reasoning_effort = (
+        matched_target_config.reasoning_effort if matched_target_config else None
+    )
 
     return ExecutionSelection(
         profile=selected_profile,
