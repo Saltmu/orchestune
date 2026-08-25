@@ -4,9 +4,12 @@ import pytest
 
 from orchestune.dag.models import ConflictEdge, ConflictGraph
 from orchestune.dispatch.scoring import (
+    MIN_PRIORITY_GAP,
+    QUALITY_SPAN,
     SCHEDULING_MODE_CRITICAL_PATH,
     SCHEDULING_MODE_LEGACY,
     decision_to_dict,
+    reconcile_decisions_with_launches,
     remaining_token_budget,
     select_next_tasks,
     select_tasks_with_decisions,
@@ -403,3 +406,85 @@ class TestObservability:
             max_launches_per_window=1,
             window_seconds=3600,
         ) == [_task(1)]
+
+
+class TestPriorityOrderingInvariant:
+    """PR#665レビュー指摘(Codex P2)の回帰防止。
+
+    critical path/cost由来の項は、待ち時間が等しい候補同士でpriorityの順序を
+    逆転させてはならない。逆転は「片方がbonus満額・もう片方がpenalty満額」で
+    起きるため、判定すべきは片側のbonus合計ではなく候補**間**の差である。
+    """
+
+    def test_quality_terms_cannot_span_one_priority_step(self):
+        assert QUALITY_SPAN < MIN_PRIORITY_GAP
+
+    def test_cheap_high_fan_out_low_priority_loses_to_expensive_medium(self):
+        # low側: 最長チェーン・最多後続・トークンほぼ0・試行1回
+        hub = _task(1, subtask_id="hub", priority="low")
+        # medium側: 後続なし・トークン最大・試行3回（＝penalty満額）
+        costly = _task(2, subtask_id="costly", priority="medium")
+        known = [
+            hub,
+            costly,
+            _task(10, subtask_id="d1", depends_on=("hub",)),
+            _task(11, subtask_id="d2", depends_on=("d1",)),
+            _task(12, subtask_id="d3", depends_on=("d2",)),
+        ]
+        state = RunState(
+            completed_worktrees=[
+                _completed(1, NOW - 300, total_tokens=1),
+                _completed(2, NOW - 300, total_tokens=100_000),
+                _completed(2, NOW - 300, total_tokens=100_000),
+                _completed(2, NOW - 300, total_tokens=100_000),
+            ]
+        )
+
+        result = _select(
+            [hub, costly], run_state=state, max_concurrent=1, known_tasks=known
+        )
+
+        assert result.selected == [costly]
+
+
+class TestLaunchReconciliation:
+    """PR#665レビュー指摘(Codex P2)の回帰防止。
+
+    選出（scheduling）と実起動（launch）は別物であり、レポートは実際に起動された
+    タスクだけを`✅ 起動`として扱わなければならない。
+    """
+
+    def _decisions(self):
+        return _select([_task(1), _task(2)]).decisions
+
+    def test_tasks_that_failed_to_launch_are_marked_launch_failed(self):
+        decisions = self._decisions()
+        assert [d.selected for d in decisions] == [True, True]
+
+        reconciled = reconcile_decisions_with_launches(decisions, [_task(1)])
+
+        assert reconciled[0].selected is True
+        assert reconciled[0].reason == "selected"
+        assert reconciled[1].selected is False
+        assert reconciled[1].reason == "launch-failed"
+
+    def test_already_skipped_decisions_keep_their_original_reason(self):
+        conflicts = ConflictGraph(
+            (ConflictEdge("task-1", "task-2", reason="similarity"),)
+        )
+        decisions = _select([_task(1), _task(2)], conflict_graph=conflicts).decisions
+
+        reconciled = reconcile_decisions_with_launches(decisions, [_task(1)])
+
+        assert [(d.selected, d.reason) for d in reconciled] == [
+            (True, "selected"),
+            (False, "conflict"),
+        ]
+
+    def test_a_fully_successful_launch_leaves_every_decision_untouched(self):
+        decisions = self._decisions()
+
+        assert (
+            reconcile_decisions_with_launches(decisions, [_task(1), _task(2)])
+            == decisions
+        )

@@ -33,6 +33,7 @@ from orchestune.dispatch.scoring import (
     SchedulingResult,
     Task,
     quota_available,
+    reconcile_decisions_with_launches,
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.state import save_run_state
@@ -211,5 +212,7 @@ def run_scheduling_phase(
     return SchedulingPhaseResult(
         selected=selected,
         quota_slots_available=quota_slots,
-        decisions=scheduling.decisions,
+        # 実起動は選出の部分集合になり得る（起動枠の予約失敗・起動失敗）。
+        # レポートが実態と食い違わないよう、起動結果で判定を突き合わせる。
+        decisions=reconcile_decisions_with_launches(scheduling.decisions, selected),
     )

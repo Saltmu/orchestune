@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import dataclasses
+import itertools
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -55,6 +56,7 @@ __all__ = [
     "SCHEDULING_MODES",
     "SCHEDULING_MODE_CRITICAL_PATH",
     "SCHEDULING_MODE_LEGACY",
+    "reconcile_decisions_with_launches",
 ]
 
 TIME_BONUS_WEIGHT = 0.5
@@ -65,14 +67,29 @@ SCHEDULING_MODE_LEGACY = "legacy"
 SCHEDULING_MODES = (SCHEDULING_MODE_CRITICAL_PATH, SCHEDULING_MODE_LEGACY)
 
 # critical-pathモードの重み。critical path由来のbonusとcost由来のpenaltyは
-# いずれも正規化済みの[0, 1]に重みを掛けたものなので、その総和は
-# priority 1段階分（BASE_PRIORITYの刻み=1.0）より小さく保つ。こうすることで
-# 「critical path上にある」ことが優先度ラベルを上書きしてしまうのを防ぎ、
-# 同priorityタスク同士の決め手としてのみ働かせる。
-CRITICAL_PATH_WEIGHT = 0.5
-UNLOCK_WEIGHT = 0.4
-TOKEN_COST_WEIGHT = 0.3
-REWORK_WEIGHT = 0.2
+# いずれも正規化済みの[0, 1]に重みを掛けたものなので、「critical path上にある」
+# ことが優先度ラベルを上書きしないよう総和を制限する。
+#
+# PR#665レビュー指摘(Codex P2): ここで制限すべきは片方の候補が得られるbonusの
+# 合計ではなく、2候補**間**で開き得る差＝`QUALITY_SPAN`である。低priority側が
+# bonusを満額得ると同時に高priority側がpenaltyを満額被り得るため、bonusの合計
+# だけを1.0未満に抑えても、候補間では最大`bonus + penalty`だけ差がついて
+# priority 1段階を逆転できてしまう（例: low 1.0 + 0.9 = 1.9 > medium 2.0 - 0.5
+# = 1.5）。4項の総和を`MIN_PRIORITY_GAP`未満に保つことで逆転を閉じる。
+CRITICAL_PATH_WEIGHT = 0.3
+UNLOCK_WEIGHT = 0.25
+TOKEN_COST_WEIGHT = 0.25
+REWORK_WEIGHT = 0.15
+
+# 2候補間でcritical path/cost由来の項が開き得る差の上限。
+QUALITY_SPAN = CRITICAL_PATH_WEIGHT + UNLOCK_WEIGHT + TOKEN_COST_WEIGHT + REWORK_WEIGHT
+
+# 隣接するpriority段階の最小の差。`QUALITY_SPAN`がこれ未満である限り、待ち時間が
+# 等しい候補同士でpriorityの順序が逆転することはない（テストで機械的に検証する）。
+MIN_PRIORITY_GAP = min(
+    higher - lower
+    for lower, higher in itertools.pairwise(sorted(BASE_PRIORITY.values()))
+)
 
 # 待ち時間項の重み。候補集合内の最小待ち時間との差を「ウィンドウ何個分か」で
 # 測るため非有界であり、これが飢餓回避の終端保証になる（BOUNDED_SCORE_SPAN参照）。
@@ -86,16 +103,16 @@ BOUNDED_SCORE_SPAN = (
     max(BASE_PRIORITY.values())
     - min(BASE_PRIORITY.values())
     + PROGRESS_BONUS
-    + CRITICAL_PATH_WEIGHT
-    + UNLOCK_WEIGHT
-    + TOKEN_COST_WEIGHT
-    + REWORK_WEIGHT
+    + QUALITY_SPAN
 )
 
 REASON_SELECTED = "selected"
 REASON_CONFLICT = "conflict"
 REASON_QUOTA_EXHAUSTED = "quota-exhausted"
 REASON_TOKEN_BUDGET = "token-budget"
+# PR#665レビュー指摘(Codex P2): 選出されたが実起動に失敗した（起動枠の予約が
+# 取れなかった／`create_worktree_and_launch`が失敗した）タスクの理由。
+REASON_LAUNCH_FAILED = "launch-failed"
 
 
 @dataclass(frozen=True)
@@ -151,6 +168,26 @@ class SchedulingResult:
 def decision_to_dict(decision: SchedulingDecision) -> dict:
     """イベントログ／JSONレポート用のプレーンなdictへ変換する。"""
     return dataclasses.asdict(decision)
+
+
+def reconcile_decisions_with_launches(
+    decisions: list[SchedulingDecision], launched: Iterable[Task]
+) -> list[SchedulingDecision]:
+    """実起動に失敗したタスクの判定を`launch-failed`へ落とす。
+
+    PR#665レビュー指摘(Codex P2): 選出（scheduling）と実起動（launch）は別物で、
+    `_apply_task_launches`は起動枠の予約が取れなかったタスクや
+    `create_worktree_and_launch`が失敗したタスクを飛ばして部分集合を返す。
+    選出時点の判定をそのまま出すと、`CycleReport.selected`に居ないタスクまで
+    レポートに`✅ 起動`と表示され、診断情報として信用できなくなる。
+    """
+    launched_issues = {task.issue_number for task in launched}
+    return [
+        decision
+        if not decision.selected or decision.issue_number in launched_issues
+        else replace(decision, selected=False, reason=REASON_LAUNCH_FAILED)
+        for decision in decisions
+    ]
 
 
 def remaining_token_budget(
