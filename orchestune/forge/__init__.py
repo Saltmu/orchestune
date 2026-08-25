@@ -7,7 +7,7 @@ import subprocess
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord, normalize_newlines
 
 from .admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
 from .admin import (
@@ -150,26 +150,51 @@ class Forge(IssueForge, PullRequestForge, RepoAdminForge, Protocol):
     """Orchestune が利用する分割済み Forge 契約の合成型。"""
 
 
+def _decode(raw: bytes | str | None) -> str:
+    """バイナリ実行の出力を文字列へ復号する（Noneは空文字へ倒す）。"""
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    return raw.decode("utf-8", errors="replace")
+
+
 class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin):
     """Compatibility facade composing focused GitHub Forge implementations."""
 
     def _run(self, args: list[str], input_text: str | None = None) -> str:
-        if input_text is not None:
-            # Windows上のtext=Trueなsubprocess stdin書き込みは\nを
-            # os.linesep(\r\n)へ変換する。既にCRLFを含む文字列(GitHubから
-            # 再取得した既存Issue本文など)をそのまま渡すと、書き込みの
-            # たびに\rが積み上がってしまうため、事前にLFへ正規化する。
-            input_text = input_text.replace("\r\n", "\n").replace("\r", "\n")
-        result = subprocess.run(
-            args,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=True,
-        )
-        return result.stdout
+        if input_text is None:
+            return subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+            ).stdout
+        return self._run_with_stdin(args, input_text)
+
+    @staticmethod
+    def _run_with_stdin(args: list[str], input_text: str) -> str:
+        """#664: 標準入力へ渡す本文をバイト列で書き込む。
+
+        Windows上の`text=True`なsubprocess stdin書き込みは`\\n`を
+        `os.linesep`(CRLF)へ変換するため、LFへ正規化した本文がGitHub上では
+        CRLFへ戻ってしまい、次回読み戻したときに本文中のマーカーブロックが
+        一致しなくなる（＝置換されず追記される）。バイト列で渡してOSによる
+        改行変換そのものを回避する。
+        """
+        payload = normalize_newlines(input_text).encode("utf-8")
+        result = subprocess.run(args, input=payload, capture_output=True, check=False)
+        stdout = _decode(result.stdout)
+        # 呼び出し側(`forge.issues`)がstderrを文字列として検査するため、
+        # バイナリ実行でも文字列へ復号してから例外を組み立てる。
+        stderr = _decode(result.stderr)
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, args, output=stdout, stderr=stderr
+            )
+        return stdout
 
 
 __all__ = [

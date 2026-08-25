@@ -225,7 +225,8 @@ class TestAddComment:
             "--body-file",
             "-",
         ]
-        assert gh_run.call_args.kwargs.get("input") == body
+        # #664: stdinはOSの改行変換を避けるためUTF-8バイト列で渡す。
+        assert gh_run.call_args.kwargs.get("input") == body.encode("utf-8")
 
 
 class TestCloseIssue:
@@ -435,7 +436,7 @@ class TestCreateIssue:
             "--body-file",
             "-",
         ]
-        assert gh_run.call_args.kwargs.get("input") == "body text"
+        assert gh_run.call_args.kwargs.get("input") == b"body text"
 
     def test_passes_each_label_as_a_separate_flag(self, forge: GitHubForge, gh_run):
         gh_run.stdout("https://github.com/Saltmu/orchestune/issues/1\n")

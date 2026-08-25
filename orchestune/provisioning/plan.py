@@ -23,6 +23,11 @@ from orchestune.validation import validate_issue_number
 
 VALID_PARENT_ISSUE_SOURCES = frozenset(("adopted", "derived"))
 
+# #664: GitHubのIssue本文の上限。これを超える本文はAPIに拒否されるため、
+# 送る前に自分で止めて理由を明示する（拒否をそのまま握り潰すと「provisionは
+# 成功したのに親Issueだけ古い」状態に気付けない）。
+GITHUB_ISSUE_BODY_LIMIT = 65536
+
 
 @dataclass(frozen=True)
 class PlanMetadata:
@@ -134,6 +139,14 @@ def sync_parent_decomposition_plan(
         updated_body = embed_decomposition_plan_in_parent_body(
             parent_issue.body, raw_frontmatter
         )
+        if len(updated_body) > GITHUB_ISSUE_BODY_LIMIT:
+            print(
+                f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: "
+                f"the resulting body is {len(updated_body)} characters, over GitHub's "
+                f"{GITHUB_ISSUE_BODY_LIMIT} character limit",
+                file=sys.stderr,
+            )
+            return False
         if updated_body != parent_issue.body:
             forge.update_issue_body(parent_issue_number, updated_body)
         return True

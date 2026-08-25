@@ -138,4 +138,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error
     _print_result(result)
-    raise SystemExit(0)
+    # #664: 同期に失敗した実行を成功終了させると、「provisionは通ったのに親Issue
+    # だけ古い」状態が検知されないまま残る（本文サイズ超過や書き込み拒否など）。
+    raise SystemExit(3 if result.applied and not result.plan_synced else 0)

@@ -38,6 +38,16 @@ class Task:
     writes_shared_contract: bool = False
 
 
+def normalize_newlines(text: str) -> str:
+    """#664: 改行をLFへ正規化する。
+
+    GitHubはIssue本文をCRLFで保存・返却するが、本文中のマーカーブロックを
+    読み書きする正規表現（`issue_parsing`）はLFを前提にしている。読み出しの
+    時点でLFへ揃えることで、往復（読み→書き）をLFで閉じる。
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 @dataclass(frozen=True)
 class IssueRecord:
     number: int
@@ -48,6 +58,16 @@ class IssueRecord:
     state: str = "OPEN"
     parent: dict | None = None
     blocked_by: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        """#664: `body`の改行をLFへ正規化した状態を不変条件にする。
+
+        Forge実装が複数（`GitHubForge`のGraphQL/REST経路、テストのFakeForge）
+        あるため、生成箇所ごとの正規化漏れを防ぐにはDTO側で閉じるのが確実。
+        """
+        normalized = normalize_newlines(self.body)
+        if normalized != self.body:
+            object.__setattr__(self, "body", normalized)
 
 
 @dataclass(frozen=True)

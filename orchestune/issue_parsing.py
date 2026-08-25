@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune.forge import MetadataSearchUnavailableError
-from orchestune.models import IssueRecord, Task
+from orchestune.models import IssueRecord, Task, normalize_newlines
 
 if TYPE_CHECKING:
     from orchestune.forge import IssueForge
@@ -37,7 +37,7 @@ PARENT_MARKER = "<!-- orchestune:decomposition-plan-parent -->"
 # 誤って読み書きすることも防ぐ。
 LAUNCH_HISTORY_MARKER = "<!-- orchestune:launch-history -->"
 LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
-    re.escape(LAUNCH_HISTORY_MARKER) + r"\n```yaml\s*\n(.*?)```\n?",
+    re.escape(LAUNCH_HISTORY_MARKER) + r"\r?\n```yaml\s*\n(.*?)```[ \t]*\r?\n?",
     re.DOTALL,
 )
 
@@ -46,9 +46,50 @@ LAUNCH_HISTORY_BLOCK_PATTERN = re.compile(
 # 親Issue本文から計画全体と各サブタスクのissue_number等のメタデータを復元できるようにする。
 DECOMPOSITION_PLAN_MARKER = "<!-- orchestune:decomposition-plan -->"
 DECOMPOSITION_PLAN_BLOCK_PATTERN = re.compile(
-    re.escape(DECOMPOSITION_PLAN_MARKER) + r"\n```yaml[^\n]*\n(.*?)\n```[ \t]*(?:\n|$)",
+    re.escape(DECOMPOSITION_PLAN_MARKER)
+    + r"\r?\n```yaml[^\n]*\n(.*?)\r?\n```[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
+
+
+def _last_block_match(pattern: re.Pattern[str], body: str) -> re.Match[str] | None:
+    """#664: マーカーブロックの**最後**の出現を返す。
+
+    先頭固定（`search`）だと、過去の不具合で重複追記された本文から最も古い
+    コピーを読んでしまう（`issue_number`未充填の計画を復元し、再provisionで
+    Issueを重複作成する）。最後＝最新の状態を採用する。
+    """
+    matches = list(pattern.finditer(body))
+    return matches[-1] if matches else None
+
+
+def _replace_all_blocks(
+    pattern: re.Pattern[str], body: str, new_block: str
+) -> str | None:
+    """#664: 本文中の該当ブロックを**すべて**取り除き、先頭があった位置へ
+    `new_block`を1つだけ置いた本文を返す。ブロックが無ければNone。
+
+    追記ではなく置換に倒すことで更新を冪等にし、既に重複してしまった本文
+    （Issue #486は8個まで増殖した）も次回の書き込みで1つへ自己修復する。
+    ブロック以外の本文は不変。重複ブロックの間にあった**空白のみ**の区切り
+    （追記時に挿入された空行）はブロックと一緒に取り除くが、本文全体の空行を
+    畳むことはしない（#666レビュー: 本文の他の場所にある3行以上の連続改行や
+    コードフェンス内の空行まで巻き添えで潰してしまうため）。
+    """
+    matches = list(pattern.finditer(body))
+    if not matches:
+        return None
+    pieces = [body[: matches[0].start()], new_block]
+    cursor = matches[0].end()
+    for match in matches[1:]:
+        separator = body[cursor : match.start()]
+        # 重複ブロック同士の区切りは、ブロックの一部として捨てる。散文が
+        # 挟まっていた場合はそのまま残す（内容を失わない方を優先する）。
+        if separator.strip():
+            pieces.append(separator)
+        cursor = match.end()
+    pieces.append(body[cursor:])
+    return "".join(pieces)
 
 
 def decomposition_plan_from_parent_body(body: str) -> dict | None:
@@ -56,7 +97,7 @@ def decomposition_plan_from_parent_body(body: str) -> dict | None:
 
     マーカー欠落・壊れたYAML・辞書形式でないものはNoneを返す。
     """
-    match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)
+    match = _last_block_match(DECOMPOSITION_PLAN_BLOCK_PATTERN, body)
     if not match:
         return None
     try:
@@ -83,10 +124,9 @@ def embed_decomposition_plan_in_parent_body(body: str, plan_data: dict | str) ->
     else:
         block_body = plan_data.strip() + "\n"
     new_block = f"{DECOMPOSITION_PLAN_MARKER}\n```yaml\n{block_body}```\n"
-    match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)
-    if match:
-        start, end = match.span()
-        return body[:start] + new_block + body[end:]
+    updated = _replace_all_blocks(DECOMPOSITION_PLAN_BLOCK_PATTERN, body, new_block)
+    if updated is not None:
+        return updated
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}\n{new_block}"
 
@@ -120,6 +160,9 @@ def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     plan_dict = decomposition_plan_from_parent_body(body)
     if not plan_dict:
         return None
+    # #664: 復元先はローカルの`decomposition_plan.md`なので、GitHub由来のCRLFを
+    # 持ち込まずLFへ揃える。
+    body = normalize_newlines(body)
     # Extract prose before the decomposition plan marker specifically
     parts = re.split(re.escape(DECOMPOSITION_PLAN_MARKER), body, maxsplit=1)
     prose_body = None
@@ -308,12 +351,30 @@ def launch_history_from_body(body: str) -> list[float]:
     数値化できない要素は、いずれも「起動履歴なし」＝空リストへ倒す:
     壊れた値で上限判定を誤らせるより、復元できなかった分だけ緩くなる方が
     安全側（既定の`max_concurrent`は別途効く）。
+
+    #666レビュー: CRLF本文でブロックが重複追記されていた期間は、読み取りが
+    毎回空を返していたため、追記された各ブロックは「読み取り結果（空）＋
+    その時点の1回分」＝互いに素な増分でしかない。最後のブロックだけを読むと
+    ウィンドウ内の他の起動を取りこぼし、次の永続化でその不完全な履歴が
+    正本になって`max_launches_per_window`を超過し得る。
+
+    そのため全ブロックを走査し、多重度を保ったまま連結する。値ごとに最大
+    個数を採る（`reconciliation`のマージ規則）ではいけない: `_apply_task_launches`
+    は1サイクル内の複数起動へ**同じ`now`**を渡すため、`[1000.0]`という
+    シングルトンブロックが3個並ぶことが実際に起こり、最大個数では3回の起動が
+    1回へ潰れて過少計上になる（過少＝上限が緩む危険側。重複ブロックは
+    互いに素な増分なので、連結による過大計上は原理的に起きない）。
     """
-    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
-    if not match:
-        return []
+    timestamps: list[float] = []
+    for match in LAUNCH_HISTORY_BLOCK_PATTERN.finditer(body):
+        timestamps.extend(_launch_history_from_block(match.group(1)))
+    return sorted(timestamps)
+
+
+def _launch_history_from_block(raw_yaml: str) -> list[float]:
+    """`launch_history`ブロック1個分のタイムスタンプ列を取り出す。"""
     try:
-        data = yaml.safe_load(match.group(1))
+        data = yaml.safe_load(raw_yaml)
     except yaml.YAMLError:
         return []
     if not isinstance(data, dict):
@@ -390,10 +451,9 @@ def backfill_launch_history(body: str, launch_history: list[float]) -> str | Non
         default_flow_style=False,
     )
     new_block = f"{LAUNCH_HISTORY_MARKER}\n```yaml\n{block_body}```\n"
-    match = LAUNCH_HISTORY_BLOCK_PATTERN.search(body)
-    if match:
-        start, end = match.span()
-        return body[:start] + new_block + body[end:]
+    updated = _replace_all_blocks(LAUNCH_HISTORY_BLOCK_PATTERN, body, new_block)
+    if updated is not None:
+        return updated
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}\n{new_block}"
 
