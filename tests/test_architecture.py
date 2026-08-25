@@ -70,6 +70,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.cost_model",
             "dispatch.critical_path",
             "dispatch.escalation",
+            "dispatch.execution_profiles",
             "dispatch.filters",
             "dispatch.gc",
             "dispatch.gc.completion",

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.scoring import SCHEDULING_MODE_CRITICAL_PATH
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
@@ -72,8 +73,12 @@ class DispatcherConfig:
     # bottom levelと後続解放数、推定トークン量・手戻りリスクを考慮する。
     # 'legacy'は#660以前のスコアリングそのままで、段階導入・切り戻し用。
     scheduling_mode: str = SCHEDULING_MODE_CRITICAL_PATH
+    # #668: リポジトリ定義の実行プロファイル設定（モデル・推論強度解決用）
+    execution_profile_config: ExecutionProfileConfig | None = None
 
     def __post_init__(self) -> None:
+        if self.execution_profile_config is None:
+            self.execution_profile_config = ExecutionProfileConfig()
         if self.dispatch_target is None:
             self.dispatch_target = LocalProcessDispatchTarget(log_dir=self.log_dir)
         if self.forge is None:
