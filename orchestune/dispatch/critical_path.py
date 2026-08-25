@@ -21,10 +21,10 @@
 
 `depends_on`に循環がある場合（Issue本文の手編集などで起こり得る）、逆トポロジカル
 順序が存在しないため1回の走査ではrankを正しく積み上げられず、bottom levelも
-downstreamも過小評価になる。この場合も探索上限超過と同じく`exact_downstream`を
-`False`にし、downstreamは直接の後続数へ縮退させる。壊れたメタデータのために
-正確な到達可能性計算を持ち込むより、正直に縮退したことを通知する方が良い
-（PR#665レビュー指摘）。
+downstreamも過小評価になる。この場合はbottom levelを0へ中立化して不正確な
+critical-path bonusによる並べ替えを止め、downstreamは直接の後続数へ縮退させる。
+あわせて`exact_downstream`を`False`にし、壊れたメタデータのために正確な到達
+可能性計算を持ち込むより、安全かつ観測可能に縮退する（PR#665レビュー指摘）。
 
 Conflict Graphはここでは扱わない。#659で分離したとおり、競合は対称な排他制約で
 あって因果順序ではなく、rankの計算根拠にしてはならないため。
@@ -73,8 +73,9 @@ class PrecedenceRanks:
     # rankを厳密に求められたかどうか。`False`になるのは、探索上限
     # （`MAX_TRANSITIVE_CLOSURE_NODES`）を超えたときと、`depends_on`に循環が
     # あったとき。循環時は逆トポロジカル順序が存在せず、1回の走査では
-    # `bottom_level`も`downstream`も過小評価になるため、`downstream`は直接の
-    # 後続数へ縮退させたうえでこのフラグで通知する（PR#665レビュー指摘）。
+    # `bottom_level`も`downstream`も過小評価になるため、bottom levelは0へ
+    # 中立化し、`downstream`は直接の後続数へ縮退させたうえでこのフラグで通知する
+    # （PR#665レビュー指摘）。
     exact_downstream: bool = True
 
     def bottom_level_of(self, subtask_id: str) -> float:
@@ -189,7 +190,11 @@ def compute_precedence_ranks(
     order, has_cycle = _topological_order(node_ids, successors)
     exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES and not has_cycle
     return PrecedenceRanks(
-        bottom_level=_bottom_levels(order, successors, durations or {}),
+        bottom_level=(
+            dict.fromkeys(node_ids, 0.0)
+            if has_cycle
+            else _bottom_levels(order, successors, durations or {})
+        ),
         unlocked={node: len(targets) for node, targets in successors.items()},
         downstream=_downstream_counts(order, successors, exact),
         exact_downstream=exact,

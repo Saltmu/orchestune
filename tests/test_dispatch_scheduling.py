@@ -158,6 +158,27 @@ class TestCriticalPathPriority:
 
         assert result.selected == [leaf]
 
+    def test_cycle_cannot_contribute_an_inexact_critical_path_bonus(self):
+        # PR#665レビュー指摘の反例: p -> b, a <-> b, a -> x。
+        # 循環によりbottom levelが厳密に求まらない場合は、グラフ全体で
+        # critical-path項を中立化し、不正確な値でready候補を並べ替えない。
+        predecessor = _task(9, subtask_id="p")
+        leaf = _task(1, subtask_id="leaf")
+        known = [
+            predecessor,
+            leaf,
+            _task(20, subtask_id="b", depends_on=("p", "a")),
+            _task(21, subtask_id="a", depends_on=("b",)),
+            _task(22, subtask_id="x", depends_on=("a",)),
+        ]
+
+        result = _select([leaf, predecessor], max_concurrent=1, known_tasks=known)
+
+        assert all(decision.bottom_level == 0.0 for decision in result.decisions)
+        assert all(
+            decision.components.critical_path == 0.0 for decision in result.decisions
+        )
+
 
 class TestResourceConstraints:
     def test_launch_window_ceiling_is_never_exceeded(self):

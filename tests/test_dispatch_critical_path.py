@@ -107,13 +107,14 @@ class TestBottomLevel:
 
     def test_cyclic_dependencies_terminate_deterministically(self):
         # depends_onが循環していてもクラッシュ・無限ループしないこと
-        # （Issue本文の手編集などで壊れたメタデータが渡り得る）。
+        # （Issue本文の手編集などで壊れたメタデータが渡り得る）。不正確な
+        # bottom levelで並べ替えないよう、循環時は0へ中立化する。
         tasks = [_task("a", ("b",)), _task("b", ("a",))]
 
         ranks = compute_precedence_ranks(tasks, {"a": 1.0, "b": 1.0})
 
-        assert ranks.bottom_level_of("a") > 0.0
-        assert ranks.bottom_level_of("b") > 0.0
+        assert ranks.bottom_level_of("a") == 0.0
+        assert ranks.bottom_level_of("b") == 0.0
         assert compute_precedence_ranks(tasks, {"a": 1.0, "b": 1.0}) == ranks
 
     def test_self_dependency_is_ignored(self):
@@ -221,6 +222,20 @@ class TestCyclicGraphsDegradeHonestly:
         assert ranks.exact_downstream is False
         # 縮退後は直接の後続数（p -> b の1件）を報告する。
         assert ranks.downstream_count("p") == 1
+
+    def test_a_cycle_neutralizes_inexact_bottom_levels(self):
+        # レビュー指摘の反例では、1回走査のbottom levelがp=2となる一方、
+        # 単純路p -> b -> a -> xは4ノードある。不正確な値で候補を並べ替えない。
+        tasks = [
+            _task("p"),
+            _task("b", ("p", "a")),
+            _task("a", ("b",)),
+            _task("x", ("a",)),
+        ]
+
+        ranks = compute_precedence_ranks(tasks, {})
+
+        assert set(ranks.bottom_level.values()) == {0.0}
 
     def test_a_self_contained_cycle_also_degrades(self):
         ranks = compute_precedence_ranks([_task("a", ("b",)), _task("b", ("a",))], {})
