@@ -20,6 +20,10 @@ from orchestune.dag.models import (
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.execution_profiles import (
+    ExecutionProfileConfig,
+    extract_execution_profile_config,
+)
 from orchestune.dispatch.postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
@@ -267,7 +271,20 @@ def _config_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
 # `DAG_TOOL_CONFIG_KEYS`、extract_*関数のすぐ側で一元管理）との完全一致で
 # のみ無視し、それ以外の`dag_`始まりキーは引き続き"unknown key"として
 # 拒否する。
-_NON_DISPATCHER_CONFIG_KEYS = DAG_TOOL_CONFIG_KEYS
+#
+# #668: execution_profiles および default_execution_profile は dispatcher 独自の設定だが、
+# 単純なスカラー値の argparse CLI フラグではなく階層的な TOML テーブル（dict）として
+# extract_execution_profile_config() で個別に検証・抽出されるため、
+# _config_defaults() のフラットな argparse 型チェックをバイパスする。
+_EXECUTION_PROFILE_CONFIG_KEYS = frozenset(
+    {
+        "execution_profiles",
+        "execution-profiles",
+        "default_execution_profile",
+        "default-execution-profile",
+    }
+)
+_NON_DISPATCHER_CONFIG_KEYS = DAG_TOOL_CONFIG_KEYS | _EXECUTION_PROFILE_CONFIG_KEYS
 
 
 def _normalize_config_key(key: str) -> str:
@@ -371,6 +388,7 @@ class _DispatcherInputs:
     args: argparse.Namespace
     dag_ignore_patterns: tuple[re.Pattern[str], ...]
     dag_similarity_threshold: float
+    execution_profile_config: ExecutionProfileConfig
 
 
 @dataclass(frozen=True)
@@ -397,6 +415,7 @@ def _load_dispatcher_inputs(
             extract_dag_ignore_patterns(config_data)
         )
         config_dag_similarity_threshold = extract_dag_similarity_threshold(config_data)
+        execution_profile_config = extract_execution_profile_config(config_data)
     except (ValueError, re.error) as e:
         _config_error(parser, str(e))
     dag_similarity_threshold = (
@@ -408,6 +427,7 @@ def _load_dispatcher_inputs(
         args=parser.parse_args(argv),
         dag_ignore_patterns=dag_ignore_patterns,
         dag_similarity_threshold=dag_similarity_threshold,
+        execution_profile_config=execution_profile_config,
     )
 
 
@@ -443,6 +463,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         max_task_reclaims=args.max_task_reclaims,
         zombie_gc=args.zombie_gc,
         scheduling_mode=args.scheduling_mode,
+        execution_profile_config=inputs.execution_profile_config,
         max_tokens_per_window=args.max_tokens_per_window,
         max_tokens_per_task=args.max_tokens_per_task,
         not_needed_review_state_path=args.not_needed_review_state_path,

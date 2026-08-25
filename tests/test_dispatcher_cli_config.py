@@ -839,3 +839,71 @@ class TestDispatcherConfigLoading:
                 cwd=tmp_path,
             )
             assert code == 0
+
+    def test_execution_profiles_loaded_from_orchestune_toml(self, tmp_path):
+        """#668: orchestune.tomlからexecution_profilesとdefault_execution_profileがロードされること。"""
+        orchestune_toml = tmp_path / "orchestune.toml"
+        orchestune_toml.write_text(
+            """
+default_execution_profile = "deep"
+
+[execution_profiles.deep.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+reasoning_effort = "high"
+
+[execution_profiles.fast.claude-cli]
+model = "claude-3-5-haiku-20241022"
+reasoning_effort = "low"
+""",
+            encoding="utf-8",
+        )
+        with (
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            code = main(
+                [
+                    "--no-apply",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
+            assert code == 0
+
+        config_arg = mock_run.call_args.args[0]
+        assert config_arg.execution_profile_config is not None
+        assert config_arg.execution_profile_config.default_execution_profile == "deep"
+        assert (
+            config_arg.execution_profile_config.profiles["deep"]["claude-cli"].model
+            == "claude-3-7-sonnet-20250219"
+        )
+        assert (
+            config_arg.execution_profile_config.profiles["deep"][
+                "claude-cli"
+            ].reasoning_effort
+            == "high"
+        )
+
+    def test_invalid_execution_profiles_in_toml_exits_with_error(
+        self, tmp_path, capsys
+    ):
+        """#668: 不正なexecution_profiles設定がある場合はエラーで終了すること。"""
+        orchestune_toml = tmp_path / "orchestune.toml"
+        orchestune_toml.write_text(
+            """
+default_execution_profile = "deep"
+
+[execution_profiles.deep.claude-cli]
+model = "--dangerous-injected-flag"
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--no-apply"], cwd=tmp_path)
+
+        assert exc_info.value.code == 2
+        assert "invalid model name" in capsys.readouterr().err
