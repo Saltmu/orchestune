@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import MagicMock
 
 
@@ -12,7 +13,7 @@ class ActiveFakeForge:
 
     def __getattr__(self, name: str) -> MagicMock:
         assert self.forge is not None, "fake_forge fixture has not been initialized"
-        return getattr(self.forge, name)
+        return cast(MagicMock, getattr(self.forge, name))
 
     def __setattr__(self, name: str, value: MagicMock | None) -> None:
         if name == "forge":
