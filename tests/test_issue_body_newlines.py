@@ -201,18 +201,17 @@ def test_launch_history_merges_all_duplicated_blocks():
     assert launch_history_from_body(body) == [1000.0, 1001.0, 1002.0]
 
 
-def test_launch_history_merge_does_not_double_count_the_same_timestamp():
-    """同じ起動が複数ブロックに現れても二重計上しない（値ごとに最大個数）。
+def test_launch_history_preserves_multiplicity_across_singleton_blocks():
+    """#666レビュー3巡目: 同一サイクルの複数起動は同じタイムスタンプを持つ。
 
-    `dispatch/reconciliation.py`の多重集合マージと同じ意味論。
+    `_apply_task_launches`は1サイクル内の全起動へ同じ`now`を渡すため、
+    CRLF期間中は`[1000.0]`というシングルトンブロックが起動回数だけ並ぶ。
+    値ごとに最大個数を採ると3回の起動が1回へ潰れ、上限判定が緩む危険側へ
+    倒れるため、多重度を保ったまま連結する。
     """
-    body = (
-        _launch_history_body([1000.0, 1000.0, 1001.0])
-        + "\n"
-        + _launch_history_body([1000.0])
-    )
+    body = "\n".join(_launch_history_body([1000.0]) for _ in range(3))
 
-    assert launch_history_from_body(body) == [1000.0, 1000.0, 1001.0]
+    assert launch_history_from_body(body) == [1000.0, 1000.0, 1000.0]
 
 
 def test_backfill_after_merged_read_collapses_to_one_complete_block():

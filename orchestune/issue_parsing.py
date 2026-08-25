@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import re
 import sys
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -354,16 +353,22 @@ def launch_history_from_body(body: str) -> list[float]:
     安全側（既定の`max_concurrent`は別途効く）。
 
     #666レビュー: CRLF本文でブロックが重複追記されていた期間は、読み取りが
-    毎回空を返していたため、追記された各ブロックはその時点の1回分しか
-    持たない。最後のブロックだけを読むとウィンドウ内の他の起動を取りこぼし、
-    次の永続化でその不完全な履歴が正本になって`max_launches_per_window`を
-    超過し得る。全ブロックを`reconciliation`と同じ多重集合マージ
-    （タイムスタンプ値ごとに最大個数を採用）で束ねてから返す。
+    毎回空を返していたため、追記された各ブロックは「読み取り結果（空）＋
+    その時点の1回分」＝互いに素な増分でしかない。最後のブロックだけを読むと
+    ウィンドウ内の他の起動を取りこぼし、次の永続化でその不完全な履歴が
+    正本になって`max_launches_per_window`を超過し得る。
+
+    そのため全ブロックを走査し、多重度を保ったまま連結する。値ごとに最大
+    個数を採る（`reconciliation`のマージ規則）ではいけない: `_apply_task_launches`
+    は1サイクル内の複数起動へ**同じ`now`**を渡すため、`[1000.0]`という
+    シングルトンブロックが3個並ぶことが実際に起こり、最大個数では3回の起動が
+    1回へ潰れて過少計上になる（過少＝上限が緩む危険側。重複ブロックは
+    互いに素な増分なので、連結による過大計上は原理的に起きない）。
     """
-    merged: Counter[float] = Counter()
+    timestamps: list[float] = []
     for match in LAUNCH_HISTORY_BLOCK_PATTERN.finditer(body):
-        merged |= Counter(_launch_history_from_block(match.group(1)))
-    return sorted(merged.elements())
+        timestamps.extend(_launch_history_from_block(match.group(1)))
+    return sorted(timestamps)
 
 
 def _launch_history_from_block(raw_yaml: str) -> list[float]:
