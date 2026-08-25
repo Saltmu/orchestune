@@ -172,7 +172,7 @@ graph LR
     end
 
     subgraph Config ["リポジトリ設定 (orchestune.toml)"]
-        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'claude-3-7-sonnet'<br/>codex-cli: model = 'o3-mini', reasoning = 'high'<br/>cloud-routine: model = 'claude-3-7-sonnet'"]
+        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'claude-3-7-sonnet'<br/>codex-cli: model = 'o3-mini', reasoning_effort = 'high'<br/>cloud-routine: model = 'claude-3-7-sonnet'"]
     end
 
     subgraph Resolver ["L2: resolve_execution_profile (決定論的解決)"]
