@@ -256,10 +256,18 @@ def _wait_seconds(task: Task, run_state: RunState, now: float) -> float:
     return max(0.0, now - created.timestamp())
 
 
-def compute_priority_score(
+def _legacy_components(
     task: Task, all_candidate_tasks: list[Task], run_state: RunState, now: float
-) -> float:
-    """#660以前のスコアリング（`legacy`モードおよび互換切り戻し用）。"""
+) -> ScoreComponents:
+    """#660以前のスコアを、そのまま内訳へ分解して返す。
+
+    PR#665レビュー指摘(Codex P2): `legacy`モードで合算値を丸ごと
+    `base_priority`へ入れると、cycle JSON／`events.jsonl`の内訳が実態と食い違う
+    （例: partial progress付きのmediumが「base 2.0 + progress 1.0」ではなく
+    「base 3.0」と報告される）。元の式は
+    `base * (1 + time_bonus) + progress`なので、待ち時間bonusの寄与
+    `base * time_bonus`をaging成分として取り出せば、合計を変えずに分解できる。
+    """
     base_priority = BASE_PRIORITY.get(task.priority, BASE_PRIORITY["medium"])
     waits = [_wait_seconds(t, run_state, now) for t in all_candidate_tasks]
     avg_wait = sum(waits) / len(waits) if waits else 0.0
@@ -269,8 +277,22 @@ def compute_priority_score(
         wait = _wait_seconds(task, run_state, now)
         time_bonus = max(0.0, (wait / avg_wait) - 1.0) * TIME_BONUS_WEIGHT
 
-    progress_factor = PROGRESS_BONUS if task.progress_partial else 0.0
-    return base_priority * (1.0 + time_bonus) + progress_factor
+    return ScoreComponents(
+        base_priority=base_priority,
+        aging=base_priority * time_bonus,
+        progress=PROGRESS_BONUS if task.progress_partial else 0.0,
+    )
+
+
+def compute_priority_score(
+    task: Task, all_candidate_tasks: list[Task], run_state: RunState, now: float
+) -> float:
+    """#660以前のスコアリング（`legacy`モードおよび互換切り戻し用）。
+
+    内訳（`_legacy_components`）の合計として求めることで、レポートへ出す成分と
+    実際に順位付けへ使う値が定義上一致する。
+    """
+    return _legacy_components(task, all_candidate_tasks, run_state, now).total
 
 
 @dataclass(frozen=True)
@@ -389,13 +411,13 @@ def _critical_path_decision(
 def _legacy_decision(
     task: Task, eligible: list[Task], run_state: RunState, now: float
 ) -> SchedulingDecision:
-    score = compute_priority_score(task, eligible, run_state, now)
+    components = _legacy_components(task, eligible, run_state, now)
     return SchedulingDecision(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id,
         mode=SCHEDULING_MODE_LEGACY,
-        score=score,
-        components=ScoreComponents(base_priority=score),
+        score=components.total,
+        components=components,
     )
 
 

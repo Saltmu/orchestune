@@ -8,6 +8,7 @@ from orchestune.dispatch.scoring import (
     QUALITY_SPAN,
     SCHEDULING_MODE_CRITICAL_PATH,
     SCHEDULING_MODE_LEGACY,
+    compute_priority_score,
     decision_to_dict,
     reconcile_decisions_with_launches,
     remaining_token_budget,
@@ -29,6 +30,7 @@ def _task(
     created_at=CREATED_AT,
     status_labels=("status:queued",),
     yaml_error=False,
+    progress_partial=False,
 ):
     return Task(
         issue_number=issue_number,
@@ -37,7 +39,7 @@ def _task(
         symbols=(),
         risk=False,
         priority=priority,
-        progress_partial=False,
+        progress_partial=progress_partial,
         status_labels=status_labels,
         created_at=created_at,
         depends_on=depends_on,
@@ -623,3 +625,58 @@ class TestIneligibleCandidatesAreStillReported:
         )
 
         assert result.decisions[0].mode == SCHEDULING_MODE_LEGACY
+
+
+class TestLegacyComponentBreakdown:
+    """PR#665レビュー指摘(Codex P2)の回帰防止。
+
+    `legacy`モードでも、レポートへ出す内訳は実際の成分でなければならない
+    （合算値を`base_priority`へ押し込むと、cycle JSON/`events.jsonl`が
+    「partial progress付きのmedium」を「base 3.0」と誤って説明してしまう）。
+    """
+
+    def _legacy(self, candidates, **kwargs):
+        return _select(
+            candidates, scheduling_mode=SCHEDULING_MODE_LEGACY, **kwargs
+        ).decisions
+
+    def test_partial_progress_is_reported_as_its_own_component(self):
+        decisions = self._legacy([_task(1, progress_partial=True), _task(2)])
+
+        partial = next(d for d in decisions if d.issue_number == 1)
+        assert partial.components.base_priority == 2.0
+        assert partial.components.progress == 1.0
+        assert partial.components.aging == 0.0
+        assert partial.score == pytest.approx(3.0)
+
+    def test_wait_bonus_is_reported_as_aging_not_as_base_priority(self):
+        state = RunState(
+            completed_worktrees=[_completed(1, NOW - 60), _completed(2, NOW - 100_000)]
+        )
+
+        decisions = self._legacy([_task(1), _task(2)], run_state=state)
+
+        starved = next(d for d in decisions if d.issue_number == 2)
+        assert starved.components.base_priority == 2.0
+        assert starved.components.aging > 0.0
+        assert starved.score == pytest.approx(starved.components.total)
+
+    def test_components_total_reproduces_compute_priority_score(self):
+        candidates = [
+            _task(1, priority="high"),
+            _task(2, progress_partial=True),
+            _task(3, priority="low"),
+        ]
+        state = RunState(
+            completed_worktrees=[_completed(1, NOW - 60), _completed(3, NOW - 90_000)]
+        )
+
+        decisions = self._legacy(candidates, run_state=state)
+
+        for decision in decisions:
+            task = next(
+                t for t in candidates if t.issue_number == decision.issue_number
+            )
+            assert decision.components.total == pytest.approx(
+                compute_priority_score(task, candidates, state, NOW)
+            )
