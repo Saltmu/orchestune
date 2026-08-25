@@ -29,6 +29,10 @@ from orchestune.dispatch.postcycle import (
 )
 from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.scoring import (
+    SCHEDULING_MODE_CRITICAL_PATH,
+    SCHEDULING_MODES,
+)
 from orchestune.dispatch.targets import (
     TargetBuildConfig,
     build_dispatch_target,
@@ -96,6 +100,18 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="ゾンビプロセスの検知・回収を行うかどうか（デフォルト: True）",
+    )
+
+
+def _add_scheduling_arguments(parser: argparse.ArgumentParser) -> None:
+    """#660: 起動タスクの選出アルゴリズムに関する引数。"""
+    parser.add_argument(
+        "--scheduling-mode",
+        choices=list(SCHEDULING_MODES),
+        default=SCHEDULING_MODE_CRITICAL_PATH,
+        help="#660: 起動タスクの選出アルゴリズム。'critical-path'（既定）はPrecedence DAGの"
+        "bottom level・後続解放数と、完了履歴から推定したトークン量・手戻りリスクを"
+        "考慮する。'legacy'は#660以前のスコアリングへ切り戻す互換モード。",
     )
 
 
@@ -208,6 +224,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "（既定でラベル更新・worktree作成・エージェント起動まで行う。dry-runには--no-applyを指定）"
     )
     _add_execution_arguments(parser)
+    _add_scheduling_arguments(parser)
     _add_storage_arguments(parser)
     _add_dispatch_target_arguments(parser)
     _add_safety_and_budget_arguments(parser)
@@ -425,6 +442,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         task_timeout_seconds=args.task_timeout_seconds,
         max_task_reclaims=args.max_task_reclaims,
         zombie_gc=args.zombie_gc,
+        scheduling_mode=args.scheduling_mode,
         max_tokens_per_window=args.max_tokens_per_window,
         max_tokens_per_task=args.max_tokens_per_task,
         not_needed_review_state_path=args.not_needed_review_state_path,

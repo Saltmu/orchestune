@@ -227,6 +227,25 @@ class TestBuildArgParser:
                 ["--not-needed-review-timeout-seconds", "-1"]
             )
 
+    def test_scheduling_mode_defaults_to_critical_path(self):
+        # #660: 新しいスケジューラを既定にしつつ、切り戻し用の互換モードを残す。
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.scheduling_mode == "critical-path"
+
+    def test_scheduling_mode_legacy_is_accepted(self):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--scheduling-mode", "legacy"])
+        assert args.scheduling_mode == "legacy"
+
+    def test_scheduling_mode_rejects_unknown_values(self):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(["--scheduling-mode", "fastest"])
+
     def test_zombie_gc_defaults_to_true(self):
         from orchestune.dispatch.dispatcher import _build_arg_parser
 

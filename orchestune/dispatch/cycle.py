@@ -75,7 +75,7 @@ def _execute_cycle_pipeline(
         ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
     )
     run_dual_status_reconciliation(ctx, config)
-    selected, quota_slots = run_scheduling_phase(
+    scheduling = run_scheduling_phase(
         ctx,
         issues,
         lock_result,
@@ -86,8 +86,8 @@ def _execute_cycle_pipeline(
         config,
     )
     return CycleReport(
-        selected=selected,
-        quota_slots_available=quota_slots,
+        selected=scheduling.selected,
+        quota_slots_available=scheduling.quota_slots_available,
         lock_changes={
             "to_lock": lock_result.to_lock,
             "to_unlock": lock_result.to_unlock,
@@ -96,6 +96,7 @@ def _execute_cycle_pipeline(
         completion_events=completion_events,
         promotion_events=promotion_events,
         applied=config.apply,
+        scheduling_decisions=scheduling.decisions,
     )
 
 

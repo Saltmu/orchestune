@@ -24,6 +24,7 @@ from orchestune.dispatch.cycle import (
     build_event_log_entry,
     run_dispatch_cycle,
 )
+from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
 from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
@@ -138,6 +139,68 @@ class TestAppendEventLog:
         assert entry["deviation_events"] == report.deviation_events
         assert entry["completion_events"] == report.completion_events
         assert entry["promotion_events"] == report.promotion_events
+
+    def test_event_log_entry_carries_scheduling_decisions(self):
+        """#660: 選定理由・rank・推定costがKPI集計用ログからも観測できること。"""
+        decision = SchedulingDecision(
+            issue_number=7,
+            subtask_id="task-7",
+            mode="critical-path",
+            score=3.25,
+            components=ScoreComponents(base_priority=2.0, critical_path=0.5),
+            bottom_level=5400.0,
+            unlocked_count=2,
+            downstream_count=4,
+            estimated_tokens=900,
+            estimated_duration_seconds=1800.0,
+            estimate_source="task-history",
+            exact_bottom_level=True,
+            exact_downstream=False,
+            selected=False,
+            reason="quota-exhausted",
+        )
+        report = CycleReport(
+            selected=[],
+            quota_slots_available=0,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+            scheduling_decisions=[decision],
+        )
+
+        entry = build_event_log_entry(report, now=1700000000.0)
+
+        assert entry["scheduling_decisions"] == [
+            {
+                "issue_number": 7,
+                "subtask_id": "task-7",
+                "mode": "critical-path",
+                "score": 3.25,
+                "components": {
+                    "base_priority": 2.0,
+                    "aging": 0.0,
+                    "critical_path": 0.5,
+                    "unlock": 0.0,
+                    "progress": 0.0,
+                    "token_penalty": 0.0,
+                    "rework_penalty": 0.0,
+                },
+                "bottom_level": 5400.0,
+                "unlocked_count": 2,
+                "downstream_count": 4,
+                "estimated_tokens": 900,
+                "estimated_duration_seconds": 1800.0,
+                "estimate_source": "task-history",
+                "exact_bottom_level": True,
+                "exact_downstream": False,
+                "selected": False,
+                "reason": "quota-exhausted",
+            }
+        ]
+        # JSON Linesとして書き出せる（＝dataclassが残っていない）こと。
+        json.dumps(entry)
 
     def test_append_event_log_writes_jsonl(self, tmp_path):
         path = tmp_path / "events.jsonl"
