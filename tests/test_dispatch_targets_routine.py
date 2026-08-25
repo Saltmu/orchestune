@@ -80,6 +80,74 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         # #157: クラウドルーチンも非対話実行のため、承認待ちで停止しないよう明示する。
         assert "非対話" in body["text"]
         assert "承認待ちで停止せず" in body["text"]
+        assert "model" not in body
+
+    def test_launch_with_execution_selection_passes_model_in_api_payload(
+        self, tmp_path
+    ):
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
+        selection = ExecutionSelection(
+            profile="deep",
+            model="claude-3-7-sonnet-20250219",
+            reasoning_effort=None,
+            reason="test",
+        )
+        with (
+            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch(
+                "orchestune.dispatch.targets.urllib.request.urlopen",
+                return_value=self._response(),
+            ) as mock_urlopen,
+        ):
+            handle = target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        assert handle.external_id == "session_1"
+        request = mock_urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        assert body["model"] == "claude-3-7-sonnet-20250219"
+
+    def test_launch_with_execution_selection_reasoning_effort_logs_warning_and_skips(
+        self, tmp_path, caplog
+    ):
+        import logging
+
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
+        selection = ExecutionSelection(
+            profile="deep",
+            model="claude-3-7-sonnet-20250219",
+            reasoning_effort="high",
+            reason="test",
+        )
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch(
+                "orchestune.dispatch.targets.urllib.request.urlopen",
+                return_value=self._response(),
+            ) as mock_urlopen,
+        ):
+            handle = target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        assert handle.external_id == "session_1"
+        assert "does not support reasoning_effort" in caplog.text
+        request = mock_urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        assert body["model"] == "claude-3-7-sonnet-20250219"
+        assert "reasoning_effort" not in body
 
     def test_launch_pushes_and_verifies_branch_before_fire(self, tmp_path):
         """Reproducer #244: stacked/parent base付きで作られたローカルbranchは、

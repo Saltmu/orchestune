@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING
 
 from orchestune.dispatch.cost_model import build_cost_model
 from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.execution_profiles import (
+    ExecutionSelection,
+    resolve_execution_profile,
+)
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task, parse_task_from_issue
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
@@ -202,6 +206,7 @@ class TaskLaunchPlan:
     branch_name: str
     base_branch_for_launch: str | None
     base_branch_for_state: str
+    execution_selection: ExecutionSelection | None = None
 
 
 def _decide_yaml_error_tasks(candidate_tasks: list[Task]) -> list[Task]:
@@ -246,12 +251,19 @@ def _decide_task_launch_plan(
             base_branch_for_launch = base_branch
             base_branch_for_state = base_branch
 
+        execution_selection = resolve_execution_profile(
+            task.execution_profile,
+            config.dispatch_target,
+            config.execution_profile_config,
+        )
+
         plans.append(
             TaskLaunchPlan(
                 task=task,
                 branch_name=branch_name,
                 base_branch_for_launch=base_branch_for_launch,
                 base_branch_for_state=base_branch_for_state,
+                execution_selection=execution_selection,
             )
         )
     return plans
@@ -362,16 +374,20 @@ def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None
         )
 
 
-def _record_successful_launch(
+def _build_active_worktree_from_launch(
     task: Task,
     plan: TaskLaunchPlan,
     launch,
     run_state: RunState,
     now: float,
-    config: DispatcherConfig,
-    open_prs: Sequence[PrRecord] | None,
-) -> None:
-    run_state.active_worktrees[str(task.issue_number)] = ActiveWorktree(
+) -> ActiveWorktree:
+    selection = plan.execution_selection
+    profile = selection.profile if selection else task.execution_profile
+    model = selection.model if selection else None
+    reasoning_effort = selection.reasoning_effort if selection else None
+    selection_reason = selection.reason if selection else None
+
+    return ActiveWorktree(
         issue_number=task.issue_number,
         branch=plan.branch_name,
         worktree_path=launch.worktree_path,
@@ -385,6 +401,24 @@ def _record_successful_launch(
             task.issue_number
         ),
         token_estimate_recorded=True,
+        profile=profile,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        selection_reason=selection_reason,
+    )
+
+
+def _record_successful_launch(
+    task: Task,
+    plan: TaskLaunchPlan,
+    launch,
+    run_state: RunState,
+    now: float,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+) -> None:
+    run_state.active_worktrees[str(task.issue_number)] = (
+        _build_active_worktree_from_launch(task, plan, launch, run_state, now)
     )
     run_state.launch_history.append(now)
     reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)
@@ -434,6 +468,7 @@ def _apply_task_launches(
                 config.dispatch_target,
                 apply=True,
                 base_branch=plan.base_branch_for_launch,
+                execution_selection=plan.execution_selection,
             )
             if not launch.launched:
                 _handle_launch_failure(task, launch, config)

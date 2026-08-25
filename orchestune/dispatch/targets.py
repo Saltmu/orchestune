@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -37,7 +38,11 @@ from orchestune.outcome_record import (
 )
 
 if TYPE_CHECKING:
+    from orchestune.dispatch.execution_profiles import ExecutionSelection
     from orchestune.models import PrRecord, Task
+
+logger = logging.getLogger(__name__)
+
 
 ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
 ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
@@ -126,8 +131,10 @@ class DispatchTarget(ABC):
         worktree_path: Path,
         *,
         force_push: bool = False,
+        execution_selection: ExecutionSelection | None = None,
     ) -> DispatchHandle:
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。
+
 
         #384: `force_push=True`は、自動リベース後の再launch（ローカルで書き
         換え済みの履歴を再pushする必要がある場合）を呼び出し元が明示するため
@@ -307,8 +314,50 @@ def _is_pid_alive(pid: int | None) -> bool:
     return is_process_alive(pid)
 
 
+def _format_local_cmd(
+    local_cmd: str,
+    task: Task,
+    branch_name: str,
+    worktree_path: Path,
+    model: str | None,
+    reasoning_effort: str | None,
+    profile_name: str,
+) -> list[str]:
+    formatted_cmd = local_cmd.format(
+        issue_number=task.issue_number,
+        subtask_id=task.subtask_id or "",
+        branch_name=branch_name,
+        worktree_path=str(worktree_path).replace("\\", "\\\\"),
+        model=model or "",
+        reasoning_effort=reasoning_effort or "",
+        profile=profile_name,
+    )
+    cmd = shlex.split(formatted_cmd)
+    cmd_lower = local_cmd.lower()
+
+    if "{model}" not in local_cmd and model:
+        if "claude" in cmd_lower or "agy" in cmd_lower or "codex" in cmd_lower:
+            cmd.extend(["--model", model])
+
+    if "{reasoning_effort}" not in local_cmd and reasoning_effort:
+        if "codex" in cmd_lower:
+            cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+        elif "claude" in cmd_lower or "agy" in cmd_lower:
+            target_label = "claude-cli" if "claude" in cmd_lower else "agy-cli"
+            logger.warning(
+                "Target %r does not support reasoning_effort %r; skipping setting",
+                target_label,
+                reasoning_effort,
+            )
+    return cmd
+
+
 class LocalProcessDispatchTarget(DispatchTarget):
-    """ローカルの`git worktree`上でsubprocessを直接起動する（既定・後方互換の実装）。"""
+    """ローカルマシン上のサブプロセスとしてエージェントを起動する戦略。
+
+    デフォルト（dry runモード）では何も実行しない`default_dry_run_command_builder`を使う。
+    `local_cmd`が指定された場合は、テンプレート文字列からコマンドを生成して実行する。
+    """
 
     def __init__(
         self,
@@ -329,16 +378,29 @@ class LocalProcessDispatchTarget(DispatchTarget):
         worktree_path: Path,
         *,
         force_push: bool = False,
+        execution_selection: ExecutionSelection | None = None,
     ) -> DispatchHandle:
         self._log_dir.mkdir(parents=True, exist_ok=True)
+        model = execution_selection.model if execution_selection else None
+        reasoning_effort = (
+            execution_selection.reasoning_effort if execution_selection else None
+        )
+        profile_name = (
+            execution_selection.profile
+            if execution_selection
+            else (task.execution_profile or "")
+        )
+
         if self._local_cmd:
-            formatted_cmd = self._local_cmd.format(
-                issue_number=task.issue_number,
-                subtask_id=task.subtask_id or "",
-                branch_name=branch_name,
-                worktree_path=str(worktree_path).replace("\\", "\\\\"),
+            cmd = _format_local_cmd(
+                self._local_cmd,
+                task,
+                branch_name,
+                worktree_path,
+                model,
+                reasoning_effort,
+                profile_name,
             )
-            cmd = shlex.split(formatted_cmd)
         else:
             cmd = self._command_builder(task, worktree_path)
 
@@ -478,9 +540,12 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
         )
 
-    def _fire(self, text: str) -> dict[str, Any]:
+    def _fire(self, text: str, model: str | None = None) -> dict[str, Any]:
         """任意のテキスト指示でルーチンをfireし、生のレスポンスペイロードを返す。"""
-        body = json.dumps({"text": text}).encode("utf-8")
+        payload_dict: dict[str, Any] = {"text": text}
+        if model is not None:
+            payload_dict["model"] = model
+        body = json.dumps(payload_dict).encode("utf-8")
         request = urllib.request.Request(
             f"{self.API_BASE}/{self._routine_id}/fire",
             data=body,
@@ -501,20 +566,30 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         worktree_path: Path,
         *,
         force_push: bool = False,
+        execution_selection: ExecutionSelection | None = None,
     ) -> DispatchHandle:
         # #244: fireより先にpush・到達性検証を行い、確認できなければfireしない。
         _push_branch_and_verify(branch_name, worktree_path, force=force_push)
-        payload = self._fire(self._build_text(task, branch_name))
+        model = execution_selection.model if execution_selection else None
+        reasoning_effort = (
+            execution_selection.reasoning_effort if execution_selection else None
+        )
+        if reasoning_effort is not None:
+            logger.warning(
+                "ClaudeCodeCloudRoutineDispatchTarget does not support reasoning_effort %r; skipping setting",
+                reasoning_effort,
+            )
+        payload = self._fire(self._build_text(task, branch_name), model=model)
         return DispatchHandle(
             external_id=payload.get("claude_code_session_id"),
             external_url=payload.get("claude_code_session_url"),
             branch_name=branch_name,
         )
 
-    def fire_text(self, text: str) -> DispatchHandle:
+    def fire_text(self, text: str, model: str | None = None) -> DispatchHandle:
         """#186: タスク以外の任意指示（統合コーディネーターの意味的レビュー等）を
         dispatcherと同一のルーチンへ投げるための汎用fire。"""
-        payload = self._fire(text)
+        payload = self._fire(text, model=model)
         return DispatchHandle(
             external_id=payload.get("claude_code_session_id"),
             external_url=payload.get("claude_code_session_url"),
@@ -699,6 +774,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         worktree_path: Path,
         *,
         force_push: bool = False,
+        execution_selection: ExecutionSelection | None = None,
     ) -> DispatchHandle:
         push_args = ["push", "--set-upstream", "origin", branch_name]
         if force_push:
@@ -707,6 +783,12 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self._log_dir.mkdir(parents=True, exist_ok=True)
         slug = branch_name.replace("/", "-")
         log_path = self._log_dir / f"{slug}.log"
+
+        model = execution_selection.model if execution_selection else None
+        reasoning_effort = (
+            execution_selection.reasoning_effort if execution_selection else None
+        )
+
         command = [
             "codex",
             "cloud",
@@ -715,8 +797,13 @@ class CodexCloudDispatchTarget(DispatchTarget):
             self._environment_id,
             "--branch",
             branch_name,
-            self._build_prompt(task, branch_name),
         ]
+        if model:
+            command.extend(["--model", model])
+        if reasoning_effort:
+            command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+        command.append(self._build_prompt(task, branch_name))
+
         combined_output = _run_codex_cloud_exec(command, worktree_path, log_path)
         task_id, task_url = _parse_codex_cloud_exec_output(combined_output)
         external_id = task_id or f"codex-cloud:{branch_name}"

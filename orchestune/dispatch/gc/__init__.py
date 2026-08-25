@@ -241,9 +241,14 @@ def _record_completed_worktree(
                 commit_sha=completion_event.get("commit_sha"),
                 base_branch=completion_active.base_branch,
                 usage=usage_obj,
+                profile=completion_active.profile,
+                model=completion_active.model,
+                reasoning_effort=completion_active.reasoning_effort,
+                selection_reason=completion_active.selection_reason,
             )
         )
         del ctx.run_state.active_worktrees[key]
+
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         completed_subtask_id=completed_subtask_id,

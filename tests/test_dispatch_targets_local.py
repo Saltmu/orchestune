@@ -38,7 +38,15 @@ class _IsCompleteOnlyTarget(DispatchTarget):
     def __init__(self, complete: bool):
         self.complete = complete
 
-    def launch(self, task: Task, branch_name: str, worktree_path, *, force_push=False):
+    def launch(
+        self,
+        task: Task,
+        branch_name: str,
+        worktree_path,
+        *,
+        force_push=False,
+        execution_selection=None,
+    ):
         return DispatchHandle(branch_name=branch_name)
 
     def is_complete(self, handle: DispatchHandle, forge=None) -> bool:
@@ -53,7 +61,9 @@ class _LegacySignatureTarget(DispatchTarget):
     def __init__(self, complete: bool):
         self.complete = complete
 
-    def launch(self, task: Task, branch_name: str, worktree_path, *, force_push=False):
+    def launch(  # type: ignore[override]
+        self, task: Task, branch_name: str, worktree_path, *, force_push=False
+    ):
         return DispatchHandle(branch_name=branch_name)
 
     def is_complete(self, handle: DispatchHandle) -> bool:  # type: ignore[override]
@@ -144,6 +154,145 @@ class TestLocalProcessDispatchTarget:
             "claude/issue-42-sub-x",
             "--path",
             str(tmp_path / "wt"),
+        ]
+
+    def test_launch_with_execution_selection_claude_cli_adds_model_and_skips_effort(
+        self, tmp_path, caplog
+    ):
+        import logging
+
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+        )
+        selection = ExecutionSelection(
+            profile="deep",
+            model="claude-3-7-sonnet-20250219",
+            reasoning_effort="high",
+            reason="test",
+        )
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value.pid = 1001
+            target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--model" in cmd
+        model_idx = cmd.index("--model")
+        assert cmd[model_idx + 1] == "claude-3-7-sonnet-20250219"
+        assert "does not support reasoning_effort" in caplog.text
+
+    def test_launch_with_execution_selection_agy_cli_adds_model_and_skips_effort(
+        self, tmp_path, caplog
+    ):
+        import logging
+
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd=AGY_CLI_LOCAL_CMD_TEMPLATE,
+        )
+        selection = ExecutionSelection(
+            profile="balanced",
+            model="gemini-2.5-pro",
+            reasoning_effort="medium",
+            reason="test",
+        )
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value.pid = 1002
+            target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--model" in cmd
+        model_idx = cmd.index("--model")
+        assert cmd[model_idx + 1] == "gemini-2.5-pro"
+        assert "does not support reasoning_effort" in caplog.text
+
+    def test_launch_with_execution_selection_codex_cli_adds_model_and_effort(
+        self, tmp_path
+    ):
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd=CODEX_CLI_LOCAL_CMD_TEMPLATE,
+        )
+        selection = ExecutionSelection(
+            profile="deep",
+            model="o3-mini",
+            reasoning_effort="high",
+            reason="test",
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 1003
+            target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--model" in cmd
+        model_idx = cmd.index("--model")
+        assert cmd[model_idx + 1] == "o3-mini"
+        assert "-c" in cmd
+        c_idx = cmd.index("-c")
+        assert cmd[c_idx + 1] == "model_reasoning_effort=high"
+
+    def test_launch_with_execution_selection_custom_template_placeholders(
+        self, tmp_path
+    ):
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="custom-runner --model {model} --effort {reasoning_effort} --profile {profile} --issue {issue_number}",
+        )
+        selection = ExecutionSelection(
+            profile="fast",
+            model="claude-3-5-haiku-20241022",
+            reasoning_effort="low",
+            reason="test",
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 1004
+            target.launch(
+                _task(issue_number=55),
+                "claude/issue-55-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == [
+            "custom-runner",
+            "--model",
+            "claude-3-5-haiku-20241022",
+            "--effort",
+            "low",
+            "--profile",
+            "fast",
+            "--issue",
+            "55",
         ]
 
 

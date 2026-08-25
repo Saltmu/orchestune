@@ -108,6 +108,98 @@ class TestRunState:
             load_run_state(path).active_worktrees["10"].token_estimate_recorded is False
         )
 
+    def test_save_and_load_roundtrip_with_execution_profile_fields(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        now = 1700000000.0
+        state = RunState(
+            active_worktrees={
+                "10": ActiveWorktree(
+                    issue_number=10,
+                    branch="claude/issue-10-x",
+                    worktree_path="worktrees/claude-issue-10-x",
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=("src/foo.py",),
+                    profile="deep",
+                    model="claude-3-7-sonnet-20250219",
+                    reasoning_effort="high",
+                    selection_reason="profile 'deep' resolved for target 'claude-cli'",
+                )
+            },
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=11,
+                    subtask_id="task-b",
+                    branch="claude/issue-11-task-b",
+                    started_at=1700000000.0,
+                    completed_at=1700003600.0,
+                    profile="balanced",
+                    model="gemini-2.5-pro",
+                    reasoning_effort="medium",
+                    selection_reason="default profile 'balanced' applied",
+                )
+            ],
+            launch_history=[1700000000.0],
+        )
+        save_run_state(state, path, now=now)
+        loaded = load_run_state(path)
+        active = loaded.active_worktrees["10"]
+        assert active.profile == "deep"
+        assert active.model == "claude-3-7-sonnet-20250219"
+        assert active.reasoning_effort == "high"
+        assert (
+            active.selection_reason == "profile 'deep' resolved for target 'claude-cli'"
+        )
+
+        completed = loaded.completed_worktrees[0]
+        assert completed.profile == "balanced"
+        assert completed.model == "gemini-2.5-pro"
+        assert completed.reasoning_effort == "medium"
+        assert completed.selection_reason == "default profile 'balanced' applied"
+
+    def test_old_data_without_execution_profile_fields_loads_as_none(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {
+                        "10": {
+                            "issue_number": 10,
+                            "branch": "claude/issue-10-x",
+                            "worktree_path": "worktrees/claude-issue-10-x",
+                            "pid": 12345,
+                            "started_at": 1700000000.0,
+                            "declared_footprint": [],
+                        }
+                    },
+                    "completed_worktrees": [
+                        {
+                            "issue_number": 11,
+                            "subtask_id": "task-b",
+                            "branch": "claude/issue-11-task-b",
+                            "started_at": 1700000000.0,
+                            "completed_at": 1700003600.0,
+                        }
+                    ],
+                    "launch_history": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = load_run_state(path)
+        active = loaded.active_worktrees["10"]
+        assert active.profile is None
+        assert active.model is None
+        assert active.reasoning_effort is None
+        assert active.selection_reason is None
+
+        completed = loaded.completed_worktrees[0]
+        assert completed.profile is None
+        assert completed.model is None
+        assert completed.reasoning_effort is None
+        assert completed.selection_reason is None
+
     def test_save_and_load_roundtrip_with_unknown_active_start_time(self, tmp_path):
         path = tmp_path / "run_state.json"
         state = RunState(

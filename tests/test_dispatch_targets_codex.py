@@ -77,6 +77,44 @@ class TestCodexCloudDispatchTarget:
         log_file = tmp_path / "logs" / "claude-issue-1-task-a.log"
         assert log_file.read_text(encoding="utf-8") == exec_output
 
+    def test_launch_with_execution_selection_passes_model_and_reasoning_effort(
+        self, tmp_path
+    ):
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+        target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
+        push_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        submit_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="task_123\n", stderr=""
+        )
+        selection = ExecutionSelection(
+            profile="deep",
+            model="o3-mini",
+            reasoning_effort="high",
+            reason="test",
+        )
+        with patch(
+            "orchestune.dispatch.targets.subprocess.run",
+            side_effect=[push_result, submit_result],
+        ) as mock_run:
+            target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                execution_selection=selection,
+            )
+
+        submit_call = mock_run.call_args_list[1]
+        command = submit_call.args[0]
+        assert "--model" in command
+        model_idx = command.index("--model")
+        assert command[model_idx + 1] == "o3-mini"
+        assert "-c" in command
+        c_idx = command.index("-c")
+        assert command[c_idx + 1] == "model_reasoning_effort=high"
+
     def test_launch_fallback_when_output_has_no_task_id(self, tmp_path):
         target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
         push_result = subprocess.CompletedProcess(

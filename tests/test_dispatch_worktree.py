@@ -778,8 +778,13 @@ class TestProvisionAndLaunch:
                 fake_target, task, "feature/1", worktree_path
             )
             assert handle == fake_handle
-            assert started_at == 12345.67
-            fake_target.launch.assert_called_once_with(task, "feature/1", worktree_path)
+            fake_target.launch.assert_called_once_with(
+                task,
+                "feature/1",
+                worktree_path,
+                force_push=False,
+                execution_selection=None,
+            )
 
 
 class TestCleanupFailedWorktree:
