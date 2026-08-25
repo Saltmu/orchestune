@@ -50,7 +50,6 @@ DECOMPOSITION_PLAN_BLOCK_PATTERN = re.compile(
     + r"\r?\n```yaml[^\n]*\n(.*?)\r?\n```[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
-_BLANK_LINE_RUN_PATTERN = re.compile(r"\n{3,}")
 
 
 def _last_block_match(pattern: re.Pattern[str], body: str) -> re.Match[str] | None:
@@ -72,7 +71,10 @@ def _replace_all_blocks(
 
     追記ではなく置換に倒すことで更新を冪等にし、既に重複してしまった本文
     （Issue #486は8個まで増殖した）も次回の書き込みで1つへ自己修復する。
-    ブロック以外の本文は、重複除去で生じた余分な空行を畳む以外は不変。
+    ブロック以外の本文は不変。重複ブロックの間にあった**空白のみ**の区切り
+    （追記時に挿入された空行）はブロックと一緒に取り除くが、本文全体の空行を
+    畳むことはしない（#666レビュー: 本文の他の場所にある3行以上の連続改行や
+    コードフェンス内の空行まで巻き添えで潰してしまうため）。
     """
     matches = list(pattern.finditer(body))
     if not matches:
@@ -80,13 +82,14 @@ def _replace_all_blocks(
     pieces = [body[: matches[0].start()], new_block]
     cursor = matches[0].end()
     for match in matches[1:]:
-        pieces.append(body[cursor : match.start()])
+        separator = body[cursor : match.start()]
+        # 重複ブロック同士の区切りは、ブロックの一部として捨てる。散文が
+        # 挟まっていた場合はそのまま残す（内容を失わない方を優先する）。
+        if separator.strip():
+            pieces.append(separator)
         cursor = match.end()
     pieces.append(body[cursor:])
-    updated = "".join(pieces)
-    if len(matches) > 1:
-        updated = _BLANK_LINE_RUN_PATTERN.sub("\n\n", updated)
-    return updated
+    return "".join(pieces)
 
 
 def decomposition_plan_from_parent_body(body: str) -> dict | None:

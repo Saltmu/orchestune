@@ -89,6 +89,44 @@ def test_embed_collapses_already_duplicated_blocks():
     assert updated.startswith("EPIC prose")
 
 
+def test_embed_preserves_unrelated_blank_lines_while_collapsing_duplicates():
+    """#666レビュー: 重複除去は本文の他の空行を巻き添えにしない。
+
+    人間が書いた3行以上の連続改行や、コードフェンス内の空行は保持する。
+    """
+    prose = "見出し\n\n\n\n本文\n\n```text\nline1\n\n\n\nline2\n```\n"
+    body = (
+        f"{prose}\n{PARENT_MARKER}\n\n"
+        + _plan_block(_plan())
+        + "\n"
+        + _plan_block(_plan(subtasks=[{"id": "task-a", "issue_number": 652}]))
+    )
+
+    updated = embed_decomposition_plan_in_parent_body(
+        body, _plan(subtasks=[{"id": "task-a", "issue_number": 653}])
+    )
+
+    assert _plan_block_count(updated) == 1
+    assert prose in updated
+
+
+def test_embed_keeps_prose_written_between_duplicated_blocks():
+    """重複ブロックの間に散文があれば捨てずに残す。"""
+    body = (
+        f"EPIC prose\n\n{PARENT_MARKER}\n\n"
+        + _plan_block(_plan())
+        + "\n人間が後から書いたメモ\n\n"
+        + _plan_block(_plan(subtasks=[{"id": "task-a", "issue_number": 652}]))
+    )
+
+    updated = embed_decomposition_plan_in_parent_body(
+        body, _plan(subtasks=[{"id": "task-a", "issue_number": 653}])
+    )
+
+    assert _plan_block_count(updated) == 1
+    assert "人間が後から書いたメモ" in updated
+
+
 def test_plan_extraction_prefers_the_last_block():
     """重複した本文からは最も新しい（最後の）ブロックを採用する。"""
     body = _body_with_plan_blocks(
