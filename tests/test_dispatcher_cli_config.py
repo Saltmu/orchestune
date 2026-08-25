@@ -895,6 +895,8 @@ reasoning_effort = "low"
         orchestune_toml = tmp_path / "orchestune.toml"
         orchestune_toml.write_text(
             """
+default_execution_profile = "deep"
+
 [execution_profiles.deep.claude-cli]
 model = "--dangerous-injected-flag"
 """,

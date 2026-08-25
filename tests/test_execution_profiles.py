@@ -326,6 +326,7 @@ reasoning-effort = "high"
 
     def test_target_name_normalized_at_parse_time(self) -> None:
         raw_config = {
+            "default_execution_profile": "deep",
             "execution_profiles": {
                 "deep": {
                     "claude_cli": {
@@ -333,13 +334,40 @@ reasoning-effort = "high"
                         "reasoning_effort": "high",
                     }
                 }
-            }
+            },
         }
         config = extract_execution_profile_config(raw_config)
         assert "claude-cli" in config.profiles["deep"]
         selection = resolve_execution_profile("deep", "claude-cli", config)
         assert selection.model == "claude-3-7-sonnet-20250219"
         assert selection.reasoning_effort == "high"
+
+    def test_duplicate_target_aliases_rejected(self) -> None:
+        raw_config = {
+            "default_execution_profile": "deep",
+            "execution_profiles": {
+                "deep": {
+                    "claude-cli": {"model": "claude-3-7-sonnet-20250219"},
+                    "claude_cli": {"model": "claude-3-5-haiku-20241022"},
+                }
+            },
+        }
+        with pytest.raises(ConfigError) as exc_info:
+            extract_execution_profile_config(raw_config)
+        assert "duplicate target definition" in str(exc_info.value)
+        assert "claude_cli" in str(exc_info.value)
+
+    def test_implicit_default_missing_from_profiles_rejected(self) -> None:
+        raw_config = {
+            "execution_profiles": {
+                "deep": {"claude-cli": {"model": "claude-3-7-sonnet-20250219"}}
+            }
+        }
+        with pytest.raises(ConfigError) as exc_info:
+            extract_execution_profile_config(raw_config)
+        assert "default_execution_profile 'balanced' is not defined" in str(
+            exc_info.value
+        )
 
 
 class TestResolveExecutionProfile:

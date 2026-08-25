@@ -165,6 +165,10 @@ def _parse_profile_targets(
     for target_name, target_settings in targets_map.items():
         validated_target_name = validate_target_name(target_name)
         normalized_target_name = validated_target_name.replace("_", "-")
+        if normalized_target_name in parsed_targets:
+            raise ConfigError(
+                f"duplicate target definition {target_name!r} (normalized to {normalized_target_name!r}) in profile {profile_name!r}"
+            )
         parsed_targets[normalized_target_name] = _parse_target_execution_config(
             profile_name, normalized_target_name, target_settings
         )
@@ -203,11 +207,7 @@ def extract_execution_profile_config(
             validated_profile_name, targets_map
         )
 
-    if (
-        default_profile != DEFAULT_EXECUTION_PROFILE
-        and parsed_profiles
-        and default_profile not in parsed_profiles
-    ):
+    if parsed_profiles and default_profile not in parsed_profiles:
         raise ConfigError(
             f"default_execution_profile {default_profile!r} is not defined under 'execution_profiles'"
         )
