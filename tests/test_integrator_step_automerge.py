@@ -28,6 +28,11 @@ from orchestune.integrator.steps import (
     clear_parent_branch_stale_marker,
 )
 from orchestune.models import Task
+from orchestune.pr_link_notice import (
+    KIND_MERGED,
+    notice_marker,
+    render_merged_notice,
+)
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _CLOSE_CHILD_ISSUES = (
@@ -814,3 +819,61 @@ class TestRetryChildIssueCloseStep:
         assert res["status"] == "no_done_tasks"
         assert res["retried_closed_issues"] == [1]
         integrator_env.close_issue.assert_called_once_with(1, "completed", comment=ANY)
+
+
+class TestChildIssueCloseNotice:
+    """#676: 親ブランチへのマージ完了を、子Issue側へPRリンク付きで通知する。
+
+    GitHubは既定ブランチ以外を対象とするPRをIssueの「Development」欄へ
+    自動リンクしないため、クローズコメント自体を相互リンクの通知として使う。
+    """
+
+    def test_close_comment_links_the_integration_pr(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        res = Integrator(_child_config()).run()
+
+        assert res["closed_issues"] == [1]
+        comment = integrator_env.close_issue.call_args.kwargs["comment"]
+        assert notice_marker(KIND_MERGED, 999) in comment
+        assert "#999" in comment
+        assert "parent/issue-100" in comment
+        fake_forge.list_comments.assert_any_call(1)
+
+    def test_close_without_comment_when_already_notified(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        # 前サイクルで通知済み（クローズだけが失敗した）場合に、同じ通知を
+        # 二重投稿しない。クローズ自体は再試行する。
+        fake_forge.list_comments.return_value = [
+            {
+                "body": render_merged_notice(999, "parent/issue-100"),
+                "author": "bot",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        res = Integrator(_child_config()).run()
+
+        assert res["closed_issues"] == [1]
+        integrator_env.close_issue.assert_called_once_with(1, "completed", comment=None)
+
+    def test_falls_back_to_plain_comment_without_an_integration_pr(
+        self, integrator_env: IntegratorEnv
+    ):
+        # #373の回復経路: 統合PRを作れなかった（差分無し）が、既に親へ
+        # 取り込み済みと確認できたケース。リンクすべきPR番号が無いため、
+        # 従来どおりの文面でクローズする。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.create_pull_request.side_effect = RuntimeError("no commits")
+        integrator_env.is_current_branch_tip_merged_into.return_value = True
+
+        res = Integrator(_child_config()).run()
+
+        assert res["closed_issues"] == [1]
+        comment = integrator_env.close_issue.call_args.kwargs["comment"]
+        assert "自動的にクローズしました" in comment
+        assert "orchestune:pr-link" not in comment

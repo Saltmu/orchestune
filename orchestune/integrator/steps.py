@@ -29,6 +29,7 @@ from orchestune.integrator.types import (
     IntegrationStatus,
 )
 from orchestune.integrator.worktree import IntegrationWorktree
+from orchestune.pr_link_notice import merged_notice_if_new
 
 
 @contextmanager
@@ -773,10 +774,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 ctx.forge.close_issue(
                     task.issue_number,
                     "completed",
-                    comment=(
-                        "Integratorが親ブランチへの自動マージを完了したため、"
-                        "このIssueを自動的にクローズしました。"
-                    ),
+                    comment=_close_comment(ctx, task.issue_number),
                 )
                 closed_issues.append(task.issue_number)
             except Exception as error:
@@ -786,6 +784,28 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
         return closed_issues
+
+
+def _close_comment(ctx: IntegrationContext, issue_number: int) -> str | None:
+    """#676: 子Issueのクローズコメントを、統合PRへのリンク通知として組み立てる。
+
+    GitHubは既定ブランチ以外を対象とするPRをIssueの「Development」欄へ自動
+    リンクしないため、このコメントが子Issue側から親ブランチへのマージを辿る
+    唯一の手掛かりになる。既に同じPRの通知を投稿済みなら`None`を返し、
+    クローズだけを再試行できるようにする（前サイクルでクローズのみ失敗した
+    場合に同じ通知を二重投稿しないため）。
+    """
+    if ctx.integration_pr_number is None:
+        return (
+            "Integratorが親ブランチへの自動マージを完了したため、"
+            "このIssueを自動的にクローズしました。"
+        )
+    return merged_notice_if_new(
+        ctx.forge,
+        issue_number,
+        ctx.integration_pr_number,
+        ctx.base_branch.removeprefix("origin/"),
+    )
 
 
 __all__ = [

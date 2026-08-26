@@ -342,3 +342,11 @@ Without a parent issue, the Integrator is responsible only up to creating an int
 
 Downstream dependent task branches are rebased automatically depending on the state of the tasks they depend on. The rebase target is **the branch of the dependency whose PR has already passed CI** (stacking), not "the latest main". No auto-rebase happens when the dependency cannot be narrowed down to a single branch, or when the dependency has not passed CI yet.
 
+### 4.5 Issue ↔ PR link notices
+
+GitHub's `Closes #N` auto-linking and the "Development" sidebar on an issue only work when the PR targets the default branch (`main`). Under the parent-branch workflow that leaves a child issue with no visible trace of the PR that implemented it, so Orchestune fills the gap with comments:
+
+1. **When a PR is opened**: once the dispatcher sees an open PR targeting `parent/issue-{N}`, it posts a "PR #XXX has been opened" notice on the corresponding child issue. The target issue is resolved both from the PR's `Closes #N` references and from the head branch name (`claude/issue-{N}-{subtask_id}`), so PRs opened by the agent itself are announced through the same path.
+2. **When a PR is merged**: when the Integrator merges the integration PR into the parent branch and closes the child issue, that closing comment doubles as a "PR #XXX has been merged into the parent branch" completion notice.
+
+Both comments embed a `<!-- orchestune:pr-link:{created|merged}:{pr_number} -->` marker, so the same notice is never posted twice (if the existing comments cannot be read, the notice is skipped and retried on the next cycle).
