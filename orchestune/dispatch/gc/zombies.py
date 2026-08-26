@@ -41,10 +41,21 @@ def _check_zombie_and_timeout(
     is_timeout = False
     process_alive = is_process_alive(active.pid)
 
-    if zombie_enabled and not process_alive:
+    if zombie_enabled and active.pid is not None and not process_alive:
         # プロセスが消えていれば、worktreeの変更有無にかかわらず当該実行は
         # 進行不能である。clean worktree を除外すると、既定の timeout=0 では
         # 永久にクオータを占有するため、ゾンビとして一律回収・再キューする。
+        is_zombie = True
+
+    elif (
+        zombie_enabled
+        and active.pid is None
+        and active.started_at is None
+        and not os.path.exists(active.worktree_path)
+    ):
+        # #383: 対応PRが見つからず自己修復した孤立エントリは、ローカルPIDも
+        # 開始時刻も物理worktreeも持たない。これはクラウド実行（pid=None）とは
+        # 区別できるため、クオータを永久に占有しないよう回収する。
         is_zombie = True
 
     if not is_zombie and active.started_at is not None:
