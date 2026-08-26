@@ -38,7 +38,10 @@ from orchestune.dispatch.phase_reconciliation import (
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.worktree import file_lock
-from orchestune.pr_link_notice import notify_open_pr_links
+from orchestune.pr_link_notice import (
+    notice_candidate_issue_numbers,
+    notify_open_pr_links,
+)
 
 __all__ = ["CycleReport", "run_dispatch_cycle"]
 
@@ -63,7 +66,9 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
     if not config.apply:
         return
     events = notify_open_pr_links(
-        config.resolved_forge, ctx.prs, set(ctx.tasks_by_issue)
+        config.resolved_forge,
+        ctx.prs,
+        notice_candidate_issue_numbers(ctx.tasks_by_issue.values()),
     )
     for event in events:
         print(

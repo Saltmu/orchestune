@@ -17,13 +17,14 @@ from orchestune.pr_link_notice import (
     KIND_MERGED,
     has_notice,
     merged_notice_if_new,
+    notice_candidate_issue_numbers,
     notice_marker,
     notify_open_pr_links,
     notify_pr_created,
     render_created_notice,
     render_merged_notice,
 )
-from tests.conftest import make_issue, make_pr
+from tests.conftest import make_issue, make_pr, make_task
 
 
 def _comment(body: str) -> dict[str, Any]:
@@ -114,11 +115,6 @@ class TestMergedNoticeIfNew:
         fake_forge.list_comments.return_value = [
             _comment(render_merged_notice(456, "parent/issue-100"))
         ]
-
-        assert merged_notice_if_new(fake_forge, 12, 456, "parent/issue-100") is None
-
-    def test_returns_none_when_comments_cannot_be_read(self, fake_forge: MagicMock):
-        fake_forge.list_comments.side_effect = RuntimeError("API unavailable")
 
         assert merged_notice_if_new(fake_forge, 12, 456, "parent/issue-100") is None
 
@@ -258,3 +254,49 @@ class TestDispatchCycleWiring:
         self._run_cycle(self._config(tmp_path, apply=False), fake_forge)
 
         fake_forge.add_comment.assert_not_called()
+
+
+class TestMergedNoticeFailsOpen:
+    """マージ通知は「そのIssueに対する最後の書き込み」なので、作成通知とは
+    逆に fail open にする。"""
+
+    def test_returns_notice_when_comments_cannot_be_read(self, fake_forge: MagicMock):
+        # クローズ後のIssueは以降のサイクルで統合対象から外れ、再試行されない。
+        # 判定不能なまま通知を落とすとPRリンクが恒久的に失われるため、
+        # 重複の可能性を受け入れてでも通知本文を返す。
+        fake_forge.list_comments.side_effect = RuntimeError("API unavailable")
+
+        body = merged_notice_if_new(fake_forge, 12, 456, "parent/issue-100")
+
+        assert body is not None
+        assert notice_marker(KIND_MERGED, 456) in body
+
+
+class TestNoticeCandidateIssueNumbers:
+    """通知の走査対象を、まだ統合が終わっていないタスクに限定する。
+
+    親ブランチ運用では完了済みタスクのPRが開いたまま残ることがあり、
+    全件を毎サイクル走査すると`list_comments`の呼び出しが完了タスク数に比例して
+    増え続ける。
+    """
+
+    def test_includes_open_tasks(self):
+        tasks = [make_task(12, status_labels=("status:in-progress",))]
+
+        assert notice_candidate_issue_numbers(tasks) == {12}
+
+    def test_includes_done_tasks_not_yet_integrated(self):
+        # 完了直後にPRが作成された場合でも、作成通知を投稿する余地を残す。
+        tasks = [make_task(12, status_labels=("status:done",))]
+
+        assert notice_candidate_issue_numbers(tasks) == {12}
+
+    def test_excludes_closed_issues(self):
+        tasks = [make_task(12, status_labels=("status:done",), issue_state="CLOSED")]
+
+        assert notice_candidate_issue_numbers(tasks) == set()
+
+    def test_excludes_already_integrated_tasks(self):
+        tasks = [make_task(12, status_labels=("status:done", "integration:included"))]
+
+        assert notice_candidate_issue_numbers(tasks) == set()

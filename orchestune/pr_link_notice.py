@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from orchestune.forge import Forge
-from orchestune.models import PrRecord, normalize_newlines
+from orchestune.models import PrRecord, Task, normalize_newlines
 
 KIND_CREATED = "created"
 KIND_MERGED = "merged"
@@ -109,13 +109,19 @@ def notify_pr_created(
 def merged_notice_if_new(
     forge: Forge, issue_number: int, pr_number: int, base_branch: str
 ) -> str | None:
-    """未通知であればマージ完了通知の本文を返す（通知済み・判定不能なら`None`）。
+    """通知済みでなければマージ完了通知の本文を返す（通知済みなら`None`）。
 
     Integratorは`close_issue`の`comment`として渡すため、投稿自体はここでは
     行わない。クローズとコメントを1回のAPI呼び出しに束ねることで、
     「コメントは残ったがクローズに失敗した」中途半端な状態を作らない。
+
+    PR#684レビュー対応(Codex P2): 通知済みかどうかを判定できなかった場合は、
+    作成通知(`notify_pr_created`)とは逆に**fail open**で本文を返す。マージ通知は
+    Issueをクローズする最後の書き込みであり、クローズ済みIssueは以降のサイクルで
+    統合対象から外れる（`PrepareTasksStep`）ため再試行の機会がない。ここで
+    見送るとPRリンクが恒久的に失われるので、重複コメントの可能性を受け入れる。
     """
-    if _already_notified(forge, issue_number, KIND_MERGED, pr_number) is not False:
+    if _already_notified(forge, issue_number, KIND_MERGED, pr_number) is True:
         return None
     return render_merged_notice(pr_number, base_branch)
 
@@ -131,6 +137,24 @@ def target_issue_numbers(pr: PrRecord, known_issue_numbers: set[int]) -> list[in
     if match:
         numbers.add(int(match.group(1)))
     return sorted(numbers & known_issue_numbers)
+
+
+def notice_candidate_issue_numbers(tasks: Iterable[Task]) -> set[int]:
+    """作成通知の走査対象とするタスクIssueの番号を返す。
+
+    PR#684レビュー対応(Codex P2): 親ブランチ運用では、統合済みタスクの子PRが
+    （ブランチ削除に失敗した場合などに）開いたまま残ることがある。全タスクを
+    毎サイクル走査すると、マーカーを読み直すためだけの`list_comments`呼び出しが
+    完了タスク数に比例して増え続けるため、既にクローズされたIssueと
+    `integration:included`で統合を終えたタスクを候補から外す。作成通知が
+    間に合わなかった分は、統合時のマージ通知が引き継ぐ。
+    """
+    return {
+        task.issue_number
+        for task in tasks
+        if task.issue_state != "CLOSED"
+        and "integration:included" not in task.status_labels
+    }
 
 
 def notify_open_pr_links(
@@ -162,6 +186,7 @@ __all__ = [
     "KIND_MERGED",
     "has_notice",
     "merged_notice_if_new",
+    "notice_candidate_issue_numbers",
     "notice_marker",
     "notify_open_pr_links",
     "notify_pr_created",
