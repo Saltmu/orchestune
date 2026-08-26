@@ -82,6 +82,14 @@ class TaskReclaimRecord:
     # 回収を次サイクルで再試行する際、同じ回数を再利用して枠を二重に消費しない
     # ようにするために使う。反映が確定した時点で`False`へ戻す。
     pending: bool = False
+    # #675: 起動直後・コミットなしで終了したローカル実行の再投入回数と、指数
+    # バックオフにより次に起動してよい時刻。通常のゾンビ/timeout回収回数とは
+    # 別枠にし、短時間の通信障害で既存の回収予算を消費しない。
+    early_death_retry_count: int = 0
+    early_death_retry_at: float = 0.0
+    # queuedラベル反映前に永続化した予約分。GitHub反映が失敗した場合、次サイクル
+    # では同じ回数を再利用し、自動再投入枠を二重消費しない。
+    early_death_retry_pending: bool = False
 
 
 @dataclass
@@ -141,6 +149,21 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
             count=count,
             last_reclaimed_at=float(last_reclaimed_at),
             pending=value.get("pending") is True,
+            early_death_retry_count=(
+                value.get("early_death_retry_count", 0)
+                if isinstance(value.get("early_death_retry_count", 0), int)
+                and not isinstance(value.get("early_death_retry_count", 0), bool)
+                and value.get("early_death_retry_count", 0) >= 0
+                else 0
+            ),
+            early_death_retry_at=(
+                float(value.get("early_death_retry_at", 0.0))
+                if isinstance(value.get("early_death_retry_at", 0.0), int | float)
+                and not isinstance(value.get("early_death_retry_at", 0.0), bool)
+                and math.isfinite(value.get("early_death_retry_at", 0.0))
+                else 0.0
+            ),
+            early_death_retry_pending=(value.get("early_death_retry_pending") is True),
         )
     return records
 

@@ -61,6 +61,28 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
+def _add_early_death_retry_arguments(parser: argparse.ArgumentParser) -> None:
+    """#675: 起動直後の異常終了に対する再投入・バックオフ設定。"""
+    parser.add_argument(
+        "--early-death-window-seconds",
+        type=_non_negative_int,
+        default=120,
+        help="起動直後のコミットなし終了を一時障害として再投入する判定時間（秒）",
+    )
+    parser.add_argument(
+        "--max-early-death-retries",
+        type=_non_negative_int,
+        default=2,
+        help="起動直後のコミットなし終了に対する自動再投入の上限（#675）",
+    )
+    parser.add_argument(
+        "--early-death-backoff-seconds",
+        type=_non_negative_int,
+        default=60,
+        help="起動直後の異常終了を再投入する際の指数バックオフ基準秒数",
+    )
+
+
 def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--apply",
@@ -99,6 +121,7 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         "（#512）。超過したタスクはstatus:blocked-human-reviewへ遷移し再投入されなくなる。"
         "0を指定すると1回目の回収で即エスカレーションする（無制限にはできない）",
     )
+    _add_early_death_retry_arguments(parser)
     parser.add_argument(
         "--zombie-gc",
         action=argparse.BooleanOptionalAction,
@@ -321,6 +344,9 @@ _NON_NEGATIVE_INT_KEYS = frozenset(
         "max_recompute_retries",
         "task_timeout_seconds",
         "max_task_reclaims",
+        "early_death_window_seconds",
+        "max_early_death_retries",
+        "early_death_backoff_seconds",
         "not_needed_review_timeout_seconds",
     }
 )
@@ -461,6 +487,9 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         max_recompute_retries=args.max_recompute_retries,
         task_timeout_seconds=args.task_timeout_seconds,
         max_task_reclaims=args.max_task_reclaims,
+        early_death_window_seconds=args.early_death_window_seconds,
+        max_early_death_retries=args.max_early_death_retries,
+        early_death_backoff_seconds=args.early_death_backoff_seconds,
         zombie_gc=args.zombie_gc,
         scheduling_mode=args.scheduling_mode,
         execution_profile_config=inputs.execution_profile_config,
