@@ -35,7 +35,8 @@ def run_gc_phase(
     held_worktree_paths = {
         event["worktree_path"]
         for event in completion_events
-        if event.get("action") == "completion_skipped_dirty_worktree"
+        if event.get("action")
+        in ("completion_skipped_dirty_worktree", "completion_skipped_forge_error")
         and event.get("worktree_path")
     }
     gc_events = _collect_zombies_and_timeouts(
