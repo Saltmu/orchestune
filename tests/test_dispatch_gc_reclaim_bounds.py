@@ -61,6 +61,7 @@ def _config(tmp_path, **overrides):
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
         apply=True,
+        zombie_gc=False,
         task_timeout_seconds=60,
         forge=FakeForge(),
     )
@@ -176,7 +177,12 @@ class TestReclaimRetryBound:
     def test_zombie_reclaims_share_the_same_counter(self, tmp_path):
         """タイムアウトだけでなくゾンビ回収も同じカウンタで拘束される。"""
         run_state = RunState(active_worktrees={})
-        config = _config(tmp_path, task_timeout_seconds=0, max_task_reclaims=1)
+        config = _config(
+            tmp_path,
+            zombie_gc=True,
+            task_timeout_seconds=0,
+            max_task_reclaims=1,
+        )
         actions = []
         for _ in range(2):
             # pid不在・worktree不在・started_at不明はゾンビ相当（#383）
@@ -417,7 +423,12 @@ class TestReclaimRetryBound:
         worktree.mkdir()
         active = _active(worktree_path=str(worktree))
         run_state = RunState(active_worktrees={"280": active})
-        config = _config(tmp_path, task_timeout_seconds=0, max_task_reclaims=0)
+        config = _config(
+            tmp_path,
+            zombie_gc=True,
+            task_timeout_seconds=0,
+            max_task_reclaims=0,
+        )
 
         with (
             patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
@@ -439,7 +450,7 @@ class TestReclaimRetryBound:
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         assert events == []
-        # エントリは残したまま、次サイクルのゾンビ判定で拾える形にする
+        # エントリは残したまま、次サイクルのゾンビ判定で再び拾える。
         assert set(run_state.active_worktrees) == {"280"}
         assert run_state.active_worktrees["280"].started_at is None
         # 回数は永続化済みのまま（二重には数えない）
