@@ -142,10 +142,6 @@ class TestGC:
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
@@ -210,10 +206,6 @@ class TestGC:
             ),
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
@@ -344,10 +336,6 @@ class TestGC:
             ),
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,

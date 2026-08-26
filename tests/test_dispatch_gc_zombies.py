@@ -159,10 +159,6 @@ class TestDecideZombieOrTimeoutReclaims:
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -188,10 +184,6 @@ class TestDecideZombieOrTimeoutReclaims:
         with (
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=False,
             ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
@@ -292,10 +284,6 @@ class TestDecideZombieOrTimeoutReclaims:
         with (
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
@@ -865,10 +853,6 @@ class TestApplyZombieOrTimeoutReclaim:
         with (
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(

@@ -425,10 +425,6 @@ class TestReclaimRetryBound:
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
-            patch(
                 "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
             patch("orchestune.dispatch.gc.zombies.remove_worktree"),
