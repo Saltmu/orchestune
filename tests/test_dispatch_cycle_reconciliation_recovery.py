@@ -141,6 +141,7 @@ class TestDualStatusReconciliation:
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             apply=True,
+            zombie_gc=False,
         )
 
         fake_forge.remove_label.reset_mock(side_effect=True)
@@ -220,6 +221,7 @@ class TestSelfHealRunState:
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
+            zombie_gc=False,
         )
         run_state = RunState(active_worktrees={})
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)
@@ -450,6 +452,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
+            zombie_gc=False,
         )
 
         # アクティブワークツリーが存在する（逸脱検知を走らせるため）
@@ -589,6 +592,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             apply=True,
+            zombie_gc=False,
         )
 
         active = ActiveWorktree(
