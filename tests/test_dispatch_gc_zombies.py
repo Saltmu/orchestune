@@ -83,7 +83,7 @@ class TestCollectZombiesAndTimeouts:
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
 
-    def test_dead_process_without_physical_worktree_requeues_issue(
+    def test_timeout_without_physical_worktree_requeues_issue(
         self, tmp_path, fake_forge
     ):
         """#198: run_stateを削除するGC回収は、worktreeの有無にかかわらず
@@ -110,7 +110,7 @@ class TestCollectZombiesAndTimeouts:
                 run_state, {active.issue_number: task}, config
             )
 
-        assert events[0]["reason"] == "process disappeared"
+        assert events[0]["reason"] == "timeout exceeded"
         assert run_state.active_worktrees == {}
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
@@ -195,6 +195,25 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.reason == "process disappeared"
         assert reclaim.is_timeout is False
         assert reclaim.process_alive is False
+
+    def test_cloud_handle_without_pid_is_not_reclaimed_as_zombie(self, tmp_path):
+        """クラウド実行はローカルPIDを持たないため、進行中のセッションを
+        process disappeared と誤認してはならない。"""
+        active = _active(worktree_path=str(tmp_path), pid=None, started_at=1_000.0)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=0,
+        )
+
+        reclaims = _decide_zombie_or_timeout_reclaims(
+            run_state, {}, config, None, now=2_000.0
+        )
+
+        assert reclaims == []
 
     def test_timeout_exceeded_reclaims_with_reason_timeout(self, tmp_path):
         active = _active(started_at=1_000.0, pid=111)
