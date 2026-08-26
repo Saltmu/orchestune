@@ -83,7 +83,7 @@ class TestCollectZombiesAndTimeouts:
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
 
-    def test_timeout_without_physical_worktree_requeues_issue(
+    def test_dead_process_without_physical_worktree_requeues_issue(
         self, tmp_path, fake_forge
     ):
         """#198: run_stateを削除するGC回収は、worktreeの有無にかかわらず
@@ -110,7 +110,7 @@ class TestCollectZombiesAndTimeouts:
                 run_state, {active.issue_number: task}, config
             )
 
-        assert events[0]["reason"] == "timeout exceeded"
+        assert events[0]["reason"] == "process disappeared"
         assert run_state.active_worktrees == {}
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
