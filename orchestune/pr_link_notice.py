@@ -139,7 +139,19 @@ def ensure_pr_merged_notice(
 
 
 def requires_link_notice(pr: PrRecord) -> bool:
-    return (pr.base_ref or "").startswith(PARENT_BRANCH_PREFIX)
+    """通知対象のPRかどうかを判定する。
+
+    PR#684レビュー対応(Codex P2): upstream repository上のheadを持つPRだけを
+    対象とする。forkからのPRも`list_open_prs()`には含まれ、`parent/*`をbaseに
+    `claude/issue-{N}-...`というheadを名乗ることも、既知のIssueを`Closes`で
+    参照することもできる。identityを確認できないPR（`is_cross_repository`が
+    不明）も含めてfail closedで除外し、第三者が「このIssueに対応するPR」という
+    権威ある体裁の通知をIssueへ書き込めないようにする
+    （`integrator.pr._is_reusable_integration_pr`と同じ方針）。
+    """
+    return pr.is_cross_repository is False and (pr.base_ref or "").startswith(
+        PARENT_BRANCH_PREFIX
+    )
 
 
 def target_issue_numbers(pr: PrRecord, known_issue_numbers: set[int]) -> list[int]:

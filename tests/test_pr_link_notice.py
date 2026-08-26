@@ -145,6 +145,7 @@ class TestNotifyOpenPrLinks:
             456,
             head_ref="claude/issue-12-task-a",
             base_ref="parent/issue-100",
+            is_cross_repository=False,
             closes_issue_numbers=(12,),
         )
 
@@ -157,7 +158,10 @@ class TestNotifyOpenPrLinks:
         self, fake_forge: MagicMock
     ):
         pr = make_pr(
-            456, head_ref="claude/issue-12-task-a", base_ref="parent/issue-100"
+            456,
+            head_ref="claude/issue-12-task-a",
+            base_ref="parent/issue-100",
+            is_cross_repository=False,
         )
 
         events = notify_open_pr_links(fake_forge, [pr], {12})
@@ -170,6 +174,7 @@ class TestNotifyOpenPrLinks:
             456,
             head_ref="claude/issue-12-task-a",
             base_ref="main",
+            is_cross_repository=False,
             closes_issue_numbers=(12,),
         )
 
@@ -181,6 +186,7 @@ class TestNotifyOpenPrLinks:
             456,
             head_ref="claude/issue-77-task-a",
             base_ref="parent/issue-100",
+            is_cross_repository=False,
             closes_issue_numbers=(77,),
         )
 
@@ -192,6 +198,7 @@ class TestNotifyOpenPrLinks:
             456,
             head_ref="integration/temp-parent-issue-100-run",
             base_ref="parent/issue-100",
+            is_cross_repository=False,
         )
 
         assert notify_open_pr_links(fake_forge, [pr], {12}) == []
@@ -205,6 +212,7 @@ class TestNotifyOpenPrLinks:
             456,
             head_ref="claude/issue-12-task-a",
             base_ref="parent/issue-100",
+            is_cross_repository=False,
             closes_issue_numbers=(12,),
         )
 
@@ -217,10 +225,16 @@ class TestNotifyOpenPrLinks:
         fake_forge.add_comment.side_effect = [RuntimeError("API unavailable"), None]
         prs = [
             make_pr(
-                456, head_ref="claude/issue-12-task-a", base_ref="parent/issue-100"
+                456,
+                head_ref="claude/issue-12-task-a",
+                base_ref="parent/issue-100",
+                is_cross_repository=False,
             ),
             make_pr(
-                457, head_ref="claude/issue-13-task-b", base_ref="parent/issue-100"
+                457,
+                head_ref="claude/issue-13-task-b",
+                base_ref="parent/issue-100",
+                is_cross_repository=False,
             ),
         ]
 
@@ -254,6 +268,7 @@ class TestDispatchCycleWiring:
                 456,
                 head_ref="claude/issue-12-task-a",
                 base_ref="parent/issue-100",
+                is_cross_repository=False,
                 closes_issue_numbers=(12,),
             )
         ]
@@ -304,3 +319,32 @@ class TestNoticeCandidateIssueNumbers:
         tasks = [make_task(12, status_labels=("status:done", "integration:included"))]
 
         assert notice_candidate_issue_numbers(tasks) == set()
+
+
+class TestCrossRepositoryPrs:
+    """PR#684レビュー対応(Codex P2): forkからのPRは対象Issueへ書き込ませない。"""
+
+    def _fork_pr(self, is_cross_repository: bool | None):
+        return make_pr(
+            456,
+            head_ref="claude/issue-12-task-a",
+            base_ref="parent/issue-100",
+            is_cross_repository=is_cross_repository,
+            closes_issue_numbers=(12,),
+        )
+
+    def test_skips_fork_pr(self, fake_forge: MagicMock):
+        # forkの投稿者は`parent/*`宛てに`claude/issue-{N}-...`というheadを
+        # 名乗れるため、identityを確認せずに通知すると権威ある体裁の
+        # コメントを他人のIssueへ書き込めてしまう。
+        assert notify_open_pr_links(fake_forge, [self._fork_pr(True)], {12}) == []
+        fake_forge.add_comment.assert_not_called()
+
+    def test_skips_pr_with_unknown_identity(self, fake_forge: MagicMock):
+        assert notify_open_pr_links(fake_forge, [self._fork_pr(None)], {12}) == []
+        fake_forge.add_comment.assert_not_called()
+
+    def test_notifies_upstream_pr(self, fake_forge: MagicMock):
+        events = notify_open_pr_links(fake_forge, [self._fork_pr(False)], {12})
+
+        assert [event["issue_number"] for event in events] == [12]
