@@ -93,6 +93,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.tasks",
             "integrator.worktree",
             "issue_parsing",
+            "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
             "provisioning.rendering",

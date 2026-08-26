@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -37,6 +38,10 @@ from orchestune.dispatch.phase_reconciliation import (
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.worktree import file_lock
+from orchestune.pr_link_notice import (
+    notice_expected_bases,
+    notify_open_pr_links,
+)
 
 __all__ = ["CycleReport", "run_dispatch_cycle"]
 
@@ -51,6 +56,28 @@ def _prepare_cycle_issues(run_state, config: DispatcherConfig, now: float):
     return issues.filtered_by_parent(config.parent_issue_number)
 
 
+def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
+    """#676: 親ブランチ宛てPRを、対象Issue側へコメントで相互リンクする。
+
+    GitHubは既定ブランチ以外を対象とするPRをIssueの「Development」欄へ
+    自動リンクしないため、ディスパッチャーが検知した時点で補完する。
+    通知はベストエフォートで、失敗してもサイクルを止めない。
+    """
+    if not config.apply:
+        return
+    events = notify_open_pr_links(
+        config.resolved_forge,
+        ctx.prs,
+        notice_expected_bases(ctx.tasks_by_issue.values()),
+    )
+    for event in events:
+        print(
+            f"Linked PR #{event['pr_number']} to issue #{event['issue_number']} "
+            "with a notice comment.",
+            file=sys.stderr,
+        )
+
+
 def _execute_cycle_pipeline(
     ctx, issues, run_state, config: DispatcherConfig, now: float
 ) -> CycleReport:
@@ -60,6 +87,7 @@ def _execute_cycle_pipeline(
         any_forced_serial,
         completed_subtask_ids,
     ) = _process_active_worktrees(ctx)
+    _notify_pr_links(ctx, config)
 
     completion_events = run_gc_phase(
         ctx.run_state,
