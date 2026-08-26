@@ -174,7 +174,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.is_timeout is False
         assert reclaim.process_alive is False
 
-    def test_dead_process_with_clean_worktree_is_not_a_zombie(self, tmp_path):
+    def test_dead_process_with_clean_worktree_is_reclaimed_as_zombie(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -198,7 +198,11 @@ class TestDecideZombieOrTimeoutReclaims:
                 run_state, {}, config, None, now=2_000.0
             )
 
-        assert reclaims == []
+        assert len(reclaims) == 1
+        reclaim = reclaims[0]
+        assert reclaim.reason == "process disappeared"
+        assert reclaim.is_timeout is False
+        assert reclaim.process_alive is False
 
     def test_timeout_exceeded_reclaims_with_reason_timeout(self, tmp_path):
         active = _active(started_at=1_000.0, pid=111)

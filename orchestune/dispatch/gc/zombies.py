@@ -14,7 +14,6 @@ from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
-    worktree_has_uncommitted_changes,
 )
 from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
@@ -43,16 +42,10 @@ def _check_zombie_and_timeout(
     process_alive = is_process_alive(active.pid)
 
     if zombie_enabled and not process_alive:
-        worktree_exists = os.path.exists(active.worktree_path)
-        if worktree_exists and worktree_has_uncommitted_changes(active.worktree_path):
-            is_zombie = True
-        elif not worktree_exists and active.started_at is None:
-            # #383: run_state自己修復で対応PRが見つからず復元されたエントリは
-            # started_at=None かつ物理worktreeも存在しないため、通常のゾンビ判定
-            # （worktree実在+dirty）にもタイムアウト判定（started_at必須）にも
-            # 永久に該当できずクオータを占有し続ける。プロセス不在・worktree不在・
-            # 開始時刻不明の三条件が揃った場合はゾンビ相当として回収する。
-            is_zombie = True
+        # プロセスが消えていれば、worktreeの変更有無にかかわらず当該実行は
+        # 進行不能である。clean worktree を除外すると、既定の timeout=0 では
+        # 永久にクオータを占有するため、ゾンビとして一律回収・再キューする。
+        is_zombie = True
 
     if not is_zombie and active.started_at is not None:
         if timeout_limit > 0 and exceeds_limit(now - active.started_at, timeout_limit):
