@@ -154,17 +154,23 @@ def requires_link_notice(pr: PrRecord) -> bool:
     )
 
 
-def target_issue_numbers(pr: PrRecord, known_issue_numbers: set[int]) -> list[int]:
-    """PRが対応するタスクIssueの番号を、`Closes`参照とheadブランチ名から解決する。"""
+def target_issue_numbers(pr: PrRecord, expected_bases: Mapping[int, str]) -> list[int]:
+    """PRが対応するタスクIssueの番号を、`Closes`参照とheadブランチ名から解決する。
+
+    解決した候補のうち、PRのbaseがそのIssueの親ブランチと完全に一致するものだけを
+    返す（`notice_expected_bases`参照）。
+    """
     numbers = set(pr.closes_issue_numbers)
     match = _ISSUE_BRANCH_PATTERN.match(pr.head_ref or "")
     if match:
         numbers.add(int(match.group(1)))
-    return sorted(numbers & known_issue_numbers)
+    return sorted(
+        number for number in numbers if expected_bases.get(number) == pr.base_ref
+    )
 
 
-def notice_candidate_issue_numbers(tasks: Iterable[Task]) -> set[int]:
-    """作成通知の走査対象とするタスクIssueの番号を返す。
+def notice_expected_bases(tasks: Iterable[Task]) -> dict[int, str]:
+    """作成通知の走査対象タスクと、そのIssueが本来ぶら下がる親ブランチの対応表。
 
     PR#684レビュー対応(Codex P2): 親ブランチ運用では、統合済みタスクの子PRが
     （ブランチ削除に失敗した場合などに）開いたまま残ることがある。全タスクを
@@ -172,17 +178,24 @@ def notice_candidate_issue_numbers(tasks: Iterable[Task]) -> set[int]:
     完了タスク数に比例して増え続けるため、既にクローズされたIssueと
     `integration:included`で統合を終えたタスクを候補から外す。作成通知が
     間に合わなかった分は、統合時のマージ通知が引き継ぐ。
+
+    同(Codex P2): 値として期待される親ブランチ名を持たせ、`parent/`接頭辞だけの
+    照合にしない。別の親（例: `parent/issue-200`）宛てのPRが`Closes`やhead名で
+    このサイクルの子Issueを参照しているだけで通知してしまうと、無関係なPRを
+    「このIssueに対応するPR」として書き込むことになる。親が特定できないタスクは
+    照合できないため、fail closedで候補から外す。
     """
     return {
-        task.issue_number
+        task.issue_number: f"{PARENT_BRANCH_PREFIX}issue-{task.parent_number}"
         for task in tasks
-        if task.issue_state != "CLOSED"
+        if task.parent_number is not None
+        and task.issue_state != "CLOSED"
         and "integration:included" not in task.status_labels
     }
 
 
 def notify_open_pr_links(
-    forge: Forge, prs: Iterable[PrRecord], known_issue_numbers: set[int]
+    forge: Forge, prs: Iterable[PrRecord], expected_bases: Mapping[int, str]
 ) -> list[dict[str, Any]]:
     """親ブランチ宛てのオープンPRについて、未通知の対象Issueへ通知を投稿する。
 
@@ -193,7 +206,7 @@ def notify_open_pr_links(
     for pr in prs:
         if not requires_link_notice(pr):
             continue
-        for issue_number in target_issue_numbers(pr, known_issue_numbers):
+        for issue_number in target_issue_numbers(pr, expected_bases):
             if notify_pr_created(forge, issue_number, pr.number, pr.base_ref):
                 events.append(
                     {
@@ -210,7 +223,7 @@ __all__ = [
     "KIND_MERGED",
     "ensure_pr_merged_notice",
     "has_notice",
-    "notice_candidate_issue_numbers",
+    "notice_expected_bases",
     "notice_marker",
     "notify_open_pr_links",
     "notify_pr_created",

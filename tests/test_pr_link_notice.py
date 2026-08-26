@@ -17,7 +17,7 @@ from orchestune.pr_link_notice import (
     KIND_MERGED,
     ensure_pr_merged_notice,
     has_notice,
-    notice_candidate_issue_numbers,
+    notice_expected_bases,
     notice_marker,
     notify_open_pr_links,
     notify_pr_created,
@@ -149,7 +149,7 @@ class TestNotifyOpenPrLinks:
             closes_issue_numbers=(12,),
         )
 
-        events = notify_open_pr_links(fake_forge, [pr], {12})
+        events = notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"})
 
         assert events == [{"issue_number": 12, "pr_number": 456, "kind": KIND_CREATED}]
         fake_forge.add_comment.assert_called_once()
@@ -164,7 +164,7 @@ class TestNotifyOpenPrLinks:
             is_cross_repository=False,
         )
 
-        events = notify_open_pr_links(fake_forge, [pr], {12})
+        events = notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"})
 
         assert [event["issue_number"] for event in events] == [12]
 
@@ -178,7 +178,7 @@ class TestNotifyOpenPrLinks:
             closes_issue_numbers=(12,),
         )
 
-        assert notify_open_pr_links(fake_forge, [pr], {12}) == []
+        assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
         fake_forge.add_comment.assert_not_called()
 
     def test_skips_issues_outside_the_known_set(self, fake_forge: MagicMock):
@@ -190,7 +190,7 @@ class TestNotifyOpenPrLinks:
             closes_issue_numbers=(77,),
         )
 
-        assert notify_open_pr_links(fake_forge, [pr], {12}) == []
+        assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
         fake_forge.add_comment.assert_not_called()
 
     def test_skips_prs_without_resolvable_issue(self, fake_forge: MagicMock):
@@ -201,7 +201,7 @@ class TestNotifyOpenPrLinks:
             is_cross_repository=False,
         )
 
-        assert notify_open_pr_links(fake_forge, [pr], {12}) == []
+        assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
         fake_forge.add_comment.assert_not_called()
 
     def test_does_not_repost_for_an_already_notified_pr(self, fake_forge: MagicMock):
@@ -216,7 +216,7 @@ class TestNotifyOpenPrLinks:
             closes_issue_numbers=(12,),
         )
 
-        assert notify_open_pr_links(fake_forge, [pr], {12}) == []
+        assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
         fake_forge.add_comment.assert_not_called()
 
     def test_one_pr_failure_does_not_stop_the_remaining_prs(
@@ -238,7 +238,9 @@ class TestNotifyOpenPrLinks:
             ),
         ]
 
-        events = notify_open_pr_links(fake_forge, prs, {12, 13})
+        events = notify_open_pr_links(
+            fake_forge, prs, {12: "parent/issue-100", 13: "parent/issue-100"}
+        )
 
         assert [event["issue_number"] for event in events] == [13]
 
@@ -291,34 +293,73 @@ class TestDispatchCycleWiring:
         fake_forge.add_comment.assert_not_called()
 
 
-class TestNoticeCandidateIssueNumbers:
-    """通知の走査対象を、まだ統合が終わっていないタスクに限定する。
+class TestNoticeExpectedBases:
+    """通知の走査対象を、まだ統合が終わっていないタスクに限定し、そのタスクが
+    ぶら下がる親ブランチ名を対応付ける。
 
     親ブランチ運用では完了済みタスクのPRが開いたまま残ることがあり、
     全件を毎サイクル走査すると`list_comments`の呼び出しが完了タスク数に比例して
     増え続ける。
     """
 
-    def test_includes_open_tasks(self):
-        tasks = [make_task(12, status_labels=("status:in-progress",))]
+    def test_maps_open_tasks_to_their_parent_branch(self):
+        tasks = [
+            make_task(12, status_labels=("status:in-progress",), parent_number=100)
+        ]
 
-        assert notice_candidate_issue_numbers(tasks) == {12}
+        assert notice_expected_bases(tasks) == {12: "parent/issue-100"}
 
     def test_includes_done_tasks_not_yet_integrated(self):
         # 完了直後にPRが作成された場合でも、作成通知を投稿する余地を残す。
-        tasks = [make_task(12, status_labels=("status:done",))]
+        tasks = [make_task(12, status_labels=("status:done",), parent_number=100)]
 
-        assert notice_candidate_issue_numbers(tasks) == {12}
+        assert notice_expected_bases(tasks) == {12: "parent/issue-100"}
 
     def test_excludes_closed_issues(self):
-        tasks = [make_task(12, status_labels=("status:done",), issue_state="CLOSED")]
+        tasks = [
+            make_task(
+                12,
+                status_labels=("status:done",),
+                issue_state="CLOSED",
+                parent_number=100,
+            )
+        ]
 
-        assert notice_candidate_issue_numbers(tasks) == set()
+        assert notice_expected_bases(tasks) == {}
 
     def test_excludes_already_integrated_tasks(self):
-        tasks = [make_task(12, status_labels=("status:done", "integration:included"))]
+        tasks = [
+            make_task(
+                12,
+                status_labels=("status:done", "integration:included"),
+                parent_number=100,
+            )
+        ]
 
-        assert notice_candidate_issue_numbers(tasks) == set()
+        assert notice_expected_bases(tasks) == {}
+
+    def test_excludes_tasks_without_a_parent(self):
+        # 親が特定できないタスクは、PRのbaseと照合する基準を持たない。
+        tasks = [make_task(12, status_labels=("status:in-progress",))]
+
+        assert notice_expected_bases(tasks) == {}
+
+
+class TestBaseBranchMustMatchTheTaskParent:
+    """PR#684レビュー対応(Codex P2): `parent/`接頭辞だけでなく、そのIssueの
+    親ブランチと完全に一致するPRだけを通知する。"""
+
+    def test_skips_pr_targeting_another_parent_branch(self, fake_forge: MagicMock):
+        pr = make_pr(
+            456,
+            head_ref="claude/issue-12-task-a",
+            base_ref="parent/issue-200",
+            is_cross_repository=False,
+            closes_issue_numbers=(12,),
+        )
+
+        assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
+        fake_forge.add_comment.assert_not_called()
 
 
 class TestCrossRepositoryPrs:
@@ -337,14 +378,26 @@ class TestCrossRepositoryPrs:
         # forkの投稿者は`parent/*`宛てに`claude/issue-{N}-...`というheadを
         # 名乗れるため、identityを確認せずに通知すると権威ある体裁の
         # コメントを他人のIssueへ書き込めてしまう。
-        assert notify_open_pr_links(fake_forge, [self._fork_pr(True)], {12}) == []
+        assert (
+            notify_open_pr_links(
+                fake_forge, [self._fork_pr(True)], {12: "parent/issue-100"}
+            )
+            == []
+        )
         fake_forge.add_comment.assert_not_called()
 
     def test_skips_pr_with_unknown_identity(self, fake_forge: MagicMock):
-        assert notify_open_pr_links(fake_forge, [self._fork_pr(None)], {12}) == []
+        assert (
+            notify_open_pr_links(
+                fake_forge, [self._fork_pr(None)], {12: "parent/issue-100"}
+            )
+            == []
+        )
         fake_forge.add_comment.assert_not_called()
 
     def test_notifies_upstream_pr(self, fake_forge: MagicMock):
-        events = notify_open_pr_links(fake_forge, [self._fork_pr(False)], {12})
+        events = notify_open_pr_links(
+            fake_forge, [self._fork_pr(False)], {12: "parent/issue-100"}
+        )
 
         assert [event["issue_number"] for event in events] == [12]

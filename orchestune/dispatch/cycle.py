@@ -39,7 +39,7 @@ from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.worktree import file_lock
 from orchestune.pr_link_notice import (
-    notice_candidate_issue_numbers,
+    notice_expected_bases,
     notify_open_pr_links,
 )
 
@@ -68,7 +68,7 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
     events = notify_open_pr_links(
         config.resolved_forge,
         ctx.prs,
-        notice_candidate_issue_numbers(ctx.tasks_by_issue.values()),
+        notice_expected_bases(ctx.tasks_by_issue.values()),
     )
     for event in events:
         print(
