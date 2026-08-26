@@ -186,6 +186,55 @@ class TestCycleReportSection:
         content = summary_file.read_text(encoding="utf-8")
         assert "| `task-unlock-42` | #42 | 🔓 ロック解除 |" in content
 
+    def test_renders_selected_tasks_with_execution_profile_and_model(self, tmp_path):
+        from orchestune.dispatch.cycle_report import build_event_log_entry
+        from orchestune.dispatch.execution_profiles import ExecutionSelection
+        from orchestune.dispatch.report import _report_to_dict
+
+        summary_file = tmp_path / "step_summary.md"
+        task = _task(
+            issue_number=10,
+            subtask_id="task-profile-10",
+            priority="high",
+            execution_profile="deep",
+        )
+        selection = ExecutionSelection(
+            profile="deep",
+            model="claude-3-7-sonnet-20250219",
+            reasoning_effort="high",
+            reason="test",
+        )
+        cycle_report = _cycle_report(
+            selected=[task],
+            execution_selections={10: selection},
+        )
+
+        write_github_step_summary(
+            cycle_report=cycle_report,
+            integrator_report=None,
+            summary_path=str(summary_file),
+        )
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "### 🚀 新規起動タスク" in content
+        assert (
+            "| `task-profile-10` | #10 | high | `deep` | `claude-3-7-sonnet-20250219` |"
+            in content
+        )
+
+        event_log = build_event_log_entry(cycle_report, 1000.0)
+        assert event_log["selected"][0]["issue_number"] == 10
+        assert event_log["selected"][0]["execution_profile"] == "deep"
+        assert event_log["selected"][0]["model"] == "claude-3-7-sonnet-20250219"
+        assert event_log["selected"][0]["reasoning_effort"] == "high"
+
+        report_dict = _report_to_dict(cycle_report)
+        assert "10" in report_dict["execution_selections"]
+        assert (
+            report_dict["execution_selections"]["10"]["model"]
+            == "claude-3-7-sonnet-20250219"
+        )
+
 
 class TestWriteFailureFallback:
     def test_warns_on_stderr_when_summary_path_is_unwritable(self, tmp_path, capsys):

@@ -466,3 +466,88 @@ class TestBackfillLaunchHistory:
         result = backfill_launch_history(body, [1.5, 2.5, 3.5])
         assert result is not None
         assert launch_history_from_body(result) == [1.5, 2.5, 3.5]
+
+
+class TestExecutionProfileFromBody:
+    """Footprint YAMLからのexecution_profile抽出とバリデーション。"""
+
+    def test_parses_valid_execution_profile(self):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        issue = IssueRecord(
+            number=1,
+            title="[FEAT] task-a: test",
+            body=(
+                "```yaml\n"
+                "subtask_id: task-a\n"
+                "footprint: [src/foo.py]\n"
+                "symbols: [Foo]\n"
+                "depends_on: []\n"
+                "execution_profile: fast-code_1\n"
+                "```\n"
+            ),
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        task = parse_task_from_issue(issue)
+        assert task.execution_profile == "fast-code_1"
+
+    def test_execution_profile_defaults_to_none_when_absent_or_null(self):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        issue_absent = IssueRecord(
+            number=1,
+            title="[FEAT] task-a: test",
+            body="```yaml\nsubtask_id: task-a\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert parse_task_from_issue(issue_absent).execution_profile is None
+
+        issue_null = IssueRecord(
+            number=2,
+            title="[FEAT] task-b: test",
+            body="```yaml\nsubtask_id: task-b\nexecution_profile: null\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert parse_task_from_issue(issue_null).execution_profile is None
+
+    @pytest.mark.parametrize(
+        "invalid_profile",
+        [
+            "Fast-code",
+            "fast code",
+            "fast.code",
+            "fast@code",
+            "",
+            "a" * 33,
+            123,
+            True,
+            ["list"],
+            {"dict": "val"},
+        ],
+    )
+    def test_invalid_execution_profile_falls_back_to_none_safely(self, invalid_profile):
+        import yaml
+
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        data = {
+            "subtask_id": "task-a",
+            "execution_profile": invalid_profile,
+        }
+        body = f"```yaml\n{yaml.dump(data)}```\n"
+        issue = IssueRecord(
+            number=1,
+            title="[FEAT] task-a: test",
+            body=body,
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        task = parse_task_from_issue(issue)
+        assert task.execution_profile is None
+        assert task.yaml_error is False

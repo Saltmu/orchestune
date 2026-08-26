@@ -80,6 +80,7 @@ subtasks:
     * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
+* **`execution_profile`** (文字列または`null`, 任意, 既定値 `null`): サブタスクを実行するエージェントの抽象実行プロファイル名（例: `fast-code`、`deep-reasoning`）。英小文字・数字・ハイフン・アンダースコアで構成され、32文字以内である必要があります。
 * **`issue_number`** (整数または`null`, 任意, 既定値 `null`): このサブタスクのIssue番号。**手動で設定しないでください** — `orchestune provision`がこのサブタスクのIssue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。設定済みの場合、`orchestune provision`はそのサブタスクのIssueを再作成せず再利用します。
 
 ### 計画ファイルのライフサイクルと親Issueへの永続化（方針 (b)）
@@ -248,6 +249,30 @@ max-concurrent = 2
 dispatch-target = "claude-cli"
 parent-issue = 181
 run-state-path = "run_state.json"
+default_execution_profile = "balanced"
+
+[execution_profiles.balanced.claude-cli]
+model = "claude-3-5-haiku-20241022"
+
+[execution_profiles.balanced.codex-cli]
+model = "gpt-4o-mini"
+reasoning_effort = "low"
+
+[execution_profiles.deep-reasoning.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+
+[execution_profiles.deep-reasoning.codex-cli]
+model = "o3-mini"
+reasoning_effort = "high"
+
+[execution_profiles.deep-reasoning.cloud-routine]
+model = "claude-3-7-sonnet-20250219"
+
+[execution_profiles.fast-code.claude-cli]
+model = "claude-3-5-sonnet-20241022"
+
+[execution_profiles.fast-code.codex-cli]
+model = "gpt-4o"
 ```
 
 #### 設定ファイルの記述例 (`pyproject.toml`)
@@ -257,12 +282,29 @@ max-concurrent = 2
 dispatch-target = "claude-cli"
 parent-issue = 181
 run-state-path = "run_state.json"
+default_execution_profile = "balanced"
+
+[tool.orchestune.execution_profiles.balanced.claude-cli]
+model = "claude-3-5-haiku-20241022"
+
+[tool.orchestune.execution_profiles.balanced.codex-cli]
+model = "gpt-4o-mini"
+reasoning_effort = "low"
+
+[tool.orchestune.execution_profiles.deep-reasoning.claude-cli]
+model = "claude-3-7-sonnet-20250219"
+
+[tool.orchestune.execution_profiles.deep-reasoning.codex-cli]
+model = "o3-mini"
+reasoning_effort = "high"
 ```
 
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
 > 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
+>
+> `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 
 ---
 

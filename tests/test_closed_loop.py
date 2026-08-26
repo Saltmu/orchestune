@@ -289,6 +289,7 @@ class DummyAgentDispatchTarget(DispatchTarget):
         worktree_path: Path,
         *,
         force_push: bool = False,
+        execution_selection=None,
     ) -> DispatchHandle:
         # Run agent task scenario synchronously
         self.run_scenario_func(task, branch_name, worktree_path)

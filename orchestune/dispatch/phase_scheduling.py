@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
@@ -15,6 +15,10 @@ from orchestune.dispatch.actor_verification import (
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.execution_profiles import (
+    ExecutionSelection,
+    resolve_execution_profile,
+)
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
     _filter_deviation_blocked_candidates,
@@ -50,6 +54,7 @@ class SchedulingPhaseResult:
     selected: list[Task]
     quota_slots_available: int
     decisions: list[SchedulingDecision]
+    execution_selections: dict[int, ExecutionSelection] = field(default_factory=dict)
 
 
 def _filter_queued_candidates(
@@ -209,10 +214,19 @@ def run_scheduling_phase(
     selected = _finalize_launch(
         scheduling.selected, task_to_base_branch, candidate_tasks, ctx, now, config
     )
+    execution_selections = {
+        task.issue_number: resolve_execution_profile(
+            task.execution_profile,
+            config.dispatch_target,
+            config.execution_profile_config,
+        )
+        for task in selected
+    }
     return SchedulingPhaseResult(
         selected=selected,
         quota_slots_available=quota_slots,
         # 実起動は選出の部分集合になり得る（起動枠の予約失敗・起動失敗）。
         # レポートが実態と食い違わないよう、起動結果で判定を突き合わせる。
         decisions=reconcile_decisions_with_launches(scheduling.decisions, selected),
+        execution_selections=execution_selections,
     )

@@ -144,6 +144,44 @@ class TestRenderIssueBodySubtaskIdSafety:
         assert data["shared_contract"] == "plugin-registry"
         assert data["writes_shared_contract"] is True
 
+    def test_execution_profile_metadata_round_trips_in_real_template(
+        self, template_path: Path
+    ):
+        subtask = SubTask(
+            id="task-profile",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            execution_profile="fast-code_1",
+        )
+
+        body = _render_issue_body(subtask, template_path.read_text(encoding="utf-8"))
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["execution_profile"] == "fast-code_1"
+
+    def test_execution_profile_renders_null_when_none(self, template_path: Path):
+        subtask = SubTask(
+            id="task-profile-none",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            execution_profile=None,
+        )
+
+        body = _render_issue_body(subtask, template_path.read_text(encoding="utf-8"))
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["execution_profile"] is None
+
     def test_a_fields_own_value_is_not_reprocessed_as_a_template_token(self):
         """#323 review (P2): substituting one field at a time (as opposed to
         a single pass over the original template) means an earlier field's
@@ -185,6 +223,7 @@ class TestValidateTemplateIdentityMarker:
             "```yaml\n"
             "subtask_id: {{subtask_id_yaml}}\n"
             "parent_issue_number: {{parent_issue_number}}\n"
+            "execution_profile: {{execution_profile}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="depends_on"):
@@ -198,6 +237,7 @@ class TestValidateTemplateIdentityMarker:
             "```yaml\n"
             "subtask_id: {{subtask_id_yaml}}\n"
             "depends_on: {{depends_on}}\n"
+            "execution_profile: {{execution_profile}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="parent_issue_number"):
@@ -209,9 +249,39 @@ class TestValidateTemplateIdentityMarker:
             "```yaml\n"
             "parent_issue_number: {{parent_issue_number}}\n"
             "depends_on: {{depends_on}}\n"
+            "execution_profile: {{execution_profile}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="subtask_id"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_missing_execution_profile_placeholder(
+        self, tmp_path: Path
+    ):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="execution_profile"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_with_quoted_execution_profile_placeholder(
+        self, tmp_path: Path
+    ):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            'execution_profile: "{{execution_profile}}"\n'
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="execution_profile"):
             _validate_template_identity_marker(template, tmp_path / "t.md")
 
 

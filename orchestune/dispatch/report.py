@@ -111,12 +111,29 @@ def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
     if not cycle_report.selected:
         lines.append("今回新たに起動されたタスクはありません。\n")
     else:
-        lines.append("| サブタスクID | Issue番号 | 優先度 |")
-        lines.append("| --- | --- | --- |")
-        for task in cycle_report.selected:
+        has_profiles = any(
+            t.issue_number in cycle_report.execution_selections or t.execution_profile
+            for t in cycle_report.selected
+        )
+        if has_profiles or cycle_report.execution_selections:
             lines.append(
-                f"| `{task.subtask_id}` | #{task.issue_number} | {task.priority} |"
+                "| サブタスクID | Issue番号 | 優先度 | プロファイル | モデル |"
             )
+            lines.append("| --- | --- | --- | --- | --- |")
+            for task in cycle_report.selected:
+                sel = cycle_report.execution_selections.get(task.issue_number)
+                prof = sel.profile if sel else (task.execution_profile or "-")
+                mdl = sel.model if (sel and sel.model) else "-"
+                lines.append(
+                    f"| `{task.subtask_id}` | #{task.issue_number} | {task.priority} | `{prof}` | `{mdl}` |"
+                )
+        else:
+            lines.append("| サブタスクID | Issue番号 | 優先度 |")
+            lines.append("| --- | --- | --- |")
+            for task in cycle_report.selected:
+                lines.append(
+                    f"| `{task.subtask_id}` | #{task.issue_number} | {task.priority} |"
+                )
         lines.append("")
 
     lines.append("### 🔒 外部ロック（External Lock）変更")
@@ -177,4 +194,10 @@ def _report_to_dict(report: CycleReport) -> dict:
         "scheduling_decisions": [
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
+        "execution_selections": {
+            str(issue): dataclasses.asdict(sel)
+            for issue, sel in report.execution_selections.items()
+        }
+        if report.execution_selections
+        else {},
     }

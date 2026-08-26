@@ -67,6 +67,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
        depends_on: []
        priority: medium    # high, medium, low (default: medium)
        risk: false         # true if touching API keys, credentials, or risky subprocesses
+       execution_profile: null  # e.g. "fast-code", "deep-reasoning" (abstract execution profile name)
        shared_contract: null  # e.g. "format-registry" — tag subtasks sharing an unestablished extension point (see Stage 1 "Shared-contract gate")
        writes_shared_contract: false  # true if this subtask's footprint writes to the shared_contract file under a name orchestune-dag's category patterns won't recognize (usually unnecessary — footprint matches are auto-detected)
        issue_number: null  # filled in by orchestune-provision once this subtask's issue exists

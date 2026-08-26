@@ -425,3 +425,56 @@ class TestDocsExistenceVerificationConsistency:
         section = _section(lang, 3)
         marker = "同時に" if lang == "ja" else "at once"
         assert marker in section
+
+
+class TestDocsExecutionProfilesConsistency:
+    """#670: Usageに記載されたExecution Profilesの設定例とスキーマの乖離を検証する。"""
+
+    _TOML_FENCE_PATTERN = re.compile(r"```toml\n(.*?)```", re.DOTALL)
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_toml_execution_profile_examples_are_valid_and_extractable(self, lang):
+        from orchestune.dispatch.execution_profiles import (
+            extract_execution_profile_config,
+        )
+
+        section = _section(lang, 4)
+        toml_blocks = self._TOML_FENCE_PATTERN.findall(section)
+        assert (
+            len(toml_blocks) >= 2
+        ), f"{lang}のUsage ## 4.節にTOML設定例が見つかりません"
+
+        # Check orchestune.toml example
+        orchestune_toml = tomllib.loads(toml_blocks[0])
+        config_orchestune = extract_execution_profile_config(orchestune_toml)
+        assert config_orchestune.default_execution_profile == "balanced"
+        assert "balanced" in config_orchestune.profiles
+        assert "deep-reasoning" in config_orchestune.profiles
+
+        # Check pyproject.toml example
+        pyproject_toml = tomllib.loads(toml_blocks[1])
+        tool_section = pyproject_toml.get("tool", {}).get("orchestune", {})
+        config_pyproject = extract_execution_profile_config(tool_section)
+        assert config_pyproject.default_execution_profile == "balanced"
+        assert "balanced" in config_pyproject.profiles
+        assert "deep-reasoning" in config_pyproject.profiles
+
+    def test_ja_and_en_execution_profile_configs_match(self):
+        from orchestune.dispatch.execution_profiles import (
+            extract_execution_profile_config,
+        )
+
+        ja_blocks = self._TOML_FENCE_PATTERN.findall(_section("ja", 4))
+        en_blocks = self._TOML_FENCE_PATTERN.findall(_section("en", 4))
+
+        ja_cfg1 = extract_execution_profile_config(tomllib.loads(ja_blocks[0]))
+        en_cfg1 = extract_execution_profile_config(tomllib.loads(en_blocks[0]))
+        assert ja_cfg1 == en_cfg1
+
+        ja_cfg2 = extract_execution_profile_config(
+            tomllib.loads(ja_blocks[1])["tool"]["orchestune"]
+        )
+        en_cfg2 = extract_execution_profile_config(
+            tomllib.loads(en_blocks[1])["tool"]["orchestune"]
+        )
+        assert ja_cfg2 == en_cfg2

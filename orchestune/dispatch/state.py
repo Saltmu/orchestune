@@ -32,6 +32,10 @@ class ActiveWorktree:
     # `estimated_tokens=None`が「起動時に不明として記録済み」なのか、本フィールド
     # 導入前の状態で未記録なのかを区別する。後者だけ現行cost modelへ縮退する。
     token_estimate_recorded: bool = False
+    profile: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    selection_reason: str | None = None
 
 
 @dataclass
@@ -50,6 +54,10 @@ class CompletedWorktree:
     commit_sha: str | None = None
     base_branch: str = "origin/main"
     usage: Usage | None = None
+    profile: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    selection_reason: str | None = None
 
 
 @dataclass
@@ -148,11 +156,8 @@ def _parse_lookup_cursor(value: object) -> int:
     return value
 
 
-def load_run_state(path: str | Path) -> RunState:
-    data = read_json_with_recovery(path, label="run_state.json")
-    if data is None:
-        return RunState(active_worktrees={}, launch_history=[])
-    active_worktrees = {
+def _parse_active_worktrees(data: dict) -> dict[str, ActiveWorktree]:
+    return {
         key: ActiveWorktree(
             issue_number=value["issue_number"],
             branch=value["branch"],
@@ -169,10 +174,17 @@ def load_run_state(path: str | Path) -> RunState:
             token_estimate_recorded=value.get(
                 "token_estimate_recorded", "estimated_tokens" in value
             ),
+            profile=value.get("profile"),
+            model=value.get("model"),
+            reasoning_effort=value.get("reasoning_effort"),
+            selection_reason=value.get("selection_reason"),
         )
         for key, value in data.get("active_worktrees", {}).items()
     }
-    completed_worktrees = [
+
+
+def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
+    return [
         CompletedWorktree(
             issue_number=value["issue_number"],
             subtask_id=value["subtask_id"],
@@ -184,13 +196,24 @@ def load_run_state(path: str | Path) -> RunState:
             commit_sha=value.get("commit_sha"),
             base_branch=value.get("base_branch", "origin/main"),
             usage=Usage(**value["usage"]) if value.get("usage") else None,
+            profile=value.get("profile"),
+            model=value.get("model"),
+            reasoning_effort=value.get("reasoning_effort"),
+            selection_reason=value.get("selection_reason"),
         )
         for value in data.get("completed_worktrees", [])
     ]
+
+
+def load_run_state(path: str | Path) -> RunState:
+    data = read_json_with_recovery(path, label="run_state.json")
+    if data is None:
+        return RunState(active_worktrees={}, launch_history=[])
+
     return RunState(
-        active_worktrees=active_worktrees,
+        active_worktrees=_parse_active_worktrees(data),
         launch_history=list(data.get("launch_history", [])),
-        completed_worktrees=completed_worktrees,
+        completed_worktrees=_parse_completed_worktrees(data),
         last_reconciled_at=data.get("last_reconciled_at"),
         task_reclaim_counts=_parse_task_reclaim_counts(data.get("task_reclaim_counts")),
         task_reclaim_lookup_cursor=_parse_lookup_cursor(
