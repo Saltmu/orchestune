@@ -416,12 +416,12 @@ class TestReclaimRetryBound:
         """PR#520レビュー7巡目対応(Codex P1): GitHubへの反映が失敗しても、
         帳簿エントリがスロットを占有し続けない。
 
-        worktreeは削除済みなので、タイムアウト判定が無効な構成では
+        ローカルプロセスが消え、worktreeが削除済みなので、タイムアウト判定が無効な構成では
         `started_at`を未知へ落として#383のゾンビ復旧経路に載せる。
         """
         worktree = tmp_path / "wt-280"
         worktree.mkdir()
-        active = _active(worktree_path=str(worktree))
+        active = _active(worktree_path=str(worktree), pid=4242)
         run_state = RunState(active_worktrees={"280": active})
         config = _config(
             tmp_path,
