@@ -828,21 +828,35 @@ class TestChildIssueCloseNotice:
     自動リンクしないため、クローズコメント自体を相互リンクの通知として使う。
     """
 
-    def test_close_comment_links_the_integration_pr(
+    def test_notice_is_posted_before_the_issue_is_closed(
         self, integrator_env: IntegratorEnv, fake_forge
     ):
+        # PR#684レビュー対応(Codex P2): クローズコメントに通知を同梱すると、
+        # クローズが失敗した場合に`RetryChildIssueCloseStep`が汎用コメントで
+        # クローズし直し、PRリンクが恒久的に失われる。クローズより前に独立した
+        # コメントとして通知を残す。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        call_order: list[str] = []
+        integrator_env.add_comment.side_effect = lambda *a, **k: call_order.append(
+            "add_comment"
+        )
+        integrator_env.close_issue.side_effect = lambda *a, **k: call_order.append(
+            "close_issue"
+        )
 
         res = Integrator(_child_config()).run()
 
         assert res["closed_issues"] == [1]
-        comment = integrator_env.close_issue.call_args.kwargs["comment"]
-        assert notice_marker(KIND_MERGED, 999) in comment
-        assert "#999" in comment
-        assert "parent/issue-100" in comment
-        fake_forge.list_comments.assert_any_call(1)
+        assert call_order == ["add_comment", "close_issue"]
+        issue_number, body = integrator_env.add_comment.call_args.args
+        assert issue_number == 1
+        assert notice_marker(KIND_MERGED, 999) in body
+        assert "#999" in body
+        assert "parent/issue-100" in body
+        integrator_env.close_issue.assert_called_once_with(1, "completed", comment=None)
 
-    def test_close_without_comment_when_already_notified(
+    def test_does_not_repost_the_notice_when_already_present(
         self, integrator_env: IntegratorEnv, fake_forge
     ):
         # 前サイクルで通知済み（クローズだけが失敗した）場合に、同じ通知を
@@ -859,7 +873,22 @@ class TestChildIssueCloseNotice:
         res = Integrator(_child_config()).run()
 
         assert res["closed_issues"] == [1]
+        integrator_env.add_comment.assert_not_called()
         integrator_env.close_issue.assert_called_once_with(1, "completed", comment=None)
+
+    def test_falls_back_to_the_close_comment_when_the_notice_cannot_be_posted(
+        self, integrator_env: IntegratorEnv
+    ):
+        # 独立コメントの投稿に失敗した場合の最後の手段として、クローズコメント
+        # そのものに通知を載せる。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.add_comment.side_effect = RuntimeError("API unavailable")
+
+        res = Integrator(_child_config()).run()
+
+        assert res["closed_issues"] == [1]
+        comment = integrator_env.close_issue.call_args.kwargs["comment"]
+        assert notice_marker(KIND_MERGED, 999) in comment
 
     def test_falls_back_to_plain_comment_without_an_integration_pr(
         self, integrator_env: IntegratorEnv

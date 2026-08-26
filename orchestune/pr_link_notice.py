@@ -106,24 +106,36 @@ def notify_pr_created(
     return True
 
 
-def merged_notice_if_new(
+def ensure_pr_merged_notice(
     forge: Forge, issue_number: int, pr_number: int, base_branch: str
-) -> str | None:
-    """通知済みでなければマージ完了通知の本文を返す（通知済みなら`None`）。
+) -> bool:
+    """マージ完了通知がIssueに存在する状態を保証し、成否を返す。
 
-    Integratorは`close_issue`の`comment`として渡すため、投稿自体はここでは
-    行わない。クローズとコメントを1回のAPI呼び出しに束ねることで、
-    「コメントは残ったがクローズに失敗した」中途半端な状態を作らない。
+    既に投稿済みなら何もせず`True`を返す。投稿自体に失敗した場合だけ`False`を
+    返し、呼び出し側に最後の手段（クローズコメントへの同梱）を委ねる。
 
-    PR#684レビュー対応(Codex P2): 通知済みかどうかを判定できなかった場合は、
-    作成通知(`notify_pr_created`)とは逆に**fail open**で本文を返す。マージ通知は
-    Issueをクローズする最後の書き込みであり、クローズ済みIssueは以降のサイクルで
-    統合対象から外れる（`PrepareTasksStep`）ため再試行の機会がない。ここで
-    見送るとPRリンクが恒久的に失われるので、重複コメントの可能性を受け入れる。
+    PR#684レビュー対応(Codex P2): Integratorは**Issueをクローズする前に**
+    これを呼ぶ。クローズコメントに通知を同梱すると、クローズが失敗した場合に
+    次サイクルの`RetryChildIssueCloseStep`が汎用コメントでクローズし直し、
+    その時点では統合PR番号も失われているため、PRリンクが恒久的に失われる。
+
+    通知済みかどうかを判定できなかった場合は、作成通知(`notify_pr_created`)とは
+    逆に**fail open**で投稿する。クローズ済みIssueは以降のサイクルで統合対象から
+    外れる（`PrepareTasksStep`）ため再試行の機会がなく、ここで見送ると通知が
+    永久に失われる。重複コメントの可能性より通知の欠落を避ける。
     """
     if _already_notified(forge, issue_number, KIND_MERGED, pr_number) is True:
-        return None
-    return render_merged_notice(pr_number, base_branch)
+        return True
+    try:
+        forge.add_comment(issue_number, render_merged_notice(pr_number, base_branch))
+    except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
+        print(
+            f"Warning: Failed to post the merged PR link notice for PR "
+            f"#{pr_number} on issue #{issue_number}: {error}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def requires_link_notice(pr: PrRecord) -> bool:
@@ -184,8 +196,8 @@ def notify_open_pr_links(
 __all__ = [
     "KIND_CREATED",
     "KIND_MERGED",
+    "ensure_pr_merged_notice",
     "has_notice",
-    "merged_notice_if_new",
     "notice_candidate_issue_numbers",
     "notice_marker",
     "notify_open_pr_links",

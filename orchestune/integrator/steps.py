@@ -29,7 +29,10 @@ from orchestune.integrator.types import (
     IntegrationStatus,
 )
 from orchestune.integrator.worktree import IntegrationWorktree
-from orchestune.pr_link_notice import merged_notice_if_new
+from orchestune.pr_link_notice import (
+    ensure_pr_merged_notice,
+    render_merged_notice,
+)
 
 
 @contextmanager
@@ -787,25 +790,32 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
 
 def _close_comment(ctx: IntegrationContext, issue_number: int) -> str | None:
-    """#676: 子Issueのクローズコメントを、統合PRへのリンク通知として組み立てる。
+    """#676: マージ完了通知をクローズ前に残し、クローズコメントを決める。
 
     GitHubは既定ブランチ以外を対象とするPRをIssueの「Development」欄へ自動
-    リンクしないため、このコメントが子Issue側から親ブランチへのマージを辿る
-    唯一の手掛かりになる。既に同じPRの通知を投稿済みなら`None`を返し、
-    クローズだけを再試行できるようにする（前サイクルでクローズのみ失敗した
-    場合に同じ通知を二重投稿しないため）。
+    リンクしないため、この通知が子Issue側から親ブランチへのマージを辿る唯一の
+    手掛かりになる。PR#684レビュー対応(Codex P2): 通知はクローズコメントに
+    同梱せず、クローズ**前**に独立したコメントとして投稿する。同梱すると、
+    クローズだけが失敗した場合に次サイクルの`RetryChildIssueCloseStep`が
+    （統合PR番号を復元できないまま）汎用コメントでクローズし直し、リンクが
+    恒久的に失われる。
+
+    戻り値は`close_issue`へ渡すコメント本文:
+    - 通知を残せた場合は`None`（重複を避け、クローズだけを行う）
+    - 通知の投稿に失敗した場合は最後の手段として通知本文そのもの
+    - リンクすべき統合PRが無い場合は従来どおりの文面
     """
+    base_branch = ctx.base_branch.removeprefix("origin/")
     if ctx.integration_pr_number is None:
         return (
             "Integratorが親ブランチへの自動マージを完了したため、"
             "このIssueを自動的にクローズしました。"
         )
-    return merged_notice_if_new(
-        ctx.forge,
-        issue_number,
-        ctx.integration_pr_number,
-        ctx.base_branch.removeprefix("origin/"),
-    )
+    if ensure_pr_merged_notice(
+        ctx.forge, issue_number, ctx.integration_pr_number, base_branch
+    ):
+        return None
+    return render_merged_notice(ctx.integration_pr_number, base_branch)
 
 
 __all__ = [

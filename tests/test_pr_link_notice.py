@@ -15,8 +15,8 @@ from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.pr_link_notice import (
     KIND_CREATED,
     KIND_MERGED,
+    ensure_pr_merged_notice,
     has_notice,
-    merged_notice_if_new,
     notice_candidate_issue_numbers,
     notice_marker,
     notify_open_pr_links,
@@ -104,19 +104,39 @@ class TestNotifyPrCreated:
         assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is False
 
 
-class TestMergedNoticeIfNew:
-    def test_returns_notice_body_when_not_yet_posted(self, fake_forge: MagicMock):
-        body = merged_notice_if_new(fake_forge, 12, 456, "parent/issue-100")
+class TestEnsurePrMergedNotice:
+    def test_posts_when_not_yet_notified(self, fake_forge: MagicMock):
+        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is True
 
-        assert body is not None
+        fake_forge.add_comment.assert_called_once()
+        issue_number, body = fake_forge.add_comment.call_args.args
+        assert issue_number == 12
         assert notice_marker(KIND_MERGED, 456) in body
 
-    def test_returns_none_when_already_posted(self, fake_forge: MagicMock):
+    def test_reports_success_without_reposting_when_already_notified(
+        self, fake_forge: MagicMock
+    ):
         fake_forge.list_comments.return_value = [
             _comment(render_merged_notice(456, "parent/issue-100"))
         ]
 
-        assert merged_notice_if_new(fake_forge, 12, 456, "parent/issue-100") is None
+        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is True
+        fake_forge.add_comment.assert_not_called()
+
+    def test_posts_anyway_when_comments_cannot_be_read(self, fake_forge: MagicMock):
+        # マージ通知はIssueをクローズする直前の書き込みで、クローズ後は統合対象から
+        # 外れて再試行されない。判定不能なら重複の可能性を受け入れて投稿する。
+        fake_forge.list_comments.side_effect = RuntimeError("API unavailable")
+
+        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is True
+        fake_forge.add_comment.assert_called_once()
+
+    def test_reports_failure_when_the_comment_cannot_be_posted(
+        self, fake_forge: MagicMock
+    ):
+        fake_forge.add_comment.side_effect = RuntimeError("API unavailable")
+
+        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is False
 
 
 class TestNotifyOpenPrLinks:
@@ -254,22 +274,6 @@ class TestDispatchCycleWiring:
         self._run_cycle(self._config(tmp_path, apply=False), fake_forge)
 
         fake_forge.add_comment.assert_not_called()
-
-
-class TestMergedNoticeFailsOpen:
-    """マージ通知は「そのIssueに対する最後の書き込み」なので、作成通知とは
-    逆に fail open にする。"""
-
-    def test_returns_notice_when_comments_cannot_be_read(self, fake_forge: MagicMock):
-        # クローズ後のIssueは以降のサイクルで統合対象から外れ、再試行されない。
-        # 判定不能なまま通知を落とすとPRリンクが恒久的に失われるため、
-        # 重複の可能性を受け入れてでも通知本文を返す。
-        fake_forge.list_comments.side_effect = RuntimeError("API unavailable")
-
-        body = merged_notice_if_new(fake_forge, 12, 456, "parent/issue-100")
-
-        assert body is not None
-        assert notice_marker(KIND_MERGED, 456) in body
 
 
 class TestNoticeCandidateIssueNumbers:
