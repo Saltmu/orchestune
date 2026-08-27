@@ -7,6 +7,7 @@
 
 import json
 import subprocess
+import time
 from contextlib import ExitStack, contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +20,8 @@ from orchestune.dispatch.cycle import (
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
+    TaskReclaimRecord,
+    load_run_state,
     save_run_state,
 )
 from orchestune.outcome_record import OutcomeRecord
@@ -308,6 +311,103 @@ class TestRunDispatchCycleCompletion:
         assert all(
             call.args != (1, "status:done") for call in mock_add_label.call_args_list
         )
+
+    def test_early_no_commit_exit_is_requeued_with_persisted_backoff(
+        self, tmp_path, fake_forge
+    ):
+        """#675: 起動直後の通信断相当の終了は即時エスカレーションしない。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, started_at=time.time() - 10)
+        config = self._config(
+            tmp_path,
+            run_state_path,
+            early_death_window_seconds=120,
+            max_early_death_retries=2,
+            early_death_backoff_seconds=60,
+        )
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.side_effect = lambda label, **_: (
+            [in_progress_issue] if label == "status:in-progress" else []
+        )
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.return_value = []
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+            ),
+            _patch_gc_process_alive(return_value=False),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch(
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+            ) as mock_escalate,
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "early_death_requeued"
+        assert "1" not in json.loads(run_state_path.read_text())["active_worktrees"]
+        record = load_run_state(run_state_path).task_reclaim_counts[1]
+        assert record.early_death_retry_count == 1
+        assert record.early_death_retry_at > time.time()
+        assert record.early_death_retry_pending is False
+        mock_escalate.assert_not_called()
+        fake_forge.add_label.assert_any_call(1, "status:queued")
+
+    def test_early_no_commit_exit_escalates_after_retry_limit(
+        self, tmp_path, fake_forge
+    ):
+        """#675: 回数を使い切った後は従来どおり人間確認へ安全に移行する。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, started_at=time.time() - 10)
+        state = RunState(task_reclaim_counts={})
+        state.active_worktrees = {
+            "1": _active(
+                worktree_path=str(tmp_path / "w1"), started_at=time.time() - 10
+            )
+        }
+        state.task_reclaim_counts[1] = TaskReclaimRecord(early_death_retry_count=2)
+        save_run_state(state, run_state_path)
+        config = self._config(tmp_path, run_state_path, max_early_death_retries=2)
+        in_progress_issue = _full_issue(1, labels=("status:in-progress",))
+        fake_forge.list_issues_by_label.side_effect = lambda label, **_: (
+            [in_progress_issue] if label == "status:in-progress" else []
+        )
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.return_value = []
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+            ),
+            _patch_gc_process_alive(return_value=False),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch(
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+            ) as mock_escalate,
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "completed_no_commits"
+        mock_escalate.assert_called_once()
 
     def test_dirty_worktree_completion_is_skipped(self, tmp_path, fake_forge):
         run_state_path = tmp_path / "run_state.json"

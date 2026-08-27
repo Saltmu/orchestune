@@ -6,7 +6,7 @@ import dataclasses
 import math
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +28,12 @@ from orchestune.dispatch.labels import (
 )
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.dispatch.state import (
+    ActiveWorktree,
+    RunState,
+    TaskReclaimRecord,
+    save_run_state,
+)
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -249,6 +254,111 @@ def _apply_no_commits_escalation(
     )
 
 
+def _reserve_early_death_retry(
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    run_state: RunState,
+    now: float,
+) -> tuple[int, float] | None:
+    """再投入枠を予約し、回数と次回起動可能時刻を返す。"""
+    if (
+        active.external_id is not None
+        or active.started_at is None
+        or not 0 <= now - active.started_at <= config.early_death_window_seconds
+    ):
+        return None
+    previous = run_state.task_reclaim_counts.get(active.issue_number)
+    retries = previous.early_death_retry_count if previous is not None else 0
+    pending = previous is not None and previous.early_death_retry_pending
+    if retries >= config.max_early_death_retries and not pending:
+        return None
+
+    retry_count = retries if pending else retries + 1
+    retry_at = (
+        previous.early_death_retry_at
+        if pending and previous is not None
+        else now + config.early_death_backoff_seconds * 2 ** (retry_count - 1)
+    )
+    record = previous or TaskReclaimRecord()
+    record.early_death_retry_count = retry_count
+    record.early_death_retry_at = retry_at
+    record.early_death_retry_pending = True
+    run_state.task_reclaim_counts[active.issue_number] = record
+    return retry_count, retry_at
+
+
+def _publish_early_death_requeue(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+    run_state: RunState,
+    now: float,
+    retry_count: int,
+    retry_at: float,
+    open_prs: Sequence[PrRecord] | None,
+    on_requeue_applied: Callable[[], None] | None,
+) -> None:
+    """予約を先に保存し、worktree回収とqueued遷移を反映する。"""
+    save_run_state(
+        run_state,
+        config.run_state_path,
+        now=now,
+        launch_window_seconds=config.window_seconds,
+        open_prs=open_prs,
+    )
+    remove_worktree(active.worktree_path)
+    status_labels = (
+        active_task.status_labels if active_task else ("status:in-progress",)
+    )
+    transition_status_label(
+        config.resolved_forge,
+        active.issue_number,
+        "status:queued",
+        tuple(label for label in PRIMARY_STATUS_LABELS if label in status_labels),
+        on_label_added=on_requeue_applied,
+    )
+    config.resolved_forge.add_comment(
+        active.issue_number,
+        "起動直後にコミットなしでエージェントプロセスが終了したため、一時的な通信障害として"
+        f"自動再投入します（{retry_count}/{config.max_early_death_retries}回目）。"
+        f"次回起動は指数バックオフ後（Unix時刻 {retry_at:.0f} 以降）です。",
+    )
+
+
+def _apply_early_death_retry(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    config: DispatcherConfig,
+    run_state: RunState,
+    now: float,
+    open_prs: Sequence[PrRecord] | None = None,
+    on_requeue_applied: Callable[[], None] | None = None,
+) -> dict | None:
+    """起動直後・コミットなし終了を指数バックオフ付きで再投入する。"""
+    reservation = _reserve_early_death_retry(active, config, run_state, now)
+    if reservation is None:
+        return None
+    retry_count, retry_at = reservation
+    if config.apply:
+        _publish_early_death_requeue(
+            active,
+            active_task,
+            config,
+            run_state,
+            now,
+            retry_count,
+            retry_at,
+            open_prs,
+            on_requeue_applied,
+        )
+    return {
+        "action": "early_death_requeued",
+        "subtask_id": active_task.subtask_id if active_task else "",
+        "commit_sha": None,
+        "early_death_retry_at": retry_at,
+    }
+
+
 def _apply_without_outcome_escalation(
     active: ActiveWorktree, config: DispatcherConfig
 ) -> None:
@@ -323,9 +433,25 @@ def _apply_special_completed_action(
     config: DispatcherConfig,
     active_task: Task | None,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None,
+    run_state: RunState | None,
+    now: float,
+    open_prs: Sequence[PrRecord] | None,
+    on_early_death_requeue: Callable[[], None] | None,
 ) -> dict | None:
     action = decision.action
     if action == "completed_no_commits":
+        if run_state is not None:
+            early_death = _apply_early_death_retry(
+                active,
+                active_task,
+                config,
+                run_state,
+                now,
+                open_prs,
+                on_early_death_requeue,
+            )
+            if early_death is not None:
+                return early_death
         _apply_no_commits_escalation(active, config)
         return {"subtask_id": decision.subtask_id, "commit_sha": None}
     if action == "completed_without_outcome":
@@ -370,19 +496,19 @@ def _apply_completed_worktree_outcome(
     config: DispatcherConfig,
     active_task: Task | None = None,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
+    run_state: RunState | None = None,
+    now: float | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
+    on_early_death_requeue: Callable[[], None] | None = None,
 ) -> dict:
-    handle = _active_dispatch_handle(active)
-    usage = (
-        config.dispatch_target.collect_usage(handle) if config.dispatch_target else None
-    )
-    usage_dict = dataclasses.asdict(usage) if isinstance(usage, Usage) else None
+    usage = _collect_completed_usage(active, config)
     event: dict = {
         "issue_number": active.issue_number,
         "worktree_path": active.worktree_path,
         "action": decision.action,
     }
-    if usage_dict is not None:
-        event["usage"] = usage_dict
+    if isinstance(usage, Usage):
+        event["usage"] = dataclasses.asdict(usage)
     if decision.action in (
         "completion_skipped_dirty_worktree",
         "completion_skipped_forge_error",
@@ -390,7 +516,15 @@ def _apply_completed_worktree_outcome(
         return event
 
     special = _apply_special_completed_action(
-        active, decision, config, active_task, dispatch_not_needed_review
+        active,
+        decision,
+        config,
+        active_task,
+        dispatch_not_needed_review,
+        run_state,
+        time.time() if now is None else now,
+        open_prs,
+        on_early_death_requeue,
     )
     if special is not None:
         if decision.action == "not_needed":
@@ -411,11 +545,23 @@ def _apply_completed_worktree_outcome(
     return event
 
 
+def _collect_completed_usage(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> Usage | None:
+    if config.dispatch_target is None:
+        return None
+    return config.dispatch_target.collect_usage(_active_dispatch_handle(active))
+
+
 def _finalize_completed_worktree(
     active: ActiveWorktree,
     active_task: Task | None,
     config: DispatcherConfig,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
+    run_state: RunState | None = None,
+    now: float | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
+    on_early_death_requeue: Callable[[], None] | None = None,
 ) -> dict:
     decision = _decide_completed_worktree_outcome(
         active,
@@ -424,7 +570,15 @@ def _finalize_completed_worktree(
         forge=config.resolved_forge,
     )
     return _apply_completed_worktree_outcome(
-        active, decision, config, active_task, dispatch_not_needed_review
+        active,
+        decision,
+        config,
+        active_task,
+        dispatch_not_needed_review,
+        run_state,
+        now,
+        open_prs,
+        on_early_death_requeue,
     )
 
 

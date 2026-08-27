@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.completion import (
+    _apply_early_death_retry,
     _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
@@ -21,7 +22,7 @@ from orchestune.dispatch.gc.completion import (
     _is_worktree_complete,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree
+from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
@@ -63,6 +64,29 @@ def _task(**overrides):
 
 class TestFinalizeCompletedWorktree:
     """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
+
+    def test_pending_early_death_retry_reuses_reserved_count(self, tmp_path):
+        """GitHub反映失敗後の再試行は最後の自動再投入枠を二重消費しない。"""
+        active = _active(started_at=100.0)
+        record = TaskReclaimRecord(
+            early_death_retry_count=2,
+            early_death_retry_at=180.0,
+            early_death_retry_pending=True,
+        )
+        run_state = RunState(task_reclaim_counts={280: record})
+        config = DispatcherConfig(
+            apply=False,
+            max_early_death_retries=2,
+            early_death_window_seconds=120,
+            run_state_path=tmp_path / "state.json",
+            events_log_path=tmp_path / "events.jsonl",
+        )
+
+        event = _apply_early_death_retry(active, _task(), config, run_state, now=110.0)
+
+        assert event is not None
+        assert event["early_death_retry_at"] == 180.0
+        assert run_state.task_reclaim_counts[280].early_death_retry_count == 2
 
     def test_no_new_commits_is_not_treated_as_completed(self, tmp_path, fake_forge):
         """#74再現: worktreeはcleanだがbase_branchに対して新規コミットが0件の場合、

@@ -232,6 +232,9 @@ orchestune-dispatch
 | `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のruntime Conflict Graph再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
 | `--task-timeout-seconds <int>` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行する。無人運転時は正の値を設定することを推奨。 |
 | `--max-task-reclaims <int>` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移し、以降は再投入されない。`0`は「1回目の回収で即エスカレーション」を意味する（無制限にする設定値は存在しない）。 |
+| `--early-death-window-seconds <int>` | `120` | 起動からこの秒数以内にローカルプロセスがコミットなしで終了した場合、一時的な起動障害として扱う。`0`では即時終了だけを対象にする。 |
+| `--max-early-death-retries <int>` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションする。 |
+| `--early-death-backoff-seconds <int>` | `60` | 起動直後の異常終了を再キューイングする際の基準待機秒数。再試行ごとに待機時間を2倍にする。 |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
@@ -302,7 +305,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
-> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
+> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
 >
 > `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 
@@ -342,3 +345,11 @@ reasoning_effort = "high"
 
 下流の依存タスクのブランチは、依存先タスクの完了状況に応じて自動でリベースされます。リベース先は「最新の main」ではなく、**CIを通過済みの依存先タスクのブランチ**です（スタッキング）。依存先が単一に絞り込めない場合や、依存先がまだCIを通過していない場合、自動リベースは行われません。
 
+### 4.5 IssueとPRの相互リンク通知
+
+GitHubの `Closes #N` による自動リンクとIssueサイドバーの「Development」欄は、PRのbaseが既定ブランチ（`main`）の場合にのみ機能します。そのため親ブランチ運用では、子Issueだけを見てもどのPRで作業されたのかを辿れません。Orchestuneはこれを次のコメントで補完します。
+
+1. **PR作成時**: ディスパッチャーがオープンPRを検知すると、対応する子Issueへ「PR #XXX が作成されました」という通知コメントを投稿します。対象Issueは、PR本文の `Closes #N` 参照とheadブランチ名（`claude/issue-{N}-{subtask_id}`）の双方から解決され、**PRのbaseがそのIssue自身の親ブランチ（`parent/issue-{親Issue番号}`）と完全に一致する場合にのみ**通知します（別の親ブランチ宛てのPRが `Closes` でこのIssueを参照しているだけの場合は通知しません）。また、upstreamリポジトリ上のブランチを head とするPRに限られ、forkからのPRおよびheadの出所を確認できないPRは、なりすまし防止のため通知しません。エージェントが自分で起票したPRも同じ経路で通知されます。
+2. **PRマージ時**: Integratorが統合PRを親ブランチへマージして子Issueをクローズする際、クローズの**直前**に「PR #XXX が親ブランチにマージされました」という完了通知コメントを投稿します。クローズと同じコメントに載せないのは、クローズだけが失敗した場合に次サイクルの再試行が統合PR番号を復元できず、リンクが恒久的に失われるためです。
+
+いずれのコメントにも `<!-- orchestune:pr-link:{created|merged}:{PR番号} -->` 形式のマーカーが埋め込まれ、同じ通知が二重に投稿されることはありません。既存コメントを読めなかった場合の扱いは通知の種類で異なります。作成通知は投稿を見送り次のサイクルで再試行しますが、マージ通知はクローズ直前の最後の書き込みで再試行の機会がないため、リンクを失わないよう投稿を優先します。

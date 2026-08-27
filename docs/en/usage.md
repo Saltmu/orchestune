@@ -232,6 +232,9 @@ orchestune-dispatch
 | `--max-recompute-retries <int>` | `2` | Maximum runtime Conflict Graph recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
 | `--task-timeout-seconds <int>` | `0` | Seconds after which a running task is treated as timed out and reclaimed by the GC. `0` (the default) disables timeout reclamation and only detects zombies. Set a positive value before leaving a run unattended. |
 | `--max-task-reclaims <int>` | `3` | Maximum number of times the zombie/timeout GC may return the same task to `status:queued`. Once exceeded, the task moves to `status:blocked-human-review` and is no longer requeued. `0` means the very first reclaim escalates; there is no value that makes it unlimited. |
+| `--early-death-window-seconds <int>` | `120` | Treat a no-commit local process exit within this many seconds of launch as a transient startup failure. `0` restricts this recovery to an immediate exit. |
+| `--max-early-death-retries <int>` | `2` | Maximum automatic requeues for transient startup failures. The next no-commit exit escalates to `status:blocked-human-review`. |
+| `--early-death-backoff-seconds <int>` | `60` | Base delay for an early-death requeue. Each retry doubles the previous delay. |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | Maximum number of seconds a pending `status:not-needed` independent review (Cloud Routine target only) is kept without either outcome label appearing. An entry past the limit escalates to `status:blocked-human-review`; there is no value that makes it unlimited. |
 | `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
 
@@ -302,7 +305,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
-> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
+> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
 >
 > In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 
@@ -342,3 +345,11 @@ Without a parent issue, the Integrator is responsible only up to creating an int
 
 Downstream dependent task branches are rebased automatically depending on the state of the tasks they depend on. The rebase target is **the branch of the dependency whose PR has already passed CI** (stacking), not "the latest main". No auto-rebase happens when the dependency cannot be narrowed down to a single branch, or when the dependency has not passed CI yet.
 
+### 4.5 Issue ↔ PR link notices
+
+GitHub's `Closes #N` auto-linking and the "Development" sidebar on an issue only work when the PR targets the default branch (`main`). Under the parent-branch workflow that leaves a child issue with no visible trace of the PR that implemented it, so Orchestune fills the gap with comments:
+
+1. **When a PR is opened**: once the dispatcher sees an open PR, it posts a "PR #XXX has been opened" notice on the corresponding child issue. The target issue is resolved both from the PR's `Closes #N` references and from the head branch name (`claude/issue-{N}-{subtask_id}`), so PRs opened by the agent itself are announced through the same path. A notice is posted **only when the PR's base is exactly that issue's own parent branch** (`parent/issue-{parent_issue_number}`), so a PR targeting a different parent branch that merely references the issue is ignored. The PR's head must also live in the upstream repository: PRs from forks, and any PR whose head origin cannot be confirmed, are skipped so that a third party cannot post an authoritative-looking notice on someone else's issue.
+2. **When a PR is merged**: when the Integrator merges the integration PR into the parent branch and closes the child issue, it posts a "PR #XXX has been merged into the parent branch" completion notice *just before* closing. The notice is deliberately not folded into the closing comment: if only the close fails, the retry on the next cycle can no longer recover the integration PR number, and the link would be lost for good.
+
+Both comments embed a `<!-- orchestune:pr-link:{created|merged}:{pr_number} -->` marker, so the same notice is never posted twice. The two notices differ in how they handle a failure to read the existing comments: the creation notice is skipped and retried on the next cycle, while the merge notice is posted anyway, because it is the last write before the issue is closed and would otherwise never be retried.

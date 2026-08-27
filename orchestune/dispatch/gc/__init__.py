@@ -573,6 +573,7 @@ def _handle_completed_event_outcome(
         )
     if action in (
         "completed_no_commits",
+        "early_death_requeued",
         "completed_without_outcome",
         "not_needed",
         "not_needed_review_dispatched",
@@ -580,7 +581,7 @@ def _handle_completed_event_outcome(
         "escalated_base_branch_red",
     ):
         if ctx.config.apply:
-            del ctx.run_state.active_worktrees[key]
+            ctx.run_state.active_worktrees.pop(key, None)
     elif action == "completion_skipped_dirty_worktree":
         completion_event["action"] = _apply_dirty_worktree_hold(
             ctx, key, completion_active, active_task
@@ -599,11 +600,27 @@ def _rule_completed(
     completion_active = resolution.completion_active
     assert completion_active is not None
 
+    def _settle_early_death_requeue() -> None:
+        ctx.run_state.active_worktrees.pop(key, None)
+        record = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+        if record is not None:
+            record.early_death_retry_pending = False
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+
     completion_event = _finalize_completed_worktree(
         completion_active,
         active_task,
         ctx.config,
         dispatch_not_needed_review=ctx.not_needed_review_dispatcher,
+        run_state=ctx.run_state,
+        now=time.time(),
+        open_prs=ctx.prs,
+        on_early_death_requeue=_settle_early_death_requeue,
     )
     return _handle_completed_event_outcome(
         ctx, key, completion_active, active_task, completion_event

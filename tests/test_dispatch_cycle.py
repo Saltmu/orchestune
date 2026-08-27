@@ -36,6 +36,7 @@ from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
+    TaskReclaimRecord,
     load_run_state,
     save_run_state,
 )
@@ -377,6 +378,40 @@ class TestDetermineCandidateTasksExcludesDualStatus:
     """#254レビュー対応(#275 Codex P1): add(status:queued)成功後に
     remove(status:done)が失敗した中断状態のIssueを、dispatcherが誤って
     起動候補に含めないことを検証する。"""
+
+    def test_excludes_early_death_retry_until_its_backoff_expires(self, fake_forge):
+        task = _task(
+            issue_number=1, subtask_id="task-a", status_labels=("status:queued",)
+        )
+        issues = IssuesByStatus(
+            queued=[_issue(1, labels=("status:queued",))],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+        ctx = _ctx(
+            tasks_by_issue={1: task},
+            run_state=RunState(
+                task_reclaim_counts={
+                    1: TaskReclaimRecord(
+                        early_death_retry_count=1, early_death_retry_at=120.0
+                    )
+                }
+            ),
+        )
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
+
+        candidate_tasks, _ = _determine_candidate_tasks(
+            ctx, issues, lock_result, set(), False, now=119.0
+        )
+        assert candidate_tasks == []
+
+        candidate_tasks, _ = _determine_candidate_tasks(
+            ctx, issues, lock_result, set(), False, now=120.0
+        )
+        assert candidate_tasks == [task]
 
     def test_excludes_queued_candidate_that_still_has_status_done(self, fake_forge):
         dual_status_task = _task(

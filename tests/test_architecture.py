@@ -93,6 +93,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.tasks",
             "integrator.worktree",
             "issue_parsing",
+            "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
             "provisioning.rendering",
@@ -155,6 +156,10 @@ _BOUNDED_RECOVERY_LIMIT_NAME = re.compile(
 BOUNDED_RECOVERY_TERMINALS = {
     "max_recompute_retries": ("dispatch/rebase.py", "forced_serial"),
     "max_task_reclaims": ("dispatch/gc/zombies.py", "apply_human_review_escalation"),
+    "max_early_death_retries": (
+        "dispatch/gc/completion.py",
+        "apply_human_review_escalation",
+    ),
     "not_needed_review_timeout_seconds": (
         "integrator/coordinator.py",
         "apply_human_review_escalation",
