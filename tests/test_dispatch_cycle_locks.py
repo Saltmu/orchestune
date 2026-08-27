@@ -366,7 +366,13 @@ class TestRunDispatchCycleBranchNormalization:
         """#677: `--parent-issue`運用で先行サブタスクが親ブランチにマージされ
         差分が生じても、footprintが重なる後続の子タスクが
         `status:external-lock`で永久ブロックされず、正常にスケジュール対象
-        であり続けることをエンドツーエンドで検証する回帰テスト。"""
+        であり続けることをエンドツーエンドで検証する回帰テスト。
+
+        `config.parent_issue_number`は設定しない: `_is_base_or_parent_branch`の
+        汎用`parent/issue-*`プレフィックス除外はconfig非依存で効くうえ、
+        `parent_issue_number`を設定すると`_fetch_issues`がネイティブSub-issue
+        API経由（`find_children_by_parent`）に切り替わり、本テストがモックして
+        いる`list_issues_by_label`ベースの取得経路を素通りしてしまう。"""
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
@@ -376,7 +382,6 @@ class TestRunDispatchCycleBranchNormalization:
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             apply=False,
-            parent_issue_number=181,
         )
         queued_issue = _full_issue(2, footprint=("src/shared.py",), parent_number=181)
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)
@@ -400,6 +405,7 @@ class TestRunDispatchCycleBranchNormalization:
         mock_branch_files.assert_not_called()
         assert report.lock_changes["to_lock"] == []
         assert report.lock_changes["to_unlock"] == []
+        assert [t.issue_number for t in report.selected] == [2]
 
     def test_unrelated_external_branch_still_locks_overlapping_task(
         self, tmp_path, fake_forge
