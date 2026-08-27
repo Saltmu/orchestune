@@ -6,7 +6,7 @@ import dataclasses
 import math
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -47,12 +47,22 @@ from orchestune.outcome_record import (
 )
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class CompletedWorktreeDecision:
     action: str
     subtask_id: str = ""
     commit_sha: str | None = None
     outcome: OutcomeRecord | None = None
+
+
+COMPLETION_HOLD_ACTIONS = frozenset(
+    {"completion_skipped_dirty_worktree", "completion_skipped_forge_error"}
+)
+
+
+def is_completion_hold_event(event: Mapping[str, object]) -> bool:
+    """Return whether a completion event must be excluded from same-cycle GC."""
+    return event.get("action") in COMPLETION_HOLD_ACTIONS
 
 
 def _fetch_outcome_for_active(
