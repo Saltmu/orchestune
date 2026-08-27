@@ -219,8 +219,9 @@ orchestune-dispatch
 | `--apply` / `--no-apply` | `--apply` | 実際にタスク割り当てやGitブランチ作成を実行するか、プレビュー（ドライラン）のみにするかを選択。 |
 | `--max-concurrent <int>` | `2` | 同時に実行（起動）できるサブタスクエージェントの最大数。 |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は実行環境（`GITHUB_ACTIONS`環境変数）から自動選択される。`auto`はPATH上のローカルCLIを検出する。ローカル CLI、Claude Code Cloud Routine、または `ORCHESTUNE_CODEX_CLOUD_ENV`（もしくは `--codex-cloud-env`）で指定した Codex Cloud environment を明示選択できる。`codex-cloud` はタスクブランチを `origin` へ push してから Codex Cloud に投入し、実タスク状態追跡および対象ブランチの PR / outcome record を組み合わせて完了を判定する。`local`を明示指定した場合のみ、後方互換のダミー起動（no-op、テスト・dry-run用途）になる。 |
+| `--reviewer-bot {auto,claude,codex}` | `auto` | 実装後に依頼するレビュアー。`auto`はdispatch targetの解決後に評価され、Claude系にはCodex、Codex系と`agy`にはClaudeを選ぶ。明示値はこの対応表より優先される。汎用`local`からは推定できないため警告を出す。 |
 | `--codex-cloud-env <id>` | - | `--dispatch-target codex-cloud` で利用する Codex Cloud environment ID。未指定時は `ORCHESTUNE_CODEX_CLOUD_ENV` 環境変数を使用。 |
-| `--local-cmd <template>` | - | `--dispatch-target local` の際に、ローカルのCLI（`agy` など）へディスパッチするためのコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`（例: `agy --issue {issue_number}`）。指定しない場合はデフォルトのダミー起動コマンドが使われます。`--dispatch-target claude-cli`/`agy-cli`/`codex-cli`（`auto`がこれらに解決した場合を含む）使用時は省略可能で、指定した場合は組み込みプリセットを上書きします。 |
+| `--local-cmd <template>` | - | ローカルターゲットへディスパッチするコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, `{reviewer_bot}`。汎用`local`で省略した場合はダミー起動になる。ローカルCLIプリセットで指定するとプリセット全体を置き換え、Orchestuneはテンプレート内にある`{reviewer_bot}`だけを置換し、任意のカスタムコマンドへレビュー指示を追記しない。 |
 | `--parent-issue <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。起票される子Issueがすべてこの親Issueに紐付けられます。 |
 | `--ci-command <cmd>` | `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値） | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文のシェル風文字列。例: `'make ci'`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください（[セットアップガイドの「導入要件」](setup.md#0-導入要件prerequisites)参照）。`orchestune.toml`/`pyproject.toml`の`[tool.orchestune]`セクションでは`ci-command`キーとして指定できます。 |
 | `--deviation-buffer-lines <int>` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
@@ -250,6 +251,7 @@ orchestune-dispatch
 ```toml
 max-concurrent = 2
 dispatch-target = "claude-cli"
+reviewer-bot = "auto"
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
@@ -283,6 +285,7 @@ model = "gpt-4o"
 [tool.orchestune]
 max-concurrent = 2
 dispatch-target = "claude-cli"
+reviewer-bot = "auto"
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"

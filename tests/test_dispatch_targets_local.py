@@ -156,6 +156,24 @@ class TestLocalProcessDispatchTarget:
             str(tmp_path / "wt"),
         ]
 
+    def test_launch_replaces_reviewer_bot_placeholder(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="runner --reviewer {reviewer_bot} --issue {issue_number}",
+            reviewer_bot="codex",
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
+
+        assert mock_popen.call_args.args[0] == [
+            "runner",
+            "--reviewer",
+            "codex",
+            "--issue",
+            "42",
+        ]
+
     def test_launch_with_execution_selection_claude_cli_adds_model_and_skips_effort(
         self, tmp_path, caplog
     ):
@@ -536,6 +554,91 @@ class TestBuildDispatchTarget:
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
+
+    @pytest.mark.parametrize(
+        ("target_name", "expected_reviewer"),
+        [
+            ("claude-cli", "codex"),
+            ("agy-cli", "claude"),
+            ("codex-cli", "claude"),
+        ],
+    )
+    def test_local_preset_injects_cross_vendor_reviewer(
+        self, tmp_path, target_name, expected_reviewer
+    ):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                target_name,
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+                reviewer_bot="auto",
+            )
+        )
+
+        assert f"レビュー担当には必ず `{expected_reviewer}`" in target._local_cmd
+
+    def test_explicit_reviewer_overrides_local_cross_vendor_default(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+                reviewer_bot="claude",
+            )
+        )
+
+        assert "レビュー担当には必ず `claude`" in target._local_cmd
+
+    def test_cloud_targets_inject_cross_vendor_reviewer(self, tmp_path):
+        claude_target = build_dispatch_target(
+            TargetBuildConfig(
+                "cloud-routine",
+                "routine",
+                "token",
+                tmp_path / "logs",
+                reviewer_bot="auto",
+            )
+        )
+        codex_target = build_dispatch_target(
+            TargetBuildConfig(
+                "codex-cloud",
+                None,
+                None,
+                tmp_path / "logs",
+                codex_cloud_env="env-1",
+                reviewer_bot="auto",
+            )
+        )
+
+        assert isinstance(claude_target, ClaudeCodeCloudRoutineDispatchTarget)
+        assert "レビュー担当には必ず `codex`" in claude_target._build_text(
+            _task(), "agent/issue-1"
+        )
+        assert isinstance(codex_target, CodexCloudDispatchTarget)
+        assert "レビュー担当には必ず `claude`" in codex_target._build_prompt(
+            _task(), "agent/issue-1"
+        )
+
+    def test_generic_local_auto_reviewer_warns_and_stays_unresolved(
+        self, tmp_path, capsys
+    ):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "local",
+                None,
+                None,
+                tmp_path / "logs",
+                reviewer_bot="auto",
+            )
+        )
+
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._reviewer_bot is None
+        assert "レビュアーボットを自動選択できません" in capsys.readouterr().err
 
     def test_codex_cli_preset_bypasses_approvals_and_sandbox(self, tmp_path):
         target = build_dispatch_target(

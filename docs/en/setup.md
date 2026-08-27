@@ -177,6 +177,8 @@ orchestune dispatch --dispatch-target auto
 
 These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
 
+By default, the resolved execution target also determines a cross-vendor PR reviewer: `claude-cli` and `cloud-routine` request Codex, while `codex-cli`, `codex-cloud`, and `agy-cli` request Claude. This selection happens after `--dispatch-target auto` resolves to a concrete target. Use `--reviewer-bot claude` or `--reviewer-bot codex` (or `reviewer-bot = "..."` in TOML) to override it. A custom `--local-cmd` may use the `{reviewer_bot}` placeholder; arbitrary custom commands are otherwise left unchanged.
+
 > [!IMPORTANT]
 > **Trust Model and Security Risks**
 > 

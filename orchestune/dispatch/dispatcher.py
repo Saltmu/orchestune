@@ -198,7 +198,16 @@ def _add_dispatch_target_arguments(parser: argparse.ArgumentParser) -> None:
         "--local-cmd",
         default=None,
         help="ローカルCLIにディスパッチする際のコマンドテンプレート。"
-        "使用可能な変数: {issue_number}, {subtask_id}, {branch_name}, {worktree_path}。",
+        "使用可能な変数: {issue_number}, {subtask_id}, {branch_name}, "
+        "{worktree_path}, {model}, {reasoning_effort}, {profile}, {reviewer_bot}。",
+    )
+    parser.add_argument(
+        "--reviewer-bot",
+        choices=["auto", "claude", "codex"],
+        default="auto",
+        help="#678: 実装後レビューを依頼するボット。'auto'（既定）は解決済みの"
+        "dispatch targetに対してベンダークロスレビューを選ぶ。"
+        "Claude系はcodex、Codex系とagyはclaude。'claude'/'codex'で明示指定できる。",
     )
     parser.add_argument(
         "--routine-id",
@@ -481,6 +490,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
                 local_cmd=args.local_cmd,
                 codex_cloud_env=args.codex_cloud_env,
                 allow_unsafe_agent_execution=args.allow_unsafe_agent_execution,
+                reviewer_bot=args.reviewer_bot,
             )
         ),
         deviation_buffer_lines=args.deviation_buffer_lines,

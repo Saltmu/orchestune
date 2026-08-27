@@ -82,6 +82,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.rebase",
             "dispatch.reconciliation",
             "dispatch.recovery",
+            "dispatch.reviewer",
             "dispatch.rules",
             "dispatch.scoring",
             "dispatch.state",
