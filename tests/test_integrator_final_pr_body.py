@@ -419,7 +419,13 @@ class TestCollectChildSummaries:
 
         assert summaries == []
 
-    def test_list_comments_failure_is_non_fatal(self):
+    def test_list_comments_failure_yields_no_summaries_at_all(self):
+        """PR#690レビュー対応(Codex P2) Reproducer: `list_comments`の一時障害を
+        「Outcome Recordが無い」と同じ`None`で表すと、`_review_text`が
+        `reviewDecision`へのフォールバックや空欄の行を作ってしまう。行が残る以上
+        `if summaries`ガードを通過するため、再利用PRでは投稿済みの正しい
+        レビュー結果を劣化した内容で上書きしてしまう。`list_prs`失敗時と同じく
+        一覧ごと省略する。"""
         self.forge.list_prs.return_value = [
             _subtask_pr(201, review_decision="APPROVED")
         ]
@@ -427,8 +433,7 @@ class TestCollectChildSummaries:
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
-        assert summaries[0].pr_numbers == (201,)
-        assert summaries[0].review == "APPROVED"
+        assert summaries == []
 
     def test_child_issue_comments_are_not_fetched_once_the_pr_answered(self):
         """APIコスト制限: Outcome Recordはスキル契約上PRコメントが第一の

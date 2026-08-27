@@ -140,6 +140,17 @@ def _merged_subtask_prs(
     return matched
 
 
+class _CollectionDegraded(Exception):
+    """forge読み取りに失敗し、完全な一覧を作れなくなったことを表す内部シグナル。
+
+    PR#690レビュー対応(Codex P2): 読み取り失敗を「レコードが無い」と同じ
+    `None`で表すと、`_review_text`がフォールバックや空欄の行を作ってしまい、
+    その行は`ensure_parent_final_pr`の`if summaries`ガードを通過して投稿済みの
+    正しい表を上書きする。失敗は別物として伝え、`list_prs`失敗時と同じ
+    「一覧ごと省略」の縮退経路へ倒す。
+    """
+
+
 def _outcome_from(
     forge: Forge, number: int, issue_number: int, pr_number: int | None
 ) -> OutcomeRecord | None:
@@ -156,10 +167,11 @@ def _outcome_from(
     except Exception as error:  # noqa: BLE001 - 一覧生成はベストエフォート
         print(
             f"Warning: Failed to read comments on #{number} while building the "
-            f"final integration PR body: {error}",
+            f"final integration PR body; omitting the child table rather than "
+            f"rendering rows with degraded review results: {error}",
             file=sys.stderr,
         )
-        return None
+        raise _CollectionDegraded from error
     owned = [
         comment
         for comment in comments
@@ -252,13 +264,14 @@ def collect_child_summaries(
     連結した順で返すため、本文が毎サイクル並び替わらないよう子Issue番号で
     整列してから組み立てる。
 
-    PR#690レビュー対応(Codex P2): マージ済みPRの取得自体に失敗した場合は、
-    空リストを返して「縮退」を呼び出し元へ伝える。`prs=[]`のまま行を作ると、
-    実際にはサブタスクPRを持つ子Issueの欄が`—`になり、「PRが無かった」と
-    読める偽の行ができる。この行は再利用PRでは`ensure_parent_final_pr`の
-    `if summaries`ガードを通過して投稿済みの正しい表を上書きし、新規PRでは
-    誤情報をそのまま掲載する。空リストならテーブル省略・本文非更新という
-    既存の縮退経路へ倒せる。
+    PR#690レビュー対応(Codex P2): forge読み取りに失敗した場合は、空リストを
+    返して「縮退」を呼び出し元へ伝える。`prs=[]`やレビュー欄の空文字のまま行を
+    作ると、実際にはサブタスクPRやレビュー結果を持つ子Issueの欄が`—`になり、
+    「PRもレビューも無かった」と読める偽の行ができる。この行は再利用PRでは
+    `ensure_parent_final_pr`の`if summaries`ガードを通過して投稿済みの正しい表を
+    上書きし、新規PRでは誤情報をそのまま掲載する。空リストならテーブル省略・
+    本文非更新という既存の縮退経路へ倒せる。マージ済みPRの取得
+    (`list_prs`)とコメントの取得(`list_comments`)の双方が同じ扱いになる。
     """
     ordered = sorted(children, key=lambda child: child.number)
     try:
@@ -277,10 +290,13 @@ def collect_child_summaries(
         f"parent/issue-{parent_issue_number}",
         [child.number for child in ordered],
     )
-    return [
-        _summarize_child(forge, child, matched.get(child.number, []))
-        for child in ordered
-    ]
+    try:
+        return [
+            _summarize_child(forge, child, matched.get(child.number, []))
+            for child in ordered
+        ]
+    except _CollectionDegraded:
+        return []
 
 
 __all__ = [

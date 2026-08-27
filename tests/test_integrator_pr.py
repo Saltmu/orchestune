@@ -405,6 +405,29 @@ class TestEnsureParentFinalPrBody(_FakeForgeTest):
         assert pr_number == 321
         self.forge.update_pull_request.assert_not_called()
 
+    def test_reused_pr_body_is_kept_when_comment_collection_fails(self):
+        """PR#690レビュー対応(Codex P2) Reproducer: `list_comments`の一時障害で
+        レビュー欄が劣化した行が生成されると、行自体は残るため`if summaries`を
+        通過し、投稿済みの正しいレビュー結果がそれで上書きされてしまう。"""
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+            )
+        ]
+        self.forge.list_prs.return_value = []
+        self.forge.list_comments.side_effect = RuntimeError("transient API failure")
+
+        pr_number = ensure_parent_final_pr(
+            100, forge=self.forge, children=[self._child()]
+        )
+
+        assert pr_number == 321
+        self.forge.update_pull_request.assert_not_called()
+
     def test_discovers_children_when_they_are_not_supplied(self):
         self.forge.list_open_prs.return_value = []
         self.forge.list_sub_issues.return_value = [self._child()]
