@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -47,19 +48,39 @@ class ChildSummary:
     review: str = ""
 
 
+#: `GH-45`形式のIssue参照。`#`のエスケープでは潰せない別形式。
+_GH_REFERENCE = re.compile(r"GH-(?=\d)", re.IGNORECASE)
+
+#: `https://github.com/owner/repo/issues/45`形式のIssue参照。
+_GITHUB_REFERENCE_URL = re.compile(
+    r"(https?)://(?=(?:www\.)?github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d)",
+    re.IGNORECASE,
+)
+
+
 def _escape_cell(text: str) -> str:
     r"""Markdownテーブルのセルへ埋めても安全な文字列にする。
 
-    `#`のエスケープは体裁ではなく安全性の要件: 子Issueのタイトルに
+    これは体裁ではなく安全性の要件: 子Issueのタイトルやレビュー結果に
     `fixes #45`のようなクローズキーワードが含まれていると、この本文を持つ
     最終統合PRのマージで**無関係な#45まで自動クローズ**されてしまう。
 
+    PR#690レビュー対応(Codex P2): 以前は`#`だけを潰していたが、GitHubが
+    受け付けるクローズ参照は`#45`・`owner/repo#45`・`GH-45`・
+    `https://github.com/owner/repo/issues/45`の4形式で、`#`のエスケープは
+    前2つしか止められていなかった。残る2形式もここで無害化する。
+    どれも`\`によるASCII記号のエスケープで参照として解釈されなくなり、
+    描画結果は元の文字列のまま変わらない。
+
     `\`を`|`より先に処理するのは、`a\|b`のようなタイトルでそのまま`|`を
     エスケープすると`a\\|b`（エスケープされた円記号＋生のセル区切り）となり、
-    表が壊れるため。改行の潰し込みも同じく行の分断を防ぐためのもの。
+    表が壊れるため。`GH-`とURLのエスケープは、後から入れた`\`が二重化されない
+    よう`\`の処理より後に置く。改行の潰し込みは行の分断を防ぐためのもの。
     """
     collapsed = " ".join(text.split())
-    return collapsed.replace("\\", "\\\\").replace("|", "\\|").replace("#", "\\#")
+    escaped = collapsed.replace("\\", "\\\\").replace("|", "\\|").replace("#", "\\#")
+    escaped = _GH_REFERENCE.sub(lambda match: match.group(0)[:-1] + r"\-", escaped)
+    return _GITHUB_REFERENCE_URL.sub(lambda match: match.group(1) + r":\/\/", escaped)
 
 
 def _render_row(summary: ChildSummary) -> str:
@@ -119,7 +140,17 @@ def _merged_subtask_prs(
     return matched
 
 
-def _outcome_from(forge: Forge, number: int) -> OutcomeRecord | None:
+def _outcome_from(
+    forge: Forge, number: int, issue_number: int, pr_number: int | None
+) -> OutcomeRecord | None:
+    """`number`のコメント欄から、この子タスクのOutcome Recordを1件選ぶ。
+
+    PR#690レビュー対応(Codex P2): 識別チェックは`parse_from_comments`の
+    **前**に掛ける。`parse_from_comments`はコメント全体から最新の1件を選ぶ
+    ため、後段で弾く形だと「最新は別タスクのレコード、その1つ前がこの子の
+    正しいレコード」というコメント欄で、正しい方が検討されずに捨てられる。
+    先に絞り込めば「この子を指すレコードのうち最新」を選べる。
+    """
     try:
         comments: Sequence[Mapping[str, Any]] = forge.list_comments(number)
     except Exception as error:  # noqa: BLE001 - 一覧生成はベストエフォート
@@ -129,7 +160,13 @@ def _outcome_from(forge: Forge, number: int) -> OutcomeRecord | None:
             file=sys.stderr,
         )
         return None
-    return parse_from_comments(comments)
+    owned = [
+        comment
+        for comment in comments
+        if (record := parse_from_comments([comment])) is not None
+        and _identifies_child(record, issue_number, pr_number)
+    ]
+    return parse_from_comments(owned)
 
 
 def _identifies_child(
@@ -162,17 +199,14 @@ def _child_outcome(
     `AGENTS.md`のAPIコスト制限に沿う。
 
     識別フィールドがこの子タスクを指さないレコードは採用しない
-    （`_identifies_child`）。採用しなかった場合は`_review_text`が
-    PRの`reviewDecision`へフォールバックする。
+    （`_outcome_from`が`_identifies_child`で絞り込む）。1件も採れなかった
+    場合は`_review_text`がPRの`reviewDecision`へフォールバックする。
     """
     for pr in prs:
-        outcome = _outcome_from(forge, pr.number)
-        if outcome is not None and _identifies_child(outcome, issue_number, pr.number):
+        outcome = _outcome_from(forge, pr.number, issue_number, pr.number)
+        if outcome is not None:
             return outcome
-    outcome = _outcome_from(forge, issue_number)
-    if outcome is not None and _identifies_child(outcome, issue_number, None):
-        return outcome
-    return None
+    return _outcome_from(forge, issue_number, issue_number, None)
 
 
 def _review_text(outcome: OutcomeRecord | None, prs: Sequence[PrRecord]) -> str:

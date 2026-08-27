@@ -46,8 +46,10 @@ def _subtask_pr(
     )
 
 
-def _outcome_comment(record: OutcomeRecord) -> dict[str, str]:
-    return {"body": record.render(), "created_at": "2026-01-02T00:00:00Z"}
+def _outcome_comment(
+    record: OutcomeRecord, created_at: str = "2026-01-02T00:00:00Z"
+) -> dict[str, str]:
+    return {"body": record.render(), "created_at": created_at}
 
 
 class TestRenderFinalPrBody:
@@ -145,6 +147,63 @@ class TestRenderFinalPrBody:
 
         assert "closes #9" not in body
         assert r"closes \#9" in body
+
+    def test_url_form_issue_reference_in_a_child_title_is_neutralized(self):
+        """PR#690レビュー対応(Codex P2): GitHubはURL形式のクローズ参照も
+        受け付けるため、`#`のエスケープだけでは
+        `Fixes https://github.com/owner/repo/issues/45`が素通りし、最終統合PRの
+        マージで無関係な#45がクローズされてしまう。"""
+        body = render_final_pr_body(
+            100,
+            [
+                ChildSummary(
+                    issue_number=101,
+                    title="Fixes https://github.com/Saltmu/orchestune/issues/45",
+                )
+            ],
+        )
+
+        assert "https://github.com/Saltmu/orchestune/issues/45" not in body
+        assert r"Fixes https:\/\/github.com/Saltmu/orchestune/issues/45" in body
+
+    def test_url_form_pull_request_reference_is_neutralized_too(self):
+        body = render_final_pr_body(
+            100,
+            [
+                ChildSummary(
+                    issue_number=101,
+                    title="closes http://www.github.com/o/r/pull/7",
+                )
+            ],
+        )
+
+        assert r"closes http:\/\/www.github.com/o/r/pull/7" in body
+
+    def test_unrelated_url_in_a_child_title_is_left_alone(self):
+        """無害化の対象はGitHubのIssue/PR参照URLだけ。関係のないURLまで
+        壊すと、タイトルの情報が読みにくくなるだけで安全性には寄与しない。"""
+        body = render_final_pr_body(
+            100,
+            [ChildSummary(issue_number=101, title="see https://example.com/issues/45")],
+        )
+
+        assert "see https://example.com/issues/45" in body
+
+    def test_gh_form_issue_reference_in_a_child_title_is_neutralized(self):
+        """`GH-45`もGitHubが受け付けるクローズ参照形式。"""
+        body = render_final_pr_body(
+            100, [ChildSummary(issue_number=101, title="fixes GH-45 の回帰対応")]
+        )
+
+        assert "GH-45" not in body
+        assert r"fixes GH\-45 の回帰対応" in body
+
+    def test_gh_prefixed_word_without_a_number_is_left_alone(self):
+        body = render_final_pr_body(
+            100, [ChildSummary(issue_number=101, title="GH-Actions の設定")]
+        )
+
+        assert "GH-Actions の設定" in body
 
 
 class TestCollectChildSummaries:
@@ -256,6 +315,35 @@ class TestCollectChildSummaries:
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
         assert summaries[0].review == "APPROVED"
+
+    def test_picks_the_latest_record_that_identifies_this_child(self):
+        """PR#690レビュー対応(Codex P2) Reproducer: 識別チェックを
+        `parse_from_comments`の後段に置くと、「最新は別タスクのレコード、
+        その1つ前がこの子の正しいレコード」というコメント欄で、パーサが先に
+        最新1件へ絞ってしまうため正しいレコードが検討されずに捨てられる。
+        絞り込みを先に行い「この子を指すレコードのうち最新」を選ぶこと。"""
+        self.forge.list_prs.return_value = [
+            _subtask_pr(201, review_decision="APPROVED")
+        ]
+        mine = OutcomeRecord(
+            result="done",
+            issue=101,
+            pr=201,
+            review=ReviewSummary(bot="codex", rounds=2, verdict="approved"),
+        )
+        foreign = OutcomeRecord(result="done", issue=999, pr=201)
+        self.forge.list_comments.side_effect = lambda number: (
+            [
+                _outcome_comment(mine, created_at="2026-01-02T00:00:00Z"),
+                _outcome_comment(foreign, created_at="2026-01-03T00:00:00Z"),
+            ]
+            if number == 201
+            else []
+        )
+
+        summaries = collect_child_summaries(self.forge, 100, [_child(101)])
+
+        assert summaries[0].review == "done (codex / approved / 2ラウンド)"
 
     def test_accepts_an_outcome_record_that_omits_the_pr_field(self):
         """境界: `pr`は任意フィールドなので、未設定を不一致として弾かない
