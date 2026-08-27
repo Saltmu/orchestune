@@ -424,6 +424,8 @@ def _record_successful_launch(
     reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)
     if reclaim_record is not None and reclaim_record.pending:
         reclaim_record.pending = False
+    if reclaim_record is not None and reclaim_record.early_death_retry_pending:
+        reclaim_record.early_death_retry_pending = False
     save_run_state(
         run_state,
         config.run_state_path,

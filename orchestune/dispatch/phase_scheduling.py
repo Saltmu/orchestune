@@ -61,6 +61,7 @@ def _filter_queued_candidates(
     ctx: CycleContext,
     issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
+    now: float = 0.0,
 ) -> list[Task]:
     newly_locked = {t.issue_number for t in lock_result.to_lock}
     queued_candidates = [
@@ -69,6 +70,10 @@ def _filter_queued_candidates(
         if issue.number not in newly_locked
         and "status:done" not in ctx.tasks_by_issue[issue.number].status_labels
         and "status:in-progress" not in ctx.tasks_by_issue[issue.number].status_labels
+        and (
+            (record := ctx.run_state.task_reclaim_counts.get(issue.number)) is None
+            or record.early_death_retry_at <= now
+        )
     ]
     actor_decisions = _decide_actor_verification(
         queued_candidates, forge=ctx.config.resolved_forge
@@ -82,10 +87,11 @@ def _determine_candidate_tasks(
     lock_result: ExternalLockScanResult,
     completed_subtask_ids: set[str],
     any_forced_serial: bool,
+    now: float = 0.0,
 ) -> tuple[list[Task], dict[int, str]]:
     """起動候補タスクを、外部ロック・actor権限・スタッキング可否・重複起動・
     強制直列化の各観点で絞り込んで確定させる。"""
-    queued_candidates = _filter_queued_candidates(ctx, issues, lock_result)
+    queued_candidates = _filter_queued_candidates(ctx, issues, lock_result, now)
 
     stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
         issues.blocked,
@@ -193,7 +199,7 @@ def run_scheduling_phase(
     はdispatch_filtersに定義済みのため、ここではそれを呼び出す。
     """
     candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
-        ctx, issues, lock_result, completed_subtask_ids, any_forced_serial
+        ctx, issues, lock_result, completed_subtask_ids, any_forced_serial, now
     )
 
     candidate_tasks = _filter_deviation_blocked_candidates(

@@ -199,6 +199,37 @@ class TestBuildArgParser:
         with pytest.raises(SystemExit):
             _build_arg_parser().parse_args(["--max-task-reclaims", "-1"])
 
+    def test_early_death_retry_options_have_bounded_defaults(self):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.early_death_window_seconds == 120
+        assert args.max_early_death_retries == 2
+        assert args.early_death_backoff_seconds == 60
+
+    def test_early_death_retry_options_are_parsed_and_reject_negative_values(self):
+        import pytest
+
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(
+            [
+                "--early-death-window-seconds",
+                "30",
+                "--max-early-death-retries",
+                "4",
+                "--early-death-backoff-seconds",
+                "15",
+            ]
+        )
+        assert (args.early_death_window_seconds, args.max_early_death_retries) == (
+            30,
+            4,
+        )
+        assert args.early_death_backoff_seconds == 15
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(["--max-early-death-retries", "-1"])
+
     def test_not_needed_review_timeout_seconds_defaults_to_a_finite_value(self):
         """#511: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
         from orchestune.dispatch.dispatcher import _build_arg_parser

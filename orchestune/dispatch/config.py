@@ -40,6 +40,12 @@ class DispatcherConfig:
     # 「無制限」を表す値は用意しない（終端のない経路を作らないため）。`0`は
     # 「1回目の回収で即エスカレーション」を意味する。
     max_task_reclaims: int = 3
+    # #675: 起動直後（コミット作成前）にプロセスが終了した場合だけ、一時的な
+    # API/ストリーム障害として再投入する。回数はRunStateに永続化し、無限再試行を
+    # 防ぐため有限の既定値を持つ。
+    early_death_window_seconds: int = 120
+    max_early_death_retries: int = 2
+    early_death_backoff_seconds: int = 60
     # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
     max_tokens_per_window: int | None = None
     max_tokens_per_task: int | None = None
