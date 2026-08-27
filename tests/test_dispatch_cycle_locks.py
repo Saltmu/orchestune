@@ -15,6 +15,7 @@ from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_rebase import (
     _apply_external_lock_sync,
     _decide_external_lock_sync,
+    _is_base_or_parent_branch,
 )
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
@@ -101,6 +102,43 @@ def _stub_label_actor_permission_by_default(fake_forge):
     yield
 
 
+class TestIsBaseOrParentBranch:
+    """#677: 親ブランチ（parent/issue-*）・ベースブランチ除外の仕様固定。
+
+    `_is_base_or_parent_branch`は`_decide_external_lock_sync`が外部タスク
+    ブランチをスキャンする前段で、ベースブランチ自身や`--parent-issue`運用の
+    親ブランチを誤って競合ブランチとして扱わないための除外判定。
+    """
+
+    @pytest.mark.parametrize(
+        "branch_name",
+        [
+            "main",
+            "master",
+            "HEAD",
+            "origin/main",
+            "origin/HEAD",
+        ],
+    )
+    def test_excludes_base_branches(self, branch_name):
+        assert _is_base_or_parent_branch(branch_name) is True
+
+    @pytest.mark.parametrize(
+        "branch_name",
+        [
+            "parent/issue-181",
+            "origin/parent/issue-181",
+            "parent/issue-1",
+        ],
+    )
+    def test_excludes_generic_parent_issue_branch(self, branch_name):
+        assert _is_base_or_parent_branch(branch_name) is True
+
+    def test_does_not_exclude_unrelated_branch(self):
+        assert _is_base_or_parent_branch("feature/foo") is False
+        assert _is_base_or_parent_branch("origin/someone-elses-branch") is False
+
+
 class TestDecideExternalLockSync:
     """decide層: githubからの読み取りとscan_external_locksの純粋計算のみを行い、
     ラベルの書き込みは行わない。"""
@@ -155,6 +193,32 @@ class TestDecideExternalLockSync:
             )
         assert result.to_unlock == []
         assert [t.issue_number for t in result.to_lock] == [2]
+
+    def test_parent_branch_diff_does_not_lock_overlapping_child_task(self, tmp_path):
+        """#677: 先行サブタスクのマージで親ブランチ（parent/issue-*）に差分が
+        生じても、footprintが重なる後続タスクをexternal-lockしない。
+
+        `test_unrelated_external_branch_still_locks_overlapping_task`の対にな
+        る陽性ケース: 同じ重なるfootprintでも、ブランチが親ブランチであれば
+        ロックされないことを確認する。"""
+        run_state = RunState(active_worktrees={})
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl", parent_issue_number=181
+        )
+        queued_task = _task(issue_number=2, footprint=("src/shared.py",))
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                return_value=["origin/parent/issue-181"],
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.branch_changed_files"
+            ) as mock_branch_files,
+        ):
+            result = _decide_external_lock_sync({2: queued_task}, [], run_state, config)
+        mock_branch_files.assert_not_called()
+        assert result.to_lock == []
+        assert result.to_unlock == []
 
 
 class TestApplyExternalLockSync:
@@ -295,6 +359,53 @@ class TestRunDispatchCycleBranchNormalization:
             run_dispatch_cycle(config)
 
         mock_branch_files.assert_not_called()
+
+    def test_parent_branch_diff_does_not_block_child_task_scheduling(
+        self, tmp_path, fake_forge
+    ):
+        """#677: `--parent-issue`運用で先行サブタスクが親ブランチにマージされ
+        差分が生じても、footprintが重なる後続の子タスクが
+        `status:external-lock`で永久ブロックされず、正常にスケジュール対象
+        であり続けることをエンドツーエンドで検証する回帰テスト。
+
+        `config.parent_issue_number`は設定しない: `_is_base_or_parent_branch`の
+        汎用`parent/issue-*`プレフィックス除外はconfig非依存で効くうえ、
+        `parent_issue_number`を設定すると`_fetch_issues`がネイティブSub-issue
+        API経由（`find_children_by_parent`）に切り替わり、本テストがモックして
+        いる`list_issues_by_label`ベースの取得経路を素通りしてしまう。"""
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=False,
+        )
+        queued_issue = _full_issue(2, footprint=("src/shared.py",), parent_number=181)
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                return_value=["origin/parent/issue-181"],
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.branch_changed_files"
+            ) as mock_branch_files,
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [queued_issue] if label == "status:queued" else []
+            )
+            report = run_dispatch_cycle(config)
+
+        mock_branch_files.assert_not_called()
+        assert report.lock_changes["to_lock"] == []
+        assert report.lock_changes["to_unlock"] == []
+        assert [t.issue_number for t in report.selected] == [2]
 
     def test_unrelated_external_branch_still_locks_overlapping_task(
         self, tmp_path, fake_forge
