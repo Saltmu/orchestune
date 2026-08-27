@@ -13,6 +13,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
     _collect_zombies_and_timeouts,
+    _decide_zombie_and_timeout,
     _decide_zombie_or_timeout_reclaims,
 )
 from orchestune.dispatch.scoring import Task
@@ -143,6 +144,22 @@ class TestCollectZombiesAndTimeouts:
 
 class TestDecideZombieOrTimeoutReclaims:
     """#233: decide層は副作用（github/os.kill/subprocess呼び出し）を一切行わない。"""
+
+    def test_pure_classifier_uses_supplied_observations(self, tmp_path):
+        active = _active(
+            worktree_path=str(tmp_path / "not-observed"), pid=111, started_at=None
+        )
+
+        decision = _decide_zombie_and_timeout(
+            active,
+            zombie_enabled=True,
+            timeout_limit=0,
+            now=2_000.0,
+            process_alive=False,
+            worktree_exists=True,
+        )
+
+        assert decision == (True, False, False)
 
     def test_zombie_dead_process_with_dirty_worktree_is_reclaimed(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
