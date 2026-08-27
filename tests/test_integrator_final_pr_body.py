@@ -435,6 +435,39 @@ class TestCollectChildSummaries:
 
         assert summaries == []
 
+    def test_prefers_the_outcome_on_the_latest_subtask_pr(self):
+        """PR#690レビュー対応(Codex P2) Reproducer: 子Issueに複数のマージ済み
+        サブタスクPRがあるとき、`_merged_subtask_prs`は表示順を安定させるため
+        PR番号昇順で返す。その順で先頭のレコードを採ると、後から作られたPRに
+        新しい結果があっても古い方を載せてしまい、行にはPRが両方並ぶため
+        齟齬になる。PR番号の大きい方＝最新の表明を採ること。"""
+        self.forge.list_prs.return_value = [
+            _subtask_pr(201, head_ref="claude/issue-101-task-a"),
+            _subtask_pr(205, head_ref="claude/issue-101-task-a-retry"),
+        ]
+        older = OutcomeRecord(
+            result="done",
+            issue=101,
+            pr=201,
+            review=ReviewSummary(bot="codex", rounds=1, verdict="approved"),
+        )
+        newer = OutcomeRecord(
+            result="done",
+            issue=101,
+            pr=205,
+            review=ReviewSummary(bot="claude", rounds=3, verdict="approved"),
+        )
+        by_pr = {201: older, 205: newer}
+        self.forge.list_comments.side_effect = lambda number: (
+            [_outcome_comment(by_pr[number])] if number in by_pr else []
+        )
+
+        summaries = collect_child_summaries(self.forge, 100, [_child(101)])
+
+        assert summaries[0].review == "done (claude / approved / 3ラウンド)"
+        # 表示は昇順のまま（読みやすさのため）で、採用だけが最新優先。
+        assert summaries[0].pr_numbers == (201, 205)
+
     def test_child_issue_comments_are_not_fetched_once_the_pr_answered(self):
         """APIコスト制限: Outcome Recordはスキル契約上PRコメントが第一の
         投稿先であるため、そこで解決できた子Issueのコメントは読みに行かない。"""

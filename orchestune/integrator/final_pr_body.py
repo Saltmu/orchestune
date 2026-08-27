@@ -210,11 +210,21 @@ def _child_outcome(
     のため、この順なら子Issue1件あたり原則1回のAPI呼び出しで解決でき、
     `AGENTS.md`のAPIコスト制限に沿う。
 
+    PR#690レビュー対応(Codex P2): 複数のサブタスクPRがある場合は**PR番号の
+    大きい方から**見る。`_merged_subtask_prs`は表示順を安定させるため昇順で
+    返すが、その順で先頭を採ると、後から作られたPRに新しい結果があっても
+    古いPRの結果を載せてしまう（行にはPRが両方並ぶので齟齬になる）。PR番号は
+    GitHub上で単調増加するので、最大のものがこのサブタスクについての最新の
+    表明にあたる。全PRのコメントを読んで`created_at`を比較する案は採らない:
+    複数PRがある子Issueで必ず全件読むことになり、上記のAPIコスト制限に反する
+    一方、PR番号による近似で取り違えが起きるのは「古いPRへ後から新しい
+    outcomeが貼られた」場合に限られる。
+
     識別フィールドがこの子タスクを指さないレコードは採用しない
     （`_outcome_from`が`_identifies_child`で絞り込む）。1件も採れなかった
     場合は`_review_text`がPRの`reviewDecision`へフォールバックする。
     """
-    for pr in prs:
+    for pr in reversed(prs):
         outcome = _outcome_from(forge, pr.number, issue_number, pr.number)
         if outcome is not None:
             return outcome
