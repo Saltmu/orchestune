@@ -12,6 +12,7 @@ from orchestune.dispatch.targets import (
     DispatchTarget,
     LocalProcessDispatchTarget,
     TargetBuildConfig,
+    _local_cli_name,
     build_dispatch_target,
     default_dry_run_command_builder,
     detect_installed_local_cli,
@@ -32,6 +33,18 @@ def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):
         status_labels=("status:queued",),
         created_at="2026-01-01T00:00:00+00:00",
     )
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ([], None),
+        (["/opt/tools/CLAUDE.EXE"], "claude"),
+        (["runner", "codex"], None),
+    ],
+)
+def test_local_cli_name_uses_only_the_executable(command, expected):
+    assert _local_cli_name(command) == expected
 
 
 class _IsCompleteOnlyTarget(DispatchTarget):
@@ -414,6 +427,25 @@ class TestBuildDispatchTarget:
         assert target._local_cmd is None
         assert "ORCHESTUNE_CODEX_CLOUD_ENV" in capsys.readouterr().err
 
+    def test_cloud_fallback_re_resolves_auto_reviewer_for_custom_local_cmd(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.delenv("ORCHESTUNE_CODEX_CLOUD_ENV", raising=False)
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "codex-cloud",
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="runner --reviewer {reviewer_bot}",
+                reviewer_bot="auto",
+            )
+        )
+
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._reviewer_bot is None
+        assert "レビュアーボットを自動選択できません" in capsys.readouterr().err
+
     def test_cloud_routine_without_credentials_falls_back_to_local(
         self, tmp_path, monkeypatch
     ):
@@ -759,6 +791,7 @@ class TestBuildDispatchTarget:
         assert "claude" in captured.err
         assert "agy" in captured.err
         assert "codex" in captured.err
+        assert captured.err.count("警告:") == 1
 
     def test_auto_with_explicit_local_cmd_overrides_detected_preset(self, tmp_path):
         with patch(

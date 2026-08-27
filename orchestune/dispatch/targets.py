@@ -926,6 +926,7 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
                 "ローカルのダミー起動にフォールバックします。",
                 file=sys.stderr,
             )
+            dispatch_target_name = "local"
 
     if is_unsafe and not allow_unsafe:
         raise ValueError(
@@ -974,30 +975,45 @@ def _build_codex_cloud_target(
     return None
 
 
+def _warn_unresolved_auto_reviewer(resolved_target_name: str) -> None:
+    print(
+        f"警告: 実行ターゲット `{resolved_target_name}` からレビュアーボットを"
+        "自動選択できません。決定論的なレビュー担当が必要な場合は "
+        "`--reviewer-bot claude|codex` を明示してください。",
+        file=sys.stderr,
+    )
+
+
 def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     target_name = _resolve_target_name(
         config.dispatch_target_name, config.allow_unsafe_agent_execution
     )
     reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, target_name)
-    if config.reviewer_bot == "auto" and reviewer_bot is None:
-        print(
-            f"警告: 実行ターゲット `{target_name}` からレビュアーボットを自動選択できません。"
-            "決定論的なレビュー担当が必要な場合は `--reviewer-bot claude|codex` を"
-            "明示してください。",
-            file=sys.stderr,
-        )
+    auto_dummy_fallback = (
+        config.dispatch_target_name == "auto"
+        and target_name == "local"
+        and config.local_cmd is None
+    )
+    if reviewer_bot is None and not auto_dummy_fallback:
+        _warn_unresolved_auto_reviewer(target_name)
     if target_name == "cloud-routine":
         cloud_target = _build_cloud_routine_target(
             config.routine_id, config.routine_token, reviewer_bot
         )
         if cloud_target is not None:
             return cloud_target
+        reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
+        if reviewer_bot is None and config.local_cmd is not None:
+            _warn_unresolved_auto_reviewer("local")
     elif target_name == "codex-cloud":
         codex_target = _build_codex_cloud_target(
             config.codex_cloud_env, config.log_dir, reviewer_bot
         )
         if codex_target is not None:
             return codex_target
+        reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
+        if reviewer_bot is None and config.local_cmd is not None:
+            _warn_unresolved_auto_reviewer("local")
 
     elif target_name in _LOCAL_CMD_BASE_BY_TARGET:
         return LocalProcessDispatchTarget(
