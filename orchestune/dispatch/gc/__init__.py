@@ -9,7 +9,8 @@ import os
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
@@ -29,6 +30,7 @@ from orchestune.dispatch.gc.completion import (
     _is_worktree_complete,
     _local_pr_completion_status,
     _parse_github_timestamp,
+    is_completion_hold_event,
 )
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
@@ -42,6 +44,7 @@ from orchestune.dispatch.gc.zombies import (
     _apply_zombie_or_timeout_reclaim,
     _check_zombie_and_timeout,
     _collect_zombies_and_timeouts,
+    _decide_zombie_and_timeout,
     _decide_zombie_or_timeout_reclaims,
 )
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
@@ -69,6 +72,7 @@ __all__ = [
     "_collect_zombies_and_timeouts",
     "_decide_completed_worktree_outcome",
     "_decide_not_needed_dirty_worktree",
+    "_decide_zombie_and_timeout",
     "_decide_zombie_or_timeout_reclaims",
     "_finalize_abandoned_cloud_worktree",
     "_finalize_completed_worktree",
@@ -77,6 +81,7 @@ __all__ = [
     "_is_worktree_complete",
     "_local_pr_completion_status",
     "_parse_github_timestamp",
+    "is_completion_hold_event",
     "backup_wip_commit",
     "is_process_alive",
     "remote_branch_commit_sha_if_ahead",
@@ -434,10 +439,7 @@ def _abandoned_worktree_outcome(
 def _find_recovery_pr(
     active: ActiveWorktree, config: DispatcherConfig
 ) -> PrRecord | None:
-    try:
-        all_prs = config.resolved_forge.list_prs(state="all")
-    except Exception:
-        return None
+    all_prs = config.resolved_forge.list_prs(state="all")
     matching_prs = [
         pr for pr in all_prs if active.issue_number in pr.closes_issue_numbers
     ]
@@ -447,42 +449,109 @@ def _find_recovery_pr(
     )
 
 
-def _resolve_completion_active_or_outcome(
+@dataclass(frozen=True, slots=True)
+class CompletionResolution:
+    """Explicit result of probing whether one active worktree can be completed."""
+
+    state: Literal["pending", "ready", "resolved"]
+    completion_active: ActiveWorktree | None = None
+    rule_outcome: ActiveWorktreeRuleOutcome | None = None
+
+    def __post_init__(self) -> None:
+        valid = (
+            (
+                self.state == "pending"
+                and self.completion_active is None
+                and self.rule_outcome is None
+            )
+            or (
+                self.state == "ready"
+                and self.completion_active is not None
+                and self.rule_outcome is None
+            )
+            or (
+                self.state == "resolved"
+                and self.completion_active is None
+                and self.rule_outcome is not None
+            )
+        )
+        if not valid:
+            raise ValueError(f"invalid completion resolution: {self.state}")
+
+    @classmethod
+    def pending(cls) -> CompletionResolution:
+        return cls(state="pending")
+
+    @classmethod
+    def ready(cls, active: ActiveWorktree) -> CompletionResolution:
+        return cls(state="ready", completion_active=active)
+
+    @classmethod
+    def resolved(cls, outcome: ActiveWorktreeRuleOutcome) -> CompletionResolution:
+        return cls(state="resolved", rule_outcome=outcome)
+
+
+def _completion_forge_error_hold(active: ActiveWorktree) -> ActiveWorktreeRuleOutcome:
+    """Build a non-mutating, same-cycle GC hold for an indeterminate completion."""
+    return ActiveWorktreeRuleOutcome(
+        completion_event={
+            "issue_number": active.issue_number,
+            "worktree_path": active.worktree_path,
+            "action": "completion_skipped_forge_error",
+        },
+        terminal=True,
+    )
+
+
+def _resolve_completion(
     ctx: CycleContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
-) -> tuple[ActiveWorktree | None, ActiveWorktreeRuleOutcome | None]:
-    """完了判定を行う対象ActiveWorktreeまたは早期終端Outcomeを解決する。"""
+) -> CompletionResolution:
+    """完了候補・保留・早期終端を明示的な値として解決する。"""
     if active.started_at is None and active.external_id is None:
-        recovery_pr = _find_recovery_pr(active, ctx.config)
+        try:
+            recovery_pr = _find_recovery_pr(active, ctx.config)
+        except Exception:
+            return CompletionResolution.resolved(_completion_forge_error_hold(active))
         if recovery_pr is None:
-            return None, None
+            return CompletionResolution.pending()
         if recovery_pr.state.upper() == "CLOSED":
-            return None, _abandoned_worktree_outcome(ctx, key, active, active_task)
-        return replace(
-            active,
-            branch=recovery_pr.head_ref,
-            external_id=f"recovered-pr:{recovery_pr.number}",
-            external_url=f"PR#{recovery_pr.number}",
-        ), None
+            return CompletionResolution.resolved(
+                _abandoned_worktree_outcome(ctx, key, active, active_task)
+            )
+        return CompletionResolution.ready(
+            replace(
+                active,
+                branch=recovery_pr.head_ref,
+                external_id=f"recovered-pr:{recovery_pr.number}",
+                external_url=f"PR#{recovery_pr.number}",
+            )
+        )
 
     if active.external_id is not None:
         status = _cloud_worktree_completion_status(active, ctx.config)
         if status == "abandoned":
-            return None, _abandoned_worktree_outcome(ctx, key, active, active_task)
+            return CompletionResolution.resolved(
+                _abandoned_worktree_outcome(ctx, key, active, active_task)
+            )
+        if status == "unknown":
+            return CompletionResolution.resolved(_completion_forge_error_hold(active))
         if status != "completed":
-            return None, None
-        return active, None
+            return CompletionResolution.pending()
+        return CompletionResolution.ready(active)
 
     if not _is_worktree_complete(active, ctx.config):
-        return None, None
+        return CompletionResolution.pending()
     local_status = _local_pr_completion_status(active, ctx.config)
     if local_status == "abandoned":
-        return None, _abandoned_worktree_outcome(ctx, key, active, active_task)
+        return CompletionResolution.resolved(
+            _abandoned_worktree_outcome(ctx, key, active, active_task)
+        )
     if local_status == "unknown":
-        return None, None
-    return active, None
+        return CompletionResolution.resolved(_completion_forge_error_hold(active))
+    return CompletionResolution.ready(active)
 
 
 def _handle_completed_event_outcome(
@@ -495,7 +564,9 @@ def _handle_completed_event_outcome(
     """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
     action = completion_event["action"]
     if action == "completion_skipped_forge_error":
-        return None
+        return ActiveWorktreeRuleOutcome(
+            completion_event=completion_event, terminal=True
+        )
     if action in ("completed", "escalated_token_limit_exceeded"):
         return _record_completed_worktree(
             ctx, key, completion_active, active_task, completion_event
@@ -520,13 +591,13 @@ def _handle_completed_event_outcome(
 def _rule_completed(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
-    completion_active, early_outcome = _resolve_completion_active_or_outcome(
-        ctx, key, active, active_task
-    )
-    if early_outcome is not None:
-        return early_outcome
-    if completion_active is None:
+    resolution = _resolve_completion(ctx, key, active, active_task)
+    if resolution.state == "pending":
         return None
+    if resolution.state == "resolved":
+        return resolution.rule_outcome
+    completion_active = resolution.completion_active
+    assert completion_active is not None
 
     completion_event = _finalize_completed_worktree(
         completion_active,
