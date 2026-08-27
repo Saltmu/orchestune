@@ -30,16 +30,18 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import PrRecord
 
 
-def _check_zombie_and_timeout(
+def _decide_zombie_and_timeout(
     active: ActiveWorktree,
     zombie_enabled: bool,
     timeout_limit: int,
     now: float,
+    *,
+    process_alive: bool,
+    worktree_exists: bool,
 ) -> tuple[bool, bool, bool]:
-    """Return ``(is_zombie, is_timeout, process_alive)``."""
+    """Purely classify process/worktree observations into a reclaim decision."""
     is_zombie = False
     is_timeout = False
-    process_alive = is_process_alive(active.pid)
 
     if zombie_enabled and active.pid is not None and not process_alive:
         # プロセスが消えていれば、worktreeの変更有無にかかわらず当該実行は
@@ -51,7 +53,7 @@ def _check_zombie_and_timeout(
         zombie_enabled
         and active.pid is None
         and active.started_at is None
-        and not os.path.exists(active.worktree_path)
+        and not worktree_exists
     ):
         # #383: 対応PRが見つからず自己修復した孤立エントリは、ローカルPIDも
         # 開始時刻も物理worktreeも持たない。これはクラウド実行（pid=None）とは
@@ -63,6 +65,23 @@ def _check_zombie_and_timeout(
             is_timeout = True
 
     return is_zombie, is_timeout, process_alive
+
+
+def _check_zombie_and_timeout(
+    active: ActiveWorktree,
+    zombie_enabled: bool,
+    timeout_limit: int,
+    now: float,
+) -> tuple[bool, bool, bool]:
+    """Observe external state, then delegate to the pure reclaim classifier."""
+    return _decide_zombie_and_timeout(
+        active,
+        zombie_enabled,
+        timeout_limit,
+        now,
+        process_alive=is_process_alive(active.pid),
+        worktree_exists=os.path.exists(active.worktree_path),
+    )
 
 
 @dataclass
