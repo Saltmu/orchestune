@@ -984,6 +984,13 @@ def _warn_unresolved_auto_reviewer(resolved_target_name: str) -> None:
     )
 
 
+def _resolve_local_fallback_reviewer(config: TargetBuildConfig) -> ReviewerBot | None:
+    reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
+    if reviewer_bot is None and config.local_cmd is not None:
+        _warn_unresolved_auto_reviewer("local")
+    return reviewer_bot
+
+
 def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     target_name = _resolve_target_name(
         config.dispatch_target_name, config.allow_unsafe_agent_execution
@@ -1002,18 +1009,14 @@ def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
         )
         if cloud_target is not None:
             return cloud_target
-        reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
-        if reviewer_bot is None and config.local_cmd is not None:
-            _warn_unresolved_auto_reviewer("local")
+        reviewer_bot = _resolve_local_fallback_reviewer(config)
     elif target_name == "codex-cloud":
         codex_target = _build_codex_cloud_target(
             config.codex_cloud_env, config.log_dir, reviewer_bot
         )
         if codex_target is not None:
             return codex_target
-        reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
-        if reviewer_bot is None and config.local_cmd is not None:
-            _warn_unresolved_auto_reviewer("local")
+        reviewer_bot = _resolve_local_fallback_reviewer(config)
 
     elif target_name in _LOCAL_CMD_BASE_BY_TARGET:
         return LocalProcessDispatchTarget(

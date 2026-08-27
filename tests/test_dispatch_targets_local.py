@@ -427,13 +427,16 @@ class TestBuildDispatchTarget:
         assert target._local_cmd is None
         assert "ORCHESTUNE_CODEX_CLOUD_ENV" in capsys.readouterr().err
 
-    def test_cloud_fallback_re_resolves_auto_reviewer_for_custom_local_cmd(
-        self, tmp_path, monkeypatch, capsys
+    @pytest.mark.parametrize("target_name", ["cloud-routine", "codex-cloud"])
+    def test_cloud_fallbacks_re_resolve_auto_reviewer_for_custom_local_cmd(
+        self, tmp_path, monkeypatch, capsys, target_name
     ):
         monkeypatch.delenv("ORCHESTUNE_CODEX_CLOUD_ENV", raising=False)
+        monkeypatch.delenv("ORCHESTUNE_ROUTINE_ID", raising=False)
+        monkeypatch.delenv("ORCHESTUNE_ROUTINE_TOKEN", raising=False)
         target = build_dispatch_target(
             TargetBuildConfig(
-                "codex-cloud",
+                target_name,
                 None,
                 None,
                 tmp_path / "logs",
