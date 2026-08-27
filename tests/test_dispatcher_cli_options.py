@@ -157,6 +157,19 @@ class TestBuildArgParser:
         args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cloud"])
         assert args.dispatch_target == "codex-cloud"
 
+    def test_reviewer_bot_defaults_to_auto(self):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args([])
+        assert args.reviewer_bot == "auto"
+
+    @pytest.mark.parametrize("reviewer_bot", ["auto", "claude", "codex"])
+    def test_reviewer_bot_is_parsed(self, reviewer_bot):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        args = _build_arg_parser().parse_args(["--reviewer-bot", reviewer_bot])
+        assert args.reviewer_bot == reviewer_bot
+
     def test_codex_cloud_env_option_is_parsed(self):
         from orchestune.dispatch.dispatcher import _build_arg_parser
 
@@ -316,6 +329,7 @@ class TestDispatcherCliSingleResponsibility:
             "events_log_path",
             "not_needed_review_state_path",
             "dispatch_target",
+            "reviewer_bot",
             "routine_token",
             "allow_unsafe_agent_execution",
             "max_tokens_per_task",
@@ -348,12 +362,24 @@ class TestConfigDefaults:
             "max-task-reclaims": 5,
             "not-needed-review-timeout-seconds": 1800,
             "zombie-gc": False,
+            "reviewer-bot": "claude",
         }
         defaults = _config_defaults(parser, config_data)
         assert defaults["task_timeout_seconds"] == 1200
         assert defaults["max_task_reclaims"] == 5
         assert defaults["not_needed_review_timeout_seconds"] == 1800
         assert defaults["zombie_gc"] is False
+        assert defaults["reviewer_bot"] == "claude"
+
+    def test_cli_reviewer_bot_overrides_config_default(self):
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+
+        parser = _build_arg_parser()
+        parser.set_defaults(**_config_defaults(parser, {"reviewer-bot": "claude"}))
+
+        args = parser.parse_args(["--reviewer-bot", "codex"])
+
+        assert args.reviewer_bot == "codex"
 
     def test_config_defaults_validation_error(self):
         import pytest
@@ -366,6 +392,9 @@ class TestConfigDefaults:
 
         with pytest.raises(SystemExit):
             _config_defaults(parser, {"zombie-gc": "invalid"})
+
+        with pytest.raises(SystemExit):
+            _config_defaults(parser, {"reviewer-bot": "gemini"})
 
         with pytest.raises(SystemExit):
             _config_defaults(parser, {"max-task-reclaims": -1})
@@ -552,3 +581,25 @@ class TestMainDispatchTargetAutoDetection:
             )
 
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
+
+    def test_explicit_reviewer_bot_is_forwarded_to_target_builder(self, tmp_path):
+        with (
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ),
+        ):
+            main(
+                [
+                    "--no-apply",
+                    "--reviewer-bot",
+                    "codex",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ]
+            )
+
+        assert mock_build.call_args.args[0].reviewer_bot == "codex"

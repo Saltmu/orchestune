@@ -26,6 +26,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from orchestune.dispatch.reviewer import (
+    ReviewerBot,
+    ReviewerBotSetting,
+    resolve_reviewer_bot,
+)
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
@@ -54,7 +59,18 @@ NONINTERACTIVE_DISPATCH_INSTRUCTION = (
     "実装プラン作成後は直ちに実装・検証・コミットまで完了させてください。"
 )
 
-CLAUDE_CLI_LOCAL_CMD_TEMPLATE = (
+
+def _noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
+    if reviewer_bot is None:
+        return NONINTERACTIVE_DISPATCH_INSTRUCTION
+    return (
+        NONINTERACTIVE_DISPATCH_INSTRUCTION
+        + f"PR作成後のレビュー担当には必ず `{reviewer_bot}` を指定し、"
+        "レビュー完了と指摘解消まで自律的に進めてください。"
+    )
+
+
+_CLAUDE_CLI_LOCAL_CMD_BASE = (
     'claude -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
@@ -63,7 +79,7 @@ CLAUDE_CLI_LOCAL_CMD_TEMPLATE = (
     "--output-format stream-json"
 )
 
-AGY_CLI_LOCAL_CMD_TEMPLATE = (
+_AGY_CLI_LOCAL_CMD_BASE = (
     'agy -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
@@ -71,12 +87,38 @@ AGY_CLI_LOCAL_CMD_TEMPLATE = (
     "--add-dir . --print-timeout 60m --dangerously-skip-permissions"
 )
 
-CODEX_CLI_LOCAL_CMD_TEMPLATE = (
+_CODEX_CLI_LOCAL_CMD_BASE = (
     'codex exec "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--dangerously-bypass-approvals-and-sandbox"
+)
+
+_LOCAL_CMD_BASE_BY_TARGET = {
+    "claude-cli": _CLAUDE_CLI_LOCAL_CMD_BASE,
+    "agy-cli": _AGY_CLI_LOCAL_CMD_BASE,
+    "codex-cli": _CODEX_CLI_LOCAL_CMD_BASE,
+}
+
+
+def _default_local_cmd_template(
+    target_name: str, reviewer_bot: ReviewerBot | None
+) -> str:
+    return _LOCAL_CMD_BASE_BY_TARGET[target_name].replace(
+        NONINTERACTIVE_DISPATCH_INSTRUCTION,
+        _noninteractive_instruction(reviewer_bot),
+    )
+
+
+CLAUDE_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
+    "claude-cli", resolve_reviewer_bot("auto", "claude-cli")
+)
+AGY_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
+    "agy-cli", resolve_reviewer_bot("auto", "agy-cli")
+)
+CODEX_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
+    "codex-cli", resolve_reviewer_bot("auto", "codex-cli")
 )
 
 LOCAL_CLI_CANDIDATES: tuple[str, ...] = ("claude", "agy", "codex")
@@ -314,6 +356,16 @@ def _is_pid_alive(pid: int | None) -> bool:
     return is_process_alive(pid)
 
 
+def _local_cli_name(command: list[str]) -> str | None:
+    """Return the supported CLI executable without inspecting prompt text."""
+    if not command:
+        return None
+    executable = Path(command[0]).name.lower().removesuffix(".exe")
+    if executable in LOCAL_CLI_CANDIDATES:
+        return executable
+    return None
+
+
 def _format_local_cmd(
     local_cmd: str,
     task: Task,
@@ -322,6 +374,7 @@ def _format_local_cmd(
     model: str | None,
     reasoning_effort: str | None,
     profile_name: str,
+    reviewer_bot: ReviewerBot | None = None,
 ) -> list[str]:
     formatted_cmd = local_cmd.format(
         issue_number=task.issue_number,
@@ -331,22 +384,22 @@ def _format_local_cmd(
         model=model or "",
         reasoning_effort=reasoning_effort or "",
         profile=profile_name,
+        reviewer_bot=reviewer_bot or "",
     )
     cmd = shlex.split(formatted_cmd)
-    cmd_lower = local_cmd.lower()
+    cli_name = _local_cli_name(cmd)
 
     if "{model}" not in local_cmd and model:
-        if "claude" in cmd_lower or "agy" in cmd_lower or "codex" in cmd_lower:
+        if cli_name is not None:
             cmd.extend(["--model", model])
 
     if "{reasoning_effort}" not in local_cmd and reasoning_effort:
-        if "codex" in cmd_lower:
+        if cli_name == "codex":
             cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
-        elif "claude" in cmd_lower or "agy" in cmd_lower:
-            target_label = "claude-cli" if "claude" in cmd_lower else "agy-cli"
+        elif cli_name in ("claude", "agy"):
             logger.warning(
                 "Target %r does not support reasoning_effort %r; skipping setting",
-                target_label,
+                f"{cli_name}-cli",
                 reasoning_effort,
             )
     return cmd
@@ -366,10 +419,12 @@ class LocalProcessDispatchTarget(DispatchTarget):
         ] = default_dry_run_command_builder,
         log_dir: str | Path = Path("logs"),
         local_cmd: str | None = None,
+        reviewer_bot: ReviewerBot | None = None,
     ):
         self._command_builder = command_builder
         self._log_dir = Path(log_dir)
         self._local_cmd = local_cmd
+        self._reviewer_bot = reviewer_bot
 
     def launch(
         self,
@@ -400,6 +455,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
                 model,
                 reasoning_effort,
                 profile_name,
+                self._reviewer_bot,
             )
         else:
             cmd = self._command_builder(task, worktree_path)
@@ -516,11 +572,13 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         routine_token: str,
         max_retries: int = 3,
         initial_delay: float = 1.0,
+        reviewer_bot: ReviewerBot | None = None,
     ):
         self._routine_id = routine_id
         self._routine_token = routine_token
         self._max_retries = max_retries
         self._initial_delay = initial_delay
+        self._reviewer_bot = reviewer_bot
 
     def _build_text(self, task: Task, branch_name: str) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
@@ -537,7 +595,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             f"originから `{branch_name}` をfetchしてcheckoutし、その内容を"
             "起点に作業してください。\n"
             f"想定footprint: {footprint}\n"
-            f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
+            f"{_noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
     def _fire(self, text: str, model: str | None = None) -> dict[str, Any]:
@@ -748,9 +806,15 @@ class CodexCloudDispatchTarget(DispatchTarget):
     Cloud実タスク状態照合とPR状態を組み合わせて完了判定を行う。
     """
 
-    def __init__(self, environment_id: str, log_dir: str | Path = Path("logs")):
+    def __init__(
+        self,
+        environment_id: str,
+        log_dir: str | Path = Path("logs"),
+        reviewer_bot: ReviewerBot | None = None,
+    ):
         self._environment_id = environment_id
         self._log_dir = Path(log_dir)
+        self._reviewer_bot = reviewer_bot
 
     def _build_prompt(self, task: Task, branch_name: str) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
@@ -760,7 +824,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
             "標準開発ワークフローに従って実装してください。\n"
             f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
             f"想定footprint: {footprint}\n"
-            f"{NONINTERACTIVE_DISPATCH_INSTRUCTION}\n"
+            f"{_noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
     def _fetch_task_status(self, task_id: str) -> str | None:
@@ -837,7 +901,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
 
 @dataclass(frozen=True)
 class TargetBuildConfig:
-    """#476: `build_dispatch_target`の7引数を集約するDTO。"""
+    """#476: `build_dispatch_target`の入力を集約するDTO。"""
 
     dispatch_target_name: str
     routine_id: str | None
@@ -846,6 +910,7 @@ class TargetBuildConfig:
     local_cmd: str | None = None
     codex_cloud_env: str | None = None
     allow_unsafe_agent_execution: bool = False
+    reviewer_bot: ReviewerBotSetting = "auto"
 
 
 def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
@@ -861,6 +926,7 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
                 "ローカルのダミー起動にフォールバックします。",
                 file=sys.stderr,
             )
+            dispatch_target_name = "local"
 
     if is_unsafe and not allow_unsafe:
         raise ValueError(
@@ -872,12 +938,16 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
 
 
 def _build_cloud_routine_target(
-    routine_id: str | None, routine_token: str | None
+    routine_id: str | None,
+    routine_token: str | None,
+    reviewer_bot: ReviewerBot | None,
 ) -> ClaudeCodeCloudRoutineDispatchTarget | None:
     resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
     resolved_token = routine_token or os.environ.get(ROUTINE_TOKEN_ENV_VAR)
     if resolved_id and resolved_token:
-        return ClaudeCodeCloudRoutineDispatchTarget(resolved_id, resolved_token)
+        return ClaudeCodeCloudRoutineDispatchTarget(
+            resolved_id, resolved_token, reviewer_bot=reviewer_bot
+        )
     print(
         f"警告: {ROUTINE_ID_ENV_VAR}/{ROUTINE_TOKEN_ENV_VAR}"
         "が未設定のため、クラウドルーチンへのディスパッチはできません。"
@@ -888,11 +958,15 @@ def _build_cloud_routine_target(
 
 
 def _build_codex_cloud_target(
-    codex_cloud_env: str | None, log_dir: str | Path
+    codex_cloud_env: str | None,
+    log_dir: str | Path,
+    reviewer_bot: ReviewerBot | None,
 ) -> CodexCloudDispatchTarget | None:
     resolved_env = codex_cloud_env or os.environ.get(CODEX_CLOUD_ENV_VAR)
     if resolved_env:
-        return CodexCloudDispatchTarget(resolved_env, log_dir=log_dir)
+        return CodexCloudDispatchTarget(
+            resolved_env, log_dir=log_dir, reviewer_bot=reviewer_bot
+        )
     print(
         f"警告: {CODEX_CLOUD_ENV_VAR}が未設定のため、Codex Cloudへの"
         "ディスパッチはできません。ローカルのダミー起動にフォールバックします。",
@@ -901,36 +975,58 @@ def _build_codex_cloud_target(
     return None
 
 
+def _warn_unresolved_auto_reviewer(resolved_target_name: str) -> None:
+    print(
+        f"警告: 実行ターゲット `{resolved_target_name}` からレビュアーボットを"
+        "自動選択できません。決定論的なレビュー担当が必要な場合は "
+        "`--reviewer-bot claude|codex` を明示してください。",
+        file=sys.stderr,
+    )
+
+
+def _resolve_local_fallback_reviewer(config: TargetBuildConfig) -> ReviewerBot | None:
+    reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
+    if reviewer_bot is None and config.local_cmd is not None:
+        _warn_unresolved_auto_reviewer("local")
+    return reviewer_bot
+
+
 def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     target_name = _resolve_target_name(
         config.dispatch_target_name, config.allow_unsafe_agent_execution
     )
+    reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, target_name)
+    auto_dummy_fallback = (
+        config.dispatch_target_name == "auto"
+        and target_name == "local"
+        and config.local_cmd is None
+    )
+    if reviewer_bot is None and not auto_dummy_fallback:
+        _warn_unresolved_auto_reviewer(target_name)
     if target_name == "cloud-routine":
         cloud_target = _build_cloud_routine_target(
-            config.routine_id, config.routine_token
+            config.routine_id, config.routine_token, reviewer_bot
         )
         if cloud_target is not None:
             return cloud_target
+        reviewer_bot = _resolve_local_fallback_reviewer(config)
     elif target_name == "codex-cloud":
-        codex_target = _build_codex_cloud_target(config.codex_cloud_env, config.log_dir)
+        codex_target = _build_codex_cloud_target(
+            config.codex_cloud_env, config.log_dir, reviewer_bot
+        )
         if codex_target is not None:
             return codex_target
+        reviewer_bot = _resolve_local_fallback_reviewer(config)
 
-    elif target_name == "claude-cli":
+    elif target_name in _LOCAL_CMD_BASE_BY_TARGET:
         return LocalProcessDispatchTarget(
             log_dir=config.log_dir,
-            local_cmd=config.local_cmd or CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
-        )
-    elif target_name == "agy-cli":
-        return LocalProcessDispatchTarget(
-            log_dir=config.log_dir,
-            local_cmd=config.local_cmd or AGY_CLI_LOCAL_CMD_TEMPLATE,
-        )
-    elif target_name == "codex-cli":
-        return LocalProcessDispatchTarget(
-            log_dir=config.log_dir,
-            local_cmd=config.local_cmd or CODEX_CLI_LOCAL_CMD_TEMPLATE,
+            local_cmd=config.local_cmd
+            or _default_local_cmd_template(target_name, reviewer_bot),
+            reviewer_bot=reviewer_bot,
         )
     return LocalProcessDispatchTarget(
-        log_dir=config.log_dir, local_cmd=config.local_cmd
+        log_dir=config.log_dir,
+        local_cmd=config.local_cmd,
+        reviewer_bot=reviewer_bot,
     )

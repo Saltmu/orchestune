@@ -219,8 +219,9 @@ orchestune-dispatch
 | `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or just preview them (dry-run). |
 | `--max-concurrent <int>` | `2` | Maximum number of subtask agents running concurrently. |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, it is auto-selected from the runtime environment (the `GITHUB_ACTIONS` variable). `auto` detects a local CLI on `PATH`. You can explicitly select a local CLI, Claude Code Cloud Routine, or a Codex Cloud environment configured through `ORCHESTUNE_CODEX_CLOUD_ENV` (or `--codex-cloud-env`). `codex-cloud` pushes the task branch to `origin`, submits it to Codex Cloud, and combines Cloud task tracking with branch PR / outcome record status to determine completion. Only explicitly passing `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
+| `--reviewer-bot {auto,claude,codex}` | `auto` | Reviewer requested after implementation. `auto` is evaluated after the dispatch target is resolved and selects a cross-vendor reviewer: Claude targets use Codex; Codex and `agy` targets use Claude. An explicit value overrides this mapping. Generic `local` cannot be inferred and emits a warning. |
 | `--codex-cloud-env <id>` | - | Codex Cloud environment ID used by `--dispatch-target codex-cloud`; defaults to `ORCHESTUNE_CODEX_CLOUD_ENV`. |
-| `--local-cmd <template>` | - | When using `--dispatch-target local`, a command template for dispatching to a local CLI (e.g. `agy`). Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}` (e.g. `agy --issue {issue_number}`). If omitted, the default dry-run stub command is used. With `--dispatch-target claude-cli`/`agy-cli`/`codex-cli` (including when `auto` resolves to one of these), this is optional and overrides the built-in preset. |
+| `--local-cmd <template>` | - | When using a local target, a command template for dispatching to a CLI. Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, and `{reviewer_bot}`. If omitted for generic `local`, the dry-run stub is used. With a local CLI preset, this option replaces the preset; Orchestune substitutes `{reviewer_bot}` when present but never appends review instructions to arbitrary custom commands. |
 | `--parent-issue <int>` | - | The parent GitHub Issue number that coordinates this plan. Created sub-issues will link to this parent. |
 | `--ci-command <cmd>` | `./scripts/local-ci.sh` (specific to Orchestune's own repository) | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex, e.g. `'make ci'`). Set this explicitly if your repository's CI entrypoint differs (see [Setup Guide § Prerequisites](setup.md#0-prerequisites)). In `orchestune.toml`/`pyproject.toml`'s `[tool.orchestune]` section, use the `ci-command` key. |
 | `--deviation-buffer-lines <int>` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
@@ -250,6 +251,7 @@ The dispatcher searches for configuration files in the following order and loads
 ```toml
 max-concurrent = 2
 dispatch-target = "claude-cli"
+reviewer-bot = "auto"
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
@@ -283,6 +285,7 @@ model = "gpt-4o"
 [tool.orchestune]
 max-concurrent = 2
 dispatch-target = "claude-cli"
+reviewer-bot = "auto"
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"

@@ -12,6 +12,7 @@ from orchestune.dispatch.targets import (
     DispatchTarget,
     LocalProcessDispatchTarget,
     TargetBuildConfig,
+    _local_cli_name,
     build_dispatch_target,
     default_dry_run_command_builder,
     detect_installed_local_cli,
@@ -32,6 +33,18 @@ def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):
         status_labels=("status:queued",),
         created_at="2026-01-01T00:00:00+00:00",
     )
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ([], None),
+        (["/opt/tools/CLAUDE.EXE"], "claude"),
+        (["runner", "codex"], None),
+    ],
+)
+def test_local_cli_name_uses_only_the_executable(command, expected):
+    assert _local_cli_name(command) == expected
 
 
 class _IsCompleteOnlyTarget(DispatchTarget):
@@ -154,6 +167,24 @@ class TestLocalProcessDispatchTarget:
             "claude/issue-42-sub-x",
             "--path",
             str(tmp_path / "wt"),
+        ]
+
+    def test_launch_replaces_reviewer_bot_placeholder(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="runner --reviewer {reviewer_bot} --issue {issue_number}",
+            reviewer_bot="codex",
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
+
+        assert mock_popen.call_args.args[0] == [
+            "runner",
+            "--reviewer",
+            "codex",
+            "--issue",
+            "42",
         ]
 
     def test_launch_with_execution_selection_claude_cli_adds_model_and_skips_effort(
@@ -396,6 +427,28 @@ class TestBuildDispatchTarget:
         assert target._local_cmd is None
         assert "ORCHESTUNE_CODEX_CLOUD_ENV" in capsys.readouterr().err
 
+    @pytest.mark.parametrize("target_name", ["cloud-routine", "codex-cloud"])
+    def test_cloud_fallbacks_re_resolve_auto_reviewer_for_custom_local_cmd(
+        self, tmp_path, monkeypatch, capsys, target_name
+    ):
+        monkeypatch.delenv("ORCHESTUNE_CODEX_CLOUD_ENV", raising=False)
+        monkeypatch.delenv("ORCHESTUNE_ROUTINE_ID", raising=False)
+        monkeypatch.delenv("ORCHESTUNE_ROUTINE_TOKEN", raising=False)
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                target_name,
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="runner --reviewer {reviewer_bot}",
+                reviewer_bot="auto",
+            )
+        )
+
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._reviewer_bot is None
+        assert "レビュアーボットを自動選択できません" in capsys.readouterr().err
+
     def test_cloud_routine_without_credentials_falls_back_to_local(
         self, tmp_path, monkeypatch
     ):
@@ -537,6 +590,91 @@ class TestBuildDispatchTarget:
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
 
+    @pytest.mark.parametrize(
+        ("target_name", "expected_reviewer"),
+        [
+            ("claude-cli", "codex"),
+            ("agy-cli", "claude"),
+            ("codex-cli", "claude"),
+        ],
+    )
+    def test_local_preset_injects_cross_vendor_reviewer(
+        self, tmp_path, target_name, expected_reviewer
+    ):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                target_name,
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+                reviewer_bot="auto",
+            )
+        )
+
+        assert f"レビュー担当には必ず `{expected_reviewer}`" in target._local_cmd
+
+    def test_explicit_reviewer_overrides_local_cross_vendor_default(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+                reviewer_bot="claude",
+            )
+        )
+
+        assert "レビュー担当には必ず `claude`" in target._local_cmd
+
+    def test_cloud_targets_inject_cross_vendor_reviewer(self, tmp_path):
+        claude_target = build_dispatch_target(
+            TargetBuildConfig(
+                "cloud-routine",
+                "routine",
+                "token",
+                tmp_path / "logs",
+                reviewer_bot="auto",
+            )
+        )
+        codex_target = build_dispatch_target(
+            TargetBuildConfig(
+                "codex-cloud",
+                None,
+                None,
+                tmp_path / "logs",
+                codex_cloud_env="env-1",
+                reviewer_bot="auto",
+            )
+        )
+
+        assert isinstance(claude_target, ClaudeCodeCloudRoutineDispatchTarget)
+        assert "レビュー担当には必ず `codex`" in claude_target._build_text(
+            _task(), "agent/issue-1"
+        )
+        assert isinstance(codex_target, CodexCloudDispatchTarget)
+        assert "レビュー担当には必ず `claude`" in codex_target._build_prompt(
+            _task(), "agent/issue-1"
+        )
+
+    def test_generic_local_auto_reviewer_warns_and_stays_unresolved(
+        self, tmp_path, capsys
+    ):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "local",
+                None,
+                None,
+                tmp_path / "logs",
+                reviewer_bot="auto",
+            )
+        )
+
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target._reviewer_bot is None
+        assert "レビュアーボットを自動選択できません" in capsys.readouterr().err
+
     def test_codex_cli_preset_bypasses_approvals_and_sandbox(self, tmp_path):
         target = build_dispatch_target(
             TargetBuildConfig(
@@ -656,6 +794,7 @@ class TestBuildDispatchTarget:
         assert "claude" in captured.err
         assert "agy" in captured.err
         assert "codex" in captured.err
+        assert captured.err.count("警告:") == 1
 
     def test_auto_with_explicit_local_cmd_overrides_detected_preset(self, tmp_path):
         with patch(
