@@ -226,6 +226,60 @@ class TestCollectChildSummaries:
 
         assert summaries[0].review == "not-needed"
 
+    def test_rejects_an_outcome_record_naming_another_issue(self):
+        """Codexレビュー(P2) Reproducer: PRが複数Issueを閉じる場合や古い
+        レコードが貼り直された場合、そのPRのコメントには別タスクのOutcome
+        Recordが載りうる。`issue`は契約上の識別子なので、一致しないレコードを
+        この子Issueのレビュー結果として表示してはならない。"""
+        self.forge.list_prs.return_value = [
+            _subtask_pr(201, review_decision="APPROVED")
+        ]
+        foreign = OutcomeRecord(result="done", issue=999, pr=201)
+        self.forge.list_comments.side_effect = lambda number: (
+            [_outcome_comment(foreign)] if number == 201 else []
+        )
+
+        summaries = collect_child_summaries(self.forge, 100, [_child(101)])
+
+        assert summaries[0].review == "APPROVED"
+
+    def test_rejects_an_outcome_record_naming_another_pr(self):
+        """同(P2): PRコメント上のレコードが別PRを名乗る場合も同様に弾く。"""
+        self.forge.list_prs.return_value = [
+            _subtask_pr(201, review_decision="APPROVED")
+        ]
+        foreign = OutcomeRecord(result="done", issue=101, pr=999)
+        self.forge.list_comments.side_effect = lambda number: (
+            [_outcome_comment(foreign)] if number == 201 else []
+        )
+
+        summaries = collect_child_summaries(self.forge, 100, [_child(101)])
+
+        assert summaries[0].review == "APPROVED"
+
+    def test_accepts_an_outcome_record_that_omits_the_pr_field(self):
+        """境界: `pr`は任意フィールドなので、未設定を不一致として弾かない
+        （弾くと`pr`を省略した正当なレコードが全て失われる）。"""
+        self.forge.list_prs.return_value = [_subtask_pr(201)]
+        record = OutcomeRecord(result="done", issue=101)
+        self.forge.list_comments.side_effect = lambda number: (
+            [_outcome_comment(record)] if number == 201 else []
+        )
+
+        summaries = collect_child_summaries(self.forge, 100, [_child(101)])
+
+        assert summaries[0].review == "done"
+
+    def test_rejects_a_foreign_outcome_record_on_the_child_issue_itself(self):
+        """同(P2): 子Issue側のコメントに載った別タスクのレコードも弾く。"""
+        self.forge.list_prs.return_value = []
+        foreign = OutcomeRecord(result="done", issue=999)
+        self.forge.list_comments.return_value = [_outcome_comment(foreign)]
+
+        summaries = collect_child_summaries(self.forge, 100, [_child(101)])
+
+        assert summaries[0].review == ""
+
     def test_blocked_outcome_reports_its_reason(self):
         self.forge.list_prs.return_value = []
         record = OutcomeRecord(
@@ -264,13 +318,18 @@ class TestCollectChildSummaries:
 
         assert [s.issue_number for s in summaries] == [101, 102, 103]
 
-    def test_list_prs_failure_degrades_to_issue_only_rows(self):
+    def test_list_prs_failure_yields_no_summaries_at_all(self):
+        """Codexレビュー(P2) Reproducer: `list_prs`が一時障害で落ちたとき、
+        `prs=[]`として行を組み立てると、実際にはPRがある子Issueの
+        サブタスクPR欄が`—`になる。この「PRが無かった」と読める偽の行は、
+        再利用PRでは`if summaries`を通過して投稿済みの正しい表を上書きし、
+        新規PRでは誤情報をそのまま掲載してしまう。行を作らないことで
+        既存の縮退ガード（テーブル省略・本文非更新）へ倒す。"""
         self.forge.list_prs.side_effect = RuntimeError("transient API failure")
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
-        assert summaries[0].issue_number == 101
-        assert summaries[0].pr_numbers == ()
+        assert summaries == []
 
     def test_list_comments_failure_is_non_fatal(self):
         self.forge.list_prs.return_value = [

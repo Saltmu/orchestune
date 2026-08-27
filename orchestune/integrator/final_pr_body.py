@@ -132,6 +132,26 @@ def _outcome_from(forge: Forge, number: int) -> OutcomeRecord | None:
     return parse_from_comments(comments)
 
 
+def _identifies_child(
+    record: OutcomeRecord, issue_number: int, pr_number: int | None
+) -> bool:
+    """PR#690レビュー対応(Codex P2): そのレコードの識別フィールドが、この子
+    タスクのものだと述べているかを確認する。
+
+    1つのPRが複数Issueを閉じる場合や、古いレコードが貼り直された場合、
+    走査対象のコメント欄には別タスクのOutcome Recordが載りうる。`issue`/`pr`は
+    レコード契約上の識別子なので、ここで照合しなければ他タスクの
+    レビュー結果をこの子Issueの行として掲載してしまう。
+
+    `pr`は任意フィールドであり、未設定は「PRを主張していない」を意味する。
+    不一致として弾くと`pr`を省略した正当なレコードが全て失われるため、
+    値が入っているときだけ照合する。
+    """
+    if record.issue != issue_number:
+        return False
+    return pr_number is None or record.pr is None or record.pr == pr_number
+
+
 def _child_outcome(
     forge: Forge, issue_number: int, prs: Sequence[PrRecord]
 ) -> OutcomeRecord | None:
@@ -140,12 +160,19 @@ def _child_outcome(
     local-ci-developerスキルは完了時のoutcomeを**PRコメント**へ投稿する契約
     のため、この順なら子Issue1件あたり原則1回のAPI呼び出しで解決でき、
     `AGENTS.md`のAPIコスト制限に沿う。
+
+    識別フィールドがこの子タスクを指さないレコードは採用しない
+    （`_identifies_child`）。採用しなかった場合は`_review_text`が
+    PRの`reviewDecision`へフォールバックする。
     """
     for pr in prs:
         outcome = _outcome_from(forge, pr.number)
-        if outcome is not None:
+        if outcome is not None and _identifies_child(outcome, issue_number, pr.number):
             return outcome
-    return _outcome_from(forge, issue_number)
+    outcome = _outcome_from(forge, issue_number)
+    if outcome is not None and _identifies_child(outcome, issue_number, None):
+        return outcome
+    return None
 
 
 def _review_text(outcome: OutcomeRecord | None, prs: Sequence[PrRecord]) -> str:
@@ -190,6 +217,14 @@ def collect_child_summaries(
     `find_children_by_parent`はネイティブSub-issueと本文metadata由来の候補を
     連結した順で返すため、本文が毎サイクル並び替わらないよう子Issue番号で
     整列してから組み立てる。
+
+    PR#690レビュー対応(Codex P2): マージ済みPRの取得自体に失敗した場合は、
+    空リストを返して「縮退」を呼び出し元へ伝える。`prs=[]`のまま行を作ると、
+    実際にはサブタスクPRを持つ子Issueの欄が`—`になり、「PRが無かった」と
+    読める偽の行ができる。この行は再利用PRでは`ensure_parent_final_pr`の
+    `if summaries`ガードを通過して投稿済みの正しい表を上書きし、新規PRでは
+    誤情報をそのまま掲載する。空リストならテーブル省略・本文非更新という
+    既存の縮退経路へ倒せる。
     """
     ordered = sorted(children, key=lambda child: child.number)
     try:
@@ -197,10 +232,12 @@ def collect_child_summaries(
     except Exception as error:  # noqa: BLE001 - 一覧生成はベストエフォート
         print(
             f"Warning: Failed to list merged PRs while building the final "
-            f"integration PR body for #{parent_issue_number}: {error}",
+            f"integration PR body for #{parent_issue_number}; omitting the child "
+            f"table rather than rendering rows that wrongly show no subtask "
+            f"PRs: {error}",
             file=sys.stderr,
         )
-        prs = []
+        return []
     matched = _merged_subtask_prs(
         prs,
         f"parent/issue-{parent_issue_number}",

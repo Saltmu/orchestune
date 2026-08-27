@@ -383,6 +383,28 @@ class TestEnsureParentFinalPrBody(_FakeForgeTest):
         assert pr_number == 321
         self.forge.update_pull_request.assert_not_called()
 
+    def test_reused_pr_body_is_kept_when_merged_pr_collection_fails(self):
+        """Codexレビュー(P2) Reproducer: `list_prs`の一時障害で、実際には
+        サブタスクPRがある子Issueの行が`—`付きで生成されると、投稿済みの
+        正しい表がそれで上書きされてしまう。"""
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+            )
+        ]
+        self.forge.list_prs.side_effect = RuntimeError("transient API failure")
+
+        pr_number = ensure_parent_final_pr(
+            100, forge=self.forge, children=[self._child()]
+        )
+
+        assert pr_number == 321
+        self.forge.update_pull_request.assert_not_called()
+
     def test_discovers_children_when_they_are_not_supplied(self):
         self.forge.list_open_prs.return_value = []
         self.forge.list_sub_issues.return_value = [self._child()]
