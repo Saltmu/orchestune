@@ -97,8 +97,23 @@ class TestProcessParentCompletion:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
+
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
+    def test_hands_the_discovered_children_to_the_final_pr(
+        self, mock_ensure_pr, fake_forge: MagicMock
+    ):
+        """#681: 子Issue一覧テーブルの生成のために、既に取得済みの子Issueを
+        そのまま引き渡す（`find_children_by_parent`の二重呼び出しを避ける）。"""
+        children = [_issue(101, "CLOSED"), _issue(102, "CLOSED")]
+        fake_forge.get_merged_pr_timestamp.return_value = None
+        fake_forge.list_sub_issues.return_value = children
+        mock_ensure_pr.return_value = 777
+
+        process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert mock_ensure_pr.call_args.kwargs["children"] == children
 
     @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_waits_when_some_children_still_open(
@@ -160,7 +175,7 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
     def test_does_not_close_when_tip_verification_fails_for_unknown_reason(
@@ -197,7 +212,7 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
     def test_closes_when_merge_happened_after_reopen(self, fake_forge: MagicMock):
@@ -230,7 +245,7 @@ class TestProcessParentCompletion:
 
         fake_forge.is_current_branch_tip_merged_into.assert_not_called()
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
     @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
@@ -255,7 +270,7 @@ class TestProcessParentCompletion:
 
         fake_forge.branch_exists.assert_called_once_with("parent/issue-100")
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
     @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
@@ -277,7 +292,7 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
         assert res == {"status": "final_pr_ready", "pr_number": 777}
 
 

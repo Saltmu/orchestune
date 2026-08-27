@@ -143,7 +143,11 @@ def process_parent_completion(
         return {"status": "already_closed"}
 
     if children:
-        pr_number = ensure_parent_final_pr(parent_issue_number, forge=forge)
+        # #681: 一覧テーブルの生成に必要な子Issueは既に取得済みなので、
+        # `find_children_by_parent`を再実行させずそのまま渡す。
+        pr_number = ensure_parent_final_pr(
+            parent_issue_number, forge=forge, children=children
+        )
         return {"status": "final_pr_ready", "pr_number": pr_number}
 
     return {"status": "waiting_on_children", "open_children": []}

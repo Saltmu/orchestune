@@ -7,7 +7,7 @@ from orchestune.integrator.pr import (
     ensure_parent_final_pr,
     handle_merge_failure,
 )
-from orchestune.models import PrRecord, Task
+from orchestune.models import IssueRecord, PrRecord, Task
 
 
 def _task(issue_number=1, subtask_id="task-1"):
@@ -301,3 +301,104 @@ class TestEnsureParentFinalPr(_FakeForgeTest):
         pr_number = ensure_parent_final_pr(100, forge=self.forge)
 
         assert pr_number is None
+
+
+class TestEnsureParentFinalPrBody(_FakeForgeTest):
+    """#681: 最終統合PR本文への`Closes #`と子Issue/サブタスクPR一覧の埋め込み。"""
+
+    def _child(self, number: int = 101, title: str = "[FEAT] サブタスクA"):
+        return IssueRecord(
+            number=number,
+            title=title,
+            body="",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            state="CLOSED",
+        )
+
+    def _merged_subtask_pr(self, number: int = 201, child: int = 101):
+        return PrRecord(
+            number=number,
+            head_ref=f"claude/issue-{child}-task-a",
+            changed_files=(),
+            closes_issue_numbers=(child,),
+            state="MERGED",
+            base_ref="parent/issue-100",
+            is_cross_repository=False,
+            review_decision="APPROVED",
+        )
+
+    def test_created_body_contains_closes_and_the_child_table(self):
+        self.forge.list_open_prs.return_value = []
+        self.forge.list_prs.return_value = [self._merged_subtask_pr()]
+        self.forge.create_pull_request.return_value = 555
+
+        pr_number = ensure_parent_final_pr(
+            100, forge=self.forge, children=[self._child()]
+        )
+
+        assert pr_number == 555
+        body = self.forge.create_pull_request.call_args.kwargs["body"]
+        assert body.splitlines()[0] == "Closes #100"
+        assert "| #101 | [FEAT] サブタスクA | #201 | APPROVED |" in body
+
+    def test_reused_pr_body_is_refreshed_with_the_child_table(self):
+        """`ensure_integration_pr`(#375)と同じく、再利用時も本文を最新化する。"""
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+            )
+        ]
+        self.forge.list_prs.return_value = [self._merged_subtask_pr()]
+
+        pr_number = ensure_parent_final_pr(
+            100, forge=self.forge, children=[self._child()]
+        )
+
+        assert pr_number == 321
+        self.forge.create_pull_request.assert_not_called()
+        self.forge.update_pull_request.assert_called_once()
+        assert self.forge.update_pull_request.call_args.args[0] == 321
+        assert "| #101 |" in self.forge.update_pull_request.call_args.kwargs["body"]
+
+    def test_reused_pr_body_is_kept_when_no_summary_could_be_built(self):
+        """Reproducer(縮退境界): 子Issueを1件も解決できないサイクルで本文を
+        上書きすると、既に投稿済みの正しい一覧が一時的なAPI障害で失われる。"""
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+            )
+        ]
+
+        pr_number = ensure_parent_final_pr(100, forge=self.forge, children=[])
+
+        assert pr_number == 321
+        self.forge.update_pull_request.assert_not_called()
+
+    def test_discovers_children_when_they_are_not_supplied(self):
+        self.forge.list_open_prs.return_value = []
+        self.forge.list_sub_issues.return_value = [self._child()]
+        self.forge.create_pull_request.return_value = 556
+
+        ensure_parent_final_pr(100, forge=self.forge)
+
+        assert "| #101 |" in self.forge.create_pull_request.call_args.kwargs["body"]
+
+    def test_child_discovery_failure_still_creates_the_pr(self):
+        """一覧が作れなくても最終PRの確保自体は諦めない。"""
+        self.forge.list_open_prs.return_value = []
+        self.forge.list_sub_issues.side_effect = RuntimeError("transient API failure")
+        self.forge.create_pull_request.return_value = 557
+
+        pr_number = ensure_parent_final_pr(100, forge=self.forge)
+
+        assert pr_number == 557
+        assert "Closes #100" in self.forge.create_pull_request.call_args.kwargs["body"]
