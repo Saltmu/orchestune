@@ -230,7 +230,13 @@ class TestRuleCompleted:
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
-        assert outcome is None
+        assert outcome is not None
+        assert outcome.completion_event == {
+            "issue_number": active.issue_number,
+            "worktree_path": active.worktree_path,
+            "action": "completion_skipped_forge_error",
+        }
+        assert outcome.terminal is True
         mock_finalize.assert_not_called()
 
     def test_recovered_entry_uses_all_state_prs_and_requeues_closed_pr(

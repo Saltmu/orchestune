@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -24,6 +24,7 @@ from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
 )
+from orchestune.models import PrRecord
 
 
 def _task(**overrides):
@@ -293,6 +294,155 @@ class TestProcessActiveWorktrees:
 
         assert [event["action"] for event in report.completion_events] == [
             "completion_skipped_dirty_worktree"
+        ]
+        assert run_state.active_worktrees == {"1": active}
+
+    def _run_dead_local_completion_cycle(
+        self,
+        tmp_path,
+        fake_forge,
+        *,
+        active_overrides=None,
+        config_overrides=None,
+        create_worktree=True,
+    ):
+        """完了検知後の同一サイクルGCまでを、実際のフェーズ順で実行する。"""
+        worktree_path = tmp_path / "w1"
+        if create_worktree:
+            worktree_path.mkdir()
+        active_values = {"worktree_path": str(worktree_path), "pid": 123}
+        active_values.update(active_overrides or {})
+        active = _active(**active_values)
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+        config_values = dict(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=False,
+            zombie_gc=True,
+        )
+        config_values.update(config_overrides or {})
+        config = DispatcherConfig(**config_values)
+        ctx = _ctx(run_state=run_state, tasks_by_issue={1: task}, config=config)
+
+        with (
+            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch(
+                "orchestune.dispatch.cycle._fetch_issues",
+                return_value=_group_by_status([]),
+            ),
+            patch("orchestune.dispatch.cycle.run_self_heal_phase"),
+            patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
+            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            _patch_gc_process_alive(return_value=False),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                return_value=[],
+            ),
+            patch(
+                "orchestune.dispatch.phase_reconciliation._handle_blocked_recompute_recovery",
+                return_value=[],
+            ),
+            patch(
+                "orchestune.dispatch.cycle._sync_external_locks",
+                return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            ),
+            patch(
+                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                return_value=([], {}),
+            ),
+            patch(
+                "orchestune.dispatch.phase_scheduling._finalize_launch", return_value=[]
+            ),
+        ):
+            report = run_dispatch_cycle(config)
+        return report, run_state, active
+
+    def test_forge_outcome_error_holds_dead_process_from_same_cycle_gc(
+        self, tmp_path, fake_forge
+    ):
+        """Forgeの一時障害で完了確定できないworktreeを同一サイクルで回収しない。"""
+        fake_forge.list_prs.return_value = [
+            PrRecord(
+                number=10,
+                head_ref="claude/issue-1-task-a",
+                changed_files=("src/foo.py",),
+                closes_issue_numbers=(1,),
+                state="MERGED",
+            )
+        ]
+        fake_forge.list_comments.side_effect = RuntimeError("temporary forge error")
+
+        report, run_state, active = self._run_dead_local_completion_cycle(
+            tmp_path, fake_forge
+        )
+
+        assert [event["action"] for event in report.completion_events] == [
+            "completion_skipped_forge_error"
+        ]
+        assert run_state.active_worktrees == {"1": active}
+
+    def test_unknown_local_pr_status_holds_dead_process_from_same_cycle_gc(
+        self, tmp_path, fake_forge
+    ):
+        """PR状態を取得できない場合もfail-closedで次サイクルまで保留する。"""
+        fake_forge.list_prs.side_effect = RuntimeError("temporary forge error")
+
+        report, run_state, active = self._run_dead_local_completion_cycle(
+            tmp_path, fake_forge
+        )
+
+        assert [event["action"] for event in report.completion_events] == [
+            "completion_skipped_forge_error"
+        ]
+        assert run_state.active_worktrees == {"1": active}
+
+    def test_unknown_cloud_status_holds_timed_out_session_from_same_cycle_gc(
+        self, tmp_path, fake_forge
+    ):
+        """クラウド状態照会の一時障害もタイムアウトGCより優先して保留する。"""
+        dispatch_target = MagicMock()
+        dispatch_target.completion_status.return_value = "unknown"
+
+        report, run_state, active = self._run_dead_local_completion_cycle(
+            tmp_path,
+            fake_forge,
+            active_overrides={"pid": None, "external_id": "session-1"},
+            config_overrides={
+                "dispatch_target": dispatch_target,
+                "task_timeout_seconds": 1,
+            },
+        )
+
+        assert [event["action"] for event in report.completion_events] == [
+            "completion_skipped_forge_error"
+        ]
+        assert run_state.active_worktrees == {"1": active}
+
+    def test_unknown_recovery_pr_status_holds_orphan_from_same_cycle_gc(
+        self, tmp_path, fake_forge
+    ):
+        """自己修復エントリのPR照会失敗を、PR不在と誤認して回収しない。"""
+        fake_forge.list_prs.side_effect = RuntimeError("temporary forge error")
+
+        report, run_state, active = self._run_dead_local_completion_cycle(
+            tmp_path,
+            fake_forge,
+            active_overrides={"pid": None, "started_at": None},
+            create_worktree=False,
+        )
+
+        assert [event["action"] for event in report.completion_events] == [
+            "completion_skipped_forge_error"
         ]
         assert run_state.active_worktrees == {"1": active}
 

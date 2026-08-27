@@ -13,6 +13,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
     _collect_zombies_and_timeouts,
+    _decide_zombie_and_timeout,
     _decide_zombie_or_timeout_reclaims,
 )
 from orchestune.dispatch.scoring import Task
@@ -144,6 +145,22 @@ class TestCollectZombiesAndTimeouts:
 class TestDecideZombieOrTimeoutReclaims:
     """#233: decide層は副作用（github/os.kill/subprocess呼び出し）を一切行わない。"""
 
+    def test_pure_classifier_uses_supplied_observations(self, tmp_path):
+        active = _active(
+            worktree_path=str(tmp_path / "not-observed"), pid=111, started_at=None
+        )
+
+        decision = _decide_zombie_and_timeout(
+            active,
+            zombie_enabled=True,
+            timeout_limit=0,
+            now=2_000.0,
+            process_alive=False,
+            worktree_exists=True,
+        )
+
+        assert decision == (True, False, False)
+
     def test_zombie_dead_process_with_dirty_worktree_is_reclaimed(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
@@ -159,10 +176,6 @@ class TestDecideZombieOrTimeoutReclaims:
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
-            ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -174,7 +187,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.is_timeout is False
         assert reclaim.process_alive is False
 
-    def test_dead_process_with_clean_worktree_is_not_a_zombie(self, tmp_path):
+    def test_dead_process_with_clean_worktree_is_reclaimed_as_zombie(self, tmp_path):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -189,14 +202,33 @@ class TestDecideZombieOrTimeoutReclaims:
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=False,
-            ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
             )
+
+        assert len(reclaims) == 1
+        reclaim = reclaims[0]
+        assert reclaim.reason == "process disappeared"
+        assert reclaim.is_timeout is False
+        assert reclaim.process_alive is False
+
+    def test_cloud_handle_without_pid_is_not_reclaimed_as_zombie(self, tmp_path):
+        """クラウド実行はローカルPIDを持たないため、進行中のセッションを
+        process disappeared と誤認してはならない。"""
+        active = _active(worktree_path=str(tmp_path), pid=None, started_at=1_000.0)
+        run_state = RunState(active_worktrees={"280": active})
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=0,
+        )
+
+        reclaims = _decide_zombie_or_timeout_reclaims(
+            run_state, {}, config, None, now=2_000.0
+        )
 
         assert reclaims == []
 
@@ -288,10 +320,6 @@ class TestDecideZombieOrTimeoutReclaims:
         with (
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
@@ -861,10 +889,6 @@ class TestApplyZombieOrTimeoutReclaim:
         with (
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(

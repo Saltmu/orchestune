@@ -61,6 +61,7 @@ def _config(tmp_path, **overrides):
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
         apply=True,
+        zombie_gc=False,
         task_timeout_seconds=60,
         forge=FakeForge(),
     )
@@ -176,7 +177,12 @@ class TestReclaimRetryBound:
     def test_zombie_reclaims_share_the_same_counter(self, tmp_path):
         """タイムアウトだけでなくゾンビ回収も同じカウンタで拘束される。"""
         run_state = RunState(active_worktrees={})
-        config = _config(tmp_path, task_timeout_seconds=0, max_task_reclaims=1)
+        config = _config(
+            tmp_path,
+            zombie_gc=True,
+            task_timeout_seconds=0,
+            max_task_reclaims=1,
+        )
         actions = []
         for _ in range(2):
             # pid不在・worktree不在・started_at不明はゾンビ相当（#383）
@@ -410,23 +416,24 @@ class TestReclaimRetryBound:
         """PR#520レビュー7巡目対応(Codex P1): GitHubへの反映が失敗しても、
         帳簿エントリがスロットを占有し続けない。
 
-        worktreeは削除済みなので、タイムアウト判定が無効な構成では
+        ローカルプロセスが消え、worktreeが削除済みなので、タイムアウト判定が無効な構成では
         `started_at`を未知へ落として#383のゾンビ復旧経路に載せる。
         """
         worktree = tmp_path / "wt-280"
         worktree.mkdir()
-        active = _active(worktree_path=str(worktree))
+        active = _active(worktree_path=str(worktree), pid=4242)
         run_state = RunState(active_worktrees={"280": active})
-        config = _config(tmp_path, task_timeout_seconds=0, max_task_reclaims=0)
+        config = _config(
+            tmp_path,
+            zombie_gc=True,
+            task_timeout_seconds=0,
+            max_task_reclaims=0,
+        )
 
         with (
             patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies.worktree_has_uncommitted_changes",
-                return_value=True,
             ),
             patch(
                 "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
@@ -443,7 +450,7 @@ class TestReclaimRetryBound:
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         assert events == []
-        # エントリは残したまま、次サイクルのゾンビ判定で拾える形にする
+        # エントリは残したまま、次サイクルのゾンビ判定で再び拾える。
         assert set(run_state.active_worktrees) == {"280"}
         assert run_state.active_worktrees["280"].started_at is None
         # 回数は永続化済みのまま（二重には数えない）

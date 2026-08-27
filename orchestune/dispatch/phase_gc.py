@@ -1,8 +1,8 @@
 """Maintenance GC Phase コーディネーター。
 
-ゾンビ・タイムアウトしたactive worktreeの回収を行う。dirty worktreeを人間
-確認まで保留した完了判定(#212)を、同一サイクル内のゾンビGCが上書きしない
-よう、該当worktreeをGC対象から明示的に除外する。
+ゾンビ・タイムアウトしたactive worktreeの回収を行う。dirty worktreeや
+一時的なForge障害で保留した完了判定を、同一サイクル内のGCが上書きしないよう、
+該当worktreeをGC対象から明示的に除外する。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc import _collect_zombies_and_timeouts
+from orchestune.dispatch.gc.completion import is_completion_hold_event
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
@@ -25,8 +26,8 @@ def run_gc_phase(
 ) -> list[dict]:
     """ゾンビ/タイムアウトGCを実行し、マージ済みcompletion_eventsを返す。
 
-    #212: dirty worktreeを人間確認まで保留する完了判定を、直後の
-    ゾンビGCが同一サイクル内で上書きしないよう、該当worktreeを明示的に除外する。
+    #212: 完了判定を保留したworktreeを、直後のゾンビ/タイムアウトGCが
+    同一サイクル内で上書きしないよう、該当worktreeを明示的に除外する。
 
     #512/PR#520レビュー2巡目対応: 回収回数の永続化はラベル遷移より先に行うため、
     GC内から`save_run_state`を呼ぶ。刈り込みでレート制限用の起動履歴や重複起動
@@ -35,8 +36,7 @@ def run_gc_phase(
     held_worktree_paths = {
         event["worktree_path"]
         for event in completion_events
-        if event.get("action") == "completion_skipped_dirty_worktree"
-        and event.get("worktree_path")
+        if is_completion_hold_event(event) and event.get("worktree_path")
     }
     gc_events = _collect_zombies_and_timeouts(
         run_state,

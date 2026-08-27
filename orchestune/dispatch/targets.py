@@ -68,7 +68,7 @@ AGY_CLI_LOCAL_CMD_TEMPLATE = (
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
-    "--sandbox --dangerously-skip-permissions"
+    "--add-dir . --print-timeout 60m --dangerously-skip-permissions"
 )
 
 CODEX_CLI_LOCAL_CMD_TEMPLATE = (

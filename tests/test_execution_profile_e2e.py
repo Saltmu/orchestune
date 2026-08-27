@@ -241,6 +241,7 @@ Testing full lifecycle of execution profiles.
             events_log_path=events_log_path,
             worktree_root=worktree_root,
             apply=True,
+            zombie_gc=False,
             dispatch_target=target,
             forge=in_memory_forge,
             parent_issue_number=parent_num,

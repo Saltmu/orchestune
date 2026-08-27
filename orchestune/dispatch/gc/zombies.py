@@ -14,7 +14,6 @@ from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
-    worktree_has_uncommitted_changes,
 )
 from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
@@ -31,34 +30,58 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import PrRecord
 
 
-def _check_zombie_and_timeout(
+def _decide_zombie_and_timeout(
     active: ActiveWorktree,
     zombie_enabled: bool,
     timeout_limit: int,
     now: float,
+    *,
+    process_alive: bool,
+    worktree_exists: bool,
 ) -> tuple[bool, bool, bool]:
-    """Return ``(is_zombie, is_timeout, process_alive)``."""
+    """Purely classify process/worktree observations into a reclaim decision."""
     is_zombie = False
     is_timeout = False
-    process_alive = is_process_alive(active.pid)
 
-    if zombie_enabled and not process_alive:
-        worktree_exists = os.path.exists(active.worktree_path)
-        if worktree_exists and worktree_has_uncommitted_changes(active.worktree_path):
-            is_zombie = True
-        elif not worktree_exists and active.started_at is None:
-            # #383: run_state自己修復で対応PRが見つからず復元されたエントリは
-            # started_at=None かつ物理worktreeも存在しないため、通常のゾンビ判定
-            # （worktree実在+dirty）にもタイムアウト判定（started_at必須）にも
-            # 永久に該当できずクオータを占有し続ける。プロセス不在・worktree不在・
-            # 開始時刻不明の三条件が揃った場合はゾンビ相当として回収する。
-            is_zombie = True
+    if zombie_enabled and active.pid is not None and not process_alive:
+        # プロセスが消えていれば、worktreeの変更有無にかかわらず当該実行は
+        # 進行不能である。clean worktree を除外すると、既定の timeout=0 では
+        # 永久にクオータを占有するため、ゾンビとして一律回収・再キューする。
+        is_zombie = True
+
+    elif (
+        zombie_enabled
+        and active.pid is None
+        and active.started_at is None
+        and not worktree_exists
+    ):
+        # #383: 対応PRが見つからず自己修復した孤立エントリは、ローカルPIDも
+        # 開始時刻も物理worktreeも持たない。これはクラウド実行（pid=None）とは
+        # 区別できるため、クオータを永久に占有しないよう回収する。
+        is_zombie = True
 
     if not is_zombie and active.started_at is not None:
         if timeout_limit > 0 and exceeds_limit(now - active.started_at, timeout_limit):
             is_timeout = True
 
     return is_zombie, is_timeout, process_alive
+
+
+def _check_zombie_and_timeout(
+    active: ActiveWorktree,
+    zombie_enabled: bool,
+    timeout_limit: int,
+    now: float,
+) -> tuple[bool, bool, bool]:
+    """Observe external state, then delegate to the pure reclaim classifier."""
+    return _decide_zombie_and_timeout(
+        active,
+        zombie_enabled,
+        timeout_limit,
+        now,
+        process_alive=is_process_alive(active.pid),
+        worktree_exists=os.path.exists(active.worktree_path),
+    )
 
 
 @dataclass
