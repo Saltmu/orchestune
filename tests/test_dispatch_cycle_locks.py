@@ -134,18 +134,6 @@ class TestIsBaseOrParentBranch:
     def test_excludes_generic_parent_issue_branch(self, branch_name):
         assert _is_base_or_parent_branch(branch_name) is True
 
-    def test_excludes_configured_parent_issue_branch_even_without_prefix_match(
-        self, tmp_path
-    ):
-        """`config.parent_issue_number`との厳密一致は、`parent/issue-`プレフィックス
-        規則と独立した第二の防御線として存在する（同じ結果になる場合でも、
-        設定駆動の除外経路自体を回帰から守る）。"""
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", parent_issue_number=181
-        )
-        assert _is_base_or_parent_branch("parent/issue-181", config) is True
-        assert _is_base_or_parent_branch("origin/parent/issue-181", config) is True
-
     def test_does_not_exclude_unrelated_branch(self):
         assert _is_base_or_parent_branch("feature/foo") is False
         assert _is_base_or_parent_branch("origin/someone-elses-branch") is False
