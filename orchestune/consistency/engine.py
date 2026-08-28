@@ -53,6 +53,12 @@ class ConsistencyEngine:
         observed: ObservedRepositoryState,
         desired: DesiredRepositoryState,
     ) -> ConsistencyReport:
+        if observed.repository_id != desired.repository_id:
+            raise ValueError(
+                "repository_id mismatch: "
+                f"observed={observed.repository_id!r}, "
+                f"desired={desired.repository_id!r}"
+            )
         findings: list[ConsistencyFinding] = []
         evaluated: list[str] = []
         for invariant in self._invariants:

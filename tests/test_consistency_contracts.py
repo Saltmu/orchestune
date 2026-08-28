@@ -314,3 +314,19 @@ def test_engine_normalizes_findings_returned_in_unstable_order() -> None:
         "task.a",
         "task.z",
     ]
+
+
+def test_engine_rejects_repository_mismatch_before_evaluating_invariants() -> None:
+    calls: list[str] = []
+    invariant = _RecordingInvariant(
+        "repository.all",
+        ConsistencyScope.REPOSITORY,
+        calls,
+        (),
+    )
+    desired = DesiredRepositoryState(repository_id="other/repository")
+
+    with pytest.raises(ValueError, match="repository_id mismatch"):
+        ConsistencyEngine((invariant,)).evaluate(_observed(), desired)
+
+    assert calls == []
