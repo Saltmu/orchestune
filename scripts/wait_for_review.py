@@ -186,6 +186,20 @@ def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None)
     return result
 
 
+def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
+    mention_pattern = re.compile(rf"@{re.escape(bot_name)}\s+review\b", re.IGNORECASE)
+    return bool(mention_pattern.search(body))
+
+
+def _ensure_review_trigger_mention(body: str, bot_name: str) -> str:
+    trimmed = body.strip()
+    if not trimmed:
+        return f"@{bot_name} review"
+    if _has_review_trigger_mention(trimmed, bot_name):
+        return trimmed
+    return f"@{bot_name} review\n\n{trimmed}"
+
+
 def post_review_trigger(
     pr_number: int,
     bot_name: str = "claude",
@@ -195,11 +209,12 @@ def post_review_trigger(
 ) -> dict[str, Any]:
     if body_file:
         with open(body_file, encoding="utf-8") as f:
-            comment_body = f.read().strip()
+            raw_body = f.read()
     elif body:
-        comment_body = body.strip()
+        raw_body = body
     else:
-        comment_body = f"@{bot_name} review"
+        raw_body = ""
+    comment_body = _ensure_review_trigger_mention(raw_body, bot_name)
     comment_body = _mark_review_trigger(comment_body, bot_name, round_num=round_num)
 
     stdout = _run_gh(
@@ -331,13 +346,19 @@ def _handle_review_trigger(
     if existing_trigger is not None:
         trigger_id = existing_trigger.get("id")
         trigger_time = str(existing_trigger.get("created_at") or "")
+        existing_body = existing_trigger.get("body") or ""
         if trigger_id is not None:
             excluded_ids.add(trigger_id)
+        if _has_review_trigger_mention(existing_body, bot_name):
+            print(
+                f"Review trigger for @{bot_name} (Round {current_round}) already exists "
+                f"(Comment ID: {trigger_id}); skipping post and waiting..."
+            )
+            return trigger_time
         print(
-            f"Review trigger for @{bot_name} (Round {current_round}) already exists "
-            f"(Comment ID: {trigger_id}); skipping post and waiting..."
+            f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
+            f"is missing @{bot_name} review mention; reposting trigger..."
         )
-        return trigger_time
 
     print(
         f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
