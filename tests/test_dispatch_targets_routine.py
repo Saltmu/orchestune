@@ -82,6 +82,27 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         assert "承認待ちで停止せず" in body["text"]
         assert "model" not in body
 
+    def test_launch_instructs_base_branch(self, tmp_path):
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
+        with (
+            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch(
+                "orchestune.dispatch.targets.urllib.request.urlopen",
+                return_value=self._response(),
+            ) as mock_urlopen,
+        ):
+            target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                base_branch="parent/issue-700",
+            )
+
+        request = mock_urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        assert "parent/issue-700" in body["text"]
+        assert "--base parent/issue-700" in body["text"]
+
     def test_launch_with_execution_selection_passes_model_in_api_payload(
         self, tmp_path
     ):

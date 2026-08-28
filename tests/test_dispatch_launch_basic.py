@@ -356,6 +356,60 @@ class TestApplyTaskLaunches:
         assert active.started_at == dispatch_boundary_time
         assert active.started_at != cycle_now
 
+    def test_apply_task_launches_passes_base_branch_to_target(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.targets import LocalProcessDispatchTarget
+
+        task = Task(
+            issue_number=1,
+            subtask_id="task-1",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2023-01-01T00:00:00+00:00",
+        )
+        plans = [
+            TaskLaunchPlan(
+                task,
+                "claude/issue-1-task-1",
+                "parent/issue-700",
+                "parent/issue-700",
+            )
+        ]
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="runner --base {base_branch} --issue {issue_number}",
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=target,
+        )
+        run_state = RunState(active_worktrees={})
+
+        with (
+            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(plans, run_state, 1000.0, config)
+
+        assert mock_popen.call_args[0][0] == [
+            "runner",
+            "--base",
+            "parent/issue-700",
+            "--issue",
+            "1",
+        ]
+
     def test_active_worktree_records_execution_selection_fields(self, tmp_path):
         from unittest.mock import MagicMock, patch
 

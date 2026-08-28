@@ -77,6 +77,31 @@ class TestCodexCloudDispatchTarget:
         log_file = tmp_path / "logs" / "claude-issue-1-task-a.log"
         assert log_file.read_text(encoding="utf-8") == exec_output
 
+    def test_launch_instructs_base_branch(self, tmp_path):
+        target = CodexCloudDispatchTarget("env_123", log_dir=tmp_path / "logs")
+        exec_output = "Task created: https://chatgpt.com/codex/tasks/task_e_6a8859c41f24832ab443a9db2294023d\n"
+        push_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        submit_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=exec_output, stderr=""
+        )
+        with patch(
+            "orchestune.dispatch.targets.subprocess.run",
+            side_effect=[push_result, submit_result],
+        ) as mock_run:
+            target.launch(
+                _task(),
+                "claude/issue-1-task-a",
+                tmp_path / "wt",
+                base_branch="parent/issue-700",
+            )
+
+        _, submit_call = mock_run.call_args_list
+        prompt = submit_call.args[0][-1]
+        assert "parent/issue-700" in prompt
+        assert "--base parent/issue-700" in prompt
+
     def test_launch_with_execution_selection_passes_model_and_reasoning_effort(
         self, tmp_path
     ):

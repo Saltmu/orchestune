@@ -33,12 +33,20 @@ When files or branches are created or updated via GitHub MCP write tools rather 
 ### 3. Submitting the PR
 Submit the PR using the fixed backend selected during Step 0 Preflight:
 
+> [!IMPORTANT]
+> **Base Branch for Child Subtask PRs**:
+> If the Issue is a child subtask under a parent issue (`parent_issue_number` is present in the Footprint YAML / prompt, or the worktree was branched from `parent/issue-{N}`), **always pass `--base parent/issue-{parent_issue_number}`** (e.g. `gh pr create --base parent/issue-700 ...`) to prevent accidental direct merges into `main`. For standalone features without a parent issue, `--base main` is used.
+
 - **When using `gh` CLI**:
   ```bash
-  gh pr create --title "PR Title" --body-file /tmp/pr_body.md
+  # Standalone issue:
+  gh pr create --base main --title "PR Title" --body-file /tmp/pr_body.md
+
+  # Child subtask of parent issue (e.g. #700):
+  gh pr create --base parent/issue-700 --title "PR Title" --body-file /tmp/pr_body.md
   ```
 - **When using GitHub MCP (or if `gh` CLI is unauthenticated/unavailable)**:
-  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, title, and body content from `/tmp/pr_body.md`.
+  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, base branch (`parent/issue-{N}` or `main`), title, and body content from `/tmp/pr_body.md`.
   - Or create the PR via the GitHub Web UI with the same title and body content.
 
 ### 4. Post-Creation PR Head Diff Verification

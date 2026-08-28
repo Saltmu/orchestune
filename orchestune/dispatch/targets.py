@@ -74,6 +74,7 @@ _CLAUDE_CLI_LOCAL_CMD_BASE = (
     'claude -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--permission-mode bypassPermissions "
     "--output-format stream-json"
@@ -83,6 +84,7 @@ _AGY_CLI_LOCAL_CMD_BASE = (
     'agy -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--add-dir . --print-timeout 60m --dangerously-skip-permissions"
 )
@@ -91,6 +93,7 @@ _CODEX_CLI_LOCAL_CMD_BASE = (
     'codex exec "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--dangerously-bypass-approvals-and-sandbox"
 )
@@ -174,6 +177,7 @@ class DispatchTarget(ABC):
         *,
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
+        base_branch: str | None = None,
     ) -> DispatchHandle:
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。
 
@@ -375,7 +379,11 @@ def _format_local_cmd(
     reasoning_effort: str | None,
     profile_name: str,
     reviewer_bot: ReviewerBot | None = None,
+    base_branch: str | None = None,
 ) -> list[str]:
+    base_branch_val = (
+        base_branch.removeprefix("origin/") if base_branch else ""
+    ) or "main"
     formatted_cmd = local_cmd.format(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id or "",
@@ -385,6 +393,7 @@ def _format_local_cmd(
         reasoning_effort=reasoning_effort or "",
         profile=profile_name,
         reviewer_bot=reviewer_bot or "",
+        base_branch=base_branch_val,
     )
     cmd = shlex.split(formatted_cmd)
     cli_name = _local_cli_name(cmd)
@@ -434,6 +443,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
         *,
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
+        base_branch: str | None = None,
     ) -> DispatchHandle:
         self._log_dir.mkdir(parents=True, exist_ok=True)
         model = execution_selection.model if execution_selection else None
@@ -456,6 +466,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
                 reasoning_effort,
                 profile_name,
                 self._reviewer_bot,
+                base_branch=base_branch,
             )
         else:
             cmd = self._command_builder(task, worktree_path)
@@ -580,8 +591,13 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self._initial_delay = initial_delay
         self._reviewer_bot = reviewer_bot
 
-    def _build_text(self, task: Task, branch_name: str) -> str:
+    def _build_text(
+        self, task: Task, branch_name: str, base_branch: str | None = None
+    ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
+        base_branch_val = (
+            base_branch.removeprefix("origin/") if base_branch else ""
+        ) or "main"
         return (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
@@ -595,6 +611,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             f"originから `{branch_name}` をfetchしてcheckoutし、その内容を"
             "起点に作業してください。\n"
             f"想定footprint: {footprint}\n"
+            f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
             f"{_noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
@@ -625,6 +642,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         *,
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
+        base_branch: str | None = None,
     ) -> DispatchHandle:
         # #244: fireより先にpush・到達性検証を行い、確認できなければfireしない。
         _push_branch_and_verify(branch_name, worktree_path, force=force_push)
@@ -637,7 +655,10 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
                 "ClaudeCodeCloudRoutineDispatchTarget does not support reasoning_effort %r; skipping setting",
                 reasoning_effort,
             )
-        payload = self._fire(self._build_text(task, branch_name), model=model)
+        payload = self._fire(
+            self._build_text(task, branch_name, base_branch=base_branch),
+            model=model,
+        )
         return DispatchHandle(
             external_id=payload.get("claude_code_session_id"),
             external_url=payload.get("claude_code_session_url"),
@@ -816,14 +837,20 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self._log_dir = Path(log_dir)
         self._reviewer_bot = reviewer_bot
 
-    def _build_prompt(self, task: Task, branch_name: str) -> str:
+    def _build_prompt(
+        self, task: Task, branch_name: str, base_branch: str | None = None
+    ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
+        base_branch_val = (
+            base_branch.removeprefix("origin/") if base_branch else ""
+        ) or "main"
         return (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
             "標準開発ワークフローに従って実装してください。\n"
             f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
             f"想定footprint: {footprint}\n"
+            f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
             f"{_noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
@@ -839,6 +866,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         *,
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
+        base_branch: str | None = None,
     ) -> DispatchHandle:
         push_args = ["push", "--set-upstream", "origin", branch_name]
         if force_push:
@@ -866,7 +894,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
             command.extend(["--model", model])
         if reasoning_effort:
             command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
-        command.append(self._build_prompt(task, branch_name))
+        command.append(self._build_prompt(task, branch_name, base_branch=base_branch))
 
         combined_output = _run_codex_cloud_exec(command, worktree_path, log_path)
         task_id, task_url = _parse_codex_cloud_exec_output(combined_output)
