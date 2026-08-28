@@ -89,6 +89,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.targets",
             "dispatch.worktree",
             "infra.not_needed_review_state",
+            "integrator.final_pr_body",
             "integrator.git_ops",
             "integrator.pr",
             "integrator.tasks",

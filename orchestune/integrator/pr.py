@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 
 from orchestune.forge import Forge, GitHubForge
-from orchestune.models import PrRecord, Task
+from orchestune.integrator.final_pr_body import (
+    ChildSummary,
+    collect_child_summaries,
+    render_final_pr_body,
+)
+from orchestune.issue_parsing import find_children_by_parent
+from orchestune.models import IssueRecord, PrRecord, Task
 
 # #295: GitHubコメントの肥大化を避けるため、末尾のみを埋め込む。
 # エラーメッセージ本体は通常出力の末尾に現れるため、これで十分な情報量を確保する。
@@ -90,39 +97,66 @@ def ensure_parent_final_pr(
     parent_issue_number: int,
     base_branch: str = "main",
     forge: Forge | None = None,
+    children: Sequence[IssueRecord] | None = None,
 ) -> int | None:
     """#170: 親Issue配下の全子Issueが完了した際、`parent/issue-{N}`から
     `base_branch`への最終統合PRを用意する。
 
     このPRのマージが「最終マージ」であり、常に人間が行う。マージ検知後の
     親Issueクローズは`parent_completion.process_parent_completion`が担う。
+
+    #681: 本文には`Closes #`と子Issue・サブタスクPR・レビュー結果の一覧を
+    埋め込む（`final_pr_body`）。`children`は呼び出し元が既に取得済みの子Issue
+    で、`find_children_by_parent`の二重呼び出しを避けるために受け取る。
     """
     forge = forge or GitHubForge()
     try:
         head = f"parent/issue-{parent_issue_number}"
-        existing = [
-            pr
-            for pr in forge.list_open_prs()
-            if _is_reusable_integration_pr(pr, head, base_branch)
-        ]
-        if existing:
-            return existing[0].number
+        title = f"Integrate parent issue #{parent_issue_number} into {base_branch}"
+        summaries = _final_pr_summaries(forge, parent_issue_number, children)
+        body = render_final_pr_body(parent_issue_number, summaries)
+
+        existing = _find_reusable_integration_pr(forge, head, base_branch)
+        if existing is not None:
+            # #375と同じく再利用時も本文を最新化する。ただし一覧を1件も作れな
+            # かった縮退サイクルでは書き換えない: 一時的なAPI障害で、投稿済み
+            # の正しい一覧を失わせないため（fail closed）。
+            # なおタイトルは生成時と同一の決定論的な文字列であり、`Forge`が
+            # 本文単独の更新を公開していないため毎回一緒に送る（人間がPRを
+            # リネームしていた場合は元の表記へ戻る）。
+            if summaries:
+                _update_reused_integration_pr(forge, existing.number, title, body)
+            return existing.number
 
         return forge.create_pull_request(
-            head=head,
-            base=base_branch,
-            title=f"Integrate parent issue #{parent_issue_number} into {base_branch}",
-            body=(
-                f"親Issue #{parent_issue_number} 配下の全子Issueが完了したため、"
-                "Orchestune Integratorが作成した最終統合PRです。\n\n"
-                "このPRのマージが最終マージです。人間がレビューの上マージして"
-                "ください。マージが検知され次第、Orchestuneが親Issueを"
-                "自動的にクローズします。"
-            ),
+            head=head, base=base_branch, title=title, body=body
         )
     except Exception as e:
         print(f"Warning: Failed to ensure parent final PR: {e}", file=sys.stderr)
         return None
+
+
+def _final_pr_summaries(
+    forge: Forge,
+    parent_issue_number: int,
+    children: Sequence[IssueRecord] | None,
+) -> list[ChildSummary]:
+    """一覧テーブルの行を用意する。解決できなければ空リスト（テーブル省略）。
+
+    子Issueの探索に失敗しても最終PRの確保自体は諦めない。一覧が欠けることより、
+    人間がマージすべき最終PRが存在しないことのほうが重い。
+    """
+    if children is None:
+        try:
+            children = find_children_by_parent(forge, parent_issue_number).issues
+        except Exception as error:
+            print(
+                f"Warning: Failed to discover children of #{parent_issue_number} "
+                f"while building the final integration PR body: {error}",
+                file=sys.stderr,
+            )
+            return []
+    return collect_child_summaries(forge, parent_issue_number, children)
 
 
 def handle_merge_failure(

@@ -236,6 +236,17 @@ dispatcher having been run with `--parent-issue <N>` (see
   child Issue under the parent was closed. The parent Issue is closed with
   `reason=completed`; already-closed parent Issues are left alone (checked via
   `github.get_issue_state`) to avoid a redundant close call.
+- Two independent close paths (#681): `orchestune/integrator/final_pr_body.py`
+  puts `Closes #{N}` on the first line of the final PR body. Because that PR
+  targets the default branch (`main`), GitHub itself closes the parent Issue the
+  moment a human merges it, and links the parent into the Issue's "Development"
+  sidebar. The merge-detection close above is idempotent, so whichever path
+  fires first, the outcome is the same.
+- The same body carries an auto-generated table of every child Issue number and
+  title, its merged subtask PR number, and its review result (the Outcome Record
+  when present, otherwise the PR's `reviewDecision`). It gives the final reviewer
+  a trail into each subtask's changes and AI review; if collection fails, only
+  the table is dropped — opening the final PR still proceeds.
 
 ## Related labels (not `status:*`, but closely related)
 
