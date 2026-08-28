@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+import orchestune
+import orchestune.consistency as consistency_api
 from orchestune.consistency import (
     ConsistencyEngine,
     ConsistencyFinding,
@@ -32,6 +34,12 @@ from orchestune.consistency import (
 )
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
+
+
+def test_consistency_contracts_are_exported_from_package_root() -> None:
+    for name in consistency_api.__all__:
+        assert name in orchestune.__all__
+        assert getattr(orchestune, name) is getattr(consistency_api, name)
 
 
 def _observed() -> ObservedRepositoryState:
