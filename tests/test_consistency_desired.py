@@ -140,6 +140,19 @@ def test_dependencies_drive_blocked_and_queued_task_statuses() -> None:
     assert _fact_value(state, "703", "task.dispatch_eligible") is True
 
 
+def test_external_completed_dependency_can_resolve_a_task_slice() -> None:
+    state = derive_desired_repository_state(
+        "Saltmu/orchestune",
+        (_task("consumer", 702, depends_on=("external-contract",)),),
+        completed_task_ids=("external-contract",),
+        policy=DispatchPolicy(max_concurrent=1),
+        now=NOW,
+    )
+
+    assert _fact_value(state, "702", "task.dependencies_resolved") is True
+    assert _fact_value(state, "702", "task.dispatch_eligible") is True
+
+
 @pytest.mark.parametrize(
     ("lifecycle", "status_label"),
     [
@@ -318,5 +331,41 @@ def test_duplicate_or_naive_intent_metadata_fails_closed() -> None:
             (),
             policy=DispatchPolicy(max_concurrent=1),
             intents=(naive,),
+            now=NOW,
+        )
+
+
+def test_terminal_intent_with_legacy_naive_timestamp_is_ignored() -> None:
+    terminal = TransitionIntent(
+        intent_id="legacy-terminal",
+        scope=ConsistencyScope.TASK,
+        operation="launch",
+        created_at=datetime(2026, 8, 28),
+        status=IntentStatus.VERIFIED,
+    )
+
+    state = derive_desired_repository_state(
+        "Saltmu/orchestune",
+        (),
+        policy=DispatchPolicy(max_concurrent=1),
+        intents=(terminal,),
+        now=NOW,
+    )
+
+    assert state.transition_intents == ()
+
+
+def test_in_slice_open_task_cannot_be_declared_completed() -> None:
+    with pytest.raises(
+        ValueError, match="non-completed tasks declared completed.*contract"
+    ):
+        derive_desired_repository_state(
+            "Saltmu/orchestune",
+            (
+                _task("contract", 701),
+                _task("consumer", 702, depends_on=("contract",)),
+            ),
+            completed_task_ids=("contract",),
+            policy=DispatchPolicy(max_concurrent=1),
             now=NOW,
         )

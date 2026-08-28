@@ -7,12 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from orchestune.consistency.intents import (
+    intent_is_live,
+    require_timezone_aware,
+)
 from orchestune.consistency.models import (
     ConsistencyScope,
     DesiredFact,
     DesiredRepositoryState,
     FactValue,
-    IntentStatus,
     TransitionIntent,
 )
 
@@ -68,12 +71,6 @@ _TERMINAL_STATUS = {
     TaskLifecycle.NOT_NEEDED: "status:not-needed",
     TaskLifecycle.HUMAN_REVIEW: "status:blocked-human-review",
 }
-_LIVE_INTENT_STATUSES = frozenset({IntentStatus.PLANNED, IntentStatus.APPLIED})
-
-
-def _require_aware(value: datetime, field: str) -> None:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"{field} must be timezone-aware")
 
 
 def _normalized_tasks(
@@ -89,22 +86,50 @@ def _normalized_tasks(
     return normalized
 
 
+def _normalized_active_ids(
+    tasks: tuple[DesiredTaskInput, ...],
+    active_task_ids: Iterable[str],
+) -> frozenset[str]:
+    requested = frozenset(active_task_ids)
+    unknown = requested - {task.task_id for task in tasks}
+    if unknown:
+        raise ValueError(f"unknown active task IDs: {sorted(unknown)}")
+    return frozenset(
+        task.task_id
+        for task in tasks
+        if task.task_id in requested and task.lifecycle is TaskLifecycle.OPEN
+    )
+
+
+def _normalized_completed_ids(
+    tasks: tuple[DesiredTaskInput, ...],
+    completed_task_ids: Iterable[str],
+) -> frozenset[str]:
+    terminal = frozenset(
+        task.task_id
+        for task in tasks
+        if task.lifecycle in {TaskLifecycle.DONE, TaskLifecycle.NOT_NEEDED}
+    )
+    requested = frozenset(completed_task_ids)
+    known_ids = {task.task_id for task in tasks}
+    contradictory = sorted((requested & known_ids) - terminal)
+    if contradictory:
+        raise ValueError(f"non-completed tasks declared completed: {contradictory}")
+    return requested | terminal
+
+
 def _live_intents(
     intents: Iterable[TransitionIntent], now: datetime
 ) -> tuple[TransitionIntent, ...]:
     by_id: dict[str, TransitionIntent] = {}
     for intent in intents:
-        _require_aware(intent.created_at, "intent.created_at")
-        if intent.expires_at is not None:
-            _require_aware(intent.expires_at, "intent.expires_at")
         if intent.intent_id in by_id:
             raise ValueError(f"duplicate intent_id: {intent.intent_id}")
         by_id[intent.intent_id] = intent
     return tuple(
         intent
         for intent_id, intent in sorted(by_id.items())
-        if intent.status in _LIVE_INTENT_STATUSES
-        and (intent.expires_at is None or intent.expires_at > now)
+        if intent_is_live(intent, now=now)
     )
 
 
@@ -253,23 +278,10 @@ def derive_desired_repository_state(
 
     if not repository_id:
         raise ValueError("repository_id must not be empty")
-    _require_aware(now, "now")
+    require_timezone_aware(now, "now")
     normalized_tasks = _normalized_tasks(tasks)
-    task_ids = {task.task_id for task in normalized_tasks}
-    requested_active = frozenset(active_task_ids)
-    unknown_active = requested_active - task_ids
-    if unknown_active:
-        raise ValueError(f"unknown active task IDs: {sorted(unknown_active)}")
-    completed_ids = frozenset(completed_task_ids) | frozenset(
-        task.task_id
-        for task in normalized_tasks
-        if task.lifecycle in {TaskLifecycle.DONE, TaskLifecycle.NOT_NEEDED}
-    )
-    active_ids = frozenset(
-        task.task_id
-        for task in normalized_tasks
-        if task.task_id in requested_active and task.lifecycle is TaskLifecycle.OPEN
-    )
+    active_ids = _normalized_active_ids(normalized_tasks, active_task_ids)
+    completed_ids = _normalized_completed_ids(normalized_tasks, completed_task_ids)
     facts = [
         *_repository_facts(
             policy,

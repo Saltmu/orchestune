@@ -19,7 +19,7 @@ from orchestune.consistency.models import (
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 
 _SCHEMA_VERSION = 1
-_LIVE_STATUSES = frozenset({IntentStatus.PLANNED, IntentStatus.APPLIED})
+LIVE_INTENT_STATUSES = frozenset({IntentStatus.PLANNED, IntentStatus.APPLIED})
 _ALLOWED_TRANSITIONS = {
     IntentStatus.PLANNED: frozenset(
         {IntentStatus.APPLIED, IntentStatus.FAILED, IntentStatus.EXPIRED}
@@ -33,9 +33,24 @@ _ALLOWED_TRANSITIONS = {
 }
 
 
-def _require_aware(value: datetime, field: str) -> None:
+def require_timezone_aware(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field} must be timezone-aware")
+
+
+def intent_is_live(intent: TransitionIntent, *, now: datetime) -> bool:
+    """Return whether an intent is valid in-flight state at ``now``.
+
+    Terminal history is excluded before timestamp validation so legacy terminal
+    records cannot prevent otherwise valid desired-state derivation.
+    """
+
+    if intent.status not in LIVE_INTENT_STATUSES:
+        return False
+    require_timezone_aware(intent.created_at, "intent.created_at")
+    if intent.expires_at is not None:
+        require_timezone_aware(intent.expires_at, "intent.expires_at")
+    return intent.expires_at is None or intent.expires_at > now
 
 
 def _validate_fact_value(value: FactValue, field: str = "value") -> None:
@@ -54,9 +69,9 @@ def _validate_intent(intent: TransitionIntent) -> None:
         raise ValueError("intent_id must not be empty")
     if not intent.operation:
         raise ValueError("operation must not be empty")
-    _require_aware(intent.created_at, "created_at")
+    require_timezone_aware(intent.created_at, "created_at")
     if intent.expires_at is not None:
-        _require_aware(intent.expires_at, "expires_at")
+        require_timezone_aware(intent.expires_at, "expires_at")
         if intent.expires_at <= intent.created_at:
             raise ValueError("expires_at must be later than created_at")
     if any(not isinstance(item, str) for item in intent.diagnostics):
@@ -91,7 +106,7 @@ def _datetime_from_json(value: Any, field: str) -> datetime:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"{field} must be an ISO-8601 string") from exc
-    _require_aware(parsed, field)
+    require_timezone_aware(parsed, field)
     return parsed
 
 
@@ -338,21 +353,18 @@ class IntentJournal:
         return self._transition(intent_id, IntentStatus.FAILED, diagnostics)
 
     def pending(self, *, now: datetime) -> tuple[TransitionIntent, ...]:
-        _require_aware(now, "now")
+        require_timezone_aware(now, "now")
         return tuple(
-            intent
-            for intent in self.load()
-            if intent.status in _LIVE_STATUSES
-            and (intent.expires_at is None or intent.expires_at > now)
+            intent for intent in self.load() if intent_is_live(intent, now=now)
         )
 
     def expire_overdue(self, *, now: datetime) -> tuple[TransitionIntent, ...]:
-        _require_aware(now, "now")
+        require_timezone_aware(now, "now")
         current = list(self.load())
         expired: list[TransitionIntent] = []
         for index, intent in enumerate(current):
             if (
-                intent.status not in _LIVE_STATUSES
+                intent.status not in LIVE_INTENT_STATUSES
                 or intent.expires_at is None
                 or intent.expires_at > now
             ):
@@ -373,4 +385,9 @@ class IntentJournal:
         return tuple(sorted(expired, key=lambda intent: intent.intent_id))
 
 
-__all__ = ["IntentJournal"]
+__all__ = [
+    "IntentJournal",
+    "LIVE_INTENT_STATUSES",
+    "intent_is_live",
+    "require_timezone_aware",
+]
