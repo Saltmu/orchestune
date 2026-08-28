@@ -104,6 +104,10 @@ _FILTERED_PULL_REQUESTS = (
     "the reused pull request snapshot is filtered, so finding no match does "
     "not prove that no pull request exists"
 )
+_FILTERED_CHILDREN = (
+    "the reused Issue snapshot is filtered, so these are the children observed "
+    "in it, not necessarily every child"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -119,18 +123,25 @@ class ForgeSnapshot:
     were true, not when they were read here.  Leaving it `None` means the
     caller makes no freshness claim, and the snapshot is taken at face value.
 
-    `pull_requests_complete` says whether `pull_requests` covers every state.
-    It defaults to `False` because the snapshot a cycle already has —
-    `CycleContext.prs`, from `list_open_prs()` — holds open pull requests only,
-    where a task whose pull request has since merged or closed simply has no
-    candidate.  Reading that as "this task has no pull request" would invent an
-    absence, so only a caller that fetched every state may claim completeness.
+    The two completeness flags both default to `False`, because the snapshot a
+    cycle already has is filtered in both directions and reading a filter as an
+    absence is how a repair comes to act on state that is really there:
+
+    - `pull_requests_complete` — `CycleContext.prs` comes from
+      `list_open_prs()`, so a task whose pull request has since merged or
+      closed simply has no candidate.
+    - `issues_complete` — `IssuesByStatus.all()` covers six status labels and
+      may be narrowed to one parent, so a parent's children in the snapshot are
+      a subset (a `status:blocked-human-review` child is not in it at all).
+
+    Only a caller that fetched every state may claim completeness.
     """
 
     issues: tuple[IssueRecord, ...] = ()
     pull_requests: tuple[PrRecord, ...] = ()
     fetched_at: datetime | None = None
     pull_requests_complete: bool = False
+    issues_complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,7 +363,7 @@ class _Index:
     declared_branches: dict[int, str]
     task_numbers: tuple[int, ...]
     children_by_parent: dict[int, tuple[int, ...]]
-    declared_parent_states: dict[int, str]
+    declared_parent_states: dict[int, tuple[str, ...]]
 
 
 def _index_pull_requests(
@@ -372,9 +383,18 @@ def _index_pull_requests(
     )
 
 
-def _index_parents(issues: dict[int, IssueRecord]) -> tuple[dict, dict]:
+def _index_parents(
+    issues: dict[int, IssueRecord],
+) -> tuple[dict[int, tuple[int, ...]], dict[int, tuple[str, ...]]]:
+    """Group observed Issues under their parents, keeping every declared state.
+
+    Children are read over several Forge requests, so two of them can carry
+    different states for the same parent that transitioned mid-fetch.  Every
+    distinct declaration is kept here; picking one arbitrarily would hand a
+    parent invariant a confident value with no basis.
+    """
     children: dict[int, list[int]] = {}
-    states: dict[int, str] = {}
+    states: dict[int, set[str]] = {}
     for number in sorted(issues):
         parent = _parent_number(issues[number])
         if parent is None:
@@ -382,8 +402,11 @@ def _index_parents(issues: dict[int, IssueRecord]) -> tuple[dict, dict]:
         children.setdefault(parent, []).append(number)
         state = _parent_state(issues[number])
         if state is not None:
-            states.setdefault(parent, state)
-    return {parent: tuple(numbers) for parent, numbers in children.items()}, states
+            states.setdefault(parent, set()).add(state)
+    return (
+        {parent: tuple(numbers) for parent, numbers in children.items()},
+        {parent: tuple(sorted(declared)) for parent, declared in states.items()},
+    )
 
 
 def _build_index(
@@ -649,7 +672,7 @@ class ObservationCollector:
                     identity(FACT_PARENT_ISSUE_NUMBER, _Reading(parent)),
                     forge(
                         FACT_CHILD_ISSUE_NUMBERS,
-                        self._forge_reading(reading, index.children_by_parent[parent]),
+                        self._children_reading(parent, reading, index),
                     ),
                     forge(
                         FACT_PARENT_STATE,
@@ -660,6 +683,20 @@ class ObservationCollector:
             for parent in sorted(index.children_by_parent)
         ]
 
+    def _children_reading(
+        self, parent: int, reading: _ForgeReading, index: _Index
+    ) -> _Reading:
+        """Report the observed children, and whether they are all of them.
+
+        The subset is kept as the value even when uncertain — it is the
+        evidence a diagnosis needs — but a filtered snapshot must not let a
+        parent invariant conclude that the children it cannot see are gone.
+        """
+        children = index.children_by_parent[parent]
+        if reading.snapshot is not None and not reading.snapshot.issues_complete:
+            return _Reading(children, _UNKNOWN, (_FILTERED_CHILDREN,))
+        return self._forge_reading(reading, children)
+
     def _parent_state_reading(
         self, parent: int, reading: _ForgeReading, index: _Index
     ) -> _Reading:
@@ -667,9 +704,19 @@ class ObservationCollector:
         record = index.issues.get(parent)
         if record is not None:
             return self._forge_reading(reading, record.state)
-        declared = index.declared_parent_states.get(parent)
-        if declared is not None:
-            return self._forge_reading(reading, declared)
+        declared = index.declared_parent_states.get(parent, ())
+        if len(declared) > 1:
+            candidates = ", ".join(repr(state) for state in declared)
+            return _Reading(
+                None,
+                _UNKNOWN,
+                (
+                    f"ambiguous parent state for issue {parent}: "
+                    f"children declare {candidates}",
+                ),
+            )
+        if declared:
+            return self._forge_reading(reading, declared[0])
         return _Reading(None, _UNKNOWN, (_missing_from_snapshot(parent),))
 
     # -- Task scope ---------------------------------------------------------

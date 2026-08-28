@@ -301,15 +301,74 @@ def test_parent_scope_groups_children_by_explicit_parent_identifier() -> None:
     snapshot = ForgeSnapshot(
         issues=(_issue(703, parent=parent), _issue(704, parent=parent)),
         fetched_at=FETCHED_AT,
+        issues_complete=True,
     )
     state = _collector().collect(forge=snapshot)
 
     children = _fact(state, ConsistencyScope.PARENT, "700", FACT_CHILD_ISSUE_NUMBERS)
     assert children.value == (703, 704)
+    assert children.certainty is ObservationCertainty.KNOWN
     assert (
         _fact(state, ConsistencyScope.PARENT, "700", FACT_PARENT_STATE).value == "OPEN"
     )
     assert _task_fact(state, 703, FACT_PARENT_ISSUE_NUMBER).value == 700
+
+
+def test_children_from_a_label_filtered_snapshot_stay_uncertain() -> None:
+    """`IssuesByStatus.all()` covers six status labels, so a child that is (say)
+    `status:blocked-human-review` is simply not in it. The observed children are
+    kept as evidence, but must not read as the parent's complete child list."""
+    parent = {"number": 700, "state": "OPEN"}
+    snapshot = ForgeSnapshot(
+        issues=(_issue(703, parent=parent),), fetched_at=FETCHED_AT
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    children = _fact(state, ConsistencyScope.PARENT, "700", FACT_CHILD_ISSUE_NUMBERS)
+    assert children.certainty is ObservationCertainty.UNKNOWN
+    assert children.value == (703,)
+    assert children.diagnostics == (
+        "the reused Issue snapshot is filtered, so these are the children "
+        "observed in it, not necessarily every child",
+    )
+
+
+def test_conflicting_child_declared_parent_states_are_unknown() -> None:
+    """Children are read over several requests, so a parent that transitions
+    mid-fetch is declared twice; picking one silently would be a guess."""
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, parent={"number": 700, "state": "OPEN"}),
+            _issue(704, parent={"number": 700, "state": "CLOSED"}),
+        ),
+        fetched_at=FETCHED_AT,
+        issues_complete=True,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    parent_state = _fact(state, ConsistencyScope.PARENT, "700", FACT_PARENT_STATE)
+    assert parent_state.certainty is ObservationCertainty.UNKNOWN
+    assert parent_state.value is None
+    assert parent_state.diagnostics == (
+        "ambiguous parent state for issue 700: children declare 'CLOSED', 'OPEN'",
+    )
+
+
+def test_children_agreeing_on_the_parent_state_stay_known() -> None:
+    parent = {"number": 700, "state": "OPEN"}
+    snapshot = ForgeSnapshot(
+        issues=(_issue(703, parent=parent), _issue(704, parent=parent)),
+        fetched_at=FETCHED_AT,
+        issues_complete=True,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    parent_state = _fact(state, ConsistencyScope.PARENT, "700", FACT_PARENT_STATE)
+    assert parent_state.certainty is ObservationCertainty.KNOWN
+    assert parent_state.value == "OPEN"
 
 
 def test_parent_state_prefers_the_parents_own_issue_record() -> None:
