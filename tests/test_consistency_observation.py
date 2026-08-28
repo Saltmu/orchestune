@@ -334,6 +334,68 @@ def test_children_from_a_label_filtered_snapshot_stay_uncertain() -> None:
     )
 
 
+def test_conflicting_versions_of_one_issue_are_unknown_per_field() -> None:
+    """`IssuesByStatus.all()` concatenates six separately fetched label lists,
+    so an Issue that transitions between those requests appears twice."""
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, labels=("priority:high", "status:in-progress")),
+            _issue(703, labels=("priority:high", "status:done"), state="CLOSED"),
+        ),
+        fetched_at=FETCHED_AT,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    for name in (FACT_ISSUE_STATE, FACT_ISSUE_LABELS, FACT_ISSUE_STATUS_LABELS):
+        fact = _task_fact(state, 703, name)
+        assert fact.certainty is ObservationCertainty.UNKNOWN, name
+        assert fact.value is None, name
+        assert fact.diagnostics == (
+            "the reused Forge snapshot holds 2 versions of issue #703 that "
+            "disagree on labels, state",
+        ), name
+    # A field the versions agree on is still known — the conflict clouds only
+    # what actually conflicts.
+    parent = _task_fact(state, 703, FACT_PARENT_ISSUE_NUMBER)
+    assert parent.certainty is ObservationCertainty.KNOWN
+    assert _task_fact(state, 703, FACT_ISSUE_NUMBER).value == 703
+
+
+def test_repeated_identical_issue_records_stay_known() -> None:
+    """An Issue carrying two of the queried labels is fetched twice unchanged;
+    that is a repeat, not a conflict."""
+    issue = _issue(703, labels=("status:done", "status:not-needed"), state="CLOSED")
+    snapshot = ForgeSnapshot(issues=(issue, issue), fetched_at=FETCHED_AT)
+
+    state = _collector().collect(forge=snapshot)
+
+    issue_state = _task_fact(state, 703, FACT_ISSUE_STATE)
+    assert issue_state.certainty is ObservationCertainty.KNOWN
+    assert issue_state.value == "CLOSED"
+    assert _fact(state, ConsistencyScope.REPOSITORY, None, FACT_ISSUE_COUNT).value == 1
+
+
+def test_conflicting_versions_do_not_depend_on_input_order() -> None:
+    versions = (
+        _issue(703, parent={"number": 700, "state": "OPEN"}),
+        _issue(703, parent={"number": 701, "state": "OPEN"}, state="CLOSED"),
+    )
+    first = _collector().collect(
+        forge=ForgeSnapshot(issues=versions, fetched_at=FETCHED_AT)
+    )
+    second = _collector().collect(
+        forge=ForgeSnapshot(issues=tuple(reversed(versions)), fetched_at=FETCHED_AT)
+    )
+
+    assert first == second
+    # A child that disagrees with itself about its parent contributes no link.
+    assert [s.scope for s in first.observations] == [
+        ConsistencyScope.REPOSITORY,
+        ConsistencyScope.TASK,
+    ]
+
+
 def test_conflicting_child_declared_parent_states_are_unknown() -> None:
     """Children are read over several requests, so a parent that transitions
     mid-fetch is declared twice; picking one silently would be a guess."""
@@ -353,6 +415,28 @@ def test_conflicting_child_declared_parent_states_are_unknown() -> None:
     assert parent_state.value is None
     assert parent_state.diagnostics == (
         "ambiguous parent state for issue 700: children declare 'CLOSED', 'OPEN'",
+    )
+
+
+def test_conflicting_versions_of_the_parents_own_record_are_unknown() -> None:
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, parent={"number": 700, "state": "OPEN"}),
+            _issue(700, labels=(), state="OPEN"),
+            _issue(700, labels=(), state="CLOSED"),
+        ),
+        fetched_at=FETCHED_AT,
+        issues_complete=True,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    parent_state = _fact(state, ConsistencyScope.PARENT, "700", FACT_PARENT_STATE)
+    assert parent_state.certainty is ObservationCertainty.UNKNOWN
+    assert parent_state.value is None
+    assert parent_state.diagnostics == (
+        "the reused Forge snapshot holds 2 versions of issue #700 that "
+        "disagree on state",
     )
 
 

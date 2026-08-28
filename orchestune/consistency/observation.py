@@ -352,11 +352,44 @@ def _parent_state(issue: IssueRecord) -> str | None:
     return state if isinstance(state, str) else None
 
 
+def _issue_parent(issue: IssueRecord) -> FactValue:
+    return _parent_number(issue), _parent_state(issue)
+
+
+def _issue_labels(issue: IssueRecord) -> FactValue:
+    return tuple(sorted(set(issue.labels)))
+
+
+def _issue_state(issue: IssueRecord) -> FactValue:
+    return issue.state
+
+
+def _issue_status_labels(issue: IssueRecord) -> FactValue:
+    return tuple(
+        label
+        for label in sorted(set(issue.labels))
+        if label.startswith(STATUS_LABEL_PREFIX)
+    )
+
+
+# The observed fields of an Issue, named as a diagnostic reports them.  Sorted
+# by name, so a conflict reads the same whatever order the records arrived in.
+FIELD_LABELS = "labels"
+FIELD_PARENT = "parent"
+FIELD_STATE = "state"
+
+_ISSUE_FIELDS: tuple[tuple[str, Callable[[IssueRecord], FactValue]], ...] = (
+    (FIELD_LABELS, _issue_labels),
+    (FIELD_PARENT, _issue_parent),
+    (FIELD_STATE, _issue_state),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _Index:
     """Deterministic lookups over the reused snapshot and run-state records."""
 
-    issues: dict[int, IssueRecord]
+    issues: dict[int, _IssueView]
     pull_requests_by_branch: dict[str, tuple[PrRecord, ...]]
     pull_request_count: int
     executions: dict[int, tuple[ExecutionRecord, ...]]
@@ -383,24 +416,71 @@ def _index_pull_requests(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _IssueView:
+    """Every version of one Issue the snapshot holds, and where they disagree.
+
+    `IssuesByStatus.all()` concatenates six separately fetched label lists, so
+    an Issue that transitions between those requests appears twice with
+    different labels or state.  Keeping only one of them would publish an
+    arbitrary version as fact and, worse, make the snapshot depend on the order
+    the records arrived in.
+    """
+
+    records: tuple[IssueRecord, ...]
+    conflicts: tuple[str, ...] = ()
+
+    def agrees_on(self, field: str) -> bool:
+        return field not in self.conflicts
+
+
+def _distinct(records: list[IssueRecord]) -> tuple[IssueRecord, ...]:
+    """Drop exact repeats — an Issue carrying two of the queried labels."""
+    unique: list[IssueRecord] = []
+    for record in records:
+        if all(record != kept for kept in unique):
+            unique.append(record)
+    return tuple(unique)
+
+
+def _index_issues(snapshot: ForgeSnapshot | None) -> dict[int, _IssueView]:
+    grouped: dict[int, list[IssueRecord]] = {}
+    for issue in snapshot.issues if snapshot else ():
+        grouped.setdefault(issue.number, []).append(issue)
+    views: dict[int, _IssueView] = {}
+    for number, records in grouped.items():
+        unique = _distinct(records)
+        conflicts = tuple(
+            name
+            for name, value_of in _ISSUE_FIELDS
+            if len({value_of(record) for record in unique}) > 1
+        )
+        views[number] = _IssueView(unique, conflicts)
+    return views
+
+
 def _index_parents(
-    issues: dict[int, IssueRecord],
+    issues: dict[int, _IssueView],
 ) -> tuple[dict[int, tuple[int, ...]], dict[int, tuple[str, ...]]]:
     """Group observed Issues under their parents, keeping every declared state.
 
     Children are read over several Forge requests, so two of them can carry
     different states for the same parent that transitioned mid-fetch.  Every
     distinct declaration is kept here; picking one arbitrarily would hand a
-    parent invariant a confident value with no basis.
+    parent invariant a confident value with no basis.  A child whose own
+    versions disagree about its parent contributes no link at all.
     """
     children: dict[int, list[int]] = {}
     states: dict[int, set[str]] = {}
     for number in sorted(issues):
-        parent = _parent_number(issues[number])
+        view = issues[number]
+        if not view.agrees_on(FIELD_PARENT):
+            continue
+        parent = _parent_number(view.records[0])
         if parent is None:
             continue
         children.setdefault(parent, []).append(number)
-        state = _parent_state(issues[number])
+        state = _parent_state(view.records[0])
         if state is not None:
             states.setdefault(parent, set()).add(state)
     return (
@@ -414,7 +494,7 @@ def _build_index(
     executions: Sequence[ExecutionRecord],
     branches_by_issue: Mapping[int, str] | None,
 ) -> _Index:
-    issues = {issue.number: issue for issue in snapshot.issues} if snapshot else {}
+    issues = _index_issues(snapshot)
     grouped_executions: dict[int, list[ExecutionRecord]] = {}
     for record in executions:
         grouped_executions.setdefault(record.issue_number, []).append(record)
@@ -701,9 +781,11 @@ class ObservationCollector:
         self, parent: int, reading: _ForgeReading, index: _Index
     ) -> _Reading:
         """Prefer the parent's own record; fall back to what a child declares."""
-        record = index.issues.get(parent)
-        if record is not None:
-            return self._forge_reading(reading, record.state)
+        view = index.issues.get(parent)
+        if view is not None:
+            if not view.agrees_on(FIELD_STATE):
+                return _Reading(None, _UNKNOWN, (_conflicting_versions(parent, view),))
+            return self._forge_reading(reading, view.records[0].state)
         declared = index.declared_parent_states.get(parent, ())
         if len(declared) > 1:
             candidates = ", ".join(repr(state) for state in declared)
@@ -747,23 +829,21 @@ class ObservationCollector:
     def _issue_observations(
         self, issue_number: int, reading: _ForgeReading, index: _Index, now: datetime
     ) -> list[Observation]:
-        issue = index.issues.get(issue_number)
-        labels = () if issue is None else _normalized_labels(issue)
-        status = tuple(x for x in labels if x.startswith(STATUS_LABEL_PREFIX))
+        view = index.issues.get(issue_number)
         identity = _emitter(SOURCE_COLLECTOR, now)
         forge = _emitter(SOURCE_FORGE, reading.observed_at)
         return [
             identity(FACT_ISSUE_NUMBER, _Reading(issue_number)),
             *(
-                forge(name, self._issue_reading(issue_number, issue, reading, value))
-                for name, value in (
-                    (FACT_ISSUE_STATE, None if issue is None else issue.state),
-                    (FACT_ISSUE_LABELS, labels),
-                    (FACT_ISSUE_STATUS_LABELS, status),
-                    (
-                        FACT_PARENT_ISSUE_NUMBER,
-                        None if issue is None else _parent_number(issue),
-                    ),
+                forge(
+                    name,
+                    self._issue_reading(issue_number, view, reading, field, value_of),
+                )
+                for name, field, value_of in (
+                    (FACT_ISSUE_STATE, FIELD_STATE, _issue_state),
+                    (FACT_ISSUE_LABELS, FIELD_LABELS, _issue_labels),
+                    (FACT_ISSUE_STATUS_LABELS, FIELD_LABELS, _issue_status_labels),
+                    (FACT_PARENT_ISSUE_NUMBER, FIELD_PARENT, _parent_number),
                 )
             ),
         ]
@@ -771,15 +851,23 @@ class ObservationCollector:
     def _issue_reading(
         self,
         issue_number: int,
-        issue: IssueRecord | None,
+        view: _IssueView | None,
         reading: _ForgeReading,
-        value: FactValue,
+        field: str,
+        value_of: Callable[[IssueRecord], FactValue],
     ) -> _Reading:
+        """Read one Issue field, per field, so a conflict clouds only itself."""
         if reading.snapshot is None:
             return _Reading(None, _UNKNOWN, reading.diagnostics)
-        if issue is None:
+        if view is None:
             return _Reading(None, _UNKNOWN, (_missing_from_snapshot(issue_number),))
-        return _Reading(value, reading.certainty, reading.diagnostics)
+        if not view.agrees_on(field):
+            return _Reading(
+                None, _UNKNOWN, (_conflicting_versions(issue_number, view),)
+            )
+        return _Reading(
+            value_of(view.records[0]), reading.certainty, reading.diagnostics
+        )
 
     def _execution_observations(
         self, view: _ExecutionView, now: datetime
@@ -902,8 +990,11 @@ def _missing_from_snapshot(issue_number: int) -> str:
     return f"issue #{issue_number} is not present in the reused Forge snapshot"
 
 
-def _normalized_labels(issue: IssueRecord) -> tuple[str, ...]:
-    return tuple(sorted(set(issue.labels)))
+def _conflicting_versions(issue_number: int, view: _IssueView) -> str:
+    return (
+        f"the reused Forge snapshot holds {len(view.records)} versions of issue "
+        f"#{issue_number} that disagree on {', '.join(view.conflicts)}"
+    )
 
 
 def build_observed_repository_state(
