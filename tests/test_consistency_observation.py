@@ -286,13 +286,17 @@ def test_repository_scope_summarises_the_reused_snapshot() -> None:
         issues=(_issue(703), _issue(704)),
         pull_requests=(_pr(720, "claude/issue-703"),),
         fetched_at=FETCHED_AT,
+        issues_complete=True,
+        pull_requests_complete=True,
     )
     state = _collector().collect(forge=snapshot, executions=(_execution(703),))
 
     repo = ConsistencyScope.REPOSITORY
     assert _fact(state, repo, None, FACT_FORGE_REACHABLE).value is True
-    assert _fact(state, repo, None, FACT_ISSUE_COUNT).value == 2
-    assert _fact(state, repo, None, FACT_PULL_REQUEST_COUNT).value == 1
+    for name, value in ((FACT_ISSUE_COUNT, 2), (FACT_PULL_REQUEST_COUNT, 1)):
+        count = _fact(state, repo, None, name)
+        assert count.value == value
+        assert count.certainty is ObservationCertainty.KNOWN
     assert _fact(state, repo, None, FACT_EXECUTION_COUNT).value == 1
 
 

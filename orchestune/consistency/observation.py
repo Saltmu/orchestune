@@ -108,6 +108,14 @@ _FILTERED_CHILDREN = (
     "the reused Issue snapshot is filtered, so these are the children observed "
     "in it, not necessarily every child"
 )
+_FILTERED_ISSUE_COUNT = (
+    "the reused Issue snapshot is filtered, so the observed issue count is not "
+    "a complete repository count"
+)
+_FILTERED_PULL_REQUEST_COUNT = (
+    "the reused pull request snapshot is filtered, so the observed pull request "
+    "count is not a complete repository count"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +322,19 @@ def _fact_name(observation: Observation) -> str:
     return observation.name
 
 
+def _unknown_forge_reading(
+    reading: _ForgeReading,
+    diagnostics: tuple[str, ...],
+    value: FactValue = None,
+) -> _Reading:
+    """Keep freshness evidence when another Forge uncertainty takes priority."""
+    return _Reading(
+        value,
+        _UNKNOWN,
+        (*reading.diagnostics, *diagnostics),
+    )
+
+
 def _scope(
     scope: ConsistencyScope, subject_id: str | None, facts: list[Observation]
 ) -> ScopedObservations:
@@ -403,20 +424,30 @@ class _Index:
     declared_parent_states: dict[int, tuple[str, ...]]
 
 
+def _distinct[RecordT](records: Sequence[RecordT]) -> tuple[RecordT, ...]:
+    """Drop exact repeats without changing the first-seen deterministic value."""
+    unique: list[RecordT] = []
+    for record in records:
+        if all(record != kept for kept in unique):
+            unique.append(record)
+    return tuple(unique)
+
+
 def _index_pull_requests(
     snapshot: ForgeSnapshot | None,
 ) -> tuple[dict[str, tuple[PrRecord, ...]], int]:
     grouped: dict[str, list[PrRecord]] = {}
     if snapshot is None:
         return {}, 0
-    for pull_request in snapshot.pull_requests:
+    pull_requests = _distinct(snapshot.pull_requests)
+    for pull_request in pull_requests:
         grouped.setdefault(pull_request.head_ref, []).append(pull_request)
     return (
         {
             head_ref: tuple(sorted(records, key=lambda record: record.number))
             for head_ref, records in grouped.items()
         },
-        len(snapshot.pull_requests),
+        len(pull_requests),
     )
 
 
@@ -436,15 +467,6 @@ class _IssueView:
 
     def agrees_on(self, field: str) -> bool:
         return field not in self.conflicts
-
-
-def _distinct(records: list[IssueRecord]) -> tuple[IssueRecord, ...]:
-    """Drop exact repeats — an Issue carrying two of the queried labels."""
-    unique: list[IssueRecord] = []
-    for record in records:
-        if all(record != kept for kept in unique):
-            unique.append(record)
-    return tuple(unique)
 
 
 def _index_issues(snapshot: ForgeSnapshot | None) -> dict[int, _IssueView]:
@@ -513,8 +535,17 @@ def _build_index(
     # act on) a missing branch, worktree, or pull request that a parent never
     # has.  Run state or the caller's branch map override this — an Issue that
     # is actually being worked on stays a task even if children point at it.
+    # A nested Issue remains a task even when it also parents other Issues.
+    # Use every declared version as evidence: conflicting parent identities
+    # make the link unknown, but must not erase the task itself.
+    child_task_numbers = {
+        number
+        for number, view in issues.items()
+        if any(_parent_number(record) is not None for record in view.records)
+    }
     task_numbers = (
         (set(issues) - set(children_by_parent))
+        | child_task_numbers
         | set(grouped_executions)
         | set(declared_branches)
     )
@@ -709,7 +740,27 @@ class ObservationCollector:
         if fetched_at is None:
             return _ForgeReading(snapshot, _KNOWN, (), now)
         budget = self._freshness_budget
-        age = now - fetched_at
+        try:
+            age = now - fetched_at
+        except TypeError:
+            if budget is None:
+                return _ForgeReading(snapshot, _KNOWN, (), fetched_at)
+            return _ForgeReading(
+                snapshot,
+                _UNKNOWN,
+                (
+                    "forge snapshot timestamp cannot be compared with the "
+                    "collector clock",
+                ),
+                now,
+            )
+        if age < timedelta(0):
+            return _ForgeReading(
+                snapshot,
+                _UNKNOWN,
+                (f"forge snapshot timestamp is {-age} in the future",),
+                now,
+            )
         if budget is not None and age > budget:
             return _ForgeReading(
                 snapshot,
@@ -733,16 +784,46 @@ class ObservationCollector:
         forge = _emitter(SOURCE_FORGE, reading.observed_at)
         run_state = _emitter(SOURCE_RUN_STATE, now)
         executions = sum(len(records) for records in index.executions.values())
+        snapshot = reading.snapshot
         facts = [
-            forge(name, self._forge_reading(reading, value))
-            for name, value in (
-                (FACT_FORGE_REACHABLE, True),
-                (FACT_ISSUE_COUNT, len(index.issues)),
-                (FACT_PULL_REQUEST_COUNT, index.pull_request_count),
-            )
+            forge(FACT_FORGE_REACHABLE, self._forge_reading(reading, True)),
+            forge(
+                FACT_ISSUE_COUNT,
+                self._complete_count_reading(
+                    reading,
+                    len(index.issues),
+                    complete=snapshot is not None and snapshot.issues_complete,
+                    incomplete_diagnostic=_FILTERED_ISSUE_COUNT,
+                ),
+            ),
+            forge(
+                FACT_PULL_REQUEST_COUNT,
+                self._complete_count_reading(
+                    reading,
+                    index.pull_request_count,
+                    complete=(snapshot is not None and snapshot.pull_requests_complete),
+                    incomplete_diagnostic=_FILTERED_PULL_REQUEST_COUNT,
+                ),
+            ),
         ]
         facts.append(run_state(FACT_EXECUTION_COUNT, _Reading(executions)))
         return _scope(ConsistencyScope.REPOSITORY, None, facts)
+
+    def _complete_count_reading(
+        self,
+        reading: _ForgeReading,
+        value: int,
+        *,
+        complete: bool,
+        incomplete_diagnostic: str,
+    ) -> _Reading:
+        if reading.snapshot is None or complete:
+            return self._forge_reading(reading, value)
+        return _unknown_forge_reading(
+            reading,
+            (incomplete_diagnostic,),
+            value,
+        )
 
     # -- Parent scope -------------------------------------------------------
 
@@ -781,7 +862,11 @@ class ObservationCollector:
         """
         children = index.children_by_parent[parent]
         if reading.snapshot is not None and not reading.snapshot.issues_complete:
-            return _Reading(children, _UNKNOWN, (_FILTERED_CHILDREN,))
+            return _unknown_forge_reading(
+                reading,
+                (_FILTERED_CHILDREN,),
+                children,
+            )
         return self._forge_reading(reading, children)
 
     def _parent_state_reading(
@@ -791,14 +876,16 @@ class ObservationCollector:
         view = index.issues.get(parent)
         if view is not None:
             if not view.agrees_on(FIELD_STATE):
-                return _Reading(None, _UNKNOWN, (_conflicting_versions(parent, view),))
+                return _unknown_forge_reading(
+                    reading,
+                    (_conflicting_versions(parent, view),),
+                )
             return self._forge_reading(reading, view.records[0].state)
         declared = index.declared_parent_states.get(parent, ())
         if len(declared) > 1:
             candidates = ", ".join(repr(state) for state in declared)
-            return _Reading(
-                None,
-                _UNKNOWN,
+            return _unknown_forge_reading(
+                reading,
                 (
                     f"ambiguous parent state for issue {parent}: "
                     f"children declare {candidates}",
@@ -806,7 +893,10 @@ class ObservationCollector:
             )
         if declared:
             return self._forge_reading(reading, declared[0])
-        return _Reading(None, _UNKNOWN, (_missing_from_snapshot(parent),))
+        return _unknown_forge_reading(
+            reading,
+            (_missing_from_snapshot(parent),),
+        )
 
     # -- Task scope ---------------------------------------------------------
 
@@ -867,10 +957,16 @@ class ObservationCollector:
         if reading.snapshot is None:
             return _Reading(None, _UNKNOWN, reading.diagnostics)
         if view is None:
-            return _Reading(None, _UNKNOWN, (_missing_from_snapshot(issue_number),))
+            if reading.snapshot.issues_complete:
+                return self._forge_reading(reading, None)
+            return _unknown_forge_reading(
+                reading,
+                (_missing_from_snapshot(issue_number),),
+            )
         if not view.agrees_on(field):
-            return _Reading(
-                None, _UNKNOWN, (_conflicting_versions(issue_number, view),)
+            return _unknown_forge_reading(
+                reading,
+                (_conflicting_versions(issue_number, view),),
             )
         return _Reading(
             value_of(view.records[0]), reading.certainty, reading.diagnostics
@@ -965,14 +1061,13 @@ class ObservationCollector:
             unknown = _Reading(None, _UNKNOWN, reading.diagnostics)
             return unknown, unknown
         if branch.value is None:
-            unknown = _Reading(None, _UNKNOWN, branch.diagnostics)
+            unknown = _unknown_forge_reading(reading, branch.diagnostics)
             return unknown, unknown
         candidates = index.pull_requests_by_branch.get(branch.value, ())
         if len(candidates) > 1:
             numbers = ", ".join(str(record.number) for record in candidates)
-            unknown = _Reading(
-                None,
-                _UNKNOWN,
+            unknown = _unknown_forge_reading(
+                reading,
                 (
                     "ambiguous pull request correspondence for branch "
                     f"{branch.value!r}: candidates {numbers}",
@@ -981,7 +1076,10 @@ class ObservationCollector:
             return unknown, unknown
         if not candidates:
             if not reading.snapshot.pull_requests_complete:
-                unknown = _Reading(None, _UNKNOWN, (_FILTERED_PULL_REQUESTS,))
+                unknown = _unknown_forge_reading(
+                    reading,
+                    (_FILTERED_PULL_REQUESTS,),
+                )
                 return unknown, unknown
             return (
                 self._forge_reading(reading, None),
