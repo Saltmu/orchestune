@@ -228,7 +228,13 @@ def derive_desired_repository_state(
     intents: Iterable[TransitionIntent] = (),
     now: datetime,
 ) -> DesiredRepositoryState:
-    """Derive deterministic desired facts without observing or mutating state."""
+    """Derive deterministic desired facts without observing or mutating state.
+
+    ``completed_task_ids`` may name dependencies outside the supplied task slice;
+    unlike active run-state entries, those external completion facts are valid input.
+    ``task.dispatch_eligible`` describes each task independently.  Consumers must
+    still select no more than ``dispatch.available_slots`` tasks from that set.
+    """
 
     if not repository_id:
         raise ValueError("repository_id must not be empty")

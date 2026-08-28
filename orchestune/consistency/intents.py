@@ -254,7 +254,13 @@ def _same_identity(left: TransitionIntent, right: TransitionIntent) -> bool:
 
 
 class IntentJournal:
-    """Versioned atomic journal for restart-safe non-atomic transitions."""
+    """Versioned atomic journal for restart-safe non-atomic transitions.
+
+    Each file replacement is crash-atomic, while a complete load/modify/save cycle
+    assumes one writer.  Callers that can span processes must serialize journal
+    operations around this class (for example with ``infra.process_utils.FileLock``)
+    so two stale reads cannot overwrite one another.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
