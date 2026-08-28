@@ -227,6 +227,24 @@ class TestLocalProcessDispatchTarget:
             "42",
         ]
 
+    def test_claude_cli_template_includes_verbose_flag_for_stream_json(self):
+        """#714: Claude CLIは-pと--output-format stream-jsonの併用時に--verboseが必須。"""
+        assert "--verbose" in CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_launch_claude_cli_includes_verbose_flag(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(_task(issue_number=42), "claude/issue-42", tmp_path / "wt")
+
+        cmd = mock_popen.call_args.args[0]
+        assert "--verbose" in cmd
+        assert "--output-format" in cmd
+        assert "stream-json" in cmd
+
     def test_launch_with_execution_selection_claude_cli_adds_model_and_skips_effort(
         self, tmp_path, caplog
     ):

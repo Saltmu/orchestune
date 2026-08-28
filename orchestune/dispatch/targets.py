@@ -82,7 +82,8 @@ _CLAUDE_CLI_LOCAL_CMD_BASE = (
     "PR作成時は必ずベースブランチに `{base_branch}` を指定してください（`gh pr create --base {base_branch}`）。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--permission-mode bypassPermissions "
-    "--output-format stream-json"
+    "--output-format stream-json "
+    "--verbose"
 )
 
 _AGY_CLI_LOCAL_CMD_BASE = (
