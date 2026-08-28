@@ -70,11 +70,16 @@ def _noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
     )
 
 
+def _resolve_base_branch_val(base_branch: str | None) -> str:
+    """PR作成時のベースブランチ名を正規化する（未指定時は'main'）。"""
+    return (base_branch.removeprefix("origin/") if base_branch else "") or "main"
+
+
 _CLAUDE_CLI_LOCAL_CMD_BASE = (
     'claude -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
-    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください（`gh pr create --base {base_branch}`）。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--permission-mode bypassPermissions "
     "--output-format stream-json"
@@ -84,7 +89,7 @@ _AGY_CLI_LOCAL_CMD_BASE = (
     'agy -p "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
-    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください（`gh pr create --base {base_branch}`）。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--add-dir . --print-timeout 60m --dangerously-skip-permissions"
 )
@@ -93,7 +98,7 @@ _CODEX_CLI_LOCAL_CMD_BASE = (
     'codex exec "GitHub Issue #{issue_number} を、'
     "必ず作業ブランチ `{branch_name}` で、"
     "標準開発ワークフローに従って実装してください。"
-    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください（`gh pr create --base {base_branch}`）。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
     "--dangerously-bypass-approvals-and-sandbox"
 )
@@ -181,10 +186,13 @@ class DispatchTarget(ABC):
     ) -> DispatchHandle:
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。
 
-
         #384: `force_push=True`は、自動リベース後の再launch（ローカルで書き
         換え済みの履歴を再pushする必要がある場合）を呼び出し元が明示するため
         のフラグ。pushを行わない実装では無視してよい。
+
+        #711: `base_branch`はタスクPR作成先のベースブランチ（親Issueモード時は
+        `parent/issue-{N}`、通常時は`main`）。未指定時は`None`（各実装側で
+        `main`へフォールバック）。
         """
 
     @abstractmethod
@@ -381,9 +389,7 @@ def _format_local_cmd(
     reviewer_bot: ReviewerBot | None = None,
     base_branch: str | None = None,
 ) -> list[str]:
-    base_branch_val = (
-        base_branch.removeprefix("origin/") if base_branch else ""
-    ) or "main"
+    base_branch_val = _resolve_base_branch_val(base_branch)
     formatted_cmd = local_cmd.format(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id or "",
@@ -595,9 +601,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self, task: Task, branch_name: str, base_branch: str | None = None
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
-        base_branch_val = (
-            base_branch.removeprefix("origin/") if base_branch else ""
-        ) or "main"
+        base_branch_val = _resolve_base_branch_val(base_branch)
         return (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
@@ -841,9 +845,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self, task: Task, branch_name: str, base_branch: str | None = None
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
-        base_branch_val = (
-            base_branch.removeprefix("origin/") if base_branch else ""
-        ) or "main"
+        base_branch_val = _resolve_base_branch_val(base_branch)
         return (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
