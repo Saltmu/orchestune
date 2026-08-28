@@ -187,8 +187,8 @@ def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None)
 
 
 def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
-    mention_pattern = re.compile(rf"@{re.escape(bot_name)}\s+review\b", re.IGNORECASE)
-    return bool(mention_pattern.search(body))
+    pattern = re.compile(rf"^\s*@{re.escape(bot_name)}\s+review\s*$", re.IGNORECASE)
+    return any(pattern.match(line) is not None for line in body.splitlines())
 
 
 def _ensure_review_trigger_mention(body: str, bot_name: str) -> str:

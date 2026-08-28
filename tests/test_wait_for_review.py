@@ -410,6 +410,13 @@ def test_has_review_trigger_mention():
     assert _has_review_trigger_mention("Prefix\n@codex review\nSuffix", "codex") is True
     assert _has_review_trigger_mention("@claude", "claude") is False
     assert (
+        _has_review_trigger_mention("Fixing `@claude review` issue", "claude") is False
+    )
+    assert (
+        _has_review_trigger_mention("Please check this: @claude review", "claude")
+        is False
+    )
+    assert (
         _has_review_trigger_mention(
             "<!-- orchestune:review-trigger bot=claude -->", "claude"
         )
