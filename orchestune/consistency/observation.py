@@ -15,8 +15,9 @@ Three rules shape everything below.
    configured, that raises, or a subject missing from a label-filtered snapshot
    all yield `ObservationCertainty.UNKNOWN` carrying the reason — never a
    confident "it is not there", which would make a repair delete live state.
-3. **Observation only.** This module imports no adapter and the probe Protocols
-   declare read operations exclusively, so collecting cannot repair anything.
+3. **Observation only.** Every contact with the outside world goes through the
+   injected probes, whose Protocols declare read operations exclusively, so
+   collecting cannot repair anything.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from orchestune.consistency.models import (
     ObservedRepositoryState,
     ScopedObservations,
 )
+from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord, PrRecord
 
 # Provenance recorded on every observation, so a finding can name where the
@@ -98,6 +100,10 @@ _NO_LOCAL_PID = "execution records no local pid"
 _NO_LOCAL_PROCESS = "cloud execution has no local process"
 _NO_WORKTREE_PATH = "execution records no worktree path"
 _NO_BRANCH = "no branch is recorded for this task"
+_FILTERED_PULL_REQUESTS = (
+    "the reused pull request snapshot is filtered, so finding no match does "
+    "not prove that no pull request exists"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +118,19 @@ class ForgeSnapshot:
     `fetched_at` is what makes freshness observable: it is when these records
     were true, not when they were read here.  Leaving it `None` means the
     caller makes no freshness claim, and the snapshot is taken at face value.
+
+    `pull_requests_complete` says whether `pull_requests` covers every state.
+    It defaults to `False` because the snapshot a cycle already has —
+    `CycleContext.prs`, from `list_open_prs()` — holds open pull requests only,
+    where a task whose pull request has since merged or closed simply has no
+    candidate.  Reading that as "this task has no pull request" would invent an
+    absence, so only a caller that fetched every state may claim completeness.
     """
 
     issues: tuple[IssueRecord, ...] = ()
     pull_requests: tuple[PrRecord, ...] = ()
     fetched_at: datetime | None = None
+    pull_requests_complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,11 +320,16 @@ def _scope(
 
 
 def _parent_number(issue: IssueRecord) -> int | None:
-    """The parent Issue number, ignoring a payload that does not carry one."""
-    parent = issue.parent
-    if not parent:
-        return None
-    number = parent.get("number")
+    """The parent Issue number, by the same rule the rest of Orchestune uses.
+
+    `effective_parent_number` prefers the native sub-Issue relationship and
+    falls back to the body's Footprint `parent_issue_number` — the degraded
+    mode for forges that expose no relationship API (#485).  Resolving it here
+    the same way keeps a legacy child from being recorded as having no parent,
+    which would be an invented absence.  A payload that carries no usable
+    number still resolves to `None`.
+    """
+    number = effective_parent_number(issue)
     if isinstance(number, bool) or not isinstance(number, int):
         return None
     return number
@@ -379,6 +398,16 @@ def _build_index(
     declared_branches = dict(branches_by_issue or {})
     pull_requests_by_branch, pull_request_count = _index_pull_requests(snapshot)
     children_by_parent, declared_parent_states = _index_parents(issues)
+    # A parent Issue included so its own state can be read is a parent, not a
+    # task: giving it task facts would let a task invariant find (and a repair
+    # act on) a missing branch, worktree, or pull request that a parent never
+    # has.  Run state or the caller's branch map override this — an Issue that
+    # is actually being worked on stays a task even if children point at it.
+    task_numbers = (
+        (set(issues) - set(children_by_parent))
+        | set(grouped_executions)
+        | set(declared_branches)
+    )
     return _Index(
         issues=issues,
         pull_requests_by_branch=pull_requests_by_branch,
@@ -388,9 +417,7 @@ def _build_index(
             for number, records in grouped_executions.items()
         },
         declared_branches=declared_branches,
-        task_numbers=tuple(
-            sorted(set(issues) | set(grouped_executions) | set(declared_branches))
-        ),
+        task_numbers=tuple(sorted(task_numbers)),
         children_by_parent=children_by_parent,
         declared_parent_states=declared_parent_states,
     )
@@ -811,6 +838,9 @@ class ObservationCollector:
             )
             return unknown, unknown
         if not candidates:
+            if not reading.snapshot.pull_requests_complete:
+                unknown = _Reading(None, _UNKNOWN, (_FILTERED_PULL_REQUESTS,))
+                return unknown, unknown
             return (
                 self._forge_reading(reading, None),
                 self._forge_reading(reading, None),

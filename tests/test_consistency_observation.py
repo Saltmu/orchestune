@@ -328,6 +328,61 @@ def test_parent_state_prefers_the_parents_own_issue_record() -> None:
     assert parent_state.certainty is ObservationCertainty.KNOWN
 
 
+def test_a_parent_issue_record_is_not_also_observed_as_a_task() -> None:
+    """A parent has no branch, worktree, or pull request of its own; observing
+    it as a task would hand task invariants four invented divergences."""
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, parent={"number": 700, "state": "OPEN"}),
+            _issue(700, labels=(), state="OPEN"),
+        ),
+        fetched_at=FETCHED_AT,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    assert [(s.scope.value, s.subject_id) for s in state.observations] == [
+        ("repository", None),
+        ("parent", "700"),
+        ("task", "703"),
+    ]
+
+
+def test_a_parent_with_its_own_execution_is_still_observed_as_a_task() -> None:
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, parent={"number": 700, "state": "OPEN"}),
+            _issue(700, labels=(), state="OPEN"),
+        ),
+        fetched_at=FETCHED_AT,
+    )
+
+    state = _collector().collect(forge=snapshot, executions=(_execution(700),))
+
+    assert _task_fact(state, 700, FACT_EXECUTION_KIND).value == EXECUTION_KIND_LOCAL
+
+
+def test_a_legacy_child_declaring_its_parent_in_the_body_is_linked() -> None:
+    """Forges without a relationship API keep the link in the Footprint fence;
+    reading only `issue.parent` there would invent "this task has no parent"."""
+    body = "## Footprint\n```yaml\nsubtask_id: observed-state\nparent_issue_number: 700\n```\n"
+    issue = IssueRecord(
+        number=703,
+        title="task 703",
+        body=body,
+        labels=("status:in-progress",),
+        created_at="2026-08-28T00:00:00Z",
+    )
+    snapshot = ForgeSnapshot(issues=(issue,), fetched_at=FETCHED_AT)
+
+    state = _collector().collect(forge=snapshot)
+
+    assert _task_fact(state, 703, FACT_PARENT_ISSUE_NUMBER).value == 700
+    assert _fact(
+        state, ConsistencyScope.PARENT, "700", FACT_CHILD_ISSUE_NUMBERS
+    ).value == (703,)
+
+
 def test_parent_state_is_unknown_when_no_record_declares_it() -> None:
     snapshot = ForgeSnapshot(
         issues=(_issue(703, parent={"number": 700}),), fetched_at=FETCHED_AT
@@ -484,7 +539,24 @@ def test_multiple_pull_requests_on_one_branch_are_unknown_with_candidates() -> N
     )
 
 
-def test_task_without_a_matching_pull_request_is_a_known_absence() -> None:
+def test_task_without_a_match_in_a_complete_snapshot_is_a_known_absence() -> None:
+    snapshot = ForgeSnapshot(
+        issues=(_issue(703),),
+        pull_requests=(_pr(720, "claude/issue-999"),),
+        fetched_at=FETCHED_AT,
+        pull_requests_complete=True,
+    )
+
+    state = _collector().collect(forge=snapshot, executions=(_execution(703),))
+
+    pr_number = _task_fact(state, 703, FACT_PULL_REQUEST_NUMBER)
+    assert pr_number.certainty is ObservationCertainty.KNOWN
+    assert pr_number.value is None
+
+
+def test_task_without_a_match_in_an_open_only_snapshot_is_unknown() -> None:
+    """`CycleContext.prs` holds open pull requests only, so a merged or closed
+    one is simply absent — that must not read as "this task has none"."""
     snapshot = ForgeSnapshot(
         issues=(_issue(703),),
         pull_requests=(_pr(720, "claude/issue-999"),),
@@ -494,8 +566,16 @@ def test_task_without_a_matching_pull_request_is_a_known_absence() -> None:
     state = _collector().collect(forge=snapshot, executions=(_execution(703),))
 
     pr_number = _task_fact(state, 703, FACT_PULL_REQUEST_NUMBER)
-    assert pr_number.certainty is ObservationCertainty.KNOWN
+    assert pr_number.certainty is ObservationCertainty.UNKNOWN
     assert pr_number.value is None
+    assert pr_number.diagnostics == (
+        "the reused pull request snapshot is filtered, so finding no match "
+        "does not prove that no pull request exists",
+    )
+    assert (
+        _task_fact(state, 703, FACT_PULL_REQUEST_STATE).certainty
+        is ObservationCertainty.UNKNOWN
+    )
 
 
 def test_pull_request_is_unknown_when_the_branch_itself_is_unknown() -> None:
