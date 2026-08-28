@@ -11,6 +11,7 @@ from scripts.wait_for_review import (
     _ensure_review_trigger_mention,
     _extract_review_result,
     _filter_bot_items,
+    _find_existing_trigger_comment,
     _get_item_timestamp,
     _handle_review_trigger,
     _has_review_trigger_mention,
@@ -408,14 +409,14 @@ def test_has_review_trigger_mention():
     assert _has_review_trigger_mention("@Claude Review", "claude") is True
     assert _has_review_trigger_mention("@codex   review", "codex") is True
     assert _has_review_trigger_mention("Prefix\n@codex review\nSuffix", "codex") is True
+    assert (
+        _has_review_trigger_mention(
+            "@claude, please take another review pass", "claude"
+        )
+        is True
+    )
     assert _has_review_trigger_mention("@claude", "claude") is False
-    assert (
-        _has_review_trigger_mention("Fixing `@claude review` issue", "claude") is False
-    )
-    assert (
-        _has_review_trigger_mention("Please check this: @claude review", "claude")
-        is False
-    )
+    assert _has_review_trigger_mention("Just a general review", "claude") is False
     assert (
         _has_review_trigger_mention(
             "<!-- orchestune:review-trigger bot=claude -->", "claude"
@@ -423,6 +424,26 @@ def test_has_review_trigger_mention():
         is False
     )
     assert _has_review_trigger_mention("", "claude") is False
+
+
+def test_find_existing_trigger_comment_prefers_comment_with_mention():
+    data = {
+        "issue_comments": [
+            {
+                "id": 502,
+                "created_at": "2026-08-20T10:00:00Z",
+                "body": "## Review response\n\n<!-- orchestune:review-trigger bot=codex -->\n<!-- orchestune:review-round 2 -->",
+            },
+            {
+                "id": 503,
+                "created_at": "2026-08-20T10:01:00Z",
+                "body": "@codex review\n\n## Review response\n\n<!-- orchestune:review-trigger bot=codex -->\n<!-- orchestune:review-round 2 -->",
+            },
+        ]
+    }
+    result = _find_existing_trigger_comment(data, "codex", round_num=2)
+    assert result is not None
+    assert result["id"] == 503
 
 
 def test_ensure_review_trigger_mention():

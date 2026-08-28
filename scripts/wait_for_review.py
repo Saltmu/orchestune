@@ -168,10 +168,17 @@ def _get_latest_review_round(
 def _find_existing_trigger_comment(
     data: dict[str, list[dict[str, Any]]], bot_name: str, round_num: int
 ) -> dict[str, Any] | None:
-    for item in data.get("issue_comments", []):
-        if _is_trigger_comment(item, bot_name, round_num=round_num):
+    matching = [
+        item
+        for item in data.get("issue_comments", [])
+        if _is_trigger_comment(item, bot_name, round_num=round_num)
+    ]
+    if not matching:
+        return None
+    for item in reversed(matching):
+        if _has_review_trigger_mention(item.get("body") or "", bot_name):
             return item
-    return None
+    return matching[-1]
 
 
 def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None) -> str:
@@ -187,8 +194,8 @@ def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None)
 
 
 def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
-    pattern = re.compile(rf"^\s*@{re.escape(bot_name)}\s+review\s*$", re.IGNORECASE)
-    return any(pattern.match(line) is not None for line in body.splitlines())
+    body_lower = body.lower()
+    return f"@{bot_name.lower()}" in body_lower and "review" in body_lower
 
 
 def _ensure_review_trigger_mention(body: str, bot_name: str) -> str:
