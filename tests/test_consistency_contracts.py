@@ -89,8 +89,16 @@ def _finding(
         scope=scope,
         subject_id=subject_id,
         severity=FindingSeverity.ERROR,
-        expected=Evidence("one primary status", ("expected count: 1",)),
-        observed=Evidence("invalid primary status count", ("observed count: 2",)),
+        expected=Evidence(
+            "one primary status",
+            ("expected count: 1",),
+            value=1,
+        ),
+        observed=Evidence(
+            "invalid primary status count",
+            ("observed count: 2",),
+            value=2,
+        ),
         repairability=Repairability.AUTOMATIC,
     )
 
@@ -185,6 +193,40 @@ def test_finding_keeps_stable_identity_evidence_and_repairability() -> None:
     assert finding.expected.details == ("expected count: 1",)
     assert finding.observed.details == ("observed count: 2",)
     assert finding.repairability is Repairability.AUTOMATIC
+
+
+def test_finding_preserves_structured_values_for_pure_repair_planning() -> None:
+    finding = ConsistencyFinding(
+        code="task.invalid-status",
+        scope=ConsistencyScope.TASK,
+        subject_id="701",
+        severity=FindingSeverity.ERROR,
+        expected=Evidence("queued status", value="status:queued"),
+        observed=Evidence(
+            "multiple statuses",
+            value=("status:blocked", "status:in-progress"),
+        ),
+        repairability=Repairability.AUTOMATIC,
+    )
+    report = ConsistencyReport(
+        repository_id="Saltmu/orchestune",
+        findings=(finding,),
+    )
+
+    command = RepairCommand(
+        code="task.set-status",
+        scope=finding.scope,
+        subject_id=finding.subject_id,
+        idempotency_key="task-701-status",
+        parameters=(("status", report.findings[0].expected.value),),
+    )
+
+    assert finding.expected.value == "status:queued"
+    assert finding.observed.value == (
+        "status:blocked",
+        "status:in-progress",
+    )
+    assert command.parameters == (("status", "status:queued"),)
 
 
 class _Observer:

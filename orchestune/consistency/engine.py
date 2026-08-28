@@ -32,8 +32,10 @@ def _finding_key(finding: ConsistencyFinding) -> tuple[object, ...]:
         finding.severity.value,
         finding.expected.summary,
         finding.expected.details,
+        repr(finding.expected.value),
         finding.observed.summary,
         finding.observed.details,
+        repr(finding.observed.value),
         finding.repairability.value,
     )
 

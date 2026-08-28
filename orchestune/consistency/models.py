@@ -66,6 +66,7 @@ class Evidence:
 
     summary: str
     details: tuple[str, ...] = ()
+    value: FactValue = None
 
 
 @dataclass(frozen=True, slots=True)
