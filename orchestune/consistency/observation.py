@@ -352,10 +352,6 @@ def _parent_state(issue: IssueRecord) -> str | None:
     return state if isinstance(state, str) else None
 
 
-def _issue_parent(issue: IssueRecord) -> FactValue:
-    return _parent_number(issue), _parent_state(issue)
-
-
 def _issue_labels(issue: IssueRecord) -> FactValue:
     return tuple(sorted(set(issue.labels)))
 
@@ -374,13 +370,21 @@ def _issue_status_labels(issue: IssueRecord) -> FactValue:
 
 # The observed fields of an Issue, named as a diagnostic reports them.  Sorted
 # by name, so a conflict reads the same whatever order the records arrived in.
+#
+# Parent identity and parent state are separate fields on purpose: a parent
+# that transitions between the sequential Issue queries leaves two versions of
+# one child naming the same parent with different states.  Folding them
+# together would make that a conflict about the link itself, dropping a parent
+# scope whose identity was never in doubt.
 FIELD_LABELS = "labels"
 FIELD_PARENT = "parent"
+FIELD_PARENT_STATE = "parent state"
 FIELD_STATE = "state"
 
 _ISSUE_FIELDS: tuple[tuple[str, Callable[[IssueRecord], FactValue]], ...] = (
     (FIELD_LABELS, _issue_labels),
-    (FIELD_PARENT, _issue_parent),
+    (FIELD_PARENT, _parent_number),
+    (FIELD_PARENT_STATE, _parent_state),
     (FIELD_STATE, _issue_state),
 )
 
@@ -468,7 +472,9 @@ def _index_parents(
     different states for the same parent that transitioned mid-fetch.  Every
     distinct declaration is kept here; picking one arbitrarily would hand a
     parent invariant a confident value with no basis.  A child whose own
-    versions disagree about its parent contributes no link at all.
+    versions disagree about *which* Issue is its parent contributes no link at
+    all; one that merely saw the parent in two states still links, and both
+    states it saw are kept.
     """
     children: dict[int, list[int]] = {}
     states: dict[int, set[str]] = {}
@@ -480,9 +486,10 @@ def _index_parents(
         if parent is None:
             continue
         children.setdefault(parent, []).append(number)
-        state = _parent_state(view.records[0])
-        if state is not None:
-            states.setdefault(parent, set()).add(state)
+        for record in view.records:
+            state = _parent_state(record)
+            if state is not None:
+                states.setdefault(parent, set()).add(state)
     return (
         {parent: tuple(numbers) for parent, numbers in children.items()},
         {parent: tuple(sorted(declared)) for parent, declared in states.items()},

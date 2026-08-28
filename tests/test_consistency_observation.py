@@ -418,6 +418,54 @@ def test_conflicting_child_declared_parent_states_are_unknown() -> None:
     )
 
 
+def test_one_child_seeing_two_parent_states_keeps_the_parent_link() -> None:
+    """A parent transitioning between the sequential Issue queries leaves two
+    versions of one child naming the same parent. The link is not in doubt —
+    only the state is, and both states it saw are kept."""
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, parent={"number": 700, "state": "OPEN"}),
+            _issue(703, parent={"number": 700, "state": "CLOSED"}),
+        ),
+        fetched_at=FETCHED_AT,
+        issues_complete=True,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    parent_number = _task_fact(state, 703, FACT_PARENT_ISSUE_NUMBER)
+    assert parent_number.certainty is ObservationCertainty.KNOWN
+    assert parent_number.value == 700
+    children = _fact(state, ConsistencyScope.PARENT, "700", FACT_CHILD_ISSUE_NUMBERS)
+    assert children.value == (703,)
+    parent_state = _fact(state, ConsistencyScope.PARENT, "700", FACT_PARENT_STATE)
+    assert parent_state.certainty is ObservationCertainty.UNKNOWN
+    assert parent_state.diagnostics == (
+        "ambiguous parent state for issue 700: children declare 'CLOSED', 'OPEN'",
+    )
+
+
+def test_versions_disagreeing_on_which_issue_is_the_parent_drop_the_link() -> None:
+    snapshot = ForgeSnapshot(
+        issues=(
+            _issue(703, parent={"number": 700, "state": "OPEN"}),
+            _issue(703, parent={"number": 701, "state": "OPEN"}),
+        ),
+        fetched_at=FETCHED_AT,
+        issues_complete=True,
+    )
+
+    state = _collector().collect(forge=snapshot)
+
+    parent_number = _task_fact(state, 703, FACT_PARENT_ISSUE_NUMBER)
+    assert parent_number.certainty is ObservationCertainty.UNKNOWN
+    assert parent_number.value is None
+    assert [s.scope for s in state.observations] == [
+        ConsistencyScope.REPOSITORY,
+        ConsistencyScope.TASK,
+    ]
+
+
 def test_conflicting_versions_of_the_parents_own_record_are_unknown() -> None:
     snapshot = ForgeSnapshot(
         issues=(
