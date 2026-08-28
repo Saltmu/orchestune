@@ -60,6 +60,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     ),
     2: frozenset(
         {
+            "consistency",
+            "consistency.engine",
+            "consistency.invariants",
+            "consistency.repairs",
             "dag.contracts",
             "dag.graph",
             "dag.parsing",
@@ -110,6 +114,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     0: frozenset(
         {
             "bounded_limit",
+            "consistency.contracts",
+            "consistency.models",
             "dag",
             "dag.models",
             "dispatch",
