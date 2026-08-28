@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.scoring import Task
@@ -124,10 +124,10 @@ def _create_worktree(
     run_git(cmd, cwd=None, check=True)
 
 
-def _target_supports_execution_selection(dispatch_target: DispatchTarget) -> bool:
+def _target_supports_param(dispatch_target: DispatchTarget, param_name: str) -> bool:
     try:
         sig = inspect.signature(dispatch_target.launch)
-        return "execution_selection" in sig.parameters or any(
+        return param_name in sig.parameters or any(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )
     except (ValueError, TypeError):
@@ -142,24 +142,16 @@ def _provision_and_launch(
     *,
     force_push: bool = False,
     execution_selection: ExecutionSelection | None = None,
+    base_branch: str | None = None,
 ) -> tuple[DispatchHandle, float]:
     """#262レビュー対応: dispatch_target.launch()直前の時刻をstarted_atとして取得し起動する。"""
     dispatch_started_at = time.time()
-    if _target_supports_execution_selection(dispatch_target):
-        handle = dispatch_target.launch(
-            task,
-            branch_name,
-            worktree_path,
-            force_push=force_push,
-            execution_selection=execution_selection,
-        )
-    else:
-        handle = dispatch_target.launch(
-            task,
-            branch_name,
-            worktree_path,
-            force_push=force_push,
-        )
+    kwargs: dict[str, Any] = {"force_push": force_push}
+    if _target_supports_param(dispatch_target, "execution_selection"):
+        kwargs["execution_selection"] = execution_selection
+    if _target_supports_param(dispatch_target, "base_branch"):
+        kwargs["base_branch"] = base_branch
+    handle = dispatch_target.launch(task, branch_name, worktree_path, **kwargs)
     return handle, dispatch_started_at
 
 
@@ -176,6 +168,34 @@ def _cleanup_failed_worktree(worktree_path: Path) -> None:
         run_git(["worktree", "prune"], cwd=None, check=False)
     except Exception:
         pass
+
+
+def _handle_launch_error(
+    e: Exception,
+    task: Task,
+    branch_name: str,
+    worktree_path: Path,
+    worktree_created: bool,
+    execution_selection: ExecutionSelection | None,
+) -> LaunchResult:
+    if worktree_created:
+        _cleanup_failed_worktree(worktree_path)
+    error_details = ""
+    if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+        error_details = f" (stderr: {e.stderr.strip()})"
+    print(
+        f"Error: Failed to create worktree or launch for issue #{task.issue_number}: {e}{error_details}",
+        file=sys.stderr,
+    )
+    return LaunchResult(
+        issue_number=task.issue_number,
+        branch=branch_name,
+        worktree_path=str(worktree_path),
+        pid=None,
+        launched=False,
+        error_message=f"{e}{error_details}",
+        execution_selection=execution_selection,
+    )
 
 
 def _prepare_and_launch(
@@ -197,6 +217,7 @@ def _prepare_and_launch(
             branch_name,
             worktree_path,
             execution_selection=execution_selection,
+            base_branch=base_branch,
         )
         return LaunchResult(
             issue_number=task.issue_number,
@@ -210,23 +231,13 @@ def _prepare_and_launch(
             execution_selection=execution_selection,
         )
     except (subprocess.CalledProcessError, OSError, BranchReachabilityError) as e:
-        if worktree_created:
-            _cleanup_failed_worktree(worktree_path)
-        error_details = ""
-        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
-            error_details = f" (stderr: {e.stderr.strip()})"
-        print(
-            f"Error: Failed to create worktree or launch for issue #{task.issue_number}: {e}{error_details}",
-            file=sys.stderr,
-        )
-        return LaunchResult(
-            issue_number=task.issue_number,
-            branch=branch_name,
-            worktree_path=str(worktree_path),
-            pid=None,
-            launched=False,
-            error_message=f"{e}{error_details}",
-            execution_selection=execution_selection,
+        return _handle_launch_error(
+            e,
+            task,
+            branch_name,
+            worktree_path,
+            worktree_created,
+            execution_selection,
         )
 
 

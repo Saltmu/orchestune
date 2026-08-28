@@ -32,6 +32,7 @@ class _DummyDispatchTarget(DispatchTarget):
         *,
         force_push: bool = False,
         execution_selection=None,
+        base_branch: str | None = None,
     ):
         return DispatchHandle(branch_name=branch_name)
 

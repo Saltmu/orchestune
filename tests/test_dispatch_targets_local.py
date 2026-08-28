@@ -59,6 +59,7 @@ class _IsCompleteOnlyTarget(DispatchTarget):
         *,
         force_push=False,
         execution_selection=None,
+        base_branch=None,
     ):
         return DispatchHandle(branch_name=branch_name)
 
@@ -186,6 +187,63 @@ class TestLocalProcessDispatchTarget:
             "--issue",
             "42",
         ]
+
+    def test_launch_replaces_base_branch_placeholder(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="runner --base {base_branch} --issue {issue_number}",
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(
+                _task(issue_number=42),
+                "agent/issue-42",
+                tmp_path / "wt",
+                base_branch="parent/issue-700",
+            )
+
+        assert mock_popen.call_args.args[0] == [
+            "runner",
+            "--base",
+            "parent/issue-700",
+            "--issue",
+            "42",
+        ]
+
+    def test_launch_defaults_base_branch_to_main_when_unspecified(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="runner --base {base_branch} --issue {issue_number}",
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
+
+        assert mock_popen.call_args.args[0] == [
+            "runner",
+            "--base",
+            "main",
+            "--issue",
+            "42",
+        ]
+
+    def test_claude_cli_template_includes_verbose_flag_for_stream_json(self):
+        """#714: Claude CLIは-pと--output-format stream-jsonの併用時に--verboseが必須。"""
+        assert "--verbose" in CLAUDE_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_launch_claude_cli_includes_verbose_flag(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 9999
+            target.launch(_task(issue_number=42), "claude/issue-42", tmp_path / "wt")
+
+        cmd = mock_popen.call_args.args[0]
+        assert "--verbose" in cmd
+        assert "--output-format" in cmd
+        assert "stream-json" in cmd
 
     def test_launch_with_execution_selection_claude_cli_adds_model_and_skips_effort(
         self, tmp_path, caplog
@@ -550,6 +608,19 @@ class TestBuildDispatchTarget:
         assert "非対話" in target._local_cmd
         assert "承認待ちで停止せず" in target._local_cmd
 
+    def test_claude_cli_preset_instructs_base_branch(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
+        )
+        assert "{base_branch}" in target._local_cmd
+        assert "ベースブランチ" in target._local_cmd
+
     def test_agy_cli_preset_instructs_noninteractive_execution(self, tmp_path):
         target = build_dispatch_target(
             TargetBuildConfig(
@@ -562,6 +633,19 @@ class TestBuildDispatchTarget:
         )
         assert "非対話" in target._local_cmd
         assert "承認待ちで停止せず" in target._local_cmd
+
+    def test_agy_cli_preset_instructs_base_branch(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "agy-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
+        )
+        assert "{base_branch}" in target._local_cmd
+        assert "ベースブランチ" in target._local_cmd
 
     def test_agy_cli_with_explicit_local_cmd_overrides_preset(self, tmp_path):
         target = build_dispatch_target(
@@ -589,6 +673,19 @@ class TestBuildDispatchTarget:
         )
         assert isinstance(target, LocalProcessDispatchTarget)
         assert target._local_cmd == CODEX_CLI_LOCAL_CMD_TEMPLATE
+
+    def test_codex_cli_preset_instructs_base_branch(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "codex-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
+        )
+        assert "{base_branch}" in target._local_cmd
+        assert "ベースブランチ" in target._local_cmd
 
     @pytest.mark.parametrize(
         ("target_name", "expected_reviewer"),
