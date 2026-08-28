@@ -16,11 +16,13 @@ from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import subtasks_from_tasks
+from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
@@ -433,6 +435,59 @@ def _handle_rebase_failure(
     del ctx.run_state.active_worktrees[ctx.key]
 
 
+def _run_rebase_ci_check(worktree_path: str, worktree_root: Path | str) -> None:
+    env = _get_ci_env(Path(worktree_root).resolve().parent)
+    ci_res = subprocess.run(
+        default_ci_command(),
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+    if ci_res.returncode != 0:
+        raise subprocess.CalledProcessError(
+            ci_res.returncode,
+            ci_res.args,
+            output=ci_res.stdout,
+            stderr=ci_res.stderr,
+        )
+
+
+def _relaunch_rebased_worktree(
+    active: ActiveWorktree,
+    active_task: Task,
+    config: DispatcherConfig,
+    parent_branch: str,
+) -> None:
+    assert config.dispatch_target is not None
+    selection = (
+        ExecutionSelection(
+            profile=active.profile,
+            model=active.model,
+            reasoning_effort=active.reasoning_effort,
+            reason=active.selection_reason or "",
+        )
+        if active.profile is not None
+        else None
+    )
+    handle, started_at = _provision_and_launch(
+        config.dispatch_target,
+        active_task,
+        active.branch,
+        Path(active.worktree_path),
+        force_push=True,
+        execution_selection=selection,
+        base_branch=parent_branch,
+    )
+    active.pid = handle.pid
+    active.external_id = handle.external_id
+    active.external_url = handle.external_url
+    active.started_at = started_at
+    active.base_branch = parent_branch
+
+
 def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
     active = ctx.active
     active_task = ctx.active_task
@@ -452,33 +507,8 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
 
     try:
         run_git(["rebase", resolved_parent], cwd=active.worktree_path, check=True)
-        env = _get_ci_env(Path(config.worktree_root).resolve().parent)
-        ci_res = subprocess.run(
-            default_ci_command(),
-            cwd=active.worktree_path,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-        )
-        if ci_res.returncode != 0:
-            raise subprocess.CalledProcessError(
-                ci_res.returncode,
-                ci_res.args,
-                output=ci_res.stdout,
-                stderr=ci_res.stderr,
-            )
-
-        assert config.dispatch_target is not None
-        handle = config.dispatch_target.launch(
-            active_task, active.branch, Path(active.worktree_path), force_push=True
-        )
-        active.pid = handle.pid
-        active.external_id = handle.external_id
-        active.external_url = handle.external_url
-        active.started_at = time.time()
-        active.base_branch = parent_branch
+        _run_rebase_ci_check(active.worktree_path, config.worktree_root)
+        _relaunch_rebased_worktree(active, active_task, config, parent_branch)
     except (subprocess.CalledProcessError, OSError) as e:
         _handle_rebase_failure(active, parent_branch, e, config, ctx)
 
