@@ -33,12 +33,25 @@ When files or branches are created or updated via GitHub MCP write tools rather 
 ### 3. Submitting the PR
 Submit the PR using the fixed backend selected during Step 0 Preflight:
 
+> [!IMPORTANT]
+> **Base Branch for Child Subtask and Stacked PRs (Precedence Order)**:
+> 1. **Stacked Subtask (Highest Precedence)**: If this task depends on another subtask whose PR has not yet merged into the parent/main branch, pass that dependency subtask's branch as `--base` (e.g. `gh pr create --base claude/issue-701-consistency-contract ...`). This takes precedence even if `parent_issue_number` is also set.
+> 2. **Parent Issue Mode**: If the Issue is a child subtask under an Epic / parent issue (`parent_issue_number` present in Footprint YAML / prompt, or worktree branched from `parent/issue-{N}`) and has no unmerged subtask dependency, pass `--base parent/issue-{parent_issue_number}` (e.g., `gh pr create --base parent/issue-700 ...`) to prevent accidental direct merges into `main`.
+> 3. **Standalone Issue (Default Fallback)**: For independent tasks without parent or dependency branches, pass `--base main`.
+
 - **When using `gh` CLI**:
   ```bash
-  gh pr create --title "PR Title" --body-file /tmp/pr_body.md
+  # Standalone issue:
+  gh pr create --base main --title "PR Title" --body-file /tmp/pr_body.md
+
+  # Child subtask of parent issue (e.g. #700):
+  gh pr create --base parent/issue-700 --title "PR Title" --body-file /tmp/pr_body.md
+
+  # Stacked subtask depending on an unmerged sibling branch:
+  gh pr create --base claude/issue-701-consistency-contract --title "PR Title" --body-file /tmp/pr_body.md
   ```
 - **When using GitHub MCP (or if `gh` CLI is unauthenticated/unavailable)**:
-  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, title, and body content from `/tmp/pr_body.md`.
+  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, base branch (the stacked dependency branch, `parent/issue-{N}`, or `main`), title, and body content from `/tmp/pr_body.md`.
   - Or create the PR via the GitHub Web UI with the same title and body content.
 
 ### 4. Post-Creation PR Head Diff Verification

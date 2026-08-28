@@ -785,7 +785,33 @@ class TestProvisionAndLaunch:
                 worktree_path,
                 force_push=False,
                 execution_selection=None,
+                base_branch=None,
             )
+
+    def test_provision_and_launch_passes_base_branch(self, tmp_path):
+        task = _task(1)
+        worktree_path = tmp_path / "worktrees" / "feature-1"
+        fake_target = MagicMock()
+        fake_handle = DispatchHandle(
+            pid=999, external_id="ext-1", branch_name="feature/1"
+        )
+        fake_target.launch.return_value = fake_handle
+
+        _provision_and_launch(
+            fake_target,
+            task,
+            "feature/1",
+            worktree_path,
+            base_branch="parent/issue-700",
+        )
+        fake_target.launch.assert_called_once_with(
+            task,
+            "feature/1",
+            worktree_path,
+            force_push=False,
+            execution_selection=None,
+            base_branch="parent/issue-700",
+        )
 
     def test_legacy_dispatch_target_signature_fallback_in_provision_and_launch(
         self, tmp_path

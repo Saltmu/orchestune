@@ -146,10 +146,14 @@ class TestApplyAutoRebase:
         # Assert base_branch updated to parent-branch
         assert active.base_branch == "parent-branch"
         assert active.pid == 222
-        # #384: rebaseで書き換え済みの履歴を安全に再pushできるよう、
-        # 再launch時はforce_push=Trueを明示的に渡す。
+        # 再launch時はforce_push=Trueを明示的に渡し、base_branchも伝達する。
         mock_target.launch.assert_called_once_with(
-            task, active.branch, Path(active.worktree_path), force_push=True
+            task,
+            active.branch,
+            Path(active.worktree_path),
+            force_push=True,
+            execution_selection=None,
+            base_branch="parent-branch",
         )
 
     @patch("orchestune.dispatch.rebase.os.kill")

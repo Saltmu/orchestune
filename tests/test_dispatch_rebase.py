@@ -22,6 +22,7 @@ from orchestune.dispatch.state import (
     load_run_state,
     save_run_state,
 )
+from orchestune.dispatch.targets import DispatchHandle
 from orchestune.models import PrRecord
 from tests.conftest import make_issue
 
@@ -535,6 +536,104 @@ class TestBranchStacking:
         # 新しいPIDで状態が保存されていることを確認
         loaded = load_run_state(config.run_state_path)
         assert loaded.active_worktrees["2"].pid == 99999
+
+    def test_auto_rebase_passes_base_branch_and_execution_selection_to_dispatch_target(
+        self, tmp_path
+    ):
+        target = MagicMock()
+        target.launch.return_value = DispatchHandle(
+            pid=8888, branch_name="claude/issue-2-task-2"
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+            dispatch_target=target,
+        )
+        issue_a = _issue(1, labels=("status:in-progress",), subtask_id="task-1")
+        issue_b = _issue(
+            2,
+            labels=("status:in-progress",),
+            subtask_id="task-2",
+            depends_on=("task-1",),
+        )
+        run_state = RunState(
+            active_worktrees={
+                "2": ActiveWorktree(
+                    issue_number=2,
+                    branch="claude/issue-2-task-2",
+                    worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
+                    pid=12345,
+                    started_at=1700000000.0,
+                    declared_footprint=(),
+                    profile="deep",
+                    model="claude-3-7-sonnet",
+                    reasoning_effort="high",
+                    selection_reason="test profile",
+                )
+            }
+        )
+        save_run_state(run_state, config.run_state_path)
+
+        with (
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_issues_by_label"
+            ) as mock_list,
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                return_value=["origin/claude/issue-1-task-1"],
+            ),
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
+                return_value=[
+                    PrRecord(
+                        number=10,
+                        head_ref="claude/issue-1-task-1",
+                        changed_files=(),
+                        review_decision="APPROVED",
+                        is_ci_passing=True,
+                    )
+                ],
+            ),
+            _patch_gc_process_alive(return_value=True),
+            patch(
+                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
+            ),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("orchestune.dispatch.rebase.os.kill", return_value=None),
+            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch(
+                "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+                return_value="claude/issue-1-task-1",
+            ),
+        ):
+            mock_list.side_effect = lambda label, **_: (
+                [issue_a, issue_b] if label == "status:in-progress" else []
+            )
+
+            def run_mock(args, **kwargs):
+                if "merge-base" in args:
+                    return subprocess.CompletedProcess(
+                        args=args, returncode=1, stdout="", stderr=""
+                    )
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout="", stderr=""
+                )
+
+            mock_run.side_effect = run_mock
+            run_dispatch_cycle(config)
+
+        target.launch.assert_called_once()
+        _, kwargs = target.launch.call_args
+        assert kwargs["base_branch"] == "claude/issue-1-task-1"
+        assert kwargs["force_push"] is True
+        assert kwargs["execution_selection"] is not None
+        assert kwargs["execution_selection"].profile == "deep"
+        assert kwargs["execution_selection"].model == "claude-3-7-sonnet"
+        assert kwargs["execution_selection"].reasoning_effort == "high"
 
     def test_stacking_blocked_when_multiple_dependencies_unmerged(self, tmp_path):
         config = DispatcherConfig(
