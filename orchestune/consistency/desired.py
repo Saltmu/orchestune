@@ -33,6 +33,7 @@ class DesiredTaskInput:
     task_id: str
     subject_id: str
     depends_on: tuple[str, ...] = ()
+    footprint: tuple[str, ...] = ()
     lifecycle: TaskLifecycle = TaskLifecycle.OPEN
     forced_serial: bool = False
 
@@ -44,6 +45,7 @@ class DesiredTaskInput:
         if self.task_id in self.depends_on:
             raise ValueError(f"task {self.task_id!r} cannot depend on itself")
         object.__setattr__(self, "depends_on", tuple(sorted(set(self.depends_on))))
+        object.__setattr__(self, "footprint", tuple(sorted(set(self.footprint))))
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,14 +152,24 @@ def _is_dispatch_eligible(
     is_active: bool,
     unresolved: tuple[str, ...],
     available_slots: int,
-    active_count: int,
-    forced_serial_active: bool,
+    forced_serial_conflict: bool,
 ) -> bool:
     if task.lifecycle is not TaskLifecycle.OPEN or is_active or unresolved:
         return False
-    if available_slots == 0 or forced_serial_active:
+    if available_slots == 0 or forced_serial_conflict:
         return False
-    return not task.forced_serial or active_count == 0
+    return True
+
+
+def _conflicts_with_forced_serial(
+    candidate: DesiredTaskInput,
+    active: DesiredTaskInput,
+) -> bool:
+    if set(candidate.footprint) & set(active.footprint):
+        return True
+    if active.task_id in candidate.depends_on:
+        return True
+    return candidate.task_id in active.depends_on
 
 
 def _task_facts(
@@ -194,21 +206,24 @@ def _all_task_facts(
     policy: DispatchPolicy,
 ) -> tuple[DesiredFact, ...]:
     active_count = len(active_ids)
-    forced_serial_active = any(
-        task.task_id in active_ids and task.forced_serial for task in tasks
+    forced_serial_actives = tuple(
+        task for task in tasks if task.task_id in active_ids and task.forced_serial
     )
     available_slots = max(0, policy.max_concurrent - active_count)
     facts: list[DesiredFact] = []
     for task in tasks:
         unresolved = tuple(dep for dep in task.depends_on if dep not in completed_ids)
         is_active = task.task_id in active_ids
+        forced_serial_conflict = any(
+            _conflicts_with_forced_serial(task, active)
+            for active in forced_serial_actives
+        )
         eligible = _is_dispatch_eligible(
             task,
             is_active=is_active,
             unresolved=unresolved,
             available_slots=available_slots,
-            active_count=active_count,
-            forced_serial_active=forced_serial_active,
+            forced_serial_conflict=forced_serial_conflict,
         )
         facts.extend(
             _task_facts(

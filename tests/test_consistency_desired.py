@@ -25,6 +25,7 @@ def _task(
     issue_number: int,
     *,
     depends_on: tuple[str, ...] = (),
+    footprint: tuple[str, ...] = (),
     lifecycle: TaskLifecycle = TaskLifecycle.OPEN,
     forced_serial: bool = False,
 ) -> DesiredTaskInput:
@@ -32,6 +33,7 @@ def _task(
         task_id=task_id,
         subject_id=str(issue_number),
         depends_on=depends_on,
+        footprint=footprint,
         lifecycle=lifecycle,
         forced_serial=forced_serial,
     )
@@ -182,9 +184,22 @@ def test_active_task_and_capacity_are_reflected_in_desired_facts() -> None:
 
 def test_forced_serial_policy_blocks_overlapping_dispatch() -> None:
     tasks = (
-        _task("serial-active", 702, forced_serial=True),
-        _task("normal", 703),
-        _task("serial-waiting", 704, forced_serial=True),
+        _task(
+            "serial-active",
+            702,
+            depends_on=("reverse-dependent",),
+            footprint=("shared.py",),
+            forced_serial=True,
+        ),
+        _task("independent", 703, footprint=("independent.py",)),
+        _task("overlapping", 704, footprint=("shared.py",)),
+        _task("reverse-dependent", 705, footprint=("reverse.py",)),
+        _task(
+            "forward-dependent",
+            706,
+            depends_on=("serial-active",),
+            footprint=("forward.py",),
+        ),
     )
     while_serial_active = derive_desired_repository_state(
         "Saltmu/orchestune",
@@ -193,16 +208,13 @@ def test_forced_serial_policy_blocks_overlapping_dispatch() -> None:
         policy=DispatchPolicy(max_concurrent=3),
         now=NOW,
     )
-    while_normal_active = derive_desired_repository_state(
-        "Saltmu/orchestune",
-        tasks,
-        active_task_ids=("normal",),
-        policy=DispatchPolicy(max_concurrent=3),
-        now=NOW,
+    assert _fact_value(while_serial_active, "703", "task.dispatch_eligible") is True
+    assert _fact_value(while_serial_active, "704", "task.dispatch_eligible") is False
+    assert _fact_value(while_serial_active, "705", "task.dispatch_eligible") is False
+    assert _fact_value(while_serial_active, "706", "task.dispatch_eligible") is False
+    assert (
+        _fact_value(while_serial_active, None, "dispatch.forced_serial_active") is True
     )
-
-    assert _fact_value(while_serial_active, "703", "task.dispatch_eligible") is False
-    assert _fact_value(while_normal_active, "704", "task.dispatch_eligible") is False
 
 
 def test_only_live_planned_or_applied_intents_are_valid_transitions() -> None:
