@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from orchestune.consistency.desired import TaskLifecycle
+from orchestune.consistency.desired import DesiredTaskInput, TaskLifecycle
 from orchestune.consistency.invariants.status import (
     BLOCKED_PROMOTION_HELD,
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -286,6 +286,8 @@ _SETTLED_INTENTS = {
     "scoped to the parent": {"scope": ConsistencyScope.PARENT},
     "changing a parent-scoped fact": {"change_scope": ConsistencyScope.PARENT},
     "changing a repository-scoped fact": {"change_scope": ConsistencyScope.REPOSITORY},
+    "declaring a non-string status": {"change_value": 123},
+    "declaring an unknown status": {"change_value": "in-progress"},
     "naming another task": {"subject_id": "706"},
     "with a naive timestamp": {"created_at": datetime(2026, 8, 29, 11, 0)},
 }
@@ -420,6 +422,17 @@ def test_dependency_completed_outside_the_task_slice_unblocks_the_dependent() ->
 
 
 def test_dependency_checks_are_skipped_without_a_desired_task() -> None:
+    """A task the plan cannot describe is never promoted on its behalf.
+
+    This is what keeps `_apply_yaml_error_blocking` out of reach: a task whose
+    Footprint YAML failed to parse keeps `subtask_id == ""`, and
+    `DesiredTaskInput` refuses an empty `task_id`, so such a task can never
+    reach the desired state and can never be read as "blocked with every
+    dependency resolved".
+    """
+    with pytest.raises(ValueError, match="task_id must not be empty"):
+        DesiredTaskInput(task_id="", subject_id="705")
+
     report = _evaluate(
         _observed(_task_scope(705, labels=("status:blocked",))), _desired()
     )

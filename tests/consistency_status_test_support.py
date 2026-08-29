@@ -177,6 +177,7 @@ def _status_intent(
     changed_fact: str = "task.status_label",
     scope: ConsistencyScope = ConsistencyScope.TASK,
     change_scope: ConsistencyScope = ConsistencyScope.TASK,
+    change_value: object = "status:in-progress",
     subject_id: str | None = None,
     created_at: datetime | None = None,
 ) -> TransitionIntent:
@@ -192,7 +193,7 @@ def _status_intent(
         expected_changes=(
             DesiredFact(
                 name=changed_fact,
-                value="status:in-progress",
+                value=change_value,  # type: ignore[arg-type]
                 scope=change_scope,
                 subject_id=str(issue_number),
                 reason="launch in flight",
