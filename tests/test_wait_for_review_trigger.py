@@ -12,7 +12,6 @@ from scripts.wait_for_review import (
     _has_review_trigger_mention,
     _resolve_current_round,
     post_review_trigger,
-    wait_for_review,
 )
 
 
@@ -142,6 +141,13 @@ def test_has_review_trigger_mention():
         )
         is False
     )
+    # Claude matches flexible workflow mention anywhere with review
+    assert (
+        _has_review_trigger_mention(
+            "## Review changes\n- Addressed @claude feedback", "claude"
+        )
+        is True
+    )
     assert _has_review_trigger_mention("@claude", "claude") is False
     assert _has_review_trigger_mention("Just a general review", "claude") is False
     assert (
@@ -173,26 +179,8 @@ def test_find_existing_trigger_comment_prefers_comment_with_mention():
     assert result["id"] == 503
 
 
-def test_resolve_current_round_reuses_malformed_latest_round():
-    # When latest round (e.g. round 5) only has marker and no mention, reuse round 5
-    data_malformed_5 = {
-        "issue_comments": [
-            {
-                "id": 505,
-                "created_at": "2026-08-20T10:00:00Z",
-                "body": "## Review 5\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 5 -->",
-            }
-        ]
-    }
-    assert (
-        _resolve_current_round(
-            data_malformed_5, "claude", round_num=None, post_trigger=True
-        )
-        == 5
-    )
-
-    # When latest round has a valid mention, increment to next round
-    data_valid_5 = {
+def test_resolve_current_round():
+    data_5 = {
         "issue_comments": [
             {
                 "id": 505,
@@ -202,25 +190,15 @@ def test_resolve_current_round_reuses_malformed_latest_round():
         ]
     }
     assert (
-        _resolve_current_round(
-            data_valid_5, "claude", round_num=None, post_trigger=True
-        )
-        == 6
+        _resolve_current_round(data_5, "claude", round_num=None, post_trigger=True) == 6
     )
 
     # Explicit round_num override takes precedence
-    assert (
-        _resolve_current_round(
-            data_malformed_5, "claude", round_num=3, post_trigger=True
-        )
-        == 3
-    )
+    assert _resolve_current_round(data_5, "claude", round_num=3, post_trigger=True) == 3
 
     # When post_trigger is False, returns max(1, latest_existing_round)
     assert (
-        _resolve_current_round(
-            data_malformed_5, "claude", round_num=None, post_trigger=False
-        )
+        _resolve_current_round(data_5, "claude", round_num=None, post_trigger=False)
         == 5
     )
 
@@ -321,53 +299,3 @@ def test_post_review_trigger_failure():
 
         with pytest.raises(RuntimeError, match="gh command failed: Not authorized"):
             post_review_trigger(pr_number=540, bot_name="claude")
-
-
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
-def test_wait_for_review_recovers_malformed_round_5_under_max_rounds(
-    mock_post, mock_get_data
-):
-    malformed_5 = {
-        "id": 500,
-        "user": {"login": "human"},
-        "created_at": "2026-08-20T07:00:00Z",
-        "body": "## Review 5\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 5 -->",
-    }
-    completed_review = {
-        "id": 501,
-        "user": {"login": "claude[bot]"},
-        "created_at": "2026-08-20T07:05:00Z",
-        "body": "### Review complete\nLooks good!",
-    }
-    mock_post.return_value = {
-        "id": 502,
-        "created_at": "2026-08-20T07:01:00Z",
-        "body": "@claude review\n\n## Review 5\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 5 -->",
-    }
-    mock_get_data.side_effect = [
-        {"issue_comments": [malformed_5], "reviews": [], "inline_comments": []},
-        {
-            "issue_comments": [malformed_5, completed_review],
-            "reviews": [],
-            "inline_comments": [],
-        },
-    ]
-
-    result = wait_for_review(
-        pr_number=540,
-        timeout=10,
-        interval=0,
-        bot_name="claude",
-        post_trigger=True,
-        max_rounds=5,
-    )
-
-    assert "### Review complete" in result["review_body"]
-    mock_post.assert_called_once_with(
-        540,
-        bot_name="claude",
-        body=None,
-        body_file=None,
-        round_num=5,
-    )

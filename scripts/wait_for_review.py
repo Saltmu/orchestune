@@ -194,6 +194,10 @@ def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None)
 
 
 def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
+    body_lower = body.lower()
+    bot = bot_name.lower()
+    if bot == "claude":
+        return "@claude" in body_lower and "review" in body_lower
     pattern = re.compile(rf"@(?:{re.escape(bot_name)})[,\s:]+review\b", re.IGNORECASE)
     return pattern.search(body) is not None
 
@@ -432,14 +436,6 @@ def _resolve_current_round(
     latest_existing_round = _get_latest_review_round(initial_data, bot_name)
     if not post_trigger:
         return max(1, latest_existing_round)
-    if latest_existing_round > 0:
-        existing = _find_existing_trigger_comment(
-            initial_data, bot_name, latest_existing_round
-        )
-        if existing is not None and not _has_review_trigger_mention(
-            existing.get("body") or "", bot_name
-        ):
-            return latest_existing_round
     return latest_existing_round + 1
 
 
