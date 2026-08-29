@@ -94,16 +94,23 @@ def _group_actions(
 
 
 def _command(
-    subject_id: str, command_code: str, reason_codes: set[str]
+    subject_id: str,
+    command_code: str,
+    reason_codes: set[str],
+    *,
+    has_reclaim: bool,
 ) -> RepairCommand:
     action = command_code.removeprefix("execution.")
+    preconditions = _PRECONDITIONS[command_code]
+    if command_code == COMMAND_REQUEUE and not has_reclaim:
+        preconditions = ("execution-absent", "task-not-active")
     return RepairCommand(
         code=command_code,
         scope=ConsistencyScope.TASK,
         subject_id=subject_id,
         idempotency_key=f"execution:{subject_id}:{action}",
         parameters=(("finding_codes", tuple(sorted(reason_codes))),),
-        preconditions=_PRECONDITIONS[command_code],
+        preconditions=preconditions,
     )
 
 
@@ -121,7 +128,12 @@ def plan_execution_repairs(report: ConsistencyReport) -> tuple[RepairCommand, ..
         key=lambda item: (item[0], _COMMAND_ORDER[item[1]]),
     )
     return tuple(
-        _command(subject_id, command_code, grouped[(subject_id, command_code)])
+        _command(
+            subject_id,
+            command_code,
+            grouped[(subject_id, command_code)],
+            has_reclaim=(subject_id, COMMAND_RECLAIM) in grouped,
+        )
         for subject_id, command_code in ordered
     )
 

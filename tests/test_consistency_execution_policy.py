@@ -215,10 +215,12 @@ def test_dead_local_pid_is_reclaimable_but_cloud_pid_none_is_not_dead() -> None:
     assert [finding.subject_id for finding in dead] == ["703"]
     assert dead[0].repairability is Repairability.AUTOMATIC
     assert EXECUTION_OBSERVATION_UNKNOWN not in _codes(report)
-    assert [command.code for command in plan_execution_repairs(report)] == [
+    commands = plan_execution_repairs(report)
+    assert [command.code for command in commands] == [
         COMMAND_RECLAIM,
         COMMAND_REQUEUE,
     ]
+    assert commands[1].preconditions == ("reclaim-complete", "task-not-active")
 
 
 def test_cloud_execution_identifier_cannot_be_owned_by_multiple_tasks() -> None:
@@ -348,10 +350,12 @@ def test_desired_active_task_without_execution_has_missing_run_state_finding() -
     report = _evaluate(_state(task), _desired(**{"704": True}))
 
     assert _codes(report) == [RUN_STATE_MISSING]
-    assert [command.code for command in plan_execution_repairs(report)] == [
+    commands = plan_execution_repairs(report)
+    assert [command.code for command in commands] == [
         COMMAND_REQUEUE,
         COMMAND_BOOKKEEPING,
     ]
+    assert commands[0].preconditions == ("execution-absent", "task-not-active")
 
 
 def test_stale_terminal_run_state_is_reclaimed_without_requeue() -> None:
