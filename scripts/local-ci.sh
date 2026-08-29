@@ -26,7 +26,7 @@ echo "[3/6] Checking types (mypy)..."
 poetry run mypy orchestune tests
 
 echo "[4/6] Running tests with coverage (pytest)..."
-poetry run pytest -n auto --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+poetry run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 
 echo "[5/6] Detecting new or worsened code and skill bloat..."
 poetry run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
