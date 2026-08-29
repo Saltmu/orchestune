@@ -33,10 +33,10 @@ from orchestune.consistency import (
     TransitionIntent,
 )
 from orchestune.consistency.invariants.execution import (
-    OBSERVED_FACT_NAMES_BY_SCOPE as EXECUTION_OBSERVED_FACT_NAMES_BY_SCOPE,
+    REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE as EXECUTION_OBSERVED_FACT_NAMES_BY_SCOPE,
 )
 from orchestune.consistency.invariants.status import (
-    OBSERVED_FACT_NAMES_BY_SCOPE as STATUS_OBSERVED_FACT_NAMES_BY_SCOPE,
+    REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE as STATUS_OBSERVED_FACT_NAMES_BY_SCOPE,
 )
 from orchestune.consistency.observation import (
     ExecutionRecord,

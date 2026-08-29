@@ -7,8 +7,6 @@ and mechanically testable.
 
 from __future__ import annotations
 
-from orchestune.consistency.models import ConsistencyScope
-
 # Observed repository facts.
 FACT_EXECUTION_COUNT = "execution_count"
 FACT_FORGE_REACHABLE = "forge_reachable"
@@ -52,67 +50,4 @@ DESIRED_RUN_STATE_ACTIVE = "task.run_state_active"
 DESIRED_STATUS_LABEL = "task.status_label"
 DESIRED_UNRESOLVED_DEPENDENCIES = "task.unresolved_dependencies"
 
-OBSERVED_FACT_NAMES_BY_SCOPE = {
-    ConsistencyScope.REPOSITORY: frozenset(
-        {
-            FACT_EXECUTION_COUNT,
-            FACT_FORGE_REACHABLE,
-            FACT_ISSUE_COUNT,
-            FACT_PULL_REQUEST_COUNT,
-        }
-    ),
-    ConsistencyScope.PARENT: frozenset(
-        {
-            FACT_CHILD_ISSUE_NUMBERS,
-            FACT_PARENT_ISSUE_NUMBER,
-            FACT_PARENT_STATE,
-        }
-    ),
-    ConsistencyScope.TASK: frozenset(
-        {
-            FACT_BRANCH_EXISTS,
-            FACT_BRANCH_NAME,
-            FACT_EXECUTION_EXTERNAL_ID,
-            FACT_EXECUTION_EXTERNAL_STATUS,
-            FACT_EXECUTION_KIND,
-            FACT_EXECUTION_PID,
-            FACT_EXECUTION_PROCESS_ALIVE,
-            FACT_ISSUE_LABELS,
-            FACT_ISSUE_NUMBER,
-            FACT_ISSUE_STATE,
-            FACT_ISSUE_STATUS_LABELS,
-            FACT_PARENT_ISSUE_NUMBER,
-            FACT_PULL_REQUEST_BASE_REF,
-            FACT_PULL_REQUEST_HEAD_REF,
-            FACT_PULL_REQUEST_NUMBER,
-            FACT_PULL_REQUEST_STATE,
-            FACT_WORKTREE_EXISTS,
-            FACT_WORKTREE_PATH,
-        }
-    ),
-}
-
-DESIRED_FACT_NAMES_BY_SCOPE = {
-    ConsistencyScope.REPOSITORY: frozenset(
-        {
-            DESIRED_ACTIVE_COUNT,
-            DESIRED_AVAILABLE_SLOTS,
-            DESIRED_FORCED_SERIAL_ACTIVE,
-            DESIRED_MAX_CONCURRENT,
-        }
-    ),
-    ConsistencyScope.TASK: frozenset(
-        {
-            DESIRED_DEPENDENCIES_RESOLVED,
-            DESIRED_DISPATCH_ELIGIBLE,
-            DESIRED_RUN_STATE_ACTIVE,
-            DESIRED_STATUS_LABEL,
-            DESIRED_UNRESOLVED_DEPENDENCIES,
-        }
-    ),
-}
-
-__all__ = [name for name in globals() if name.startswith(("FACT_", "DESIRED_"))] + [
-    "DESIRED_FACT_NAMES_BY_SCOPE",
-    "OBSERVED_FACT_NAMES_BY_SCOPE",
-]
+__all__ = [name for name in globals() if name.startswith(("FACT_", "DESIRED_"))]
