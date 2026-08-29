@@ -319,12 +319,15 @@ def _apply_stale_active_entry_discard(
 def _rule_stale_entry(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
-    evaluation = evaluate_execution_repair_plan(
-        ctx.run_state,
-        ctx.tasks_by_issue,
-        ctx.config,
-        open_prs=ctx.prs,
-    )
+    evaluation = ctx.execution_repair_evaluation
+    if evaluation is None:
+        evaluation = evaluate_execution_repair_plan(
+            ctx.run_state,
+            ctx.tasks_by_issue,
+            ctx.config,
+            open_prs=ctx.prs,
+        )
+        ctx.execution_repair_evaluation = evaluation
     planned = any(
         command.code == COMMAND_RECLAIM
         and command.subject_id == str(active.issue_number)

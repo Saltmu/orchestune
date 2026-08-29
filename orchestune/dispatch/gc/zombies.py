@@ -639,10 +639,19 @@ def _reobserve_reclaim(
     held_worktree_paths: set[str] | None,
     open_prs: Sequence[PrRecord] | None,
 ) -> ZombieOrTimeoutReclaim | None:
-    """Require the same typed reclaim to survive a fresh observation."""
+    """Require the same typed reclaim to survive a targeted fresh observation."""
+    active = run_state.active_worktrees.get(previous.key)
+    if active is None or active.issue_number != previous.active.issue_number:
+        return None
+    targeted_state = RunState(
+        active_worktrees={previous.key: active},
+        task_reclaim_counts=run_state.task_reclaim_counts,
+    )
+    task = tasks_by_issue.get(active.issue_number)
+    targeted_tasks = {} if task is None else {active.issue_number: task}
     candidates = _decide_zombie_or_timeout_reclaims(
-        run_state,
-        tasks_by_issue,
+        targeted_state,
+        targeted_tasks,
         config,
         held_worktree_paths,
         time.time(),

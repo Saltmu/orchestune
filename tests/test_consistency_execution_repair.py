@@ -272,3 +272,30 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
     assert run_state.active_worktrees == {"707": active}
     fake_forge.remove_label.assert_not_called()
     fake_forge.add_label.assert_not_called()
+
+
+def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
+    dead = _active(tmp_path, 707, pid=707, started_at=None)
+    alive = _active(tmp_path, 708, pid=708, started_at=None)
+    run_state = RunState(active_worktrees={"707": dead, "708": alive})
+    config = _config(tmp_path, fake_forge, apply=False)
+
+    with (
+        patch(
+            "orchestune.dispatch.execution_repair.is_process_alive",
+            side_effect=lambda pid: pid == 708,
+        ) as process_probe,
+        patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
+    ):
+        events = _collect_zombies_and_timeouts(
+            run_state,
+            {707: _task(707), 708: _task(708)},
+            config,
+        )
+
+    assert [call.args for call in process_probe.call_args_list] == [
+        (707,),
+        (708,),
+        (707,),
+    ]
+    assert [event["issue_number"] for event in events] == [707]

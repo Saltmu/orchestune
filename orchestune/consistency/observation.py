@@ -1011,8 +1011,6 @@ class ObservationCollector:
         if record.kind == EXECUTION_KIND_CLOUD or record.external_id is not None:
             return _Reading(None, _UNKNOWN, (_NO_LOCAL_PROCESS,))
         if record.pid is None:
-            if record.kind == EXECUTION_KIND_LOCAL:
-                return _Reading(False, _KNOWN, (_NO_LOCAL_PID,))
             return _Reading(None, _UNKNOWN, (_NO_LOCAL_PID,))
         pid = record.pid
         return _read_probe(
