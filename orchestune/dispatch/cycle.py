@@ -9,13 +9,51 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
+from orchestune.consistency.desired import (
+    DesiredTaskInput,
+    DispatchPolicy,
+    TaskLifecycle,
+    derive_desired_repository_state,
+)
+from orchestune.consistency.engine import ConsistencyEngine
+from orchestune.consistency.invariants.execution import execution_invariants
+from orchestune.consistency.invariants.status import status_invariants
+from orchestune.consistency.models import (
+    ConsistencyReport,
+    ConsistencyScope,
+    DesiredRepositoryState,
+    ObservedRepositoryState,
+    RepairCommand,
+    StateChanged,
+)
+from orchestune.consistency.observation import (
+    FACT_BRANCH_NAME,
+    FACT_EXECUTION_KIND,
+    FACT_ISSUE_LABELS,
+    FACT_PULL_REQUEST_STATE,
+    FACT_WORKTREE_PATH,
+    ExecutionRecord,
+    ForgeSnapshot,
+    ObservationCollector,
+)
+from orchestune.consistency.repairs.execution import plan_execution_repairs
+from orchestune.consistency.repairs.status import plan_status_repairs
+from orchestune.consistency.supervisor import (
+    ConsistencyMode,
+    ConsistencySupervisor,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context import (
     _build_cycle_context,
+    _build_task_mappings,
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
@@ -37,13 +75,327 @@ from orchestune.dispatch.phase_reconciliation import (
 )
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.state import load_run_state
+from orchestune.dispatch.targets import DispatchHandle
 from orchestune.dispatch.worktree import file_lock
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.pr_link_notice import (
     notice_expected_bases,
     notify_open_pr_links,
 )
 
 __all__ = ["CycleReport", "run_dispatch_cycle"]
+
+
+@dataclass(frozen=True, slots=True)
+class _FunctionPlanner:
+    function: Callable[[ConsistencyReport], tuple[RepairCommand, ...]]
+
+    def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
+        return self.function(report)
+
+
+@dataclass(frozen=True, slots=True)
+class _BranchProbe:
+    config: DispatcherConfig
+
+    def branch_exists(self, branch: str) -> bool:
+        return self.config.resolved_forge.branch_exists(branch)
+
+
+class _WorktreeProbe:
+    def worktree_exists(self, path: str) -> bool:
+        return Path(path).exists()
+
+
+class _ProcessProbe:
+    def is_alive(self, pid: int) -> bool:
+        return is_process_alive(pid)
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalExecutionProbe:
+    config: DispatcherConfig
+
+    def status(self, external_id: str) -> str:
+        assert self.config.dispatch_target is not None
+        handle = DispatchHandle(external_id=external_id)
+        return self.config.dispatch_target.completion_status(
+            handle, forge=self.config.resolved_forge
+        )
+
+
+def _repository_id() -> str:
+    return os.environ.get("GITHUB_REPOSITORY") or "orchestune-repository"
+
+
+def _task_lifecycle(status_labels: tuple[str, ...]) -> TaskLifecycle:
+    if "status:done" in status_labels:
+        return TaskLifecycle.DONE
+    if "status:not-needed" in status_labels:
+        return TaskLifecycle.NOT_NEEDED
+    if any(
+        label in status_labels
+        for label in ("status:blocked-human-review", "status:manual-merge-required")
+    ):
+        return TaskLifecycle.HUMAN_REVIEW
+    return TaskLifecycle.OPEN
+
+
+class _DispatchConsistencyAdapter:
+    """Maps one dispatch-cycle view onto the consistency kernel contracts."""
+
+    def __init__(self, config, run_state, issues, ctx, *, fresh: bool) -> None:
+        self._config = config
+        self._run_state = run_state
+        self._cached_issues = issues
+        self._cached_prs = ctx.prs
+        self._cached_branches = ctx.subtask_branch_map
+        self._fresh = fresh
+        self._tasks_by_issue = ctx.tasks_by_issue
+
+    def _source_records(self):
+        if not self._fresh:
+            return self._cached_issues, self._cached_prs
+        issues = _fetch_issues(self._config).filtered_by_parent(
+            self._config.parent_issue_number
+        )
+        prs = self._config.resolved_forge.list_open_prs(paginate_files=True)
+        return issues, prs
+
+    def _executions(self) -> tuple[ExecutionRecord, ...]:
+        return tuple(
+            ExecutionRecord(
+                issue_number=active.issue_number,
+                branch=active.branch,
+                worktree_path=active.worktree_path,
+                pid=active.pid,
+                external_id=active.external_id,
+            )
+            for _, active in sorted(self._run_state.active_worktrees.items())
+        )
+
+    def _branches_by_issue(self) -> dict[int, str]:
+        branches = {
+            active.issue_number: active.branch
+            for active in self._run_state.active_worktrees.values()
+        }
+        for task in self._tasks_by_issue.values():
+            branch = self._cached_branches.get(task.subtask_id)
+            if branch is not None:
+                branches.setdefault(task.issue_number, branch)
+        return branches
+
+    def observe(self) -> ObservedRepositoryState:
+        issues, prs = self._source_records()
+        self._tasks_by_issue, _, _ = _build_task_mappings(issues.all())
+        observed_at = datetime.now(UTC)
+        collector = ObservationCollector(
+            repository_id=_repository_id(),
+            git_probe=_BranchProbe(self._config),
+            worktree_probe=_WorktreeProbe(),
+            process_probe=_ProcessProbe(),
+            external_probe=_ExternalExecutionProbe(self._config),
+            clock=lambda: observed_at,
+        )
+        return collector.collect(
+            forge=ForgeSnapshot(
+                issues=tuple(issues.all()),
+                pull_requests=tuple(prs),
+                fetched_at=observed_at,
+            ),
+            executions=self._executions(),
+            branches_by_issue=self._branches_by_issue(),
+        )
+
+    def _active_task_ids(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                task.subtask_id
+                for active in self._run_state.active_worktrees.values()
+                if (task := self._tasks_by_issue.get(active.issue_number)) is not None
+                and task.subtask_id
+            )
+        )
+
+    def _desired_tasks(self) -> tuple[DesiredTaskInput, ...]:
+        forced_serial_issues = {
+            active.issue_number
+            for active in self._run_state.active_worktrees.values()
+            if active.forced_serial
+        }
+        return tuple(
+            DesiredTaskInput(
+                task_id=task.subtask_id,
+                subject_id=str(task.issue_number),
+                depends_on=task.depends_on,
+                footprint=task.footprint,
+                lifecycle=_task_lifecycle(task.status_labels),
+                forced_serial=task.issue_number in forced_serial_issues,
+            )
+            for task in sorted(
+                self._tasks_by_issue.values(), key=lambda task: task.subtask_id
+            )
+            if task.subtask_id
+        )
+
+    def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState:
+        return derive_desired_repository_state(
+            observed.repository_id,
+            self._desired_tasks(),
+            active_task_ids=self._active_task_ids(),
+            policy=DispatchPolicy(max_concurrent=self._config.max_concurrent),
+            now=observed.observed_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ConsistencyRuntime:
+    supervisor: ConsistencySupervisor
+    cached_adapter: _DispatchConsistencyAdapter
+    fresh_adapter: _DispatchConsistencyAdapter
+
+
+def _start_consistency_runtime(
+    config, run_state, issues, ctx
+) -> _ConsistencyRuntime | None:
+    if config.consistency_mode is not ConsistencyMode.SHADOW:
+        return None
+    supervisor = ConsistencySupervisor(
+        repository_id=_repository_id(),
+        engine=ConsistencyEngine((*status_invariants(), *execution_invariants())),
+        repair_planners=(
+            _FunctionPlanner(plan_status_repairs),
+            _FunctionPlanner(plan_execution_repairs),
+        ),
+    )
+    runtime = _ConsistencyRuntime(
+        supervisor=supervisor,
+        cached_adapter=_DispatchConsistencyAdapter(
+            config, run_state, issues, ctx, fresh=False
+        ),
+        fresh_adapter=_DispatchConsistencyAdapter(
+            config, run_state, issues, ctx, fresh=True
+        ),
+    )
+    supervisor.full_scan(
+        "start", observer=runtime.cached_adapter, deriver=runtime.cached_adapter
+    )
+    return runtime
+
+
+def _event_issue_number(event: dict, ctx) -> int | None:
+    issue_number = event.get("issue_number")
+    if isinstance(issue_number, int) and not isinstance(issue_number, bool):
+        return issue_number
+    subtask_id = event.get("subtask_id")
+    if isinstance(subtask_id, str):
+        mapped = ctx.issue_number_by_subtask_id.get(subtask_id)
+        if isinstance(mapped, int) and not isinstance(mapped, bool):
+            return mapped
+    return None
+
+
+def _event_changes(
+    events: list[dict], ctx, fields: tuple[str, ...], source: str, occurred_at
+) -> list[StateChanged]:
+    return [
+        StateChanged(
+            scope=ConsistencyScope.TASK,
+            subject_id=str(issue_number),
+            fields=fields,
+            source=source,
+            occurred_at=occurred_at,
+        )
+        for event in events
+        if (issue_number := _event_issue_number(event, ctx)) is not None
+    ]
+
+
+def _lock_state_changes(report: CycleReport, occurred_at) -> list[StateChanged]:
+    return [
+        StateChanged(
+            scope=ConsistencyScope.TASK,
+            subject_id=str(task.issue_number),
+            fields=(FACT_ISSUE_LABELS,),
+            source=f"dispatch.external-lock.{action}",
+            occurred_at=occurred_at,
+        )
+        for action, tasks in report.lock_changes.items()
+        for task in tasks
+    ]
+
+
+def _scheduling_state_changes(report: CycleReport, occurred_at) -> list[StateChanged]:
+    if not report.applied:
+        return []
+    return [
+        StateChanged(
+            scope=ConsistencyScope.TASK,
+            subject_id=str(task.issue_number),
+            fields=(
+                FACT_BRANCH_NAME,
+                FACT_EXECUTION_KIND,
+                FACT_ISSUE_LABELS,
+                FACT_WORKTREE_PATH,
+            ),
+            source="dispatch.scheduling",
+            occurred_at=occurred_at,
+        )
+        for task in report.selected
+    ]
+
+
+def _pipeline_state_changes(
+    report: CycleReport, ctx, now: float
+) -> tuple[StateChanged, ...]:
+    if not report.applied:
+        return ()
+    occurred_at = datetime.fromtimestamp(now, UTC)
+    changes = _event_changes(
+        report.promotion_events,
+        ctx,
+        (FACT_ISSUE_LABELS,),
+        "dispatch.promotion",
+        occurred_at,
+    )
+    changes.extend(
+        _event_changes(
+            report.completion_events,
+            ctx,
+            (FACT_EXECUTION_KIND, FACT_ISSUE_LABELS, FACT_PULL_REQUEST_STATE),
+            "dispatch.completion",
+            occurred_at,
+        )
+    )
+    changes.extend(
+        _event_changes(
+            report.deviation_events,
+            ctx,
+            (FACT_BRANCH_NAME, FACT_ISSUE_LABELS),
+            "dispatch.deviation",
+            occurred_at,
+        )
+    )
+    changes.extend(_lock_state_changes(report, occurred_at))
+    changes.extend(_scheduling_state_changes(report, occurred_at))
+    return tuple(changes)
+
+
+def _finish_consistency_runtime(
+    runtime: _ConsistencyRuntime | None, report: CycleReport, ctx, now: float
+) -> None:
+    if runtime is None:
+        return
+    runtime.supervisor.targeted_scan(
+        "pipeline",
+        _pipeline_state_changes(report, ctx, now),
+        observer=runtime.fresh_adapter,
+        deriver=runtime.fresh_adapter,
+    )
+    runtime.supervisor.full_scan(
+        "end", observer=runtime.fresh_adapter, deriver=runtime.fresh_adapter
+    )
+    report.consistency = runtime.supervisor.cycle_report(mode=ConsistencyMode.SHADOW)
 
 
 def _prepare_cycle_issues(run_state, config: DispatcherConfig, now: float):
@@ -136,7 +488,9 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         now = time.time()
         issues = _prepare_cycle_issues(run_state, config, now)
         ctx = _build_cycle_context(issues, run_state, config)
+        consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
         report = _execute_cycle_pipeline(ctx, issues, run_state, config, now)
+        _finish_consistency_runtime(consistency_runtime, report, ctx, now)
 
         if config.apply:
             append_event_log(build_event_log_entry(report, now), config.events_log_path)

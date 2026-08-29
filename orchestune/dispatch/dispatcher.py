@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
+from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dag.models import (
     DAG_TOOL_CONFIG_KEYS,
     compile_extra_ignore_patterns,
@@ -127,6 +128,15 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="ゾンビプロセスの検知・回収を行うかどうか（デフォルト: True）",
+    )
+
+
+def _add_consistency_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--consistency-mode",
+        choices=[mode.value for mode in ConsistencyMode],
+        default=ConsistencyMode.OFF.value,
+        help="#706: 整合性Supervisor。offは無効、shadowは副作用なしでscan/reportする。",
     )
 
 
@@ -260,6 +270,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "（既定でラベル更新・worktree作成・エージェント起動まで行う。dry-runには--no-applyを指定）"
     )
     _add_execution_arguments(parser)
+    _add_consistency_arguments(parser)
     _add_scheduling_arguments(parser)
     _add_storage_arguments(parser)
     _add_dispatch_target_arguments(parser)
@@ -510,6 +521,7 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         ci_command=shlex.split(args.ci_command) if args.ci_command else None,
         dag_ignore_patterns=inputs.dag_ignore_patterns,
         dag_similarity_threshold=inputs.dag_similarity_threshold,
+        consistency_mode=ConsistencyMode(args.consistency_mode),
     )
 
 

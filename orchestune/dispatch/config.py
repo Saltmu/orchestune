@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.scoring import SCHEDULING_MODE_CRITICAL_PATH
@@ -81,8 +82,12 @@ class DispatcherConfig:
     scheduling_mode: str = SCHEDULING_MODE_CRITICAL_PATH
     # #668: リポジトリ定義の実行プロファイル設定（モデル・推論強度解決用）
     execution_profile_config: ExecutionProfileConfig | None = None
+    # #706: offは従来動作、shadowは副作用なしの整合性scan/reportのみを有効化する。
+    consistency_mode: ConsistencyMode = ConsistencyMode.OFF
 
     def __post_init__(self) -> None:
+        if not isinstance(self.consistency_mode, ConsistencyMode):
+            self.consistency_mode = ConsistencyMode(self.consistency_mode)
         if self.execution_profile_config is None:
             self.execution_profile_config = ExecutionProfileConfig()
         if self.dispatch_target is None:
