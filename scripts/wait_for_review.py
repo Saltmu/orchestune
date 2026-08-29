@@ -168,10 +168,17 @@ def _get_latest_review_round(
 def _find_existing_trigger_comment(
     data: dict[str, list[dict[str, Any]]], bot_name: str, round_num: int
 ) -> dict[str, Any] | None:
-    for item in data.get("issue_comments", []):
-        if _is_trigger_comment(item, bot_name, round_num=round_num):
+    matching = [
+        item
+        for item in data.get("issue_comments", [])
+        if _is_trigger_comment(item, bot_name, round_num=round_num)
+    ]
+    if not matching:
+        return None
+    for item in reversed(matching):
+        if _has_review_trigger_mention(item.get("body") or "", bot_name):
             return item
-    return None
+    return matching[0]
 
 
 def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None) -> str:
@@ -186,6 +193,24 @@ def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None)
     return result
 
 
+def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
+    body_lower = body.lower()
+    bot = bot_name.lower()
+    if bot == "claude":
+        return "@claude" in body_lower and "review" in body_lower
+    pattern = re.compile(rf"@(?:{re.escape(bot_name)})[,\s:]+review\b", re.IGNORECASE)
+    return pattern.search(body) is not None
+
+
+def _ensure_review_trigger_mention(body: str, bot_name: str) -> str:
+    trimmed = body.strip()
+    if not trimmed:
+        return f"@{bot_name} review"
+    if _has_review_trigger_mention(trimmed, bot_name):
+        return trimmed
+    return f"@{bot_name} review\n\n{trimmed}"
+
+
 def post_review_trigger(
     pr_number: int,
     bot_name: str = "claude",
@@ -195,11 +220,12 @@ def post_review_trigger(
 ) -> dict[str, Any]:
     if body_file:
         with open(body_file, encoding="utf-8") as f:
-            comment_body = f.read().strip()
+            raw_body = f.read()
     elif body:
-        comment_body = body.strip()
+        raw_body = body
     else:
-        comment_body = f"@{bot_name} review"
+        raw_body = ""
+    comment_body = _ensure_review_trigger_mention(raw_body, bot_name)
     comment_body = _mark_review_trigger(comment_body, bot_name, round_num=round_num)
 
     stdout = _run_gh(
@@ -331,13 +357,19 @@ def _handle_review_trigger(
     if existing_trigger is not None:
         trigger_id = existing_trigger.get("id")
         trigger_time = str(existing_trigger.get("created_at") or "")
+        existing_body = existing_trigger.get("body") or ""
         if trigger_id is not None:
             excluded_ids.add(trigger_id)
+        if _has_review_trigger_mention(existing_body, bot_name):
+            print(
+                f"Review trigger for @{bot_name} (Round {current_round}) already exists "
+                f"(Comment ID: {trigger_id}); skipping post and waiting..."
+            )
+            return trigger_time
         print(
-            f"Review trigger for @{bot_name} (Round {current_round}) already exists "
-            f"(Comment ID: {trigger_id}); skipping post and waiting..."
+            f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
+            f"is missing @{bot_name} review mention; reposting trigger..."
         )
-        return trigger_time
 
     print(
         f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
@@ -393,6 +425,20 @@ def _check_immediate_review_result(
     return None
 
 
+def _resolve_current_round(
+    initial_data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    round_num: int | None,
+    post_trigger: bool,
+) -> int:
+    if round_num is not None:
+        return round_num
+    latest_existing_round = _get_latest_review_round(initial_data, bot_name)
+    if not post_trigger:
+        return max(1, latest_existing_round)
+    return latest_existing_round + 1
+
+
 def wait_for_review(
     pr_number: int,
     *,
@@ -417,13 +463,9 @@ def wait_for_review(
         initial_snapshot = _build_snapshot(initial_data, bot_name)
         excluded_ids: set[int | str] = set()
 
-        latest_existing_round = _get_latest_review_round(initial_data, bot_name)
-        if round_num is not None:
-            current_round = round_num
-        elif post_trigger:
-            current_round = latest_existing_round + 1
-        else:
-            current_round = max(1, latest_existing_round)
+        current_round = _resolve_current_round(
+            initial_data, bot_name, round_num, post_trigger
+        )
 
         if current_round > max_rounds:
             raise MaxRoundsExceededError(
