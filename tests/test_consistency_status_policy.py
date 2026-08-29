@@ -555,13 +555,17 @@ def _malformed_task(**overrides: object) -> ScopedObservations:
         {FACT_ISSUE_STATUS_LABELS: "status:queued"},
         {FACT_ISSUE_STATUS_LABELS: (7, None)},
         {FACT_ISSUE_STATE: 705},
+        {FACT_ISSUE_STATE: "PAUSED"},
         {FACT_EXECUTION_KIND: None},
+        {FACT_EXECUTION_KIND: "bogus"},
     ),
     ids=(
         "labels are not a tuple",
         "labels are not strings",
         "state is not a string",
+        "state is outside the Issue vocabulary",
         "execution kind is not a string",
+        "execution kind is outside the run-state vocabulary",
     ),
 )
 def test_unusable_fact_shapes_read_as_uncertainty_not_absence(

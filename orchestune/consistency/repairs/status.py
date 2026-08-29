@@ -41,6 +41,7 @@ from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     FORGE_OBSERVATION_UNKNOWN,
     PRIMARY_STATUS_CONFLICT,
+    PRIMARY_STATUS_LABELS,
     PRIMARY_STATUS_MISSING,
     QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
     REPOSITORY_POLICY_INVARIANT,
@@ -87,8 +88,14 @@ _CERTAIN = "finding-certainty:known"
 _ISSUE_OPEN = "issue-open"
 
 
-def _label(value: FactValue) -> str | None:
-    return value if isinstance(value, str) and value else None
+def _primary_label(value: FactValue) -> str | None:
+    """The primary status a finding names, or `None` if it names none.
+
+    Evidence is validated rather than trusted: a report claiming a missing
+    status whose expected label is `ci:base-branch-red` would otherwise have
+    this planner add a label from a vocabulary it does not govern.
+    """
+    return value if isinstance(value, str) and value in PRIMARY_STATUS_LABELS else None
 
 
 def _observed_primary(finding: ConsistencyFinding) -> tuple[str, ...]:
@@ -117,7 +124,7 @@ def _command(
 
 
 def _add_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
-    label = _label(finding.expected.value)
+    label = _primary_label(finding.expected.value)
     if label is None:
         return ()
     return (
@@ -139,7 +146,7 @@ def _remove_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
     stripping `status:blocked-human-review` would restart a task a person
     deliberately stopped, so no report may talk this planner into it.
     """
-    keep = _label(finding.expected.value)
+    keep = _primary_label(finding.expected.value)
     observed = _observed_primary(finding)
     if keep is None or keep not in observed:
         return ()

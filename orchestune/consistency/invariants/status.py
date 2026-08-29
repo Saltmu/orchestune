@@ -45,6 +45,8 @@ from orchestune.consistency.models import (
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
     EXECUTION_KIND_LOCAL,
+    EXECUTION_KIND_NONE,
+    EXECUTION_KIND_UNKNOWN,
     FACT_EXECUTION_KIND,
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_LABELS,
@@ -107,6 +109,19 @@ TASK_POLICY_INVARIANT = "status.task-policy"
 
 _KNOWN = ObservationCertainty.KNOWN
 _ACTIVE_KINDS = frozenset({EXECUTION_KIND_CLOUD, EXECUTION_KIND_LOCAL})
+# The complete vocabularies the observation layer draws these facts from.  A
+# reading outside one of them is a value this policy has no meaning for, and is
+# read as uncertainty rather than silently folded into its nearest neighbour.
+_EXECUTION_KINDS = frozenset(
+    {
+        EXECUTION_KIND_CLOUD,
+        EXECUTION_KIND_LOCAL,
+        EXECUTION_KIND_NONE,
+        EXECUTION_KIND_UNKNOWN,
+    }
+)
+_ISSUE_STATE_OPEN = "OPEN"
+_ISSUE_STATES = frozenset({_ISSUE_STATE_OPEN, "CLOSED"})
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +149,18 @@ def _label_tuple(value: FactValue) -> tuple[str, ...] | None:
     return tuple(item for item in value if isinstance(item, str))
 
 
-def _is_text(value: FactValue) -> bool:
-    return isinstance(value, str)
+def _is_execution_kind(value: FactValue) -> bool:
+    return value in _EXECUTION_KINDS
 
 
-def _is_optional_text(value: FactValue) -> bool:
-    """`None` is a real answer here: a complete snapshot holds no such Issue."""
-    return value is None or isinstance(value, str)
+def _is_issue_state(value: FactValue) -> bool:
+    """`None` is a real answer here: a complete snapshot holds no such Issue.
+
+    Any other state — `"PAUSED"`, say, from an alternate observer — is not
+    "therefore closed".  Folding it into closed would silence every status
+    finding for that task, which is the loudest possible way to be wrong.
+    """
+    return value is None or (isinstance(value, str) and value.upper() in _ISSUE_STATES)
 
 
 def _is_label_tuple(value: FactValue) -> bool:
@@ -346,16 +366,16 @@ def _resolve_task(
     unknown = tuple(
         _unknown_finding(subject_id, name, fact, reason)
         for name, fact, usable in (
-            (FACT_EXECUTION_KIND, kind, _is_text),
+            (FACT_EXECUTION_KIND, kind, _is_execution_kind),
             (FACT_ISSUE_LABELS, labels, _is_label_tuple),
-            (FACT_ISSUE_STATE, state, _is_optional_text),
+            (FACT_ISSUE_STATE, state, _is_issue_state),
             (FACT_ISSUE_STATUS_LABELS, source, _is_label_tuple),
         )
         if (reason := _uncertainty(fact, usable)) is not None
     )
     if unknown or kind is None or labels is None or state is None or source is None:
         return None, unknown
-    if (_text(state.value) or "").upper() != "OPEN":
+    if (_text(state.value) or "").upper() != _ISSUE_STATE_OPEN:
         return None, ()
     return _open_task_view(subject_id, kind, labels, source, observed, desired), ()
 

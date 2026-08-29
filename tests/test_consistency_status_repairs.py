@@ -308,6 +308,8 @@ def _automatic_finding(
     (
         (PRIMARY_STATUS_MISSING, None, ()),
         (PRIMARY_STATUS_MISSING, "", ()),
+        (PRIMARY_STATUS_MISSING, "ci:base-branch-red", ()),
+        (PRIMARY_STATUS_MISSING, "status:external-lock", ()),
         (PRIMARY_STATUS_CONFLICT, None, ("status:done", "status:queued")),
         (PRIMARY_STATUS_CONFLICT, "status:queued", "status:queued"),
         (PRIMARY_STATUS_CONFLICT, "status:not-needed", ("status:done",)),
