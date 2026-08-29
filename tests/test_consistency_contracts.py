@@ -32,8 +32,47 @@ from orchestune.consistency import (
     StateChanged,
     TransitionIntent,
 )
+from orchestune.consistency.invariants.execution import (
+    OBSERVED_FACT_NAMES_BY_SCOPE as EXECUTION_OBSERVED_FACT_NAMES_BY_SCOPE,
+)
+from orchestune.consistency.invariants.status import (
+    OBSERVED_FACT_NAMES_BY_SCOPE as STATUS_OBSERVED_FACT_NAMES_BY_SCOPE,
+)
+from orchestune.consistency.observation import (
+    ExecutionRecord,
+    ForgeSnapshot,
+    build_observed_repository_state,
+)
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
+
+
+def test_observer_emits_every_fact_read_by_invariants() -> None:
+    """The observer/invariant seam must not admit unreachable fact reads."""
+    observed = build_observed_repository_state(
+        repository_id="Saltmu/orchestune",
+        forge=ForgeSnapshot(issues_complete=True, pull_requests_complete=True),
+        executions=(
+            ExecutionRecord(
+                issue_number=701,
+                branch="codex/issue-701",
+                worktree_path="worktree/701",
+                pid=1,
+            ),
+        ),
+        clock=lambda: NOW,
+    )
+    emitted = {
+        scope.scope: {fact.name for fact in scope.facts}
+        for scope in observed.observations
+    }
+
+    for required_by_scope in (
+        STATUS_OBSERVED_FACT_NAMES_BY_SCOPE,
+        EXECUTION_OBSERVED_FACT_NAMES_BY_SCOPE,
+    ):
+        for scope, required_names in required_by_scope.items():
+            assert required_names <= emitted[scope]
 
 
 def test_consistency_contracts_are_exported_from_package_root() -> None:
