@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
+    ConsistencyMode,
+    consistency_cycle_to_dict,
+)
 from orchestune.dispatch.scoring import SchedulingDecision, Task, decision_to_dict
 
 if TYPE_CHECKING:
@@ -27,6 +32,9 @@ class CycleReport:
     # （レポート整形テスト等）に無関係な引数を強いないため。
     scheduling_decisions: list[SchedulingDecision] = field(default_factory=list)
     execution_selections: dict[int, ExecutionSelection] = field(default_factory=dict)
+    consistency: ConsistencyCycleReport = field(
+        default_factory=lambda: ConsistencyCycleReport(mode=ConsistencyMode.OFF)
+    )
 
 
 def build_event_log_entry(report: CycleReport, now: float) -> dict:
@@ -58,6 +66,7 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
         "scheduling_decisions": [
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
+        "consistency": consistency_cycle_to_dict(report.consistency),
     }
 
 

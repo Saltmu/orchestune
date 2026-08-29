@@ -28,12 +28,18 @@ from orchestune.consistency.models import (
     StateChanged,
     TransitionIntent,
 )
+from orchestune.consistency.supervisor import (
+    ConsistencyMode,
+    ConsistencySupervisor,
+)
 
 __all__ = [
     "ConsistencyEngine",
     "ConsistencyFinding",
+    "ConsistencyMode",
     "ConsistencyReport",
     "ConsistencyScope",
+    "ConsistencySupervisor",
     "DesiredFact",
     "DesiredRepositoryState",
     "Evidence",
