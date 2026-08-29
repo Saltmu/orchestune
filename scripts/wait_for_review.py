@@ -178,7 +178,7 @@ def _find_existing_trigger_comment(
     for item in reversed(matching):
         if _has_review_trigger_mention(item.get("body") or "", bot_name):
             return item
-    return matching[-1]
+    return matching[0]
 
 
 def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None) -> str:
@@ -421,6 +421,28 @@ def _check_immediate_review_result(
     return None
 
 
+def _resolve_current_round(
+    initial_data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    round_num: int | None,
+    post_trigger: bool,
+) -> int:
+    if round_num is not None:
+        return round_num
+    latest_existing_round = _get_latest_review_round(initial_data, bot_name)
+    if not post_trigger:
+        return max(1, latest_existing_round)
+    if latest_existing_round > 0:
+        existing = _find_existing_trigger_comment(
+            initial_data, bot_name, latest_existing_round
+        )
+        if existing is not None and not _has_review_trigger_mention(
+            existing.get("body") or "", bot_name
+        ):
+            return latest_existing_round
+    return latest_existing_round + 1
+
+
 def wait_for_review(
     pr_number: int,
     *,
@@ -445,13 +467,9 @@ def wait_for_review(
         initial_snapshot = _build_snapshot(initial_data, bot_name)
         excluded_ids: set[int | str] = set()
 
-        latest_existing_round = _get_latest_review_round(initial_data, bot_name)
-        if round_num is not None:
-            current_round = round_num
-        elif post_trigger:
-            current_round = latest_existing_round + 1
-        else:
-            current_round = max(1, latest_existing_round)
+        current_round = _resolve_current_round(
+            initial_data, bot_name, round_num, post_trigger
+        )
 
         if current_round > max_rounds:
             raise MaxRoundsExceededError(
