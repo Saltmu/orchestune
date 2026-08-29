@@ -11,6 +11,9 @@ worktree, so the PR contains only that worktree branch's commits.
 
 ### 1. Preparing the PR Description File
 Copy the project's PR template (e.g. `.github/pull_request_template.md`) to a temporary working file (e.g. `/tmp/pr_body.md`) and complete all sections:
+- **Acceptance Criteria & Scope Guard**:
+  - Transcribe all acceptance criteria defined in the target Issue into the checklist (`- [x] ...`).
+  - Perform a self-check on the **Scope Guard (YAGNI)** item, confirming that the PR contains only the minimal changes required to satisfy the Issue and introduces no speculative features or unrequested automatic recovery mechanisms.
 - **Walkthrough**: Summary of architectural changes and module edits performed.
 - **Reproducer & Fix Confirmation**: Verification results of the Reproducer from Step 3 (state "N/A" for new features or minor changes).
 - **Baseline Diff**: Comparison against the baseline recorded in Step 4 (no new regressions, note any base-branch pre-existing failures).

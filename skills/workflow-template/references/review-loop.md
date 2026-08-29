@@ -14,17 +14,20 @@ After creating a PR, conduct automated LLM PR reviews for objective quality veri
 ### Handling Review Findings and Scope Management
 
 When findings are returned (Exit 10):
-1. **In-Scope Findings**:
+1. **Scope Verification against Acceptance Criteria (Anchor)**:
+   - Cross-check each finding against the PR's declared **Acceptance Criteria**.
+   - If a finding is necessary to fulfill the Acceptance Criteria or fixes a regression introduced by the PR, classify it as **In-Scope**.
+   - If a finding proposes speculative failure recoveries, extra abstraction, unrelated refactoring, or features beyond the stated Acceptance Criteria, classify it as **Out-of-Scope (YAGNI)**.
+2. **In-Scope Findings**:
    - Address the feedback by updating code and adding/modifying tests in the worktree.
    - Run local CI (`<CI_ENTRYPOINT>`) to ensure all checks pass.
    - Commit and push the fixes to the PR branch.
    - Note the commit hash and summary of changes for inclusion in the re-review reply.
-2. **Out-of-Scope Findings**:
-   - If a suggestion falls outside the scope of the current Issue (e.g. unrelated refactoring, new feature requests, or broader architectural changes):
-     - **Do NOT implement** the changes in the current PR.
-     - File a new follow-up GitHub Issue to track the task separately via the selected backend.
-     - Decline the finding in the re-review reply and reference the newly created follow-up Issue (e.g. `[Declined - Out of Scope] Deferred to follow-up Issue #...`).
-3. **Re-Review Reply Documentation**:
+3. **Out-of-Scope Findings**:
+   - **Do NOT implement** out-of-scope changes in the current PR (avoid scope creep).
+   - If the suggestion is valuable for future work, file a new follow-up GitHub Issue to track it separately via the selected backend.
+   - Decline the finding in the re-review reply with an explicit rationale referencing the PR's Acceptance Criteria and any newly created follow-up Issue (e.g. `[Declined - Out of Scope] Exceeds PR acceptance criteria; deferred to follow-up Issue #...`).
+4. **Re-Review Reply Documentation**:
    - Always include the detailed resolution summary (with commit hashes for addressed items and follow-up Issue numbers for out-of-scope items) in `/tmp/review_reply.md`.
 
 ### Review Loop Control Flow (Pseudocode)
