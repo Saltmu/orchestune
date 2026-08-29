@@ -14,18 +14,22 @@ After creating a PR, conduct automated LLM PR reviews for objective quality veri
 ### Handling Review Findings and Scope Management
 
 When findings are returned (Exit 10):
-1. **In-Scope Findings**:
+1. **Scope Verification against Acceptance Criteria (Anchor)**:
+   - Cross-check each finding against the PR's declared **Acceptance Criteria**.
+   - If a finding is necessary to fulfill the Acceptance Criteria or fixes a regression introduced by the PR, classify it as **In-Scope**.
+   - If a finding proposes speculative failure recoveries, extra abstraction, unrelated refactoring, or features beyond the stated Acceptance Criteria, classify it as **Out-of-Scope (YAGNI)**.
+2. **In-Scope Findings**:
    - Address the feedback by updating code and adding/modifying tests in the worktree.
    - Run local CI (`<CI_ENTRYPOINT>`) to ensure all checks pass.
    - Commit and push the fixes to the PR branch.
    - Note the commit hash and summary of changes for inclusion in the re-review reply.
-2. **Out-of-Scope Findings**:
-   - If a suggestion falls outside the scope of the current Issue (e.g. unrelated refactoring, new feature requests, or broader architectural changes):
-     - **Do NOT implement** the changes in the current PR.
-     - File a new follow-up GitHub Issue to track the task separately via the selected backend.
-     - Decline the finding in the re-review reply and reference the newly created follow-up Issue (e.g. `[Declined - Out of Scope] Deferred to follow-up Issue #...`).
-3. **Re-Review Reply Documentation**:
-   - Always include the detailed resolution summary (with commit hashes for addressed items and follow-up Issue numbers for out-of-scope items) in `/tmp/review_reply.md`.
+3. **Out-of-Scope Findings**:
+   - **Do NOT implement** out-of-scope changes in the current PR (avoid scope creep).
+   - If the suggestion is genuinely valuable for future work, file a new follow-up GitHub Issue to track it separately via the selected backend.
+   - If the suggestion is speculative or unneeded (YAGNI), decline it with an explicit rationale without filing a follow-up Issue.
+   - In the re-review reply, document the decline rationale referencing the PR's Acceptance Criteria and any optional follow-up Issue number (e.g. `[Declined - Out of Scope] Exceeds PR acceptance criteria; deferred to follow-up Issue #...` or `[Declined - YAGNI] ...`).
+4. **Re-Review Reply Documentation**:
+   - Always include the detailed resolution summary (with commit hashes for addressed items, rationales, and optional follow-up Issue numbers for out-of-scope items) in `/tmp/review_reply.md`.
 
 ### Review Loop Control Flow (Pseudocode)
 
@@ -47,10 +51,10 @@ Loop (up to 5 rounds):
      - Exit 30: ambiguous verdict; inspect summary and inline findings before another
        review request or escalation. Exit 2 or 12: record and escalate.
      - Exit 10:
-       a. Classify findings into in-scope vs out-of-scope.
+       a. Classify findings into in-scope vs out-of-scope (against Acceptance Criteria & YAGNI).
        b. For in-scope findings: fix code and add tests, verify local CI (<CI_ENTRYPOINT>), commit and push.
-       c. For out-of-scope findings: do NOT modify code; file a follow-up Issue instead.
-       d. Create /tmp/review_reply.md with fix details, commit hashes, and follow-up Issue references (Round X/5).
+       c. For out-of-scope findings: do NOT modify code; file a follow-up Issue only if valuable, otherwise decline with rationale.
+       d. Create /tmp/review_reply.md with fix details, commit hashes, rationales, and optional follow-up Issue references (Round X/5).
        e. Return to step 1.
      - Exit 0: terminate the loop and proceed to Step 12 (Outcome).
 ```
@@ -63,6 +67,7 @@ After addressing feedback and committing fixes, write a summary reply file expli
 ### Changes & Resolutions
 - [Addressed] Fixed bug in Finding A and added regression tests (commit: abc1234)
 - [Declined - Out of Scope] Refactoring module X is out of scope for this Issue; filed follow-up Issue #123 (reason: ...)
+- [Declined - YAGNI] Speculative recovery mechanism for Edge Case Y exceeds PR acceptance criteria (reason: ...)
 - [Declined] Preserved Finding B behavior as it conforms to intended specification (reason: ...)
 
 @claude review
