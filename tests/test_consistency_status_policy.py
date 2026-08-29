@@ -284,6 +284,8 @@ _SETTLED_INTENTS = {
     "past its deadline": {"expires_at": NOW - timedelta(seconds=1)},
     "changing another fact": {"changed_fact": "task.run_state_active"},
     "scoped to the parent": {"scope": ConsistencyScope.PARENT},
+    "changing a parent-scoped fact": {"change_scope": ConsistencyScope.PARENT},
+    "changing a repository-scoped fact": {"change_scope": ConsistencyScope.REPOSITORY},
     "naming another task": {"subject_id": "706"},
     "with a naive timestamp": {"created_at": datetime(2026, 8, 29, 11, 0)},
 }

@@ -214,7 +214,18 @@ def _observation_details(fact: Observation) -> tuple[str, ...]:
 
 
 def _covers_status(fact: DesiredFact, subject_id: str) -> bool:
-    return fact.name == DESIRED_STATUS_LABEL and fact.subject_id == subject_id
+    """Whether one expected change declares *this task's* status to be moving.
+
+    The scope is part of the match, not a formality: the journal accepts an
+    expected change at any scope, and a parent- or repository-scoped fact that
+    happens to share the name and subject would otherwise suppress this task's
+    findings until the intent expired.
+    """
+    return (
+        fact.name == DESIRED_STATUS_LABEL
+        and fact.scope is ConsistencyScope.TASK
+        and fact.subject_id == subject_id
+    )
 
 
 def _live_status_intents(
