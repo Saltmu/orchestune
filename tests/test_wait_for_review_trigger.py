@@ -133,12 +133,14 @@ def test_has_review_trigger_mention():
     assert _has_review_trigger_mention("@claude review", "claude") is True
     assert _has_review_trigger_mention("@Claude Review", "claude") is True
     assert _has_review_trigger_mention("@codex   review", "codex") is True
+    assert _has_review_trigger_mention("@codex, review", "codex") is True
+    assert _has_review_trigger_mention("@codex: review", "codex") is True
     assert _has_review_trigger_mention("Prefix\n@codex review\nSuffix", "codex") is True
     assert (
         _has_review_trigger_mention(
-            "@claude, please take another review pass", "claude"
+            "## Review changes\n- Addressed @codex feedback", "codex"
         )
-        is True
+        is False
     )
     assert _has_review_trigger_mention("@claude", "claude") is False
     assert _has_review_trigger_mention("Just a general review", "claude") is False

@@ -194,8 +194,8 @@ def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None)
 
 
 def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
-    body_lower = body.lower()
-    return f"@{bot_name.lower()}" in body_lower and "review" in body_lower
+    pattern = re.compile(rf"@(?:{re.escape(bot_name)})[,\s:]+review\b", re.IGNORECASE)
+    return pattern.search(body) is not None
 
 
 def _ensure_review_trigger_mention(body: str, bot_name: str) -> str:
