@@ -16,7 +16,6 @@ from scripts.wait_for_review import (
     _latest_bot_summary_item,
     _latest_review_trigger_timestamp,
     _run_gh,
-    post_review_trigger,
     wait_for_review,
 )
 
@@ -285,84 +284,6 @@ def test_build_snapshot():
         "review_10": "2026-08-20T09:05:00Z:11",
         "inline_100": "2026-08-20T09:05:00Z",
     }
-
-
-@patch("scripts.wait_for_review.subprocess.run")
-def test_post_review_trigger_default(mock_run):
-    mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = json.dumps(
-        {
-            "id": 12345,
-            "created_at": "2026-08-20T07:44:44Z",
-            "body": "@claude review",
-        }
-    )
-
-    result = post_review_trigger(pr_number=540, bot_name="claude")
-    assert result["id"] == 12345
-    mock_run.assert_called_once()
-    cmd = mock_run.call_args[0][0]
-    assert "gh" in cmd[0]
-    assert cmd[-1].startswith("body=@claude review")
-    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
-
-
-@patch("scripts.wait_for_review.subprocess.run")
-def test_post_review_trigger_marks_custom_bodies_for_no_post_detection(mock_run):
-    mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = json.dumps({"id": 12347})
-
-    post_review_trigger(pr_number=540, bot_name="claude", body="Please check this")
-
-    cmd = mock_run.call_args[0][0]
-    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
-
-
-@patch("scripts.wait_for_review.subprocess.run")
-def test_post_review_trigger_custom_body(mock_run):
-    mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = json.dumps(
-        {
-            "id": 12346,
-            "created_at": "2026-08-20T08:00:00Z",
-            "body": "## レビュー指摘への対応\n@claude review",
-        }
-    )
-
-    body_text = "## レビュー指摘への対応\n@claude review"
-    result = post_review_trigger(pr_number=540, bot_name="claude", body=body_text)
-    assert result["id"] == 12346
-    cmd = mock_run.call_args[0][0]
-    assert cmd[-1].startswith(f"body={body_text}")
-    assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
-
-
-def test_post_review_trigger_with_body_file(tmp_path):
-    body_file = tmp_path / "reply.md"
-    body_file.write_text("## Reply content\n@claude review", encoding="utf-8")
-
-    with patch("scripts.wait_for_review.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = json.dumps(
-            {"id": 999, "created_at": "2026-08-20T00:00:00Z"}
-        )
-
-        result = post_review_trigger(
-            pr_number=540, bot_name="claude", body_file=str(body_file)
-        )
-        assert result["id"] == 999
-        cmd = mock_run.call_args[0][0]
-        assert cmd[-1].startswith("body=## Reply content\n@claude review")
-        assert "<!-- orchestune:review-trigger bot=claude -->" in cmd[-1]
-
-
-def test_post_review_trigger_failure():
-    with patch("scripts.wait_for_review.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 1
-        mock_run.return_value.stderr = "Not authorized"
-
-        with pytest.raises(RuntimeError, match="gh command failed: Not authorized"):
-            post_review_trigger(pr_number=540, bot_name="claude")
 
 
 @patch("scripts.wait_for_review.subprocess.run")

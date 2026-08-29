@@ -37,7 +37,15 @@ def write_json_atomic(path: str | Path, data: Any) -> None:
             f.write(json.dumps(data, ensure_ascii=False, indent=2))
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:
+                if attempt == max_attempts - 1:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()

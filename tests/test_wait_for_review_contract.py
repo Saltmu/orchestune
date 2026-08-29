@@ -286,7 +286,7 @@ def test_wait_for_review_max_rounds_exceeded(mock_get_data):
             {
                 "id": 10,
                 "user": {"login": "human"},
-                "body": "Trigger\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 5 -->",
+                "body": "@claude review\n\nTrigger\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 5 -->",
             }
         ],
         "reviews": [],
