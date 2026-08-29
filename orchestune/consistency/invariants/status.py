@@ -47,6 +47,13 @@ from orchestune.consistency.observation import (
     EXECUTION_KIND_LOCAL,
     EXECUTION_KIND_NONE,
     EXECUTION_KIND_UNKNOWN,
+)
+from orchestune.consistency.vocabulary import (
+    DESIRED_DEPENDENCIES_RESOLVED,
+    DESIRED_FORCED_SERIAL_ACTIVE,
+    DESIRED_RUN_STATE_ACTIVE,
+    DESIRED_STATUS_LABEL,
+    DESIRED_UNRESOLVED_DEPENDENCIES,
     FACT_EXECUTION_KIND,
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_LABELS,
@@ -80,13 +87,6 @@ TERMINAL_ESCALATION_LABELS = (
 PROMOTION_HOLD_LABELS = ("ci:base-branch-red", "status:blocked-recompute")
 
 FORCE_SERIAL_LABEL = "status:force-serial"
-
-# Desired-state fact names produced by `consistency.desired`.
-DESIRED_DEPENDENCIES_RESOLVED = "task.dependencies_resolved"
-DESIRED_FORCED_SERIAL_ACTIVE = "dispatch.forced_serial_active"
-DESIRED_RUN_STATE_ACTIVE = "task.run_state_active"
-DESIRED_STATUS_LABEL = "task.status_label"
-DESIRED_UNRESOLVED_DEPENDENCIES = "task.unresolved_dependencies"
 
 # Stable finding codes.  These values are persisted in reports and repair
 # allowlists, so changing one is a compatibility change.
@@ -122,6 +122,18 @@ _EXECUTION_KINDS = frozenset(
 )
 _ISSUE_STATE_OPEN = "OPEN"
 _ISSUE_STATES = frozenset({_ISSUE_STATE_OPEN, "CLOSED"})
+
+REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE = {
+    ConsistencyScope.REPOSITORY: frozenset({FACT_FORGE_REACHABLE}),
+    ConsistencyScope.TASK: frozenset(
+        {
+            FACT_EXECUTION_KIND,
+            FACT_ISSUE_LABELS,
+            FACT_ISSUE_STATE,
+            FACT_ISSUE_STATUS_LABELS,
+        }
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +837,7 @@ __all__ = [
     "QUEUED_WITH_UNRESOLVED_DEPENDENCIES",
     "REPOSITORY_POLICY_INVARIANT",
     "STATUS_OBSERVATION_UNKNOWN",
+    "REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE",
     "TASK_POLICY_INVARIANT",
     "TERMINAL_ESCALATION_LABELS",
     "primary_status_labels",
