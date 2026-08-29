@@ -27,7 +27,9 @@ from orchestune.consistency.vocabulary import (
     DESIRED_MAX_CONCURRENT,
     DESIRED_RUN_STATE_ACTIVE,
     DESIRED_STATUS_LABEL,
+    DESIRED_TASK_TIMEOUT_SECONDS,
     DESIRED_UNRESOLVED_DEPENDENCIES,
+    DESIRED_ZOMBIE_GC_ENABLED,
 )
 
 
@@ -67,6 +69,8 @@ class DispatchPolicy:
     """Policy values that constrain whether a ready task may be dispatched."""
 
     max_concurrent: int
+    task_timeout_seconds: int = 0
+    zombie_gc_enabled: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -75,6 +79,14 @@ class DispatchPolicy:
             or self.max_concurrent < 0
         ):
             raise ValueError("max_concurrent must be a non-negative integer")
+        if (
+            isinstance(self.task_timeout_seconds, bool)
+            or not isinstance(self.task_timeout_seconds, int)
+            or self.task_timeout_seconds < 0
+        ):
+            raise ValueError("task_timeout_seconds must be a non-negative integer")
+        if not isinstance(self.zombie_gc_enabled, bool):
+            raise ValueError("zombie_gc_enabled must be a boolean")
 
 
 _TERMINAL_STATUS = {
@@ -154,6 +166,8 @@ def _repository_facts(
         DESIRED_AVAILABLE_SLOTS: max(0, policy.max_concurrent - active_count),
         DESIRED_FORCED_SERIAL_ACTIVE: forced_serial_active,
         DESIRED_MAX_CONCURRENT: policy.max_concurrent,
+        DESIRED_TASK_TIMEOUT_SECONDS: policy.task_timeout_seconds,
+        DESIRED_ZOMBIE_GC_ENABLED: policy.zombie_gc_enabled,
     }
     return tuple(
         DesiredFact(

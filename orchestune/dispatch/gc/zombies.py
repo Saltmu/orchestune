@@ -9,8 +9,20 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from orchestune.bounded_limit import exceeds_limit
+from orchestune.consistency.invariants.execution import (
+    EXECUTION_TIMED_OUT,
+    HANDLELESS_EXECUTION_ORPHAN,
+    LOCAL_PROCESS_DEAD,
+    RUN_STATE_STALE,
+)
+from orchestune.consistency.models import RepairCommand
+from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.execution_repair import (
+    command_finding_codes,
+    evaluate_execution_repair_plan,
+)
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
@@ -30,60 +42,6 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import PrRecord
 
 
-def _decide_zombie_and_timeout(
-    active: ActiveWorktree,
-    zombie_enabled: bool,
-    timeout_limit: int,
-    now: float,
-    *,
-    process_alive: bool,
-    worktree_exists: bool,
-) -> tuple[bool, bool, bool]:
-    """Purely classify process/worktree observations into a reclaim decision."""
-    is_zombie = False
-    is_timeout = False
-
-    if zombie_enabled and active.pid is not None and not process_alive:
-        # プロセスが消えていれば、worktreeの変更有無にかかわらず当該実行は
-        # 進行不能である。clean worktree を除外すると、既定の timeout=0 では
-        # 永久にクオータを占有するため、ゾンビとして一律回収・再キューする。
-        is_zombie = True
-
-    elif (
-        zombie_enabled
-        and active.pid is None
-        and active.started_at is None
-        and not worktree_exists
-    ):
-        # #383: 対応PRが見つからず自己修復した孤立エントリは、ローカルPIDも
-        # 開始時刻も物理worktreeも持たない。これはクラウド実行（pid=None）とは
-        # 区別できるため、クオータを永久に占有しないよう回収する。
-        is_zombie = True
-
-    if not is_zombie and active.started_at is not None:
-        if timeout_limit > 0 and exceeds_limit(now - active.started_at, timeout_limit):
-            is_timeout = True
-
-    return is_zombie, is_timeout, process_alive
-
-
-def _check_zombie_and_timeout(
-    active: ActiveWorktree,
-    zombie_enabled: bool,
-    timeout_limit: int,
-    now: float,
-) -> tuple[bool, bool, bool]:
-    """Observe external state, then delegate to the pure reclaim classifier."""
-    return _decide_zombie_and_timeout(
-        active,
-        zombie_enabled,
-        timeout_limit,
-        now,
-        process_alive=is_process_alive(active.pid),
-        worktree_exists=os.path.exists(active.worktree_path),
-    )
-
-
 @dataclass
 class ZombieOrTimeoutReclaim:
     key: str
@@ -97,6 +55,7 @@ class ZombieOrTimeoutReclaim:
     reclaim_count: int = 1
     escalate: bool = False
     now: float = 0.0
+    finding_codes: tuple[str, ...] = ()
 
 
 def _resolve_reclaim_count(run_state: RunState, issue_number: int) -> int:
@@ -113,19 +72,27 @@ def _build_reclaim_candidate(
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
-    is_zombie: bool,
-    is_timeout: bool,
+    finding_codes: tuple[str, ...],
     process_alive: bool,
     reclaim_count: int,
     max_task_reclaims: int,
     now: float,
 ) -> ZombieOrTimeoutReclaim:
     """判定結果からZombieOrTimeoutReclaimインスタンスを構築する。"""
+    is_timeout = EXECUTION_TIMED_OUT in finding_codes
+    if is_timeout:
+        reason = "timeout exceeded"
+    elif LOCAL_PROCESS_DEAD in finding_codes:
+        reason = "process disappeared"
+    elif HANDLELESS_EXECUTION_ORPHAN in finding_codes:
+        reason = "process disappeared"
+    else:
+        raise ValueError(f"unsupported reclaim findings: {finding_codes!r}")
     return ZombieOrTimeoutReclaim(
         key=key,
         active=active,
         subtask_id=active_task.subtask_id if active_task else "",
-        reason="process disappeared" if is_zombie else "timeout exceeded",
+        reason=reason,
         is_timeout=is_timeout,
         process_alive=process_alive,
         status_labels=(
@@ -136,6 +103,45 @@ def _build_reclaim_candidate(
         reclaim_count=reclaim_count,
         escalate=exceeds_limit(reclaim_count, max_task_reclaims),
         now=now,
+        finding_codes=finding_codes,
+    )
+
+
+def _reclaim_candidate_from_command(
+    command: RepairCommand,
+    active_by_subject: dict[str, tuple[str, ActiveWorktree]],
+    tasks_by_issue: dict[int, Task],
+    run_state: RunState,
+    max_task_reclaims: int,
+    now: float,
+) -> ZombieOrTimeoutReclaim | None:
+    if command.code != COMMAND_RECLAIM or command.subject_id is None:
+        return None
+    resolved = active_by_subject.get(command.subject_id)
+    if resolved is None:
+        return None
+    key, active = resolved
+    finding_codes = command_finding_codes(command)
+    reclaim_codes = {
+        EXECUTION_TIMED_OUT,
+        HANDLELESS_EXECUTION_ORPHAN,
+        LOCAL_PROCESS_DEAD,
+    }
+    if RUN_STATE_STALE in finding_codes or not reclaim_codes.intersection(
+        finding_codes
+    ):
+        return None
+    return _build_reclaim_candidate(
+        key=key,
+        active=active,
+        active_task=tasks_by_issue.get(active.issue_number),
+        finding_codes=finding_codes,
+        process_alive=(
+            active.pid is not None and LOCAL_PROCESS_DEAD not in finding_codes
+        ),
+        reclaim_count=_resolve_reclaim_count(run_state, active.issue_number),
+        max_task_reclaims=max_task_reclaims,
+        now=now,
     )
 
 
@@ -145,8 +151,9 @@ def _decide_zombie_or_timeout_reclaims(
     config: DispatcherConfig,
     held_worktree_paths: set[str] | None,
     now: float,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> list[ZombieOrTimeoutReclaim]:
-    """Decide all reclaim candidates without applying side effects."""
+    """Build reclaim candidates exclusively from kernel repair commands."""
     zombie_enabled = getattr(config, "zombie_gc", True)
     timeout_limit = getattr(config, "task_timeout_seconds", 0)
     max_task_reclaims = config.max_task_reclaims
@@ -155,31 +162,35 @@ def _decide_zombie_or_timeout_reclaims(
     if not zombie_enabled and timeout_limit <= 0:
         return []
 
-    reclaims: list[ZombieOrTimeoutReclaim] = []
-    for key, active in run_state.active_worktrees.items():
-        if active.worktree_path in held_worktree_paths:
-            continue
-        is_zombie, is_timeout, process_alive = _check_zombie_and_timeout(
-            active, zombie_enabled, timeout_limit, now
+    active_by_subject = {
+        str(active.issue_number): (key, active)
+        for key, active in run_state.active_worktrees.items()
+    }
+    held_issue_numbers = {
+        active.issue_number
+        for active in run_state.active_worktrees.values()
+        if active.worktree_path in held_worktree_paths
+    }
+    evaluation = evaluate_execution_repair_plan(
+        run_state,
+        tasks_by_issue,
+        config,
+        open_prs=open_prs or (),
+        held_issue_numbers=held_issue_numbers,
+        now=now,
+    )
+    candidates = (
+        _reclaim_candidate_from_command(
+            command,
+            active_by_subject,
+            tasks_by_issue,
+            run_state,
+            max_task_reclaims,
+            now,
         )
-        if not (is_zombie or is_timeout):
-            continue
-        active_task = tasks_by_issue.get(active.issue_number)
-        reclaim_count = _resolve_reclaim_count(run_state, active.issue_number)
-        reclaims.append(
-            _build_reclaim_candidate(
-                key=key,
-                active=active,
-                active_task=active_task,
-                is_zombie=is_zombie,
-                is_timeout=is_timeout,
-                process_alive=process_alive,
-                reclaim_count=reclaim_count,
-                max_task_reclaims=max_task_reclaims,
-                now=now,
-            )
-        )
-    return reclaims
+        for command in evaluation.commands
+    )
+    return [candidate for candidate in candidates if candidate is not None]
 
 
 def _record_reclaim(
@@ -483,8 +494,8 @@ def _settle_reclaim(
         )
 
 
-def _kill_timeout_process(reclaim: ZombieOrTimeoutReclaim) -> None:
-    if reclaim.is_timeout and reclaim.active.pid and reclaim.process_alive:
+def _stop_reclaimed_process(reclaim: ZombieOrTimeoutReclaim) -> None:
+    if reclaim.active.pid and reclaim.process_alive:
         try:
             os.kill(reclaim.active.pid, 9)
         except Exception:
@@ -564,7 +575,7 @@ def _apply_zombie_or_timeout_reclaim(
 
     if counted and not _record_reclaim(run_state, reclaim, config, open_prs):
         return None
-    _kill_timeout_process(reclaim)
+    _stop_reclaimed_process(reclaim)
 
     settled = False
 
@@ -593,13 +604,65 @@ def _collect_zombies_and_timeouts(
     held_worktree_paths: set[str] | None = None,
     open_prs: Sequence[PrRecord] | None = None,
 ) -> list[dict]:
-    """Decide and apply zombie and timeout reclamations."""
+    """Plan, re-observe, and apply zombie/timeout repairs at the GC boundary."""
     reclaims = _decide_zombie_or_timeout_reclaims(
-        run_state, tasks_by_issue, config, held_worktree_paths, time.time()
+        run_state,
+        tasks_by_issue,
+        config,
+        held_worktree_paths,
+        time.time(),
+        open_prs,
     )
     events: list[dict] = []
     for reclaim in reclaims:
-        event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config, open_prs)
+        refreshed = _reobserve_reclaim(
+            run_state,
+            tasks_by_issue,
+            config,
+            reclaim,
+            held_worktree_paths,
+            open_prs,
+        )
+        if refreshed is None:
+            continue
+        event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
         if event is not None:
             events.append(event)
     return events
+
+
+def _reobserve_reclaim(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    previous: ZombieOrTimeoutReclaim,
+    held_worktree_paths: set[str] | None,
+    open_prs: Sequence[PrRecord] | None,
+) -> ZombieOrTimeoutReclaim | None:
+    """Require the same typed reclaim to survive a targeted fresh observation."""
+    active = run_state.active_worktrees.get(previous.key)
+    if active is None or active.issue_number != previous.active.issue_number:
+        return None
+    targeted_state = RunState(
+        active_worktrees={previous.key: active},
+        task_reclaim_counts=run_state.task_reclaim_counts,
+    )
+    task = tasks_by_issue.get(active.issue_number)
+    targeted_tasks = {} if task is None else {active.issue_number: task}
+    candidates = _decide_zombie_or_timeout_reclaims(
+        targeted_state,
+        targeted_tasks,
+        config,
+        held_worktree_paths,
+        time.time(),
+        open_prs,
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.key == previous.key
+            and set(candidate.finding_codes) & set(previous.finding_codes)
+        ),
+        None,
+    )

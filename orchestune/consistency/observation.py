@@ -45,6 +45,7 @@ from orchestune.consistency.vocabulary import (
     FACT_EXECUTION_KIND,
     FACT_EXECUTION_PID,
     FACT_EXECUTION_PROCESS_ALIVE,
+    FACT_EXECUTION_STARTED_AT,
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_COUNT,
     FACT_ISSUE_LABELS,
@@ -161,6 +162,8 @@ class ExecutionRecord:
     worktree_path: str | None = None
     pid: int | None = None
     external_id: str | None = None
+    started_at: float | None = None
+    kind: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +623,8 @@ def _execution_kind(view: _ExecutionView) -> _Reading:
     record = view.record
     if record is None:
         return _Reading(EXECUTION_KIND_NONE)
+    if record.kind in {EXECUTION_KIND_CLOUD, EXECUTION_KIND_LOCAL}:
+        return _Reading(record.kind)
     if record.external_id is not None:
         return _Reading(EXECUTION_KIND_CLOUD)
     if record.pid is not None:
@@ -643,6 +648,10 @@ def _read_pid(record: ExecutionRecord) -> FactValue:
 
 def _read_external_id(record: ExecutionRecord) -> FactValue:
     return record.external_id
+
+
+def _read_started_at(record: ExecutionRecord) -> FactValue:
+    return record.started_at
 
 
 def _branch_exists(probe: GitProbe, branch: str) -> FactValue:
@@ -975,6 +984,9 @@ class ObservationCollector:
             run_state(FACT_EXECUTION_KIND, _execution_kind(view)),
             run_state(FACT_EXECUTION_PID, _execution_field(view, _read_pid)),
             run_state(
+                FACT_EXECUTION_STARTED_AT, _execution_field(view, _read_started_at)
+            ),
+            run_state(
                 FACT_EXECUTION_EXTERNAL_ID, _execution_field(view, _read_external_id)
             ),
             _emitter(SOURCE_PROCESS, now)(
@@ -996,7 +1008,7 @@ class ObservationCollector:
         record = view.record
         if record is None:
             return _Reading(None)
-        if record.external_id is not None:
+        if record.kind == EXECUTION_KIND_CLOUD or record.external_id is not None:
             return _Reading(None, _UNKNOWN, (_NO_LOCAL_PROCESS,))
         if record.pid is None:
             return _Reading(None, _UNKNOWN, (_NO_LOCAL_PID,))

@@ -35,6 +35,8 @@ from orchestune.consistency.models import (
     StateChanged,
 )
 from orchestune.consistency.observation import (
+    EXECUTION_KIND_CLOUD,
+    EXECUTION_KIND_LOCAL,
     FACT_BRANCH_NAME,
     FACT_EXECUTION_KIND,
     FACT_ISSUE_LABELS,
@@ -170,6 +172,14 @@ class _DispatchConsistencyAdapter:
                 worktree_path=active.worktree_path,
                 pid=active.pid,
                 external_id=active.external_id,
+                started_at=active.started_at,
+                kind=(
+                    EXECUTION_KIND_CLOUD
+                    if active.external_id is not None
+                    else EXECUTION_KIND_LOCAL
+                    if active.pid is not None
+                    else None
+                ),
             )
             for _, active in sorted(self._run_state.active_worktrees.items())
         )
@@ -211,9 +221,8 @@ class _DispatchConsistencyAdapter:
         return tuple(
             sorted(
                 task.subtask_id
-                for active in self._run_state.active_worktrees.values()
-                if (task := self._tasks_by_issue.get(active.issue_number)) is not None
-                and task.subtask_id
+                for task in self._tasks_by_issue.values()
+                if "status:in-progress" in task.status_labels and task.subtask_id
             )
         )
 
@@ -243,7 +252,11 @@ class _DispatchConsistencyAdapter:
             observed.repository_id,
             self._desired_tasks(),
             active_task_ids=self._active_task_ids(),
-            policy=DispatchPolicy(max_concurrent=self._config.max_concurrent),
+            policy=DispatchPolicy(
+                max_concurrent=self._config.max_concurrent,
+                task_timeout_seconds=self._config.task_timeout_seconds,
+                zombie_gc_enabled=self._config.zombie_gc,
+            ),
             now=observed.observed_at,
         )
 

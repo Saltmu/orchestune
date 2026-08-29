@@ -9,32 +9,15 @@ test_dispatch_gc_integration.py を参照。
 from unittest.mock import patch
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.execution_repair import evaluate_execution_repair_plan
 from orchestune.dispatch.gc import (
     _apply_stale_active_entry_discard,
-    _decide_stale_active_entry,
     _rule_not_needed,
     _rule_stale_entry,
 )
 from orchestune.dispatch.state import RunState
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
-
-
-class TestDecideStaleActiveEntry:
-    """decide層: githubラベルの読み取りのみでstale判定を行い、run_stateは変更しない。"""
-
-    def test_none_when_still_in_progress(self):
-        task = _task(status_labels=("status:in-progress",))
-        assert _decide_stale_active_entry(_active(), task) is None
-
-    def test_none_when_no_matching_task(self):
-        assert _decide_stale_active_entry(_active(), None) is None
-
-    def test_stale_when_label_no_longer_in_progress(self):
-        task = _task(status_labels=("status:blocked",))
-        event = _decide_stale_active_entry(_active(), task)
-        assert event is not None
-        assert event["action"] == "stale_active_entry_discarded"
 
 
 class TestApplyStaleActiveEntryDiscard:
@@ -162,6 +145,38 @@ class TestApplyStaleActiveEntryDiscard:
 
 
 class TestRuleStaleEntry:
+    def test_reuses_one_repository_evaluation_for_all_active_entries(self):
+        first = _active()
+        second = _active(issue_number=281, branch="claude/issue-281-task-b")
+        first_task = _task(status_labels=("status:blocked",))
+        second_task = _task(
+            issue_number=281,
+            subtask_id="task-b",
+            status_labels=("status:blocked",),
+        )
+        run_state = RunState(active_worktrees={"280": first, "281": second})
+        ctx = _ctx(
+            run_state=run_state,
+            tasks_by_issue={280: first_task, 281: second_task},
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.evaluate_execution_repair_plan",
+                wraps=evaluate_execution_repair_plan,
+            ) as evaluate,
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=True,
+            ),
+        ):
+            first_outcome = _rule_stale_entry(ctx, "280", first, first_task)
+            second_outcome = _rule_stale_entry(ctx, "281", second, second_task)
+
+        assert first_outcome is not None
+        assert second_outcome is not None
+        assert evaluate.call_count == 1
+
     def test_backup_failure_defers_terminal_outcome_to_next_cycle(
         self, tmp_path, fake_forge
     ):
