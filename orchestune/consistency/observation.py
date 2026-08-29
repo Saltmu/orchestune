@@ -70,6 +70,8 @@ FACT_ISSUE_LABELS = "issue_labels"
 FACT_ISSUE_NUMBER = "issue_number"
 FACT_ISSUE_STATE = "issue_state"
 FACT_ISSUE_STATUS_LABELS = "issue_status_labels"
+FACT_PULL_REQUEST_BASE_REF = "pull_request_base_ref"
+FACT_PULL_REQUEST_HEAD_REF = "pull_request_head_ref"
 FACT_PULL_REQUEST_NUMBER = "pull_request_number"
 FACT_PULL_REQUEST_STATE = "pull_request_state"
 FACT_WORKTREE_EXISTS = "worktree_exists"
@@ -1046,23 +1048,27 @@ class ObservationCollector:
     def _pull_request_observations(
         self, branch: _Identifier, reading: _ForgeReading, index: _Index
     ) -> list[Observation]:
-        number, state = self._pull_request_readings(branch, reading, index)
+        number, state, head_ref, base_ref = self._pull_request_readings(
+            branch, reading, index
+        )
         forge = _emitter(SOURCE_FORGE, reading.observed_at)
         return [
             forge(FACT_PULL_REQUEST_NUMBER, number),
             forge(FACT_PULL_REQUEST_STATE, state),
+            forge(FACT_PULL_REQUEST_HEAD_REF, head_ref),
+            forge(FACT_PULL_REQUEST_BASE_REF, base_ref),
         ]
 
     def _pull_request_readings(
         self, branch: _Identifier, reading: _ForgeReading, index: _Index
-    ) -> tuple[_Reading, _Reading]:
+    ) -> tuple[_Reading, _Reading, _Reading, _Reading]:
         """Link a task to its pull request, or record why the link is unclear."""
         if reading.snapshot is None:
             unknown = _Reading(None, _UNKNOWN, reading.diagnostics)
-            return unknown, unknown
+            return unknown, unknown, unknown, unknown
         if branch.value is None:
             unknown = _unknown_forge_reading(reading, branch.diagnostics)
-            return unknown, unknown
+            return unknown, unknown, unknown, unknown
         candidates = index.pull_requests_by_branch.get(branch.value, ())
         if len(candidates) > 1:
             numbers = ", ".join(str(record.number) for record in candidates)
@@ -1073,21 +1079,25 @@ class ObservationCollector:
                     f"{branch.value!r}: candidates {numbers}",
                 ),
             )
-            return unknown, unknown
+            return unknown, unknown, unknown, unknown
         if not candidates:
             if not reading.snapshot.pull_requests_complete:
                 unknown = _unknown_forge_reading(
                     reading,
                     (_FILTERED_PULL_REQUESTS,),
                 )
-                return unknown, unknown
+                return unknown, unknown, unknown, unknown
             return (
+                self._forge_reading(reading, None),
+                self._forge_reading(reading, None),
                 self._forge_reading(reading, None),
                 self._forge_reading(reading, None),
             )
         return (
             self._forge_reading(reading, candidates[0].number),
             self._forge_reading(reading, candidates[0].state),
+            self._forge_reading(reading, candidates[0].head_ref),
+            self._forge_reading(reading, candidates[0].base_ref),
         )
 
 

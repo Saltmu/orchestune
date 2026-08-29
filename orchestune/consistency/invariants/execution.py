@@ -33,16 +33,12 @@ from orchestune.consistency.observation import (
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_STATE,
     FACT_PARENT_ISSUE_NUMBER,
+    FACT_PULL_REQUEST_BASE_REF,
+    FACT_PULL_REQUEST_HEAD_REF,
     FACT_PULL_REQUEST_NUMBER,
     FACT_WORKTREE_EXISTS,
     FACT_WORKTREE_PATH,
 )
-
-# Optional normalized PR facts.  The policy consumes them when a complete
-# observation adapter supplies them, while remaining compatible with the
-# existing branch-linked collector snapshot.
-FACT_PULL_REQUEST_HEAD_REF = "pull_request_head_ref"
-FACT_PULL_REQUEST_BASE_REF = "pull_request_base_ref"
 
 # Stable finding codes.  These values are persisted in reports and repair
 # allowlists, so changing one is a compatibility change.

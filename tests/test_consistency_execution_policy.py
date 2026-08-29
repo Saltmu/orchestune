@@ -19,8 +19,6 @@ from orchestune.consistency.invariants.execution import (
     BRANCH_MISSING,
     BRANCH_OWNERSHIP_CONFLICT,
     EXECUTION_OBSERVATION_UNKNOWN,
-    FACT_PULL_REQUEST_BASE_REF,
-    FACT_PULL_REQUEST_HEAD_REF,
     FORGE_OBSERVATION_UNKNOWN,
     ISSUE_OWNERSHIP_CONFLICT,
     LOCAL_PROCESS_DEAD,
@@ -53,9 +51,14 @@ from orchestune.consistency.observation import (
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_STATE,
     FACT_PARENT_ISSUE_NUMBER,
+    FACT_PULL_REQUEST_BASE_REF,
+    FACT_PULL_REQUEST_HEAD_REF,
     FACT_PULL_REQUEST_NUMBER,
     FACT_WORKTREE_EXISTS,
     FACT_WORKTREE_PATH,
+    ExecutionRecord,
+    ForgeSnapshot,
+    build_observed_repository_state,
 )
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
@@ -63,6 +66,7 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
+from orchestune.models import IssueRecord, PrRecord
 
 NOW = datetime(2026, 8, 29, 10, 0, tzinfo=UTC)
 REPOSITORY_ID = "Saltmu/orchestune"
@@ -406,6 +410,54 @@ def test_pr_association_unknown_and_head_base_mismatches_are_diagnosable() -> No
         finding.repairability is not Repairability.AUTOMATIC
         for finding in report.findings
     )
+
+
+def test_observed_pull_request_base_mismatch_is_diagnosable() -> None:
+    parent = {"number": 700, "state": "OPEN"}
+    observed = build_observed_repository_state(
+        repository_id=REPOSITORY_ID,
+        forge=ForgeSnapshot(
+            issues=(
+                IssueRecord(
+                    number=726,
+                    title="task 726",
+                    body="",
+                    labels=("status:in-progress",),
+                    created_at="2026-08-29T00:00:00Z",
+                    parent=parent,
+                ),
+            ),
+            pull_requests=(
+                PrRecord(
+                    number=730,
+                    head_ref="codex/issue-726",
+                    base_ref="main",
+                    changed_files=(),
+                ),
+            ),
+            fetched_at=NOW,
+        ),
+        executions=(
+            ExecutionRecord(
+                issue_number=726,
+                branch="codex/issue-726",
+                worktree_path="worktree/726",
+                pid=100,
+            ),
+        ),
+        clock=lambda: NOW,
+    )
+
+    report = _evaluate(observed, _desired(**{"726": True}))
+
+    base_findings = tuple(
+        finding
+        for finding in report.findings
+        if finding.code == PULL_REQUEST_BASE_MISMATCH
+    )
+    assert len(base_findings) == 1
+    assert base_findings[0].expected.value == "parent/issue-700"
+    assert base_findings[0].observed.value == "main"
 
 
 def test_repair_plan_is_deterministic_deduplicated_and_idempotency_aware() -> None:
