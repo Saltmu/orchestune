@@ -212,6 +212,39 @@ def test_off_and_shadow_preserve_existing_pipeline_outcome(
     assert [scan.boundary for scan in shadow.consistency.scans] == ["start", "end"]
 
 
+def test_shadow_dry_run_ignores_state_changes_that_were_not_applied(
+    tmp_path, fake_forge
+) -> None:
+    issue = make_issue(706, labels=("status:queued",), parent=None)
+    task = make_task(706, subtask_id="shadow-supervisor")
+    config = DispatcherConfig(
+        apply=False,
+        consistency_mode=ConsistencyMode.SHADOW,
+        events_log_path=tmp_path / "events.jsonl",
+        run_state_path=tmp_path / "state.json",
+        worktree_root=tmp_path / "worktrees",
+    )
+    fake_forge.list_issues_by_label.return_value = []
+    fake_forge.list_open_prs.return_value = []
+    pipeline_report = _report(
+        applied=False,
+        promotion_events=[{"subtask_id": "shadow-supervisor"}],
+    )
+    pipeline_report.completion_events = [{"issue_number": 706}]
+    pipeline_report.deviation_events = [{"issue_number": 706}]
+    pipeline_report.lock_changes = {"to_lock": [task], "to_unlock": [task]}
+
+    report = _run_patched_cycle(
+        config,
+        issue=issue,
+        task=task,
+        run_state=RunState(),
+        pipeline_report=pipeline_report,
+    )
+
+    assert [scan.boundary for scan in report.consistency.scans] == ["start", "end"]
+
+
 def test_shadow_records_targeted_events_and_authoritative_end_diff(
     tmp_path, fake_forge
 ) -> None:
@@ -257,6 +290,7 @@ def test_shadow_records_targeted_events_and_authoritative_end_diff(
         change.scope.value == "task" and change.subject_id == "706"
         for change in end.state_changes
     )
+    assert fake_forge.list_open_prs.call_count == 2
 
 
 def test_shadow_observation_failure_is_reported_without_failing_cycle(

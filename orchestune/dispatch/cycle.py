@@ -348,6 +348,8 @@ def _scheduling_state_changes(report: CycleReport, occurred_at) -> list[StateCha
 def _pipeline_state_changes(
     report: CycleReport, ctx, now: float
 ) -> tuple[StateChanged, ...]:
+    if not report.applied:
+        return ()
     occurred_at = datetime.fromtimestamp(now, UTC)
     changes = _event_changes(
         report.promotion_events,
@@ -387,8 +389,8 @@ def _finish_consistency_runtime(
     runtime.supervisor.targeted_scan(
         "pipeline",
         _pipeline_state_changes(report, ctx, now),
-        observer=runtime.cached_adapter,
-        deriver=runtime.cached_adapter,
+        observer=runtime.fresh_adapter,
+        deriver=runtime.fresh_adapter,
     )
     runtime.supervisor.full_scan(
         "end", observer=runtime.fresh_adapter, deriver=runtime.fresh_adapter
