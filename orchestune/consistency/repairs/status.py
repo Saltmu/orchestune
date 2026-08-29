@@ -43,6 +43,7 @@ from orchestune.consistency.invariants.status import (
     PRIMARY_STATUS_CONFLICT,
     PRIMARY_STATUS_MISSING,
     QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
+    REPOSITORY_POLICY_INVARIANT,
     STATUS_OBSERVATION_UNKNOWN,
     TERMINAL_ESCALATION_LABELS,
     primary_status_labels,
@@ -218,7 +219,15 @@ def plan_status_repairs(report: ConsistencyReport) -> tuple[RepairCommand, ...]:
     is uncertain is skipped while its peers are still planned for.  Findings
     that are manual, informational, covered by a live transition intent, or
     owned by another policy are deliberately ignored.
+
+    The report must say it ran `REPOSITORY_POLICY_INVARIANT`.  A missing Forge
+    finding is not an attestation that the Forge answered — an engine built
+    from the task invariant alone would never raise one — and reading silence
+    as a clean bill of health is exactly how a blind scan ends up rewriting
+    labels it never really observed.
     """
+    if REPOSITORY_POLICY_INVARIANT not in report.evaluated_invariants:
+        return ()
     commands = tuple(
         command
         for finding in _eligible(report.findings)

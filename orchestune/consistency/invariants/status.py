@@ -99,6 +99,12 @@ PRIMARY_STATUS_MISSING = "status.primary-status-missing"
 QUEUED_WITH_UNRESOLVED_DEPENDENCIES = "status.queued-with-unresolved-dependencies"
 STATUS_OBSERVATION_UNKNOWN = "status.observation-unknown"
 
+# Stable invariant codes.  `plan_status_repairs` requires the repository policy
+# by name: it is the only invariant that looks at the Forge reading, so a report
+# that never ran it carries no evidence the Forge was answering at all.
+REPOSITORY_POLICY_INVARIANT = "status.repository-policy"
+TASK_POLICY_INVARIANT = "status.task-policy"
+
 _KNOWN = ObservationCertainty.KNOWN
 _ACTIVE_KINDS = frozenset({EXECUTION_KIND_CLOUD, EXECUTION_KIND_LOCAL})
 
@@ -759,12 +765,12 @@ def status_invariants() -> tuple[Invariant, ...]:
     """Return the pure status invariants for repository and task scope."""
     return (
         _StatusInvariant(
-            "status.repository-policy",
+            REPOSITORY_POLICY_INVARIANT,
             ConsistencyScope.REPOSITORY,
             _repository_findings,
         ),
         _StatusInvariant(
-            "status.task-policy",
+            TASK_POLICY_INVARIANT,
             ConsistencyScope.TASK,
             _task_findings,
         ),
@@ -784,7 +790,9 @@ __all__ = [
     "PRIMARY_STATUS_MISSING",
     "PROMOTION_HOLD_LABELS",
     "QUEUED_WITH_UNRESOLVED_DEPENDENCIES",
+    "REPOSITORY_POLICY_INVARIANT",
     "STATUS_OBSERVATION_UNKNOWN",
+    "TASK_POLICY_INVARIANT",
     "TERMINAL_ESCALATION_LABELS",
     "primary_status_labels",
     "status_invariants",

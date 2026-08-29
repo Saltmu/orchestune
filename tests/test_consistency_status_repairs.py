@@ -14,6 +14,8 @@ from orchestune.consistency.invariants.status import (
     PRIMARY_STATUS_CONFLICT,
     PRIMARY_STATUS_MISSING,
     QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
+    REPOSITORY_POLICY_INVARIANT,
+    TASK_POLICY_INVARIANT,
 )
 from orchestune.consistency.models import (
     ConsistencyFinding,
@@ -233,7 +235,11 @@ def test_plan_ignores_findings_it_does_not_own() -> None:
                 repairability=Repairability.AUTOMATIC,
             ),
         ),
-        evaluated_invariants=("execution.task-state",),
+        evaluated_invariants=(
+            "execution.task-state",
+            REPOSITORY_POLICY_INVARIANT,
+            TASK_POLICY_INVARIANT,
+        ),
     )
 
     assert plan_status_repairs(report) == ()
@@ -293,7 +299,7 @@ def _automatic_finding(
                 repairability=Repairability.AUTOMATIC,
             ),
         ),
-        evaluated_invariants=("status.task-policy",),
+        evaluated_invariants=(REPOSITORY_POLICY_INVARIANT, TASK_POLICY_INVARIANT),
     )
 
 
@@ -408,3 +414,29 @@ def test_a_transition_revalidates_the_dependency_state_it_relied_on(
     (command,) = plan_status_repairs(report)
     assert set(required) <= set(command.preconditions)
     assert f"holds-primary-status:{observed_label}" in command.preconditions
+
+
+def test_a_report_that_never_checked_the_forge_plans_nothing() -> None:
+    """Silence is not an attestation: no Forge invariant, no label commands."""
+    clean = _automatic_finding(
+        PRIMARY_STATUS_MISSING, expected="status:queued", observed=()
+    )
+    assert plan_status_repairs(clean) != ()
+
+    task_policy_only = ConsistencyReport(
+        repository_id=clean.repository_id,
+        findings=clean.findings,
+        evaluated_invariants=(TASK_POLICY_INVARIANT,),
+    )
+
+    assert plan_status_repairs(task_policy_only) == ()
+
+
+def test_the_engine_records_the_invariants_the_planner_requires() -> None:
+    report = _evaluate(
+        _observed(_task_scope(705, labels=())),
+        _desired(_desired_task("status-policy", 705)),
+    )
+
+    assert REPOSITORY_POLICY_INVARIANT in report.evaluated_invariants
+    assert plan_status_repairs(report) != ()
