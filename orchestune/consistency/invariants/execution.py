@@ -23,9 +23,12 @@ from orchestune.consistency.models import (
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
     EXECUTION_KIND_LOCAL,
+    EXECUTION_KIND_UNKNOWN,
 )
 from orchestune.consistency.vocabulary import (
     DESIRED_RUN_STATE_ACTIVE,
+    DESIRED_TASK_TIMEOUT_SECONDS,
+    DESIRED_ZOMBIE_GC_ENABLED,
     FACT_BRANCH_EXISTS,
     FACT_BRANCH_NAME,
     FACT_EXECUTION_EXTERNAL_ID,
@@ -33,6 +36,7 @@ from orchestune.consistency.vocabulary import (
     FACT_EXECUTION_KIND,
     FACT_EXECUTION_PID,
     FACT_EXECUTION_PROCESS_ALIVE,
+    FACT_EXECUTION_STARTED_AT,
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_STATE,
     FACT_PARENT_ISSUE_NUMBER,
@@ -49,7 +53,9 @@ ACTIVE_EXECUTION_OWNERSHIP_CONFLICT = "execution.active-execution-ownership-conf
 BRANCH_MISSING = "execution.branch-missing"
 BRANCH_OWNERSHIP_CONFLICT = "execution.branch-ownership-conflict"
 EXECUTION_OBSERVATION_UNKNOWN = "execution.observation-unknown"
+EXECUTION_TIMED_OUT = "execution.timed-out"
 FORGE_OBSERVATION_UNKNOWN = "execution.forge-observation-unknown"
+HANDLELESS_EXECUTION_ORPHAN = "execution.handleless-orphan"
 ISSUE_OWNERSHIP_CONFLICT = "execution.issue-ownership-conflict"
 LOCAL_PROCESS_DEAD = "execution.local-process-dead"
 ORPHAN_EXECUTION = "execution.orphan"
@@ -75,6 +81,7 @@ REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE = {
             FACT_EXECUTION_KIND,
             FACT_EXECUTION_PID,
             FACT_EXECUTION_PROCESS_ALIVE,
+            FACT_EXECUTION_STARTED_AT,
             FACT_ISSUE_STATE,
             FACT_PARENT_ISSUE_NUMBER,
             FACT_PULL_REQUEST_BASE_REF,
@@ -103,6 +110,19 @@ def _desired_fact(
         and fact.name == name
     )
     return matches[0] if len(matches) == 1 else None
+
+
+def _desired_repository_value(
+    desired: DesiredRepositoryState, name: str, default: FactValue
+) -> FactValue:
+    matches = tuple(
+        fact
+        for fact in desired.facts
+        if fact.scope is ConsistencyScope.REPOSITORY
+        and fact.subject_id is None
+        and fact.name == name
+    )
+    return matches[0].value if len(matches) == 1 else default
 
 
 def _tasks(observed: ObservedRepositoryState) -> tuple[ScopedObservations, ...]:
@@ -354,8 +374,13 @@ def _uncertain_execution_findings(
 
 def _local_process_findings(
     task: ScopedObservations,
+    *,
+    zombie_gc_enabled: bool,
 ) -> tuple[ConsistencyFinding, ...]:
-    if _known_value(task, FACT_EXECUTION_KIND) != EXECUTION_KIND_LOCAL:
+    if (
+        not zombie_gc_enabled
+        or _known_value(task, FACT_EXECUTION_KIND) != EXECUTION_KIND_LOCAL
+    ):
         return ()
     alive = _fact(task, FACT_EXECUTION_PROCESS_ALIVE)
     if alive is None or alive.certainty is not _KNOWN or alive.value is not False:
@@ -374,9 +399,14 @@ def _local_process_findings(
 
 
 def _missing_resource_finding(
-    task: ScopedObservations, fact_name: str, code: str, resource: str
+    task: ScopedObservations,
+    fact_name: str,
+    code: str,
+    resource: str,
+    *,
+    zombie_gc_enabled: bool,
 ) -> tuple[ConsistencyFinding, ...]:
-    if not _is_active(task):
+    if not zombie_gc_enabled or not _is_active(task):
         return ()
     fact = _fact(task, fact_name)
     if fact is None or fact.certainty is not _KNOWN or fact.value is not False:
@@ -394,8 +424,10 @@ def _missing_resource_finding(
     )
 
 
-def _orphan_findings(task: ScopedObservations) -> tuple[ConsistencyFinding, ...]:
-    if not _is_active(task):
+def _orphan_findings(
+    task: ScopedObservations, *, zombie_gc_enabled: bool
+) -> tuple[ConsistencyFinding, ...]:
+    if not zombie_gc_enabled or not _is_active(task):
         return ()
     issue = _fact(task, FACT_ISSUE_STATE)
     if issue is None or issue.certainty is not _KNOWN or issue.value is not None:
@@ -408,6 +440,83 @@ def _orphan_findings(task: ScopedObservations) -> tuple[ConsistencyFinding, ...]
             expected="OPEN or CLOSED",
             expected_summary="execution belongs to an existing Issue",
             observed_summary="execution has no corresponding Issue",
+            repairability=Repairability.AUTOMATIC,
+        ),
+    )
+
+
+def _timeout_findings(
+    task: ScopedObservations,
+    observed: ObservedRepositoryState,
+    desired: DesiredRepositoryState,
+) -> tuple[ConsistencyFinding, ...]:
+    kind = _fact(task, FACT_EXECUTION_KIND)
+    if kind is None or kind.value not in {*_ACTIVE_KINDS, EXECUTION_KIND_UNKNOWN}:
+        return ()
+    timeout = _desired_repository_value(desired, DESIRED_TASK_TIMEOUT_SECONDS, 0)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, int | float)
+        or timeout <= 0
+    ):
+        return ()
+    started_at = _fact(task, FACT_EXECUTION_STARTED_AT)
+    if (
+        started_at is None
+        or started_at.certainty is not _KNOWN
+        or isinstance(started_at.value, bool)
+        or not isinstance(started_at.value, int | float)
+    ):
+        return ()
+    elapsed = observed.observed_at.timestamp() - started_at.value
+    if elapsed <= timeout:
+        return ()
+    return (
+        _task_finding(
+            EXECUTION_TIMED_OUT,
+            task,
+            started_at,
+            expected=timeout,
+            expected_summary="execution elapsed time stays within configured timeout",
+            observed_summary="recorded execution exceeded configured timeout",
+            repairability=Repairability.AUTOMATIC,
+        ),
+    )
+
+
+def _self_healed_orphan_findings(
+    task: ScopedObservations, *, zombie_gc_enabled: bool
+) -> tuple[ConsistencyFinding, ...]:
+    """Recognize a handleless recovery record from known persisted facts."""
+    if not zombie_gc_enabled:
+        return ()
+    kind = _fact(task, FACT_EXECUTION_KIND)
+    if kind is None or kind.value != EXECUTION_KIND_UNKNOWN:
+        return ()
+    expected_values = {
+        FACT_EXECUTION_PID: None,
+        FACT_EXECUTION_EXTERNAL_ID: None,
+        FACT_EXECUTION_STARTED_AT: None,
+        FACT_WORKTREE_EXISTS: False,
+    }
+    facts = {name: _fact(task, name) for name in expected_values}
+    if any(
+        fact is None
+        or fact.certainty is not _KNOWN
+        or fact.value != expected_values[name]
+        for name, fact in facts.items()
+    ):
+        return ()
+    worktree = facts[FACT_WORKTREE_EXISTS]
+    assert worktree is not None
+    return (
+        _task_finding(
+            HANDLELESS_EXECUTION_ORPHAN,
+            task,
+            worktree,
+            expected=True,
+            expected_summary="self-healed execution worktree exists",
+            observed_summary="handleless self-healed execution is orphaned",
             repairability=Repairability.AUTOMATIC,
         ),
     )
@@ -531,16 +640,36 @@ def _pr_mismatch_findings(
 
 
 def _one_task_findings(
-    task: ScopedObservations, desired: DesiredRepositoryState
+    task: ScopedObservations,
+    observed: ObservedRepositoryState,
+    desired: DesiredRepositoryState,
 ) -> tuple[ConsistencyFinding, ...]:
+    zombie_gc_enabled = _desired_repository_value(
+        desired, DESIRED_ZOMBIE_GC_ENABLED, True
+    )
+    zombie_gc_enabled = (
+        zombie_gc_enabled if isinstance(zombie_gc_enabled, bool) else False
+    )
     return (
         *_uncertain_execution_findings(task),
-        *_local_process_findings(task),
-        *_missing_resource_finding(task, FACT_BRANCH_EXISTS, BRANCH_MISSING, "branch"),
+        *_local_process_findings(task, zombie_gc_enabled=zombie_gc_enabled),
+        *_timeout_findings(task, observed, desired),
+        *_self_healed_orphan_findings(task, zombie_gc_enabled=zombie_gc_enabled),
         *_missing_resource_finding(
-            task, FACT_WORKTREE_EXISTS, WORKTREE_MISSING, "worktree"
+            task,
+            FACT_BRANCH_EXISTS,
+            BRANCH_MISSING,
+            "branch",
+            zombie_gc_enabled=zombie_gc_enabled,
         ),
-        *_orphan_findings(task),
+        *_missing_resource_finding(
+            task,
+            FACT_WORKTREE_EXISTS,
+            WORKTREE_MISSING,
+            "worktree",
+            zombie_gc_enabled=zombie_gc_enabled,
+        ),
+        *_orphan_findings(task, zombie_gc_enabled=zombie_gc_enabled),
         *_run_state_findings(task, desired),
         *_pr_association_findings(task),
         *_pr_mismatch_findings(task),
@@ -553,7 +682,7 @@ def _task_findings(
     return tuple(
         finding
         for task in _tasks(observed)
-        for finding in _one_task_findings(task, desired)
+        for finding in _one_task_findings(task, observed, desired)
     )
 
 
@@ -598,9 +727,11 @@ __all__ = [
     "BRANCH_MISSING",
     "BRANCH_OWNERSHIP_CONFLICT",
     "EXECUTION_OBSERVATION_UNKNOWN",
+    "EXECUTION_TIMED_OUT",
     "FACT_PULL_REQUEST_BASE_REF",
     "FACT_PULL_REQUEST_HEAD_REF",
     "FORGE_OBSERVATION_UNKNOWN",
+    "HANDLELESS_EXECUTION_ORPHAN",
     "ISSUE_OWNERSHIP_CONFLICT",
     "LOCAL_PROCESS_DEAD",
     "ORPHAN_EXECUTION",

@@ -8,9 +8,18 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from orchestune.consistency.invariants.execution import (
+    EXECUTION_OBSERVATION_UNKNOWN,
+    RUN_STATE_MISSING,
+    WORKTREE_MISSING,
+)
+from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.execution_profiles import resolve_execution_profile
+from orchestune.dispatch.execution_repair import (
+    command_finding_codes,
+    evaluate_execution_repair_plan,
+)
 from orchestune.dispatch.state import ActiveWorktree, RunState
-from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parse_task_from_issue,
@@ -187,15 +196,6 @@ def _decide_missing_active_worktrees(
     in_progress_issues: list[IssueRecord],
     config: DispatcherConfig,
 ) -> list[tuple[str, str, ActiveWorktree]]:
-    missing_issues = []
-    for issue in in_progress_issues:
-        subtask_id, declared_footprint = _parse_subtask_info_from_issue(issue)
-        if str(issue.number) not in run_state.active_worktrees:
-            missing_issues.append((issue, subtask_id, declared_footprint))
-
-    if not missing_issues:
-        return []
-
     issue_to_subtask_id: dict[int, str] = {}
     for issue in in_progress_issues:
         raw_subtask_id = _extract_raw_subtask_id(issue)
@@ -206,6 +206,20 @@ def _decide_missing_active_worktrees(
         for issue_number, subtask_id in issue_to_subtask_id.items()
     }
 
+    tasks_by_issue = {
+        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
+        for issue in in_progress_issues
+    }
+    evaluation = evaluate_execution_repair_plan(run_state, tasks_by_issue, config)
+    missing_subjects = {
+        command.subject_id
+        for command in evaluation.commands
+        if command.code == COMMAND_BOOKKEEPING
+        and RUN_STATE_MISSING in command_finding_codes(command)
+    }
+    if not missing_subjects:
+        return []
+
     try:
         open_prs = config.resolved_forge.list_open_prs()
     except Exception as e:
@@ -213,7 +227,10 @@ def _decide_missing_active_worktrees(
         open_prs = []
 
     restorations: list[tuple[str, str, ActiveWorktree]] = []
-    for issue, subtask_id, declared_footprint in missing_issues:
+    for issue in in_progress_issues:
+        if str(issue.number) not in missing_subjects:
+            continue
+        subtask_id, declared_footprint = _parse_subtask_info_from_issue(issue)
         active_worktree = _build_restored_active_worktree(
             issue,
             subtask_id,
@@ -325,29 +342,47 @@ def _reconcile_stale_recovery_counters(
     return _apply_stale_recovery_counters(run_state, reconciliations)
 
 
-def _warn_missing_physical_worktrees(run_state: RunState) -> None:
-    """物理的な git worktree が存在しない場合に警告ログを出す（読み取り専用）。"""
-    try:
-        res = run_git(["worktree", "list", "--porcelain"], cwd=None, check=True)
-        existing_worktree_paths = set()
-        for line in res.stdout.splitlines():
-            if line.startswith("worktree "):
-                existing_worktree_paths.add(Path(line.split(" ", 1)[1]).resolve())
-    except Exception as e:
-        print(
-            f"Self-healing warning: Failed to list git worktrees: {e}",
-            file=sys.stderr,
+def _report_reobserved_execution_findings(
+    run_state: RunState,
+    in_progress_issues: list[IssueRecord],
+    config: DispatcherConfig,
+) -> None:
+    """Re-observe repaired tasks and retain unresolved/unknown facts for next cycle."""
+    issue_to_subtask_id = {
+        issue.number: raw
+        for issue in in_progress_issues
+        if (raw := _extract_raw_subtask_id(issue)) is not None
+    }
+    tasks_by_issue = {
+        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
+        for issue in in_progress_issues
+    }
+    evaluation = evaluate_execution_repair_plan(run_state, tasks_by_issue, config)
+    for finding in evaluation.report.findings:
+        if finding.subject_id is None:
+            continue
+        active = next(
+            (
+                item
+                for item in run_state.active_worktrees.values()
+                if str(item.issue_number) == finding.subject_id
+            ),
+            None,
         )
-        existing_worktree_paths = None
-
-    if existing_worktree_paths is not None:
-        for subtask_id, active in run_state.active_worktrees.items():
-            active_path = Path(active.worktree_path).resolve()
-            if active_path not in existing_worktree_paths:
-                print(
-                    f"Self-healing warning: Physical worktree for subtask '{subtask_id}' not found at '{active.worktree_path}'.",
-                    file=sys.stderr,
-                )
+        if active is None:
+            continue
+        if finding.code == WORKTREE_MISSING:
+            print(
+                "Self-healing warning: Physical worktree for subtask "
+                f"'{finding.subject_id}' not found at '{active.worktree_path}'.",
+                file=sys.stderr,
+            )
+        elif finding.code == EXECUTION_OBSERVATION_UNKNOWN:
+            print(
+                "Self-healing warning: Execution repair remains deferred for Issue "
+                f"#{active.issue_number}: {finding.observed.summary}",
+                file=sys.stderr,
+            )
 
 
 def recover_run_state(
@@ -362,5 +397,5 @@ def recover_run_state(
     modified = (
         _reconcile_stale_recovery_counters(run_state, in_progress_issues) or modified
     )
-    _warn_missing_physical_worktrees(run_state)
+    _report_reobserved_execution_findings(run_state, in_progress_issues, config)
     return modified

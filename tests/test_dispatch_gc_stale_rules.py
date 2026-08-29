@@ -11,30 +11,12 @@ from unittest.mock import patch
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc import (
     _apply_stale_active_entry_discard,
-    _decide_stale_active_entry,
     _rule_not_needed,
     _rule_stale_entry,
 )
 from orchestune.dispatch.state import RunState
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
-
-
-class TestDecideStaleActiveEntry:
-    """decide層: githubラベルの読み取りのみでstale判定を行い、run_stateは変更しない。"""
-
-    def test_none_when_still_in_progress(self):
-        task = _task(status_labels=("status:in-progress",))
-        assert _decide_stale_active_entry(_active(), task) is None
-
-    def test_none_when_no_matching_task(self):
-        assert _decide_stale_active_entry(_active(), None) is None
-
-    def test_stale_when_label_no_longer_in_progress(self):
-        task = _task(status_labels=("status:blocked",))
-        event = _decide_stale_active_entry(_active(), task)
-        assert event is not None
-        assert event["action"] == "stale_active_entry_discarded"
 
 
 class TestApplyStaleActiveEntryDiscard:

@@ -7,7 +7,9 @@ from collections.abc import Iterable
 from orchestune.consistency.invariants.execution import (
     BRANCH_MISSING,
     EXECUTION_OBSERVATION_UNKNOWN,
+    EXECUTION_TIMED_OUT,
     FORGE_OBSERVATION_UNKNOWN,
+    HANDLELESS_EXECUTION_ORPHAN,
     LOCAL_PROCESS_DEAD,
     ORPHAN_EXECUTION,
     RUN_STATE_MISSING,
@@ -21,6 +23,7 @@ from orchestune.consistency.models import (
     Repairability,
     RepairCommand,
 )
+from orchestune.consistency.vocabulary import FACT_EXECUTION_EXTERNAL_STATUS
 
 COMMAND_RECLAIM = "execution.reclaim"
 COMMAND_REQUEUE = "execution.requeue"
@@ -29,10 +32,12 @@ COMMAND_BOOKKEEPING = "execution.update-bookkeeping"
 _RECLAIM_AND_REQUEUE = (COMMAND_RECLAIM, COMMAND_REQUEUE)
 _ACTIONS_BY_FINDING = {
     BRANCH_MISSING: _RECLAIM_AND_REQUEUE,
+    EXECUTION_TIMED_OUT: _RECLAIM_AND_REQUEUE,
+    HANDLELESS_EXECUTION_ORPHAN: _RECLAIM_AND_REQUEUE,
     LOCAL_PROCESS_DEAD: _RECLAIM_AND_REQUEUE,
     ORPHAN_EXECUTION: (COMMAND_RECLAIM, COMMAND_BOOKKEEPING),
     RUN_STATE_MISSING: (COMMAND_REQUEUE, COMMAND_BOOKKEEPING),
-    RUN_STATE_STALE: (COMMAND_BOOKKEEPING,),
+    RUN_STATE_STALE: (COMMAND_RECLAIM, COMMAND_BOOKKEEPING),
     WORKTREE_MISSING: _RECLAIM_AND_REQUEUE,
 }
 _COMMAND_ORDER = {
@@ -56,6 +61,7 @@ def _eligible(findings: Iterable[ConsistencyFinding]) -> tuple[ConsistencyFindin
         for finding in normalized
         if finding.code == EXECUTION_OBSERVATION_UNKNOWN
         and finding.subject_id is not None
+        and f"fact={FACT_EXECUTION_EXTERNAL_STATUS}" in finding.observed.details
     }
     return tuple(
         sorted(

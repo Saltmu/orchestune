@@ -13,8 +13,14 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
+from orchestune.consistency.invariants.execution import RUN_STATE_STALE
+from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
+from orchestune.dispatch.execution_repair import (
+    command_finding_codes,
+    evaluate_execution_repair_plan,
+)
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     _active_dispatch_handle,
@@ -42,9 +48,7 @@ from orchestune.dispatch.gc.git import (
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
-    _check_zombie_and_timeout,
     _collect_zombies_and_timeouts,
-    _decide_zombie_and_timeout,
     _decide_zombie_or_timeout_reclaims,
 )
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
@@ -67,12 +71,10 @@ __all__ = [
     "_apply_completed_worktree_outcome",
     "_apply_zombie_or_timeout_reclaim",
     "_call_is_complete",
-    "_check_zombie_and_timeout",
     "_cloud_worktree_completion_status",
     "_collect_zombies_and_timeouts",
     "_decide_completed_worktree_outcome",
     "_decide_not_needed_dirty_worktree",
-    "_decide_zombie_and_timeout",
     "_decide_zombie_or_timeout_reclaims",
     "_finalize_abandoned_cloud_worktree",
     "_finalize_completed_worktree",
@@ -261,33 +263,6 @@ def _record_completed_worktree(
     )
 
 
-def _decide_stale_active_entry(
-    active: ActiveWorktree, active_task: Task | None
-) -> dict | None:
-    """GitHubラベルを正として、run_state側のstaleエントリを判定する。"""
-    if (
-        active_task is not None
-        and "status:in-progress" not in active_task.status_labels
-    ):
-        # run_stateへの登録(save_run_state)は起動成功直後に、GitHubラベルの
-        # status:in-progress付与はその後に行う順序になっているため、この間で
-        # クラッシュした場合（あるいは完了/エスカレーション処理でラベルだけ
-        # 先に更新されてクラッシュした場合）、GitHub側のラベルは
-        # status:in-progressでなくなっているのにrun_state側にだけ古い
-        # エントリが残ることがある。GitHubラベルを正として、この古い帳簿
-        # エントリを破棄する（ゾンビGCの拡張）。
-        return {
-            "issue_number": active.issue_number,
-            "subtask_id": active_task.subtask_id,
-            "action": "stale_active_entry_discarded",
-            "reason": (
-                "issue label is no longer status:in-progress "
-                f"(labels={sorted(active_task.status_labels)})"
-            ),
-        }
-    return None
-
-
 def _cleanup_stale_active_worktree(
     active: ActiveWorktree, reason: str, config: DispatcherConfig
 ) -> bool:
@@ -344,11 +319,32 @@ def _apply_stale_active_entry_discard(
 def _rule_stale_entry(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
-    stale_event = _decide_stale_active_entry(active, active_task)
-    if stale_event is None:
+    evaluation = evaluate_execution_repair_plan(
+        ctx.run_state,
+        ctx.tasks_by_issue,
+        ctx.config,
+        open_prs=ctx.prs,
+    )
+    planned = any(
+        command.code == COMMAND_RECLAIM
+        and command.subject_id == str(active.issue_number)
+        and RUN_STATE_STALE in command_finding_codes(command)
+        for command in evaluation.commands
+    )
+    if not planned or active_task is None:
         return None
+    reason = (
+        "issue label is no longer status:in-progress "
+        f"(labels={sorted(active_task.status_labels)})"
+    )
+    stale_event = {
+        "issue_number": active.issue_number,
+        "subtask_id": active_task.subtask_id,
+        "action": "stale_active_entry_discarded",
+        "reason": reason,
+    }
     discarded = _apply_stale_active_entry_discard(
-        ctx.run_state, key, active, stale_event["reason"], ctx.config
+        ctx.run_state, key, active, reason, ctx.config
     )
     if not discarded:
         return None
