@@ -35,6 +35,32 @@ from orchestune.consistency.models import (
     ObservedRepositoryState,
     ScopedObservations,
 )
+from orchestune.consistency.vocabulary import (
+    FACT_BRANCH_EXISTS,
+    FACT_BRANCH_NAME,
+    FACT_CHILD_ISSUE_NUMBERS,
+    FACT_EXECUTION_COUNT,
+    FACT_EXECUTION_EXTERNAL_ID,
+    FACT_EXECUTION_EXTERNAL_STATUS,
+    FACT_EXECUTION_KIND,
+    FACT_EXECUTION_PID,
+    FACT_EXECUTION_PROCESS_ALIVE,
+    FACT_FORGE_REACHABLE,
+    FACT_ISSUE_COUNT,
+    FACT_ISSUE_LABELS,
+    FACT_ISSUE_NUMBER,
+    FACT_ISSUE_STATE,
+    FACT_ISSUE_STATUS_LABELS,
+    FACT_PARENT_ISSUE_NUMBER,
+    FACT_PARENT_STATE,
+    FACT_PULL_REQUEST_BASE_REF,
+    FACT_PULL_REQUEST_COUNT,
+    FACT_PULL_REQUEST_HEAD_REF,
+    FACT_PULL_REQUEST_NUMBER,
+    FACT_PULL_REQUEST_STATE,
+    FACT_WORKTREE_EXISTS,
+    FACT_WORKTREE_PATH,
+)
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord, PrRecord
 
@@ -47,39 +73,6 @@ SOURCE_GIT = "git"
 SOURCE_PROCESS = "process"
 SOURCE_RUN_STATE = "run-state"
 SOURCE_WORKTREE = "worktree"
-
-# Repository-scope fact names.
-FACT_EXECUTION_COUNT = "execution_count"
-FACT_FORGE_REACHABLE = "forge_reachable"
-FACT_ISSUE_COUNT = "issue_count"
-FACT_PULL_REQUEST_COUNT = "pull_request_count"
-
-# Parent-scope fact names.
-FACT_CHILD_ISSUE_NUMBERS = "child_issue_numbers"
-FACT_PARENT_STATE = "parent_state"
-
-# Task-scope fact names.
-FACT_BRANCH_EXISTS = "branch_exists"
-FACT_BRANCH_NAME = "branch_name"
-FACT_EXECUTION_EXTERNAL_ID = "execution_external_id"
-FACT_EXECUTION_EXTERNAL_STATUS = "execution_external_status"
-FACT_EXECUTION_KIND = "execution_kind"
-FACT_EXECUTION_PID = "execution_pid"
-FACT_EXECUTION_PROCESS_ALIVE = "execution_process_alive"
-FACT_ISSUE_LABELS = "issue_labels"
-FACT_ISSUE_NUMBER = "issue_number"
-FACT_ISSUE_STATE = "issue_state"
-FACT_ISSUE_STATUS_LABELS = "issue_status_labels"
-FACT_PULL_REQUEST_BASE_REF = "pull_request_base_ref"
-FACT_PULL_REQUEST_HEAD_REF = "pull_request_head_ref"
-FACT_PULL_REQUEST_NUMBER = "pull_request_number"
-FACT_PULL_REQUEST_STATE = "pull_request_state"
-FACT_WORKTREE_EXISTS = "worktree_exists"
-FACT_WORKTREE_PATH = "worktree_path"
-
-# `FACT_PARENT_ISSUE_NUMBER` names the parent both at parent scope (its own
-# identity) and at task scope (the child's link to it).
-FACT_PARENT_ISSUE_NUMBER = "parent_issue_number"
 
 # Values of `FACT_EXECUTION_KIND`.  `EXECUTION_KIND_NONE` is a known absence
 # (run state records nothing in flight); `EXECUTION_KIND_UNKNOWN` is a record

@@ -18,6 +18,17 @@ from orchestune.consistency.models import (
     FactValue,
     TransitionIntent,
 )
+from orchestune.consistency.vocabulary import (
+    DESIRED_ACTIVE_COUNT,
+    DESIRED_AVAILABLE_SLOTS,
+    DESIRED_DEPENDENCIES_RESOLVED,
+    DESIRED_DISPATCH_ELIGIBLE,
+    DESIRED_FORCED_SERIAL_ACTIVE,
+    DESIRED_MAX_CONCURRENT,
+    DESIRED_RUN_STATE_ACTIVE,
+    DESIRED_STATUS_LABEL,
+    DESIRED_UNRESOLVED_DEPENDENCIES,
+)
 
 
 class TaskLifecycle(StrEnum):
@@ -139,10 +150,10 @@ def _repository_facts(
     forced_serial_active: bool,
 ) -> tuple[DesiredFact, ...]:
     values: dict[str, FactValue] = {
-        "dispatch.active_count": active_count,
-        "dispatch.available_slots": max(0, policy.max_concurrent - active_count),
-        "dispatch.forced_serial_active": forced_serial_active,
-        "dispatch.max_concurrent": policy.max_concurrent,
+        DESIRED_ACTIVE_COUNT: active_count,
+        DESIRED_AVAILABLE_SLOTS: max(0, policy.max_concurrent - active_count),
+        DESIRED_FORCED_SERIAL_ACTIVE: forced_serial_active,
+        DESIRED_MAX_CONCURRENT: policy.max_concurrent,
     }
     return tuple(
         DesiredFact(
@@ -206,11 +217,11 @@ def _task_facts(
 ) -> tuple[DesiredFact, ...]:
     status = _task_status(task, is_active=is_active, unresolved=unresolved)
     values: dict[str, FactValue] = {
-        "task.dependencies_resolved": not unresolved,
-        "task.dispatch_eligible": eligible,
-        "task.run_state_active": is_active,
-        "task.status_label": status,
-        "task.unresolved_dependencies": unresolved,
+        DESIRED_DEPENDENCIES_RESOLVED: not unresolved,
+        DESIRED_DISPATCH_ELIGIBLE: eligible,
+        DESIRED_RUN_STATE_ACTIVE: is_active,
+        DESIRED_STATUS_LABEL: status,
+        DESIRED_UNRESOLVED_DEPENDENCIES: unresolved,
     }
     return tuple(
         DesiredFact(

@@ -23,6 +23,9 @@ from orchestune.consistency.models import (
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
     EXECUTION_KIND_LOCAL,
+)
+from orchestune.consistency.vocabulary import (
+    DESIRED_RUN_STATE_ACTIVE,
     FACT_BRANCH_EXISTS,
     FACT_BRANCH_NAME,
     FACT_EXECUTION_EXTERNAL_ID,
@@ -60,6 +63,28 @@ WORKTREE_OWNERSHIP_CONFLICT = "execution.worktree-ownership-conflict"
 
 _KNOWN = ObservationCertainty.KNOWN
 _ACTIVE_KINDS = frozenset({EXECUTION_KIND_LOCAL, EXECUTION_KIND_CLOUD})
+
+REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE = {
+    ConsistencyScope.REPOSITORY: frozenset({FACT_FORGE_REACHABLE}),
+    ConsistencyScope.TASK: frozenset(
+        {
+            FACT_BRANCH_EXISTS,
+            FACT_BRANCH_NAME,
+            FACT_EXECUTION_EXTERNAL_ID,
+            FACT_EXECUTION_EXTERNAL_STATUS,
+            FACT_EXECUTION_KIND,
+            FACT_EXECUTION_PID,
+            FACT_EXECUTION_PROCESS_ALIVE,
+            FACT_ISSUE_STATE,
+            FACT_PARENT_ISSUE_NUMBER,
+            FACT_PULL_REQUEST_BASE_REF,
+            FACT_PULL_REQUEST_HEAD_REF,
+            FACT_PULL_REQUEST_NUMBER,
+            FACT_WORKTREE_EXISTS,
+            FACT_WORKTREE_PATH,
+        }
+    ),
+}
 
 
 def _fact(scope: ScopedObservations, name: str) -> Observation | None:
@@ -393,7 +418,7 @@ def _run_state_findings(
 ) -> tuple[ConsistencyFinding, ...]:
     if task.subject_id is None:
         return ()
-    expected = _desired_fact(desired, task.subject_id, "task.run_state_active")
+    expected = _desired_fact(desired, task.subject_id, DESIRED_RUN_STATE_ACTIVE)
     if expected is None or not isinstance(expected.value, bool):
         return ()
     kind = _fact(task, FACT_EXECUTION_KIND)
@@ -579,6 +604,7 @@ __all__ = [
     "ISSUE_OWNERSHIP_CONFLICT",
     "LOCAL_PROCESS_DEAD",
     "ORPHAN_EXECUTION",
+    "REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE",
     "PULL_REQUEST_ASSOCIATION_UNKNOWN",
     "PULL_REQUEST_BASE_MISMATCH",
     "PULL_REQUEST_HEAD_MISMATCH",
