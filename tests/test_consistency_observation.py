@@ -35,7 +35,9 @@ from orchestune.consistency.observation import (
     FACT_ISSUE_STATUS_LABELS,
     FACT_PARENT_ISSUE_NUMBER,
     FACT_PARENT_STATE,
+    FACT_PULL_REQUEST_BASE_REF,
     FACT_PULL_REQUEST_COUNT,
+    FACT_PULL_REQUEST_HEAD_REF,
     FACT_PULL_REQUEST_NUMBER,
     FACT_PULL_REQUEST_STATE,
     FACT_WORKTREE_EXISTS,
@@ -174,12 +176,19 @@ def _issue(
     )
 
 
-def _pr(number: int, head_ref: str, *, state: str = "OPEN") -> PrRecord:
+def _pr(
+    number: int,
+    head_ref: str,
+    *,
+    state: str = "OPEN",
+    base_ref: str = "parent/issue-700",
+) -> PrRecord:
     return PrRecord(
         number=number,
         head_ref=head_ref,
         changed_files=(),
         state=state,
+        base_ref=base_ref,
     )
 
 
@@ -270,6 +279,12 @@ def test_task_observation_links_issue_execution_branch_worktree_and_pr() -> None
     assert _task_fact(state, 703, FACT_WORKTREE_EXISTS).value is True
     assert _task_fact(state, 703, FACT_PULL_REQUEST_NUMBER).value == 720
     assert _task_fact(state, 703, FACT_PULL_REQUEST_STATE).value == "OPEN"
+    assert _task_fact(state, 703, FACT_PULL_REQUEST_HEAD_REF).value == (
+        "claude/issue-703"
+    )
+    assert _task_fact(state, 703, FACT_PULL_REQUEST_BASE_REF).value == (
+        "parent/issue-700"
+    )
     for name in (
         FACT_ISSUE_STATE,
         FACT_EXECUTION_PROCESS_ALIVE,
@@ -853,7 +868,12 @@ def test_forge_probe_failure_produces_unknown_repository_and_task_facts() -> Non
         _fact(state, ConsistencyScope.REPOSITORY, None, FACT_ISSUE_COUNT).certainty
         is ObservationCertainty.UNKNOWN
     )
-    for name in (FACT_ISSUE_STATE, FACT_PULL_REQUEST_NUMBER):
+    for name in (
+        FACT_ISSUE_STATE,
+        FACT_PULL_REQUEST_NUMBER,
+        FACT_PULL_REQUEST_HEAD_REF,
+        FACT_PULL_REQUEST_BASE_REF,
+    ):
         fact = _task_fact(state, 703, name)
         assert fact.certainty is ObservationCertainty.UNKNOWN
         assert fact.value is None
