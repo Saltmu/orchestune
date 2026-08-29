@@ -370,8 +370,15 @@ def _open_task_view(
 # ---------------------------------------------------------------------------
 
 
-def _unknown_finding(
-    subject_id: str, name: str, fact: Observation | None, reason: str
+def _uncertain_finding(
+    code: str,
+    subject: str,
+    name: str,
+    fact: Observation | None,
+    reason: str,
+    *,
+    scope: ConsistencyScope = ConsistencyScope.TASK,
+    subject_id: str | None = None,
 ) -> ConsistencyFinding:
     details = (
         (f"fact={name}", f"certainty={reason}")
@@ -379,20 +386,33 @@ def _unknown_finding(
         else (*_observation_details(fact), f"usability={reason}")
     )
     return ConsistencyFinding(
-        code=STATUS_OBSERVATION_UNKNOWN,
-        scope=ConsistencyScope.TASK,
+        code=code,
+        scope=scope,
         subject_id=subject_id,
         severity=FindingSeverity.WARNING,
         expected=Evidence(
-            "the status observation is current, unambiguous, and readable",
+            f"the {subject} observation is current, unambiguous, and readable",
             (f"fact={name}",),
         ),
         observed=Evidence(
-            f"the status observation is {reason}",
+            f"the {subject} observation is {reason}",
             details,
             None if fact is None else fact.value,
         ),
         repairability=Repairability.NONE,
+    )
+
+
+def _unknown_finding(
+    subject_id: str, name: str, fact: Observation | None, reason: str
+) -> ConsistencyFinding:
+    return _uncertain_finding(
+        STATUS_OBSERVATION_UNKNOWN,
+        "status",
+        name,
+        fact,
+        reason,
+        subject_id=subject_id,
     )
 
 
@@ -614,28 +634,33 @@ def _task_findings(
 # ---------------------------------------------------------------------------
 
 
+def _is_reachable(value: FactValue) -> bool:
+    return value is True
+
+
 def _forge_findings(
     observed: ObservedRepositoryState,
 ) -> tuple[ConsistencyFinding, ...]:
+    """Report anything short of one certain "the Forge answered" reading.
+
+    A missing, duplicated, stale, or negative reading all leave the same
+    question open — whether the labels in this snapshot came from a Forge that
+    was actually answering — so all of them must reach `plan_status_repairs`,
+    whose global stop is what keeps a blind scan from rewriting labels.
+    """
     scopes = _scopes(observed, ConsistencyScope.REPOSITORY)
     fact = _fact(scopes[0], FACT_FORGE_REACHABLE) if len(scopes) == 1 else None
-    if fact is None or fact.certainty is _KNOWN:
+    reason = _uncertainty(fact, _is_reachable)
+    if reason is None:
         return ()
     return (
-        ConsistencyFinding(
-            code=FORGE_OBSERVATION_UNKNOWN,
+        _uncertain_finding(
+            FORGE_OBSERVATION_UNKNOWN,
+            "Forge",
+            FACT_FORGE_REACHABLE,
+            fact,
+            reason,
             scope=ConsistencyScope.REPOSITORY,
-            severity=FindingSeverity.WARNING,
-            expected=Evidence(
-                "the Forge observation is current and unambiguous",
-                (f"fact={fact.name}",),
-            ),
-            observed=Evidence(
-                f"the Forge observation is {fact.certainty.value}",
-                _observation_details(fact),
-                fact.value,
-            ),
-            repairability=Repairability.NONE,
         ),
     )
 

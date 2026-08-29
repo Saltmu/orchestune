@@ -1,21 +1,14 @@
-"""Table-driven tests for the pure status consistency policy (#705)."""
+"""Table-driven tests for the pure status consistency invariants (#705)."""
 
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
-from orchestune.consistency.desired import (
-    DesiredTaskInput,
-    DispatchPolicy,
-    TaskLifecycle,
-    derive_desired_repository_state,
-)
-from orchestune.consistency.engine import ConsistencyEngine
+from orchestune.consistency.desired import TaskLifecycle
 from orchestune.consistency.invariants.status import (
     BLOCKED_PROMOTION_HELD,
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -33,217 +26,53 @@ from orchestune.consistency.invariants.status import (
     status_invariants,
 )
 from orchestune.consistency.models import (
-    ConsistencyFinding,
-    ConsistencyReport,
     ConsistencyScope,
     DesiredFact,
     DesiredRepositoryState,
-    Evidence,
     FindingSeverity,
     IntentStatus,
-    Observation,
     ObservationCertainty,
     ObservedRepositoryState,
     Repairability,
-    RepairCommand,
     ScopedObservations,
-    TransitionIntent,
 )
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
     EXECUTION_KIND_LOCAL,
     EXECUTION_KIND_NONE,
     FACT_EXECUTION_KIND,
-    FACT_FORGE_REACHABLE,
     FACT_ISSUE_LABELS,
     FACT_ISSUE_STATE,
     FACT_ISSUE_STATUS_LABELS,
 )
-from orchestune.consistency.repairs.status import (
-    COMMAND_ADD_LABEL,
-    COMMAND_REMOVE_LABEL,
-    COMMAND_TRANSITION_LABEL,
-    plan_status_repairs,
-)
+from orchestune.consistency.repairs.status import plan_status_repairs
 from orchestune.dispatch.labels import (
     PRIMARY_STATUS_LABELS as DISPATCH_PRIMARY_STATUS_LABELS,
 )
 from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS as DISPATCH_TERMINAL_ESCALATION_LABELS,
 )
+from tests.consistency_status_test_support import (
+    NOW,
+    REPOSITORY,
+    UNKNOWN,
+    _codes,
+    _desired,
+    _desired_task,
+    _evaluate,
+    _observation,
+    _observed,
+    _only,
+    _reachable,
+    _repository_scope,
+    _status_intent,
+    _task_scope,
+    _with_intents,
+)
 
-REPOSITORY = "Saltmu/orchestune"
-NOW = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
-KNOWN = ObservationCertainty.KNOWN
-UNKNOWN = ObservationCertainty.UNKNOWN
-
-
-# ---------------------------------------------------------------------------
-# Builders
-# ---------------------------------------------------------------------------
-
-
-def _observation(
-    name: str,
-    value: object,
-    *,
-    certainty: ObservationCertainty = KNOWN,
-) -> Observation:
-    return Observation(
-        name=name,
-        value=None if certainty is not KNOWN else value,  # type: ignore[arg-type]
-        certainty=certainty,
-        source="forge",
-        observed_at=NOW,
-        diagnostics=() if certainty is KNOWN else ("probe failed",),
-    )
-
-
-def _task_scope(
-    issue_number: int,
-    *,
-    labels: Sequence[str] = ("status:queued",),
-    issue_state: str | None = "OPEN",
-    execution_kind: str = EXECUTION_KIND_NONE,
-    uncertain: Sequence[str] = (),
-    omit: Sequence[str] = (),
-) -> ScopedObservations:
-    """Mirror what `ObservationCollector` emits for one task Issue."""
-    all_labels = tuple(sorted(set(labels)))
-    values: dict[str, object] = {
-        FACT_EXECUTION_KIND: execution_kind,
-        FACT_ISSUE_LABELS: all_labels,
-        FACT_ISSUE_STATE: issue_state,
-        FACT_ISSUE_STATUS_LABELS: tuple(
-            label for label in all_labels if label.startswith("status:")
-        ),
-    }
-    facts = tuple(
-        _observation(
-            name,
-            value,
-            certainty=UNKNOWN if name in uncertain else KNOWN,
-        )
-        for name, value in sorted(values.items())
-        if name not in omit
-    )
-    return ScopedObservations(
-        scope=ConsistencyScope.TASK, subject_id=str(issue_number), facts=facts
-    )
-
-
-def _observed(
-    *tasks: ScopedObservations,
-    forge_certainty: ObservationCertainty = KNOWN,
-) -> ObservedRepositoryState:
-    repository = ScopedObservations(
-        scope=ConsistencyScope.REPOSITORY,
-        facts=(_observation(FACT_FORGE_REACHABLE, True, certainty=forge_certainty),),
-    )
-    return ObservedRepositoryState(
-        repository_id=REPOSITORY,
-        observed_at=NOW,
-        observations=(repository, *tasks),
-    )
-
-
-def _desired_task(
-    task_id: str,
-    issue_number: int,
-    *,
-    depends_on: tuple[str, ...] = (),
-    lifecycle: TaskLifecycle = TaskLifecycle.OPEN,
-    forced_serial: bool = False,
-) -> DesiredTaskInput:
-    return DesiredTaskInput(
-        task_id=task_id,
-        subject_id=str(issue_number),
-        depends_on=depends_on,
-        lifecycle=lifecycle,
-        forced_serial=forced_serial,
-    )
-
-
-def _desired(
-    *tasks: DesiredTaskInput,
-    active: tuple[str, ...] = (),
-    completed: tuple[str, ...] = (),
-    intents: tuple[TransitionIntent, ...] = (),
-    max_concurrent: int = 3,
-) -> DesiredRepositoryState:
-    """Derive desired state with the real #702 derivation, not a stand-in."""
-    return derive_desired_repository_state(
-        REPOSITORY,
-        tasks,
-        active_task_ids=active,
-        completed_task_ids=completed,
-        policy=DispatchPolicy(max_concurrent=max_concurrent),
-        intents=intents,
-        now=NOW,
-    )
-
-
-def _status_intent(
-    issue_number: int,
-    *,
-    status: IntentStatus = IntentStatus.APPLIED,
-    expires_at: datetime | None = None,
-    changed_fact: str = "task.status_label",
-    scope: ConsistencyScope = ConsistencyScope.TASK,
-    subject_id: str | None = None,
-    created_at: datetime | None = None,
-) -> TransitionIntent:
-    subject = str(issue_number) if subject_id is None else subject_id
-    return TransitionIntent(
-        intent_id=f"intent-{issue_number}",
-        scope=scope,
-        subject_id=subject,
-        operation="transition-status",
-        created_at=NOW - timedelta(minutes=1) if created_at is None else created_at,
-        status=status,
-        expires_at=expires_at,
-        expected_changes=(
-            DesiredFact(
-                name=changed_fact,
-                value="status:in-progress",
-                scope=ConsistencyScope.TASK,
-                subject_id=str(issue_number),
-                reason="launch in flight",
-            ),
-        ),
-    )
-
-
-def _with_intents(
-    desired: DesiredRepositoryState, *intents: TransitionIntent
-) -> DesiredRepositoryState:
-    """Attach intents the #702 derivation would have filtered out on its own."""
-    return DesiredRepositoryState(
-        repository_id=desired.repository_id,
-        facts=desired.facts,
-        transition_intents=intents,
-    )
-
-
-def _evaluate(
-    observed: ObservedRepositoryState, desired: DesiredRepositoryState
-) -> ConsistencyReport:
-    return ConsistencyEngine(status_invariants()).evaluate(observed, desired)
-
-
-def _codes(report: ConsistencyReport) -> tuple[str, ...]:
-    return tuple(finding.code for finding in report.findings)
-
-
-def _only(report: ConsistencyReport, code: str) -> ConsistencyFinding:
-    matches = [finding for finding in report.findings if finding.code == code]
-    assert len(matches) == 1, _codes(report)
-    return matches[0]
-
-
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Vocabulary
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 
 def test_primary_status_labels_cover_the_dispatch_transition_sweep_set() -> None:
@@ -267,9 +96,9 @@ def test_status_invariants_are_stable_and_scoped() -> None:
     assert all(invariant.code.startswith("status.") for invariant in invariants)
 
 
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Primary status cardinality
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -353,9 +182,9 @@ def test_primary_status_missing_is_manual_without_a_desired_label() -> None:
     assert finding.expected.value is None
 
 
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Evidence for active and completed states
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -474,9 +303,9 @@ def test_settled_or_unrelated_intents_do_not_justify_in_progress(name: str) -> N
     assert _codes(report) == (IN_PROGRESS_WITHOUT_EXECUTION,)
 
 
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Dependency correspondence
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -596,9 +425,9 @@ def test_dependency_checks_are_skipped_without_a_desired_task() -> None:
     assert _codes(report) == ()
 
 
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Uncertainty
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -654,6 +483,21 @@ def test_unreachable_forge_reports_once_and_empties_the_plan() -> None:
     assert plan_status_repairs(report) == ()
 
 
+def test_a_stale_reachability_fact_keeps_its_diagnostics() -> None:
+    observed = ObservedRepositoryState(
+        repository_id=REPOSITORY,
+        observed_at=NOW,
+        observations=(
+            _repository_scope(_reachable(certainty=ObservationCertainty.STALE)),
+        ),
+    )
+
+    finding = _only(_evaluate(observed, _desired()), FORGE_OBSERVATION_UNKNOWN)
+
+    assert "certainty=stale" in finding.observed.details
+    assert "forge probe failed" in finding.observed.details
+
+
 @pytest.mark.parametrize("issue_state", (None, "CLOSED", "closed"))
 def test_closed_or_absent_issues_are_not_evaluated(issue_state: str | None) -> None:
     report = _evaluate(
@@ -668,337 +512,9 @@ def test_closed_or_absent_issues_are_not_evaluated(issue_state: str | None) -> N
     assert _codes(report) == ()
 
 
-# ---------------------------------------------------------------------------
-# Forced serial
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _ForcedSerialCase:
-    name: str
-    forced_serial: bool
-    labelled: bool
-    expected: bool
-
-
-_FORCED_SERIAL_CASES = (
-    _ForcedSerialCase("agreeing on forced serial", True, True, False),
-    _ForcedSerialCase("agreeing on normal dispatch", False, False, False),
-    _ForcedSerialCase("plan forces serial but no label", True, False, True),
-    _ForcedSerialCase("label forces serial but plan does not", False, True, True),
-)
-
-
-@pytest.mark.parametrize("case", _FORCED_SERIAL_CASES, ids=lambda case: case.name)
-def test_forced_serial_agreement(case: _ForcedSerialCase) -> None:
-    labels = ("status:in-progress",) + (
-        ("status:force-serial",) if case.labelled else ()
-    )
-    report = _evaluate(
-        _observed(_task_scope(705, labels=labels, execution_kind=EXECUTION_KIND_LOCAL)),
-        _desired(
-            _desired_task("status-policy", 705, forced_serial=case.forced_serial),
-            active=("status-policy",),
-        ),
-    )
-
-    if not case.expected:
-        assert _codes(report) == ()
-        return
-    finding = _only(report, FORCED_SERIAL_MISMATCH)
-    assert finding.scope is ConsistencyScope.REPOSITORY
-    assert finding.subject_id is None
-    assert finding.repairability is Repairability.MANUAL
-    assert plan_status_repairs(report) == ()
-
-
-def test_forced_serial_ignores_labels_on_inactive_tasks() -> None:
-    report = _evaluate(
-        _observed(_task_scope(705, labels=("status:queued", "status:force-serial"))),
-        _desired(_desired_task("status-policy", 705)),
-    )
-
-    assert _codes(report) == ()
-
-
-def test_forced_serial_stays_silent_while_a_label_is_uncertain() -> None:
-    report = _evaluate(
-        _observed(
-            _task_scope(
-                705,
-                labels=("status:in-progress",),
-                execution_kind=EXECUTION_KIND_LOCAL,
-                uncertain=(FACT_ISSUE_STATUS_LABELS,),
-            )
-        ),
-        _desired(
-            _desired_task("status-policy", 705, forced_serial=True),
-            active=("status-policy",),
-        ),
-    )
-
-    assert _codes(report) == (STATUS_OBSERVATION_UNKNOWN,)
-
-
-# ---------------------------------------------------------------------------
-# Purity and determinism
-# ---------------------------------------------------------------------------
-
-
-def test_evaluation_is_deterministic_and_leaves_inputs_untouched() -> None:
-    observed = _observed(
-        _task_scope(705, labels=("status:done", "status:queued")),
-        _task_scope(706, labels=("status:blocked",)),
-    )
-    desired = _desired(
-        _desired_task("status-policy", 705, lifecycle=TaskLifecycle.DONE),
-        _desired_task("shadow-supervisor", 706, depends_on=("status-policy",)),
-    )
-    observed_before = copy.deepcopy(observed)
-    desired_before = copy.deepcopy(desired)
-
-    first = _evaluate(observed, desired)
-    second = _evaluate(observed, desired)
-
-    assert first == second
-    assert observed == observed_before
-    assert desired == desired_before
-    assert plan_status_repairs(first) == plan_status_repairs(second)
-
-
-# ---------------------------------------------------------------------------
-# Repair planning
-# ---------------------------------------------------------------------------
-
-
-def _plan(
-    labels: Sequence[str],
-    *,
-    lifecycle: TaskLifecycle = TaskLifecycle.OPEN,
-    depends_on: tuple[str, ...] = (),
-    completed: tuple[str, ...] = (),
-    intents: tuple[TransitionIntent, ...] = (),
-) -> tuple[str, ...]:
-    report = _evaluate(
-        _observed(_task_scope(705, labels=labels)),
-        _desired(
-            _desired_task(
-                "status-policy", 705, lifecycle=lifecycle, depends_on=depends_on
-            ),
-            completed=completed,
-            intents=intents,
-        ),
-    )
-    return tuple(command.code for command in plan_status_repairs(report))
-
-
-@dataclass(frozen=True)
-class _PlanCase:
-    name: str
-    labels: tuple[str, ...]
-    lifecycle: TaskLifecycle
-    depends_on: tuple[str, ...]
-    completed: tuple[str, ...]
-    expected: tuple[str, ...]
-
-
-_PLAN_CASES = (
-    _PlanCase("healthy task", ("status:queued",), TaskLifecycle.OPEN, (), (), ()),
-    _PlanCase(
-        "restore a lost primary label",
-        (),
-        TaskLifecycle.OPEN,
-        (),
-        (),
-        (COMMAND_ADD_LABEL,),
-    ),
-    _PlanCase(
-        "finish an interrupted rollback",
-        ("status:done", "status:queued"),
-        TaskLifecycle.OPEN,
-        (),
-        (),
-        (COMMAND_REMOVE_LABEL,),
-    ),
-    _PlanCase(
-        "never strip a human gate",
-        ("status:done", "status:blocked-human-review"),
-        TaskLifecycle.DONE,
-        (),
-        (),
-        (),
-    ),
-    _PlanCase(
-        "promote a resolved dependency",
-        ("status:blocked",),
-        TaskLifecycle.OPEN,
-        ("external",),
-        ("external",),
-        (COMMAND_TRANSITION_LABEL,),
-    ),
-    _PlanCase(
-        "demote a prematurely queued task",
-        ("status:queued",),
-        TaskLifecycle.OPEN,
-        ("external",),
-        (),
-        (COMMAND_TRANSITION_LABEL,),
-    ),
-    _PlanCase(
-        "leave a held promotion alone",
-        ("status:blocked", "ci:base-branch-red"),
-        TaskLifecycle.OPEN,
-        ("external",),
-        ("external",),
-        (),
-    ),
-)
-
-
-@pytest.mark.parametrize("case", _PLAN_CASES, ids=lambda case: case.name)
-def test_plan_status_repairs_emits_only_deterministic_commands(
-    case: _PlanCase,
-) -> None:
-    assert (
-        _plan(
-            case.labels,
-            lifecycle=case.lifecycle,
-            depends_on=case.depends_on,
-            completed=case.completed,
-        )
-        == case.expected
-    )
-
-
-def test_a_live_intent_reports_the_divergence_without_planning_a_repair() -> None:
-    labels = ("status:done", "status:queued")
-    intents = (_status_intent(705),)
-    report = _evaluate(
-        _observed(_task_scope(705, labels=labels)),
-        _desired(_desired_task("status-policy", 705), intents=intents),
-    )
-
-    finding = _only(report, PRIMARY_STATUS_CONFLICT)
-    assert finding.repairability is Repairability.NONE
-    assert any("intent-705" in detail for detail in finding.observed.details)
-    assert plan_status_repairs(report) == ()
-
-
-def test_add_command_names_the_label_and_guards_the_transition() -> None:
-    report = _evaluate(
-        _observed(_task_scope(705, labels=())),
-        _desired(_desired_task("status-policy", 705)),
-    )
-
-    (command,) = plan_status_repairs(report)
-    assert command.code == COMMAND_ADD_LABEL
-    assert command.scope is ConsistencyScope.TASK
-    assert command.subject_id == "705"
-    assert dict(command.parameters)["label"] == "status:queued"
-    assert command.idempotency_key == "status:705:add:status:queued"
-    assert "issue-open" in command.preconditions
-
-
-def test_remove_command_keeps_the_desired_label() -> None:
-    report = _evaluate(
-        _observed(
-            _task_scope(705, labels=("status:blocked", "status:done", "status:queued"))
-        ),
-        _desired(_desired_task("status-policy", 705)),
-    )
-
-    commands = plan_status_repairs(report)
-    assert [dict(command.parameters)["label"] for command in commands] == [
-        "status:blocked",
-        "status:done",
-    ]
-    assert all(command.code == COMMAND_REMOVE_LABEL for command in commands)
-    assert all(
-        "retains-primary-status:status:queued" in command.preconditions
-        for command in commands
-    )
-    assert len({command.idempotency_key for command in commands}) == 2
-
-
-def test_transition_command_carries_the_replaced_label() -> None:
-    report = _evaluate(
-        _observed(_task_scope(705, labels=("status:blocked",))),
-        _desired(
-            _desired_task("status-policy", 705, depends_on=("external",)),
-            completed=("external",),
-        ),
-    )
-
-    (command,) = plan_status_repairs(report)
-    parameters = dict(command.parameters)
-    assert command.code == COMMAND_TRANSITION_LABEL
-    assert parameters["new_label"] == "status:queued"
-    assert parameters["old_labels"] == ("status:blocked",)
-    assert "dependencies-declared" in command.preconditions
-    assert "no-promotion-hold" in command.preconditions
-
-
-def test_plan_ignores_findings_it_does_not_own() -> None:
-    report = ConsistencyReport(
-        repository_id=REPOSITORY,
-        findings=(
-            ConsistencyFinding(
-                code="execution.local-process-dead",
-                scope=ConsistencyScope.TASK,
-                subject_id="705",
-                severity=FindingSeverity.ERROR,
-                expected=Evidence("alive", value=True),
-                observed=Evidence("dead", value=False),
-                repairability=Repairability.AUTOMATIC,
-            ),
-        ),
-        evaluated_invariants=("execution.task-state",),
-    )
-
-    assert plan_status_repairs(report) == ()
-
-
-def test_plan_is_ordered_by_subject_then_command() -> None:
-    report = _evaluate(
-        _observed(
-            _task_scope(706, labels=()),
-            _task_scope(705, labels=("status:done", "status:queued")),
-        ),
-        _desired(
-            _desired_task("status-policy", 705),
-            _desired_task("shadow-supervisor", 706),
-        ),
-    )
-
-    commands = plan_status_repairs(report)
-    assert [(command.subject_id, command.code) for command in commands] == [
-        ("705", COMMAND_REMOVE_LABEL),
-        ("706", COMMAND_ADD_LABEL),
-    ]
-
-
-def _subject_ids(commands: Iterable[RepairCommand]) -> list[str | None]:
-    return [command.subject_id for command in commands]
-
-
-def test_an_unknown_subject_is_excluded_but_its_peers_are_not() -> None:
-    report = _evaluate(
-        _observed(
-            _task_scope(705, labels=(), uncertain=(FACT_ISSUE_LABELS,)),
-            _task_scope(706, labels=()),
-        ),
-        _desired(
-            _desired_task("status-policy", 705),
-            _desired_task("shadow-supervisor", 706),
-        ),
-    )
-
-    assert _subject_ids(plan_status_repairs(report)) == ["706"]
-
-
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Malformed input is never mistaken for divergence
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 
 def _malformed_task(**overrides: object) -> ScopedObservations:
@@ -1082,6 +598,78 @@ def test_unnamed_unresolved_dependencies_still_demote_a_queued_task() -> None:
     assert "unresolved dependencies: (unnamed)" in finding.observed.details
 
 
+# -------------------------------------------------------------------------
+# Forced serial
+# -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ForcedSerialCase:
+    name: str
+    forced_serial: bool
+    labelled: bool
+    expected: bool
+
+
+_FORCED_SERIAL_CASES = (
+    _ForcedSerialCase("agreeing on forced serial", True, True, False),
+    _ForcedSerialCase("agreeing on normal dispatch", False, False, False),
+    _ForcedSerialCase("plan forces serial but no label", True, False, True),
+    _ForcedSerialCase("label forces serial but plan does not", False, True, True),
+)
+
+
+@pytest.mark.parametrize("case", _FORCED_SERIAL_CASES, ids=lambda case: case.name)
+def test_forced_serial_agreement(case: _ForcedSerialCase) -> None:
+    labels = ("status:in-progress",) + (
+        ("status:force-serial",) if case.labelled else ()
+    )
+    report = _evaluate(
+        _observed(_task_scope(705, labels=labels, execution_kind=EXECUTION_KIND_LOCAL)),
+        _desired(
+            _desired_task("status-policy", 705, forced_serial=case.forced_serial),
+            active=("status-policy",),
+        ),
+    )
+
+    if not case.expected:
+        assert _codes(report) == ()
+        return
+    finding = _only(report, FORCED_SERIAL_MISMATCH)
+    assert finding.scope is ConsistencyScope.REPOSITORY
+    assert finding.subject_id is None
+    assert finding.repairability is Repairability.MANUAL
+    assert plan_status_repairs(report) == ()
+
+
+def test_forced_serial_ignores_labels_on_inactive_tasks() -> None:
+    report = _evaluate(
+        _observed(_task_scope(705, labels=("status:queued", "status:force-serial"))),
+        _desired(_desired_task("status-policy", 705)),
+    )
+
+    assert _codes(report) == ()
+
+
+def test_forced_serial_stays_silent_while_a_label_is_uncertain() -> None:
+    report = _evaluate(
+        _observed(
+            _task_scope(
+                705,
+                labels=("status:in-progress",),
+                execution_kind=EXECUTION_KIND_LOCAL,
+                uncertain=(FACT_ISSUE_STATUS_LABELS,),
+            )
+        ),
+        _desired(
+            _desired_task("status-policy", 705, forced_serial=True),
+            active=("status-policy",),
+        ),
+    )
+
+    assert _codes(report) == (STATUS_OBSERVATION_UNKNOWN,)
+
+
 def test_forced_serial_needs_a_desired_dispatch_fact() -> None:
     desired = DesiredRepositoryState(repository_id=REPOSITORY, facts=())
 
@@ -1119,73 +707,27 @@ def test_one_uncertain_label_does_not_hide_a_known_forced_serial_owner() -> None
     assert finding.observed.value == ("705",)
 
 
-# ---------------------------------------------------------------------------
-# The planner refuses findings it cannot act on deterministically
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------
+# Purity and determinism
+# -------------------------------------------------------------------------
 
 
-def _automatic_finding(
-    code: str, *, expected: object, observed: object
-) -> ConsistencyReport:
-    return ConsistencyReport(
-        repository_id=REPOSITORY,
-        findings=(
-            ConsistencyFinding(
-                code=code,
-                scope=ConsistencyScope.TASK,
-                subject_id="705",
-                severity=FindingSeverity.ERROR,
-                expected=Evidence("expected", value=expected),  # type: ignore[arg-type]
-                observed=Evidence("observed", value=observed),  # type: ignore[arg-type]
-                repairability=Repairability.AUTOMATIC,
-            ),
-        ),
-        evaluated_invariants=("status.task-policy",),
+def test_evaluation_is_deterministic_and_leaves_inputs_untouched() -> None:
+    observed = _observed(
+        _task_scope(705, labels=("status:done", "status:queued")),
+        _task_scope(706, labels=("status:blocked",)),
     )
-
-
-@pytest.mark.parametrize(
-    ("code", "expected", "observed"),
-    (
-        (PRIMARY_STATUS_MISSING, None, ()),
-        (PRIMARY_STATUS_MISSING, "", ()),
-        (PRIMARY_STATUS_CONFLICT, None, ("status:done", "status:queued")),
-        (PRIMARY_STATUS_CONFLICT, "status:queued", "status:queued"),
-        (PRIMARY_STATUS_CONFLICT, "status:not-needed", ("status:done",)),
-        (BLOCKED_WITH_RESOLVED_DEPENDENCIES, "status:queued", ("status:queued",)),
-        (QUEUED_WITH_UNRESOLVED_DEPENDENCIES, "status:blocked", ()),
-    ),
-)
-def test_plan_skips_findings_without_complete_evidence(
-    code: str, expected: object, observed: object
-) -> None:
-    assert (
-        plan_status_repairs(
-            _automatic_finding(code, expected=expected, observed=observed)
-        )
-        == ()
+    desired = _desired(
+        _desired_task("status-policy", 705, lifecycle=TaskLifecycle.DONE),
+        _desired_task("shadow-supervisor", 706, depends_on=("status-policy",)),
     )
+    observed_before = copy.deepcopy(observed)
+    desired_before = copy.deepcopy(desired)
 
+    first = _evaluate(observed, desired)
+    second = _evaluate(observed, desired)
 
-def test_plan_survives_a_report_rebuilt_from_plain_strings() -> None:
-    """Finding codes are data, so equality — not identity — must drive planning."""
-    report = _automatic_finding(
-        "".join(("status.", "blocked-with-resolved-dependencies")),
-        expected="status:queued",
-        observed=("status:blocked",),
-    )
-
-    (command,) = plan_status_repairs(report)
-    assert command.code == COMMAND_TRANSITION_LABEL
-    assert "no-promotion-hold" in command.preconditions
-
-
-def test_plan_refuses_to_strip_a_human_gate_even_when_told_to() -> None:
-    """A report may claim anything; removing a human gate stays out of reach."""
-    report = _automatic_finding(
-        PRIMARY_STATUS_CONFLICT,
-        expected="status:done",
-        observed=("status:blocked-human-review", "status:done"),
-    )
-
-    assert plan_status_repairs(report) == ()
+    assert first == second
+    assert observed == observed_before
+    assert desired == desired_before
+    assert plan_status_repairs(first) == plan_status_repairs(second)

@@ -23,6 +23,12 @@ against live state:
 ``dependencies-declared``
     The task declares at least one dependency, matching the guard in
     ``dispatch.reconciliation._decide_blocked_promotions``.
+``dependencies-resolved`` / ``dependencies-unresolved``
+    The dependency state that justified the transition still holds.  A plan
+    outlives the snapshot it came from: without re-checking, a task whose
+    dependency reopened between evaluation and execution would be queued and
+    dispatched ahead of it, and one whose last dependency finished in the
+    meantime would be blocked again for nothing.
 ``no-promotion-hold``
     Neither ``ci:base-branch-red`` nor ``status:blocked-recompute`` is present.
 """
@@ -59,12 +65,22 @@ _COMMAND_ORDER = {
     COMMAND_TRANSITION_LABEL: 1,
     COMMAND_REMOVE_LABEL: 2,
 }
-_TRANSITION_TARGETS = {
-    BLOCKED_WITH_RESOLVED_DEPENDENCIES: ("status:blocked", "status:queued"),
-    QUEUED_WITH_UNRESOLVED_DEPENDENCIES: ("status:queued", "status:blocked"),
+#: Per finding code: the label replaced, the label that replaces it, and the
+#: conditions the executor must confirm again before it does.
+_TRANSITION_PLANS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    BLOCKED_WITH_RESOLVED_DEPENDENCIES: (
+        "status:blocked",
+        "status:queued",
+        ("dependencies-declared", "dependencies-resolved", "no-promotion-hold"),
+    ),
+    QUEUED_WITH_UNRESOLVED_DEPENDENCIES: (
+        "status:queued",
+        "status:blocked",
+        ("dependencies-unresolved",),
+    ),
 }
 _PLANNED_CODES = frozenset(
-    {PRIMARY_STATUS_CONFLICT, PRIMARY_STATUS_MISSING, *_TRANSITION_TARGETS}
+    {PRIMARY_STATUS_CONFLICT, PRIMARY_STATUS_MISSING, *_TRANSITION_PLANS}
 )
 _CERTAIN = "finding-certainty:known"
 _ISSUE_OPEN = "issue-open"
@@ -143,12 +159,9 @@ def _remove_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
 
 
 def _transition_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
-    old_label, new_label = _TRANSITION_TARGETS[finding.code]
+    old_label, new_label, revalidations = _TRANSITION_PLANS[finding.code]
     if _observed_primary(finding) != (old_label,):
         return ()
-    preconditions: tuple[str, ...] = (f"holds-primary-status:{old_label}",)
-    if finding.code == BLOCKED_WITH_RESOLVED_DEPENDENCIES:
-        preconditions = (*preconditions, "dependencies-declared", "no-promotion-hold")
     return (
         _command(
             finding,
@@ -156,7 +169,7 @@ def _transition_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ..
             "transition",
             new_label,
             (("new_label", new_label), ("old_labels", (old_label,))),
-            preconditions,
+            (f"holds-primary-status:{old_label}", *revalidations),
         ),
     )
 
