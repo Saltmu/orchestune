@@ -484,8 +484,9 @@ class TestApplyTaskLaunches:
         （再キュー）されないことを検証する。"""
         from unittest.mock import MagicMock, patch
 
+        from orchestune.consistency.desired import TaskLifecycle
         from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch.status_repair import evaluate_status_repair_plan
+        from orchestune.dispatch.status_repair import task_lifecycle
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -549,11 +550,7 @@ class TestApplyTaskLaunches:
         # 2サイクル目: GitHub側は status:blocked-human-review ラベルが付与された状態。
         # カーネルが人手確認状態を期待値として扱い、再キュー計画を返さない。
         cycle2_task = replace(bad_task, status_labels=("status:blocked-human-review",))
-        evaluation = evaluate_status_repair_plan(
-            {2: cycle2_task},
-            completed_subtask_ids={"dep-task"},
-        )
-        assert evaluation.commands == ()
+        assert task_lifecycle(cycle2_task.status_labels) is TaskLifecycle.HUMAN_REVIEW
 
 
 class TestApplyTaskLaunchesLabelOrdering:

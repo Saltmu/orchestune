@@ -271,7 +271,7 @@ class TestProcessActiveWorktrees:
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch(
-                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.cycle._run_status_repair_boundary",
                 return_value=[],
             ),
             patch(
@@ -345,7 +345,7 @@ class TestProcessActiveWorktrees:
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.cycle._run_status_repair_boundary",
                 return_value=[],
             ),
             patch(

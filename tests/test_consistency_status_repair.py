@@ -1,4 +1,4 @@
-"""Dispatch-side execution of consistency status repair plans (#708)."""
+"""Typed dispatch-side status repair execution through Supervisor commands."""
 
 from __future__ import annotations
 
@@ -6,13 +6,21 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-import pytest
-
-from orchestune.consistency.desired import TaskLifecycle
+import orchestune.dispatch.phase_reconciliation as phase_reconciliation
+import orchestune.dispatch.reconciliation as reconciliation
+import orchestune.dispatch.status_repair as status_repair
+from orchestune.consistency.desired import (
+    DesiredTaskInput,
+    DispatchPolicy,
+    TaskLifecycle,
+    derive_desired_repository_state,
+)
+from orchestune.consistency.engine import ConsistencyEngine
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     PRIMARY_STATUS_CONFLICT,
+    status_invariants,
 )
 from orchestune.consistency.models import (
     ConsistencyScope,
@@ -20,17 +28,16 @@ from orchestune.consistency.models import (
     RepairCommand,
     RepairStatus,
 )
+from orchestune.consistency.observation import ForgeSnapshot, ObservationCollector
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.consistency.repairs.status import (
     COMMAND_REMOVE_LABEL,
     COMMAND_TRANSITION_LABEL,
+    plan_status_repairs,
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.status_repair import (
-    StatusRepairPhase,
-    evaluate_status_repair_plan,
     execute_status_repair_command,
-    reconcile_status_repairs,
     status_intent_journal_path,
     task_lifecycle,
 )
@@ -51,6 +58,59 @@ def _config(tmp_path, forge, *, apply=True) -> DispatcherConfig:
 
 def _finding_code(command) -> object:
     return dict(command.parameters).get("finding_code")
+
+
+def _plan(tasks_by_issue, *, completed_subtask_ids=(), intents=()):
+    completed = frozenset(completed_subtask_ids)
+    tasks = tuple(
+        DesiredTaskInput(
+            task_id=task.subtask_id,
+            subject_id=str(task.issue_number),
+            depends_on=task.depends_on,
+            lifecycle=task_lifecycle(
+                task.status_labels,
+                completed=task.subtask_id in completed,
+            ),
+        )
+        for task in tasks_by_issue.values()
+        if task.subtask_id
+    )
+    observed = ObservationCollector(
+        repository_id="test-repository", clock=lambda: NOW
+    ).collect(
+        forge=ForgeSnapshot(
+            issues=tuple(
+                make_issue(
+                    task.issue_number,
+                    labels=task.status_labels,
+                    subtask_id=task.subtask_id,
+                    depends_on=task.depends_on,
+                    parent=None,
+                )
+                for task in tasks_by_issue.values()
+            ),
+            fetched_at=NOW,
+        )
+    )
+    desired = derive_desired_repository_state(
+        "test-repository",
+        tasks,
+        completed_task_ids=completed,
+        policy=DispatchPolicy(max_concurrent=max(1, len(tasks))),
+        intents=intents,
+        now=NOW,
+    )
+    report = ConsistencyEngine(status_invariants()).evaluate(observed, desired)
+    return report, plan_status_repairs(report)
+
+
+def test_legacy_status_repair_entrypoints_are_removed():
+    assert not hasattr(status_repair, "StatusRepairPhase")
+    assert not hasattr(status_repair, "reconcile_status_repairs")
+    assert not hasattr(reconciliation, "_promote_blocked_tasks")
+    assert not hasattr(reconciliation, "_reconcile_dual_status_tasks")
+    assert not hasattr(phase_reconciliation, "run_blocked_promotion_phase")
+    assert not hasattr(phase_reconciliation, "run_dual_status_reconciliation")
 
 
 def test_closed_loop_handler_fails_closed_for_non_status_command(
@@ -84,7 +144,7 @@ def test_task_lifecycle_uses_one_shared_completion_override():
     assert task_lifecycle(dual_status, completed=True) is TaskLifecycle.DONE
 
 
-def test_blocked_promotion_is_selected_from_kernel_finding_and_typed_plan():
+def test_kernel_plans_blocked_promotion_as_typed_transition():
     task = make_task(
         708,
         subtask_id="status-migration",
@@ -92,38 +152,30 @@ def test_blocked_promotion_is_selected_from_kernel_finding_and_typed_plan():
         depends_on=("shadow-supervisor",),
     )
 
-    evaluation = evaluate_status_repair_plan(
-        {708: task},
-        completed_subtask_ids={"shadow-supervisor"},
-        now=NOW,
-    )
+    report, commands = _plan({708: task}, completed_subtask_ids={"shadow-supervisor"})
 
-    assert [finding.code for finding in evaluation.report.findings] == [
+    assert [finding.code for finding in report.findings] == [
         BLOCKED_WITH_RESOLVED_DEPENDENCIES
     ]
-    assert [command.code for command in evaluation.commands] == [
-        COMMAND_TRANSITION_LABEL
-    ]
-    assert _finding_code(evaluation.commands[0]) == (BLOCKED_WITH_RESOLVED_DEPENDENCIES)
+    assert [command.code for command in commands] == [COMMAND_TRANSITION_LABEL]
+    assert _finding_code(commands[0]) == BLOCKED_WITH_RESOLVED_DEPENDENCIES
 
 
-def test_dual_status_recovery_is_selected_from_kernel_finding_and_typed_plan():
+def test_kernel_plans_dual_status_as_typed_removal():
     task = make_task(
         708,
         subtask_id="status-migration",
         status_labels=("status:done", "status:queued"),
     )
 
-    evaluation = evaluate_status_repair_plan({708: task}, now=NOW)
+    report, commands = _plan({708: task})
 
-    assert [finding.code for finding in evaluation.report.findings] == [
-        PRIMARY_STATUS_CONFLICT
-    ]
-    assert [command.code for command in evaluation.commands] == [COMMAND_REMOVE_LABEL]
-    assert dict(evaluation.commands[0].parameters)["label"] == "status:done"
+    assert [finding.code for finding in report.findings] == [PRIMARY_STATUS_CONFLICT]
+    assert [command.code for command in commands] == [COMMAND_REMOVE_LABEL]
+    assert dict(commands[0].parameters)["label"] == "status:done"
 
 
-def test_transition_intent_is_persisted_before_forge_mutation_and_verified(
+def test_transition_intent_precedes_forge_mutation_and_is_verified(
     tmp_path, in_memory_forge
 ):
     task = make_task(
@@ -133,52 +185,41 @@ def test_transition_intent_is_persisted_before_forge_mutation_and_verified(
         depends_on=("shadow-supervisor",),
     )
     in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked",),
-            depends_on=("shadow-supervisor",),
-        )
+        make_issue(708, labels=task.status_labels, subtask_id=task.subtask_id)
     )
+    command = _plan({708: task}, completed_subtask_ids={"shadow-supervisor"})[1][0]
     config = _config(tmp_path, in_memory_forge)
     journal = IntentJournal(status_intent_journal_path(config))
-    calls: list[str] = []
+    calls = []
     original_add = in_memory_forge.add_label
     original_remove = in_memory_forge.remove_label
 
     def add_label(issue_number, label):
-        pending = journal.pending(now=NOW)
-        assert len(pending) == 1
-        assert pending[0].status is IntentStatus.PLANNED
+        assert journal.pending(now=NOW)[0].status is IntentStatus.PLANNED
         calls.append(f"add:{label}")
         original_add(issue_number, label)
 
     def remove_label(issue_number, label):
-        pending = journal.pending(now=NOW)
-        assert len(pending) == 1
-        assert pending[0].status is IntentStatus.APPLIED
+        assert journal.pending(now=NOW)[0].status is IntentStatus.APPLIED
         calls.append(f"remove:{label}")
         original_remove(issue_number, label)
 
     in_memory_forge.add_label = add_label
     in_memory_forge.remove_label = remove_label
-
-    repaired = reconcile_status_repairs(
+    result = execute_status_repair_command(
+        command,
         {708: task},
         completed_subtask_ids={"shadow-supervisor"},
         config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
         now=NOW,
     )
 
-    assert repaired == (task,)
+    assert result.status is RepairStatus.APPLIED
     assert calls == ["add:status:queued", "remove:status:blocked"]
-    (intent,) = journal.load()
-    assert intent.status is IntentStatus.VERIFIED
-    assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
+    assert journal.load()[0].status is IntentStatus.VERIFIED
 
 
-def test_partial_transition_resumes_the_live_intent_without_new_conflicting_plan(
+def test_partial_transition_resumes_with_the_followup_typed_command(
     tmp_path, in_memory_forge
 ):
     task = make_task(
@@ -188,430 +229,194 @@ def test_partial_transition_resumes_the_live_intent_without_new_conflicting_plan
         depends_on=("shadow-supervisor",),
     )
     in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked",),
-            depends_on=("shadow-supervisor",),
-        )
+        make_issue(708, labels=task.status_labels, subtask_id=task.subtask_id)
     )
+    transition = _plan({708: task}, completed_subtask_ids={"shadow-supervisor"})[1][0]
     config = _config(tmp_path, in_memory_forge)
     original_remove = in_memory_forge.remove_label
-    failed_once = False
+    in_memory_forge.remove_label = lambda *_: (_ for _ in ()).throw(
+        RuntimeError("partial Forge failure")
+    )
 
-    def fail_first_remove(issue_number, label):
-        nonlocal failed_once
-        if not failed_once:
-            failed_once = True
-            raise RuntimeError("partial Forge failure")
-        original_remove(issue_number, label)
-
-    in_memory_forge.remove_label = fail_first_remove
-
-    with pytest.raises(RuntimeError, match="partial Forge failure"):
-        reconcile_status_repairs(
-            {708: task},
-            completed_subtask_ids={"shadow-supervisor"},
-            config=config,
-            phase=StatusRepairPhase.BLOCKED_PROMOTION,
-            now=NOW,
-        )
-
-    journal = IntentJournal(status_intent_journal_path(config))
-    (interrupted,) = journal.load()
-    assert interrupted.status is IntentStatus.APPLIED
+    failed = execute_status_repair_command(
+        transition,
+        {708: task},
+        completed_subtask_ids={"shadow-supervisor"},
+        config=config,
+        now=NOW,
+    )
+    assert failed.status is RepairStatus.FAILED
     assert set(in_memory_forge.get_issue_labels(708)) == {
         "status:blocked",
         "status:queued",
     }
 
-    resumed_task = replace(
-        task,
-        status_labels=("status:blocked", "status:queued"),
-    )
-    repaired = reconcile_status_repairs(
-        {708: resumed_task},
+    in_memory_forge.remove_label = original_remove
+    partial_task = replace(task, status_labels=("status:blocked", "status:queued"))
+    followup = _plan({708: partial_task}, completed_subtask_ids={"shadow-supervisor"})[
+        1
+    ][0]
+    resumed = execute_status_repair_command(
+        followup,
+        {708: partial_task},
         completed_subtask_ids={"shadow-supervisor"},
         config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
         now=NOW,
     )
 
-    assert repaired == (resumed_task,)
+    assert resumed.status is RepairStatus.APPLIED
+    journal = IntentJournal(status_intent_journal_path(config))
     assert len(journal.load()) == 1
     assert journal.load()[0].status is IntentStatus.VERIFIED
     assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
 
 
-def test_closed_loop_command_resumes_after_interrupted_forge_mutation(
+def test_conflicting_live_intent_defers_a_different_transition(
     tmp_path, in_memory_forge
 ):
-    task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:done", "status:queued"),
-    )
-    in_memory_forge.seed_issue(
-        make_issue(708, labels=task.status_labels, subtask_id=task.subtask_id)
-    )
+    dual = make_task(708, status_labels=("status:done", "status:queued"))
+    in_memory_forge.seed_issue(make_issue(708, labels=dual.status_labels))
     config = _config(tmp_path, in_memory_forge)
-    command = evaluate_status_repair_plan({708: task}, now=NOW).commands[0]
-    original_remove = in_memory_forge.remove_label
-    in_memory_forge.remove_label = lambda *args: (_ for _ in ()).throw(
-        RuntimeError("interrupted Forge mutation")
-    )
-
-    failed = execute_status_repair_command(
-        command,
-        {708: task},
-        completed_subtask_ids=(),
-        config=config,
-        now=NOW,
-    )
+    remove_done = _plan({708: dual})[1][0]
+    with patch.object(
+        in_memory_forge, "remove_label", side_effect=RuntimeError("Forge down")
+    ):
+        failed = execute_status_repair_command(
+            remove_done, {708: dual}, completed_subtask_ids=(), config=config, now=NOW
+        )
     assert failed.status is RepairStatus.FAILED
-    journal = IntentJournal(status_intent_journal_path(config))
-    assert len(journal.pending(now=NOW)) == 1
 
-    in_memory_forge.remove_label = original_remove
-    resumed = execute_status_repair_command(
+    blocked = replace(
+        dual,
+        status_labels=("status:blocked",),
+        depends_on=("shadow-supervisor",),
+    )
+    in_memory_forge.seed_issue(make_issue(708, labels=blocked.status_labels))
+    transition = _plan({708: blocked}, completed_subtask_ids={"shadow-supervisor"})[1][
+        0
+    ]
+    deferred = execute_status_repair_command(
+        transition,
+        {708: blocked},
+        completed_subtask_ids={"shadow-supervisor"},
+        config=config,
+        now=NOW,
+    )
+
+    assert deferred.status is RepairStatus.SKIPPED
+    assert deferred.diagnostics == (
+        "another live status transition covers this subject",
+    )
+    assert in_memory_forge.get_issue_labels(708) == ("status:blocked",)
+
+
+def test_fresh_hold_precondition_defers_stale_promotion(tmp_path, in_memory_forge):
+    task = make_task(
+        708,
+        status_labels=("status:blocked",),
+        depends_on=("shadow-supervisor",),
+    )
+    in_memory_forge.seed_issue(
+        make_issue(708, labels=("status:blocked", "ci:base-branch-red"))
+    )
+    command = _plan({708: task}, completed_subtask_ids={"shadow-supervisor"})[1][0]
+    config = _config(tmp_path, in_memory_forge)
+
+    result = execute_status_repair_command(
         command,
         {708: task},
-        completed_subtask_ids=(),
-        config=config,
-        now=NOW,
-    )
-    assert resumed.status is RepairStatus.APPLIED
-    assert journal.load()[0].status is IntentStatus.VERIFIED
-    assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
-
-
-def test_live_intent_from_other_phase_still_guards_status_in_kernel(
-    tmp_path, in_memory_forge
-):
-    dual_task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:done", "status:queued"),
-    )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:done", "status:queued"),
-        )
-    )
-    config = _config(tmp_path, in_memory_forge)
-
-    with (
-        patch.object(
-            in_memory_forge, "remove_label", side_effect=RuntimeError("Forge down")
-        ),
-        pytest.raises(RuntimeError, match="Forge down"),
-    ):
-        reconcile_status_repairs(
-            {708: dual_task},
-            completed_subtask_ids=set(),
-            config=config,
-            phase=StatusRepairPhase.DUAL_STATUS,
-            now=NOW,
-        )
-
-    blocked_task = replace(
-        dual_task,
-        status_labels=("status:blocked",),
-        depends_on=("shadow-supervisor",),
-    )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked",),
-            depends_on=("shadow-supervisor",),
-        )
-    )
-
-    repaired = reconcile_status_repairs(
-        {708: blocked_task},
         completed_subtask_ids={"shadow-supervisor"},
         config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
         now=NOW,
     )
 
-    assert repaired == ()
-    (pending,) = IntentJournal(status_intent_journal_path(config)).pending(now=NOW)
-    assert pending.status is IntentStatus.PLANNED
-    assert in_memory_forge.get_issue_labels(708) == ("status:blocked",)
-
-
-def test_fresh_hold_precondition_defers_stale_promotion_without_writing_intent(
-    tmp_path, in_memory_forge
-):
-    task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:blocked",),
-        depends_on=("shadow-supervisor",),
-    )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked", "ci:base-branch-red"),
-            depends_on=("shadow-supervisor",),
-        )
-    )
-    config = _config(tmp_path, in_memory_forge)
-
-    repaired = reconcile_status_repairs(
-        {708: task},
-        completed_subtask_ids={"shadow-supervisor"},
-        config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
-        now=NOW,
-    )
-
-    assert repaired == ()
+    assert result.status is RepairStatus.SKIPPED
     assert not status_intent_journal_path(config).exists()
-    assert set(in_memory_forge.get_issue_labels(708)) == {
-        "status:blocked",
-        "ci:base-branch-red",
-    }
 
 
-def test_fresh_dependency_precondition_defers_when_a_dependency_reopened(
+def test_fresh_dependency_precondition_defers_reopened_dependency(
     tmp_path, in_memory_forge
 ):
-    dependency = make_task(
-        706,
-        subtask_id="shadow-supervisor",
-        status_labels=("status:done",),
-    )
+    dependency = make_task(706, subtask_id="dep", status_labels=("status:done",))
     task = make_task(
         708,
-        subtask_id="status-migration",
         status_labels=("status:blocked",),
-        depends_on=("shadow-supervisor",),
+        depends_on=("dep",),
     )
-    in_memory_forge.seed_issue(
-        make_issue(
-            706,
-            subtask_id="shadow-supervisor",
-            labels=("status:queued",),
-        )
-    )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked",),
-            depends_on=("shadow-supervisor",),
-        )
-    )
+    in_memory_forge.seed_issue(make_issue(706, labels=("status:queued",)))
+    in_memory_forge.seed_issue(make_issue(708, labels=task.status_labels))
+    command = _plan({706: dependency, 708: task})[1][0]
     config = _config(tmp_path, in_memory_forge)
 
-    repaired = reconcile_status_repairs(
+    result = execute_status_repair_command(
+        command,
         {706: dependency, 708: task},
-        completed_subtask_ids={"shadow-supervisor"},
+        completed_subtask_ids={"dep"},
         config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
         now=NOW,
     )
 
-    assert repaired == ()
+    assert result.status is RepairStatus.SKIPPED
     assert not status_intent_journal_path(config).exists()
-    assert in_memory_forge.get_issue_labels(708) == ("status:blocked",)
 
 
-def test_intent_write_failure_prevents_the_first_forge_mutation(
-    tmp_path, in_memory_forge
-):
-    task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:done", "status:queued"),
-    )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:done", "status:queued"),
-        )
-    )
+def test_intent_write_failure_prevents_first_forge_mutation(tmp_path, in_memory_forge):
+    task = make_task(708, status_labels=("status:done", "status:queued"))
+    in_memory_forge.seed_issue(make_issue(708, labels=task.status_labels))
+    command = _plan({708: task})[1][0]
     config = _config(tmp_path, in_memory_forge)
 
-    with (
-        patch.object(IntentJournal, "plan", side_effect=OSError("journal full")),
-        pytest.raises(OSError, match="journal full"),
-    ):
-        reconcile_status_repairs(
-            {708: task},
-            completed_subtask_ids=set(),
-            config=config,
-            phase=StatusRepairPhase.DUAL_STATUS,
-            now=NOW,
+    with patch.object(IntentJournal, "plan", side_effect=OSError("journal full")):
+        result = execute_status_repair_command(
+            command, {708: task}, completed_subtask_ids=(), config=config, now=NOW
         )
 
+    assert result.status is RepairStatus.FAILED
+    assert "journal full" in result.diagnostics[0]
     assert set(in_memory_forge.get_issue_labels(708)) == {
         "status:done",
         "status:queued",
     }
 
 
-def test_first_forge_failure_keeps_a_planned_restartable_intent(
+def test_first_forge_failure_keeps_planned_restartable_intent(
     tmp_path, in_memory_forge
 ):
     task = make_task(
         708,
-        subtask_id="status-migration",
         status_labels=("status:blocked",),
-        depends_on=("shadow-supervisor",),
+        depends_on=("dep",),
     )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked",),
-            depends_on=("shadow-supervisor",),
-        )
-    )
+    in_memory_forge.seed_issue(make_issue(708, labels=task.status_labels))
+    command = _plan({708: task}, completed_subtask_ids={"dep"})[1][0]
     config = _config(tmp_path, in_memory_forge)
 
-    with (
-        patch.object(
-            in_memory_forge, "add_label", side_effect=RuntimeError("Forge down")
-        ),
-        pytest.raises(RuntimeError, match="Forge down"),
+    with patch.object(
+        in_memory_forge, "add_label", side_effect=RuntimeError("Forge down")
     ):
-        reconcile_status_repairs(
+        result = execute_status_repair_command(
+            command,
             {708: task},
-            completed_subtask_ids={"shadow-supervisor"},
+            completed_subtask_ids={"dep"},
             config=config,
-            phase=StatusRepairPhase.BLOCKED_PROMOTION,
             now=NOW,
         )
 
-    (intent,) = IntentJournal(status_intent_journal_path(config)).load()
-    assert intent.status is IntentStatus.PLANNED
-    assert in_memory_forge.get_issue_labels(708) == ("status:blocked",)
-
-
-def test_applied_marker_failure_leaves_the_intent_and_intermediate_labels(
-    tmp_path, in_memory_forge
-):
-    task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:blocked",),
-        depends_on=("shadow-supervisor",),
+    assert result.status is RepairStatus.FAILED
+    assert IntentJournal(status_intent_journal_path(config)).load()[0].status is (
+        IntentStatus.PLANNED
     )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:blocked",),
-            depends_on=("shadow-supervisor",),
-        )
-    )
-    config = _config(tmp_path, in_memory_forge)
-
-    with (
-        patch.object(
-            IntentJournal, "mark_applied", side_effect=OSError("journal full")
-        ),
-        pytest.raises(OSError, match="journal full"),
-    ):
-        reconcile_status_repairs(
-            {708: task},
-            completed_subtask_ids={"shadow-supervisor"},
-            config=config,
-            phase=StatusRepairPhase.BLOCKED_PROMOTION,
-            now=NOW,
-        )
-
-    (intent,) = IntentJournal(status_intent_journal_path(config)).load()
-    assert intent.status is IntentStatus.PLANNED
-    assert set(in_memory_forge.get_issue_labels(708)) == {
-        "status:blocked",
-        "status:queued",
-    }
 
 
-def test_post_apply_observation_failure_is_verified_on_restart(
-    tmp_path, in_memory_forge
-):
-    task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:done", "status:queued"),
-    )
-    in_memory_forge.seed_issue(
-        make_issue(
-            708,
-            subtask_id="status-migration",
-            labels=("status:done", "status:queued"),
-        )
-    )
-    config = _config(tmp_path, in_memory_forge)
-    original_get_labels = in_memory_forge.get_issue_labels
-    observations = 0
-
-    def fail_verification(issue_number):
-        nonlocal observations
-        observations += 1
-        if observations == 2:
-            raise RuntimeError("verification unavailable")
-        return original_get_labels(issue_number)
-
-    with (
-        patch.object(in_memory_forge, "get_issue_labels", fail_verification),
-        pytest.raises(RuntimeError, match="verification unavailable"),
-    ):
-        reconcile_status_repairs(
-            {708: task},
-            completed_subtask_ids=set(),
-            config=config,
-            phase=StatusRepairPhase.DUAL_STATUS,
-            now=NOW,
-        )
-
-    journal = IntentJournal(status_intent_journal_path(config))
-    assert journal.load()[0].status is IntentStatus.APPLIED
-    assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
-
-    resumed = replace(task, status_labels=("status:queued",))
-    assert reconcile_status_repairs(
-        {708: resumed},
-        completed_subtask_ids=set(),
-        config=config,
-        phase=StatusRepairPhase.DUAL_STATUS,
-        now=NOW,
-    ) == (resumed,)
-    assert journal.load()[0].status is IntentStatus.VERIFIED
-
-
-def test_dry_run_preserves_event_candidate_without_writing_intent(
-    tmp_path, in_memory_forge
-):
-    task = make_task(
-        708,
-        subtask_id="status-migration",
-        status_labels=("status:done", "status:queued"),
-    )
+def test_dry_run_skips_mutation_and_intent(tmp_path, in_memory_forge):
+    task = make_task(708, status_labels=("status:done", "status:queued"))
+    command = _plan({708: task})[1][0]
     config = _config(tmp_path, in_memory_forge, apply=False)
 
-    with patch(
-        "orchestune.dispatch.status_repair.evaluate_status_repair_plan",
-        wraps=evaluate_status_repair_plan,
-    ) as evaluate:
-        repaired = reconcile_status_repairs(
-            {708: task},
-            completed_subtask_ids=set(),
-            config=config,
-            phase=StatusRepairPhase.DUAL_STATUS,
-            now=NOW,
-        )
+    result = execute_status_repair_command(
+        command, {708: task}, completed_subtask_ids=(), config=config, now=NOW
+    )
 
-    assert repaired == (task,)
-    assert evaluate.call_count == 1
+    assert result.status is RepairStatus.SKIPPED
     assert not status_intent_journal_path(config).exists()
+    assert in_memory_forge.get_issue_labels(708) == ()

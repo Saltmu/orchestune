@@ -18,10 +18,6 @@ from orchestune.dispatch.recovery import (
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState, save_run_state
-from orchestune.dispatch.status_repair import (
-    StatusRepairPhase,
-    reconcile_status_repairs,
-)
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.issue_parsing import (
     launch_history_from_body,
@@ -74,31 +70,6 @@ def _collect_active_conflict_subtask_ids(
             for subtask_id in subtasks_for_recompute:
                 active_conflict_subtask_ids.add(subtask_id)
     return active_conflict_subtask_ids
-
-
-def _promote_blocked_tasks(
-    done_issues: list[IssueRecord],
-    completed_subtask_ids: set[str],
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-) -> list[dict]:
-    """カーネルのstatus finding/typed planを既存の昇格境界で適用する。"""
-    done_issue_numbers = {issue.number for issue in done_issues}
-    done_subtask_ids = {
-        task.subtask_id
-        for issue_number, task in tasks_by_issue.items()
-        if issue_number in done_issue_numbers and task.subtask_id
-    }
-    repaired = reconcile_status_repairs(
-        tasks_by_issue,
-        completed_subtask_ids=done_subtask_ids | completed_subtask_ids,
-        config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
-    )
-    return [
-        {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
-        for task in repaired
-    ]
 
 
 def _self_heal_run_state(
@@ -231,22 +202,6 @@ def _reconcile_recovery_counters(
             launch_window_seconds=config.window_seconds,
             open_prs=open_prs,
         )
-
-
-def _reconcile_dual_status_tasks(
-    tasks_by_issue: dict[int, Task], config: DispatcherConfig
-) -> list[dict]:
-    """カーネルのconflict finding/typed planで中断したrollbackを完了する。"""
-    repaired = reconcile_status_repairs(
-        tasks_by_issue,
-        completed_subtask_ids=(),
-        config=config,
-        phase=StatusRepairPhase.DUAL_STATUS,
-    )
-    return [
-        {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
-        for task in repaired
-    ]
 
 
 def _handle_blocked_recompute_recovery(
