@@ -14,7 +14,13 @@ from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     PRIMARY_STATUS_CONFLICT,
 )
-from orchestune.consistency.models import IntentStatus, RepairStatus
+from orchestune.consistency.models import (
+    ConsistencyScope,
+    IntentStatus,
+    RepairCommand,
+    RepairStatus,
+)
+from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.consistency.repairs.status import (
     COMMAND_REMOVE_LABEL,
     COMMAND_TRANSITION_LABEL,
@@ -45,6 +51,30 @@ def _config(tmp_path, forge, *, apply=True) -> DispatcherConfig:
 
 def _finding_code(command) -> object:
     return dict(command.parameters).get("finding_code")
+
+
+def test_closed_loop_handler_fails_closed_for_non_status_command(
+    tmp_path, in_memory_forge
+):
+    command = RepairCommand(
+        code=COMMAND_RECLAIM,
+        scope=ConsistencyScope.TASK,
+        subject_id="708",
+        idempotency_key="test:wrong-domain",
+    )
+
+    result = execute_status_repair_command(
+        command,
+        {},
+        completed_subtask_ids=(),
+        config=_config(tmp_path, in_memory_forge),
+        now=NOW,
+    )
+
+    assert result.status is RepairStatus.FAILED
+    assert result.diagnostics == (
+        "unsupported status repair command: execution.reclaim",
+    )
 
 
 def test_task_lifecycle_uses_one_shared_completion_override():

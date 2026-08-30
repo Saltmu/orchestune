@@ -15,7 +15,7 @@ from orchestune.consistency.invariants.execution import (
     LOCAL_PROCESS_DEAD,
     RUN_STATE_STALE,
 )
-from orchestune.consistency.models import RepairCommand
+from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
@@ -595,6 +595,51 @@ def _apply_zombie_or_timeout_reclaim(
         already_escalated,
         _settle_once,
         lambda: settled,
+    )
+
+
+def execute_reclaim_repair_command(
+    command: RepairCommand,
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None = None,
+) -> RepairResult:
+    """Apply one re-observed reclaim through the existing safe lifecycle."""
+    if command.code != COMMAND_RECLAIM:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.FAILED,
+            diagnostics=(f"unsupported GC repair command: {command.code}",),
+        )
+    if not config.apply:
+        return RepairResult(command=command, status=RepairStatus.SKIPPED)
+    active = run_state.active_worktrees.get(reclaim.key)
+    finding_codes = frozenset(command_finding_codes(command))
+    precondition_holds = (
+        command.subject_id == str(reclaim.active.issue_number)
+        and active is not None
+        and active == reclaim.active
+        and bool(finding_codes.intersection(reclaim.finding_codes))
+    )
+    if not precondition_holds:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=(
+                f"reclaim precondition no longer holds for subject "
+                f"{command.subject_id}",
+            ),
+        )
+    event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config, open_prs)
+    return RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED if event is not None else RepairStatus.SKIPPED,
+        diagnostics=(
+            ()
+            if event is not None
+            else ("reclaim deferred by existing safety boundary",)
+        ),
     )
 
 

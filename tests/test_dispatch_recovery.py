@@ -1,5 +1,11 @@
 from unittest.mock import patch
 
+from orchestune.consistency.models import (
+    ConsistencyScope,
+    RepairCommand,
+    RepairStatus,
+)
+from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.recovery import (
     _apply_restore_missing_active_worktrees,
@@ -7,6 +13,7 @@ from orchestune.dispatch.recovery import (
     _decide_stale_recovery_counters,
     _extract_raw_subtask_id,
     _parse_subtask_info_from_issue,
+    execute_bookkeeping_repair_command,
     recover_run_state,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState
@@ -496,6 +503,83 @@ class TestApplyRestoreMissingActiveWorktrees:
         )
         assert modified is True
         assert run_state.active_worktrees["101"] is active
+
+    def test_typed_bookkeeping_command_applies_only_its_observed_subject(self):
+        run_state = RunState(active_worktrees={})
+        active = ActiveWorktree(
+            issue_number=101,
+            branch="claude/issue-101-task-a",
+            worktree_path="worktrees/claude-issue-101-task-a",
+            pid=None,
+            started_at=0.0,
+            declared_footprint=("src/foo.py",),
+        )
+        command = RepairCommand(
+            code=COMMAND_BOOKKEEPING,
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            idempotency_key="execution:101:bookkeeping",
+        )
+
+        result = execute_bookkeeping_repair_command(
+            command,
+            run_state,
+            (("101", "task-a", active),),
+        )
+
+        assert result.status is RepairStatus.APPLIED
+        assert run_state.active_worktrees == {"101": active}
+
+    def test_typed_bookkeeping_command_defers_when_subject_is_not_observed(self):
+        run_state = RunState(active_worktrees={})
+        command = RepairCommand(
+            code=COMMAND_BOOKKEEPING,
+            scope=ConsistencyScope.TASK,
+            subject_id="102",
+            idempotency_key="execution:102:bookkeeping",
+        )
+
+        result = execute_bookkeeping_repair_command(command, run_state, ())
+
+        assert result.status is RepairStatus.SKIPPED
+        assert result.diagnostics == (
+            "bookkeeping precondition no longer holds for subject 102",
+        )
+        assert run_state.active_worktrees == {}
+
+    def test_typed_bookkeeping_command_does_not_overwrite_an_occupied_key(self):
+        occupied = ActiveWorktree(
+            issue_number=999,
+            branch="codex/issue-999",
+            worktree_path="worktrees/issue-999",
+            pid=999,
+            started_at=1.0,
+            declared_footprint=(),
+        )
+        restoration = ActiveWorktree(
+            issue_number=101,
+            branch="codex/issue-101",
+            worktree_path="worktrees/issue-101",
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+        run_state = RunState(active_worktrees={"101": occupied})
+        command = RepairCommand(
+            code=COMMAND_BOOKKEEPING,
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            idempotency_key="execution:101:bookkeeping",
+        )
+
+        result = execute_bookkeeping_repair_command(
+            command,
+            run_state,
+            (("101", "task-101", restoration),),
+        )
+
+        assert result.status is RepairStatus.SKIPPED
+        assert run_state.active_worktrees == {"101": occupied}
 
 
 class TestDecideStaleRecoveryCounters:
