@@ -33,12 +33,11 @@ PARENT_BRANCH_PREFIX = "parent/"
 #: closes_issue_numbers が空のPR（非デフォルトブランチ宛てPRやCloses記法なしPR）
 #: でも対象Issueを安全に特定できるようにする。
 _ISSUE_BRANCH_PATTERNS = (
-    re.compile(r"^[A-Za-z0-9._-]+/issue-(\d+)(?:[-_/\b]|$)"),
-    re.compile(r"(?:^|/)(?:issue-|issue/|parent/issue-)(\d+)(?:[-_/\b]|$)"),
+    re.compile(r"^[A-Za-z0-9._-]+/issue-(\d+)(?:[-_./]|$)"),
+    re.compile(r"(?:^|/)(?:issue-|issue/|parent/issue-)(\d+)(?:[-_./]|$)"),
     re.compile(
-        r"(?:^|/)(?:fix|feat|chore|refactor|bugfix|hotfix)/(?:issue-)?(\d+)(?:[-_/\b]|$)"
+        r"(?:^|/)(?:fix|feat|chore|refactor|bugfix|hotfix)/issue-(\d+)(?:[-_./]|$)"
     ),
-    re.compile(r"^[a-zA-Z0-9._-]+/(?:fix|feat|chore|refactor)/(\d+)(?:[-_/\b]|$)"),
 )
 _PR_TITLE_PATTERNS = (
     re.compile(r"(?:^|[^\w])#(\d+)(?:[^\w]|$)"),

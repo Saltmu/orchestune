@@ -12,19 +12,82 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.models import PrRecord
 from orchestune.pr_link_notice import (
     KIND_CREATED,
     KIND_MERGED,
     ensure_pr_merged_notice,
+    extract_issue_numbers_from_pr,
     has_notice,
     notice_expected_bases,
     notice_marker,
     notify_open_pr_links,
     notify_pr_created,
+    pr_matches_issue,
     render_created_notice,
     render_merged_notice,
 )
 from tests.conftest import make_issue, make_pr, make_task
+
+
+class TestExtractIssueNumbersFromPr:
+    def test_extracts_from_closes_issue_numbers(self):
+        pr = PrRecord(
+            number=1, head_ref="feat/x", changed_files=(), closes_issue_numbers=(42, 43)
+        )
+        assert extract_issue_numbers_from_pr(pr) == {42, 43}
+
+    def test_extracts_from_agent_issue_head_branch(self):
+        pr = PrRecord(
+            number=1,
+            head_ref="codex/issue-709-guarded-repair-rollout",
+            changed_files=(),
+        )
+        assert extract_issue_numbers_from_pr(pr) == {709}
+
+    def test_extracts_from_dot_separated_head_branch(self):
+        pr = PrRecord(number=1, head_ref="codex/issue-709.rollout", changed_files=())
+        assert extract_issue_numbers_from_pr(pr) == {709}
+
+    def test_extracts_from_type_issue_head_branch(self):
+        pr = PrRecord(number=1, head_ref="fix/issue-730-test", changed_files=())
+        assert extract_issue_numbers_from_pr(pr) == {730}
+
+    def test_extracts_from_title(self):
+        pr = PrRecord(
+            number=1,
+            head_ref="feat/other",
+            changed_files=(),
+            title="fix: resolve #739 and #740",
+        )
+        assert extract_issue_numbers_from_pr(pr) == {739, 740}
+
+    def test_extracts_from_body(self):
+        pr = PrRecord(
+            number=1,
+            head_ref="feat/other",
+            changed_files=(),
+            body="This fixes #739\nCloses #740",
+        )
+        assert extract_issue_numbers_from_pr(pr) == {739, 740}
+
+
+class TestPrMatchesIssue:
+    def test_matches_by_branch_issue_number(self):
+        pr = PrRecord(
+            number=1,
+            head_ref="codex/issue-709-guarded-repair-rollout",
+            changed_files=(),
+        )
+        assert pr_matches_issue(pr, 709) is True
+        assert pr_matches_issue(pr, 710) is False
+
+    def test_matches_by_subtask_id_and_issue_number(self):
+        pr = PrRecord(
+            number=1, head_ref="custom/709-guarded-repair-rollout", changed_files=()
+        )
+        assert pr_matches_issue(pr, 709, subtask_id="guarded-repair-rollout") is True
+        assert pr_matches_issue(pr, 710, subtask_id="guarded-repair-rollout") is False
 
 
 def _comment(body: str) -> dict[str, Any]:
