@@ -78,6 +78,7 @@ from orchestune.dispatch.phase_reconciliation import (
     run_self_heal_phase,
 )
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
+from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command,
@@ -147,7 +148,7 @@ class _DispatchConsistencyAdapter:
         self._cached_prs = ctx.prs
         self._cached_branches = ctx.subtask_branch_map
         self._fresh = fresh
-        self._tasks_by_issue = ctx.tasks_by_issue
+        self._tasks_by_issue: dict[int, Task] = ctx.tasks_by_issue
 
     def _source_records(self):
         if not self._fresh:
@@ -259,7 +260,7 @@ class _DispatchConsistencyAdapter:
         )
 
     @property
-    def tasks_by_issue(self):
+    def tasks_by_issue(self) -> dict[int, Task]:
         return self._tasks_by_issue
 
 

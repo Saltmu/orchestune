@@ -136,6 +136,19 @@ class _Planner:
                 scope=ConsistencyScope.TASK,
                 subject_id="706",
                 idempotency_key="status:706",
+                parameters=(("finding_code", report.findings[0].code),),
+            ),
+        )
+
+
+class _MissingFindingCodePlanner:
+    def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
+        return (
+            RepairCommand(
+                code="repair.status",
+                scope=ConsistencyScope.TASK,
+                subject_id="706",
+                idempotency_key="missing-finding-code",
             ),
         )
 
@@ -293,6 +306,7 @@ def test_shadow_scan_reports_unknown_facts_and_plans_without_executing() -> None
             scope=ConsistencyScope.TASK,
             subject_id="706",
             idempotency_key="status:706",
+            parameters=(("finding_code", "task.status.finding"),),
         ),
     )
     assert planner.calls == 1
@@ -487,5 +501,33 @@ def test_repair_mode_never_executes_non_repairable_finding() -> None:
 
     report = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
     assert executor.commands == []
+    assert report.repair_passes == ()
+    assert report.repair_outcomes[0].disposition is RepairDisposition.DEFERRED
+
+
+def test_repair_mode_fails_closed_when_command_omits_finding_code() -> None:
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine(
+            (_FindingInvariant("task.status", ConsistencyScope.TASK, "706"),)
+        ),
+        repair_planners=(_MissingFindingCodePlanner(),),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(_snapshot("queued")), deriver=_StaticDeriver()
+    )
+    executor = _RecordingExecutor()
+
+    supervisor.repair_until_stable(
+        start,
+        observer=_FailingObserver(),
+        deriver=_StaticDeriver(),
+        executor=executor,
+        allowlist=("repair.status",),
+        max_passes=1,
+    )
+
+    assert executor.commands == []
+    report = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
     assert report.repair_passes == ()
     assert report.repair_outcomes[0].disposition is RepairDisposition.DEFERRED

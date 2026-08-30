@@ -298,10 +298,8 @@ def _command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
 
 def _command_is_allowed(command: RepairCommand, allowlist: frozenset[str]) -> bool:
     finding_codes = _command_finding_codes(command)
-    return (
-        command.code in allowlist
-        or bool(finding_codes)
-        and set(finding_codes).issubset(allowlist)
+    return command.code in allowlist or (
+        bool(finding_codes) and set(finding_codes).issubset(allowlist)
     )
 
 
@@ -309,12 +307,14 @@ def _matching_findings(
     command: RepairCommand, findings: Iterable[ConsistencyFinding]
 ) -> tuple[ConsistencyFinding, ...]:
     codes = frozenset(_command_finding_codes(command))
+    if not codes:
+        return ()
     return tuple(
         finding
         for finding in findings
         if finding.scope is command.scope
         and finding.subject_id == command.subject_id
-        and (not codes or finding.code in codes)
+        and finding.code in codes
     )
 
 
