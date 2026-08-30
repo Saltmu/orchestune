@@ -739,3 +739,25 @@ def test_workflow_template_bloat_baseline():
         or "new" in tdd_md_lower
         or "distinguish" in tdd_md_lower
     )
+
+
+def test_local_ci_developer_bloat_autonomous_refactoring():
+    """local-ci-developer tdd.md specifies autonomous bloat refactoring without pausing for approval."""
+    skill_dir = SKILLS_ROOT / "local-ci-developer"
+    tdd_md = (skill_dir / "references" / "tdd.md").read_text(encoding="utf-8")
+    tdd_md_lower = tdd_md.lower()
+
+    assert "autonomously" in tdd_md_lower or "autonomous" in tdd_md_lower
+    assert "for approval" not in tdd_md_lower
+    assert "pause code modification" not in tdd_md_lower
+
+
+def test_workflow_template_bloat_autonomous_refactoring():
+    """workflow-template tdd.md specifies autonomous bloat refactoring without pausing for approval."""
+    skill_dir = SKILLS_ROOT / "workflow-template"
+    tdd_md = (skill_dir / "references" / "tdd.md").read_text(encoding="utf-8")
+    tdd_md_lower = tdd_md.lower()
+
+    assert "autonomously" in tdd_md_lower or "autonomous" in tdd_md_lower
+    assert "for approval" not in tdd_md_lower
+    assert "pause code modification" not in tdd_md_lower
