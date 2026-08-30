@@ -90,3 +90,12 @@ def test_project_local_skills_are_concrete_wrappers_referencing_sot():
 
             assert wrapper_meta.get("name") == sot_meta.get("name") == skill_name
             assert wrapper_meta.get("description") == sot_meta.get("description")
+
+
+def test_agent_rules_bloat_autonomous_refactoring():
+    agent_rules = REPOSITORY_ROOT / ".agents" / "AGENTS.md"
+    instructions = agent_rules.read_text(encoding="utf-8")
+
+    assert "自律的リファクタリング" in instructions
+    assert "承認" not in instructions
+    assert "エスカレーション" in instructions
