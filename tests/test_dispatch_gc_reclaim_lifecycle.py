@@ -14,9 +14,6 @@ from orchestune.dispatch.cycle_context import (
     discard_reclaim_counts_for_closed_issues,
 )
 from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
-from orchestune.dispatch.gc.zombies import (
-    _collect_zombies_and_timeouts,
-)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -26,6 +23,9 @@ from orchestune.dispatch.state import (
 )
 from orchestune.models import IssueRecord
 from tests.dispatch_gc_test_support import _ctx
+from tests.dispatch_gc_test_support import (
+    run_gc_reclaims as _collect_zombies_and_timeouts,
+)
 
 _NOW = 2_000.0
 
@@ -86,7 +86,7 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
         run_state.active_worktrees["280"] = _active(
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
-        with patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW):
+        with patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW):
             cycle_events = _collect_zombies_and_timeouts(run_state, {280: task}, config)
         assert len(cycle_events) == 1
         events.append(cycle_events[0])

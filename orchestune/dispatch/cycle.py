@@ -840,6 +840,19 @@ def _pipeline_report(
     )
 
 
+def _run_gc_reclaim_phase(ctx, config, completion_events, status_cycle):
+    gc_result = run_gc_phase(
+        ctx.run_state,
+        ctx.tasks_by_issue,
+        config,
+        completion_events,
+        open_prs=ctx.prs,
+    )
+    if gc_result.consistency.repair_passes:
+        status_cycle.reports.append(gc_result.consistency)
+    return gc_result.completion_events
+
+
 def _execute_cycle_pipeline(
     ctx,
     issues,
@@ -856,12 +869,8 @@ def _execute_cycle_pipeline(
     ) = _process_active_worktrees(ctx)
     _notify_pr_links(ctx, config)
 
-    completion_events = run_gc_phase(
-        ctx.run_state,
-        ctx.tasks_by_issue,
-        config,
-        completion_events,
-        open_prs=ctx.prs,
+    completion_events = _run_gc_reclaim_phase(
+        ctx, config, completion_events, status_cycle
     )
     completed = _completed_subtask_ids(ctx, completed_subtask_ids)
     promotion_events, lock_result = _run_pre_scheduling_reconciliation(

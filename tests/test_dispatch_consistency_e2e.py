@@ -12,6 +12,7 @@ from orchestune.consistency.invariants.status import PRIMARY_STATUS_CONFLICT
 from orchestune.consistency.models import IntentStatus, RepairStatus
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
+    COMMAND_RECLAIM,
     COMMAND_REQUEUE,
 )
 from orchestune.consistency.supervisor import (
@@ -26,6 +27,7 @@ from orchestune.dispatch.cycle import (
 )
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.dispatch.status_repair import status_intent_journal_path
@@ -270,6 +272,48 @@ def _pipeline_report() -> CycleReport:
         promotion_events=[],
         applied=True,
     )
+
+
+def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> None:
+    active = ActiveWorktree(
+        issue_number=745,
+        branch="codex/issue-745-gc-reclaim",
+        worktree_path=str(tmp_path / "missing-worktree"),
+        pid=745,
+        started_at=None,
+        declared_footprint=(),
+    )
+    run_state = RunState(active_worktrees={"745": active})
+    task = make_task(
+        745,
+        subtask_id="gc-reclaim",
+        status_labels=("status:in-progress",),
+    )
+    config = DispatcherConfig(
+        apply=True,
+        zombie_gc=True,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
+    )
+
+    with patch(
+        "orchestune.dispatch.execution_repair.is_process_alive",
+        side_effect=(False, False),
+    ):
+        outcome = run_gc_phase(run_state, {745: task}, config, [], open_prs=[])
+
+    results = tuple(
+        result
+        for repair_pass in outcome.consistency.repair_passes
+        for result in repair_pass.results
+    )
+    assert [(result.command.code, result.status) for result in results] == [
+        (COMMAND_RECLAIM, RepairStatus.APPLIED)
+    ]
+    assert [event["action"] for event in outcome.completion_events] == ["gc_reclaimed"]
+    assert run_state.active_worktrees == {}
 
 
 def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(

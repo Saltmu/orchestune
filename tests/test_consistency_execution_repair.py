@@ -34,9 +34,11 @@ from orchestune.dispatch.execution_repair import (
     RepairCommandOperation,
     evaluate_execution_repair_plan,
 )
-from orchestune.dispatch.gc.zombies import _collect_zombies_and_timeouts
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from tests.dispatch_gc_test_support import (
+    run_gc_reclaims as _collect_zombies_and_timeouts,
+)
 
 
 def _task(issue_number: int, *labels: str) -> Task:
@@ -380,10 +382,10 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
-            side_effect=(False, True),
+            side_effect=(False, True, True),
         ) as process_probe,
         patch.object(fake_forge, "branch_exists", return_value=True),
-        patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
+        patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
     ):
         events = _collect_zombies_and_timeouts(
             run_state,
@@ -391,14 +393,14 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
             config,
         )
 
-    assert process_probe.call_count == 2
+    assert process_probe.call_count == 3
     assert events == []
     assert run_state.active_worktrees == {"707": active}
     fake_forge.remove_label.assert_not_called()
     fake_forge.add_label.assert_not_called()
 
 
-def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
+def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forge):
     dead = _active(tmp_path, 707, pid=707, started_at=None)
     alive = _active(tmp_path, 708, pid=708, started_at=None)
     run_state = RunState(active_worktrees={"707": dead, "708": alive})
@@ -409,7 +411,7 @@ def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
             "orchestune.dispatch.execution_repair.is_process_alive",
             side_effect=lambda pid: pid == 708,
         ) as process_probe,
-        patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
+        patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
     ):
         events = _collect_zombies_and_timeouts(
             run_state,
@@ -421,5 +423,6 @@ def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
         (707,),
         (708,),
         (707,),
+        (708,),
     ]
     assert [event["issue_number"] for event in events] == [707]
