@@ -562,7 +562,11 @@ def reconcile_status_repairs(
     repaired.extend(
         _apply_selected(
             selected,
-            {intent.subject_id for intent in pending},
+            {
+                intent.subject_id
+                for intent in pending
+                if _intent_is_for_phase(intent, phase)
+            },
             tasks_by_issue,
             completed,
             config,

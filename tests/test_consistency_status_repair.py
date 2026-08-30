@@ -203,6 +203,65 @@ def test_partial_transition_resumes_the_live_intent_without_new_conflicting_plan
     assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
 
 
+def test_live_intent_from_other_phase_still_guards_status_in_kernel(
+    tmp_path, in_memory_forge
+):
+    dual_task = make_task(
+        708,
+        subtask_id="status-migration",
+        status_labels=("status:done", "status:queued"),
+    )
+    in_memory_forge.seed_issue(
+        make_issue(
+            708,
+            subtask_id="status-migration",
+            labels=("status:done", "status:queued"),
+        )
+    )
+    config = _config(tmp_path, in_memory_forge)
+
+    with (
+        patch.object(
+            in_memory_forge, "remove_label", side_effect=RuntimeError("Forge down")
+        ),
+        pytest.raises(RuntimeError, match="Forge down"),
+    ):
+        reconcile_status_repairs(
+            {708: dual_task},
+            completed_subtask_ids=set(),
+            config=config,
+            phase=StatusRepairPhase.DUAL_STATUS,
+            now=NOW,
+        )
+
+    blocked_task = replace(
+        dual_task,
+        status_labels=("status:blocked",),
+        depends_on=("shadow-supervisor",),
+    )
+    in_memory_forge.seed_issue(
+        make_issue(
+            708,
+            subtask_id="status-migration",
+            labels=("status:blocked",),
+            depends_on=("shadow-supervisor",),
+        )
+    )
+
+    repaired = reconcile_status_repairs(
+        {708: blocked_task},
+        completed_subtask_ids={"shadow-supervisor"},
+        config=config,
+        phase=StatusRepairPhase.BLOCKED_PROMOTION,
+        now=NOW,
+    )
+
+    assert repaired == ()
+    (pending,) = IntentJournal(status_intent_journal_path(config)).pending(now=NOW)
+    assert pending.status is IntentStatus.PLANNED
+    assert in_memory_forge.get_issue_labels(708) == ("status:blocked",)
+
+
 def test_fresh_hold_precondition_defers_stale_promotion_without_writing_intent(
     tmp_path, in_memory_forge
 ):
