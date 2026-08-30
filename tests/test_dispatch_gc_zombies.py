@@ -507,6 +507,39 @@ class TestApplyZombieOrTimeoutReclaim:
         )
         apply_reclaim.assert_not_called()
 
+    def test_typed_reclaim_command_reports_dry_run_without_false_precondition(
+        self, tmp_path, fake_forge
+    ):
+        active = _active(worktree_path=str(tmp_path))
+        reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
+        command = RepairCommand(
+            code=COMMAND_RECLAIM,
+            scope=ConsistencyScope.TASK,
+            subject_id="280",
+            idempotency_key="execution:280:reclaim",
+            parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=False,
+            forge=fake_forge,
+        )
+
+        with patch(
+            "orchestune.dispatch.gc.zombies._apply_zombie_or_timeout_reclaim"
+        ) as apply_reclaim:
+            result = execute_reclaim_repair_command(
+                command,
+                RunState(active_worktrees={"280": active}),
+                reclaim,
+                config,
+            )
+
+        assert result.status is RepairStatus.SKIPPED
+        assert result.diagnostics == ()
+        apply_reclaim.assert_not_called()
+
     def test_zombie_apply_removes_worktree_and_requeues(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})

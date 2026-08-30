@@ -612,6 +612,8 @@ def execute_reclaim_repair_command(
             status=RepairStatus.FAILED,
             diagnostics=(f"unsupported GC repair command: {command.code}",),
         )
+    if not config.apply:
+        return RepairResult(command=command, status=RepairStatus.SKIPPED)
     active = run_state.active_worktrees.get(reclaim.key)
     finding_codes = frozenset(command_finding_codes(command))
     precondition_holds = (
@@ -620,7 +622,7 @@ def execute_reclaim_repair_command(
         and active == reclaim.active
         and bool(finding_codes.intersection(reclaim.finding_codes))
     )
-    if not precondition_holds or not config.apply:
+    if not precondition_holds:
         return RepairResult(
             command=command,
             status=RepairStatus.SKIPPED,
