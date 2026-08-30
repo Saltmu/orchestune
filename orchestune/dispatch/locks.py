@@ -12,6 +12,7 @@ from pathlib import Path
 from orchestune.dispatch.scoring import Task
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.models import PrRecord
+from orchestune.pr_link_notice import pr_matches_issue
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -64,13 +65,13 @@ def _check_task_overlap(
         set(pr.changed_files)
         for pr in prs
         if pr.head_ref not in active_set
-        and task.issue_number not in pr.closes_issue_numbers
+        and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
     ]
     has_truncated_pr = any(
         pr.is_files_truncated
         for pr in prs
         if pr.head_ref not in active_set
-        and task.issue_number not in pr.closes_issue_numbers
+        and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
     )
     task_footprint = {path for path in task.footprint if not _is_hotspot(path)}
     return any(

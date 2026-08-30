@@ -29,10 +29,70 @@ KIND_MERGED = "merged"
 #: 自動リンクするため、補完コメントは不要（かつノイズになる）。
 PARENT_BRANCH_PREFIX = "parent/"
 
-#: `claude/issue-12-task-a`のような、Issue番号を含むheadブランチ名。
-#: `closes_issue_numbers`が空のPR（エージェントが`Closes`記法を書かずに
-#: 起票した場合など）でも対象Issueを特定できるようにする。
-_ISSUE_BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/issue-(\d+)-")
+#: Issue番号を含むheadブランチ名・タイトル・本文の抽出パターン。
+#: closes_issue_numbers が空のPR（非デフォルトブランチ宛てPRやCloses記法なしPR）
+#: でも対象Issueを安全に特定できるようにする。
+_ISSUE_BRANCH_PATTERNS = (
+    re.compile(r"^[A-Za-z0-9._-]+/issue-(\d+)(?:[-_./]|$)"),
+    re.compile(r"(?:^|/)(?:issue-|issue/|parent/issue-)(\d+)(?:[-_./]|$)"),
+    re.compile(
+        r"(?:^|/)(?:fix|feat|chore|refactor|bugfix|hotfix)/issue-(\d+)(?:[-_./]|$)"
+    ),
+)
+_PR_TITLE_PATTERNS = (
+    re.compile(r"(?:^|[^\w])#(\d+)(?:[^\w]|$)"),
+    re.compile(r"(?:^|[^\w])issue[- :](\d+)(?:[^\w]|$)", re.IGNORECASE),
+)
+_PR_BODY_PATTERNS = (
+    re.compile(r"(?:closes|fixes|resolves|issue:?)\s*#(\d+)", re.IGNORECASE),
+)
+
+
+def extract_issue_numbers_from_pr(pr: PrRecord) -> set[int]:
+    """PRから関連するIssue番号の集合を抽出する。
+
+    GraphQLのclosesIssuesReferences（closes_issue_numbers）に加え、
+    非デフォルトブランチ宛てPRで空になるGitHub APIの仕様を補うため、
+    head_ref、title、bodyから対象Issue番号を安全に逆引きする。
+    """
+    numbers = set(pr.closes_issue_numbers)
+
+    head_ref = pr.head_ref or ""
+    for pattern in _ISSUE_BRANCH_PATTERNS:
+        match = pattern.search(head_ref)
+        if match:
+            numbers.add(int(match.group(1)))
+
+    title = getattr(pr, "title", "") or ""
+    for pattern in _PR_TITLE_PATTERNS:
+        for match in pattern.finditer(title):
+            numbers.add(int(match.group(1)))
+
+    body = getattr(pr, "body", "") or ""
+    for pattern in _PR_BODY_PATTERNS:
+        for match in pattern.finditer(body):
+            numbers.add(int(match.group(1)))
+
+    return numbers
+
+
+def pr_matches_issue(
+    pr: PrRecord,
+    issue_number: int,
+    subtask_id: str | None = None,
+) -> bool:
+    """PRが指定のIssue（およびサブタスク）に対応しているかを判定する。"""
+    if issue_number in extract_issue_numbers_from_pr(pr):
+        return True
+    if subtask_id and pr.head_ref:
+        normalized_head = pr.head_ref.replace("/", "-")
+        if (
+            f"issue-{issue_number}" in normalized_head
+            or str(issue_number) in normalized_head
+        ):
+            if subtask_id in normalized_head:
+                return True
+    return False
 
 
 def notice_marker(kind: str, pr_number: int) -> str:
@@ -155,15 +215,12 @@ def requires_link_notice(pr: PrRecord) -> bool:
 
 
 def target_issue_numbers(pr: PrRecord, expected_bases: Mapping[int, str]) -> list[int]:
-    """PRが対応するタスクIssueの番号を、`Closes`参照とheadブランチ名から解決する。
+    """PRが対応するタスクIssueの番号を、`Closes`参照とheadブランチ名・タイトル等から解決する。
 
     解決した候補のうち、PRのbaseがそのIssueの親ブランチと完全に一致するものだけを
     返す（`notice_expected_bases`参照）。
     """
-    numbers = set(pr.closes_issue_numbers)
-    match = _ISSUE_BRANCH_PATTERN.match(pr.head_ref or "")
-    if match:
-        numbers.add(int(match.group(1)))
+    numbers = extract_issue_numbers_from_pr(pr)
     return sorted(
         number for number in numbers if expected_bases.get(number) == pr.base_ref
     )
@@ -222,11 +279,13 @@ __all__ = [
     "KIND_CREATED",
     "KIND_MERGED",
     "ensure_pr_merged_notice",
+    "extract_issue_numbers_from_pr",
     "has_notice",
     "notice_expected_bases",
     "notice_marker",
     "notify_open_pr_links",
     "notify_pr_created",
+    "pr_matches_issue",
     "render_created_notice",
     "render_merged_notice",
     "requires_link_notice",

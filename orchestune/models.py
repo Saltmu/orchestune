@@ -87,3 +87,5 @@ class PrRecord:
     base_ref: str = ""
     is_cross_repository: bool | None = None
     is_files_truncated: bool = False
+    title: str = ""
+    body: str = ""

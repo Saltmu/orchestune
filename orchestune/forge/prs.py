@@ -257,6 +257,8 @@ class GitHubPullRequestMixin:
                 raw_is_cross if isinstance(raw_is_cross, bool) else None
             ),
             is_files_truncated=is_truncated,
+            title=raw.get("title") or "",
+            body=raw.get("body") or "",
         )
 
     def list_prs(
@@ -274,7 +276,7 @@ class GitHubPullRequestMixin:
                 "--limit",
                 str(limit),
                 "--json",
-                "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences",
+                "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences,title,body",
             ]
         )
         return [
