@@ -14,10 +14,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.reconciliation import (
-    _reconcile_dual_status_tasks,
-    _self_heal_run_state,
-)
+from orchestune.dispatch.reconciliation import _self_heal_run_state
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -100,53 +97,6 @@ def _stub_label_actor_permission_by_default(fake_forge):
     fake_forge.get_actor_permission.reset_mock(side_effect=True)
     fake_forge.get_actor_permission.return_value = "write"
     yield
-
-
-class TestDualStatusReconciliation:
-    def test_apply_removes_status_done_for_dual_status_tasks(
-        self, tmp_path, fake_forge
-    ):
-        dual_status_task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            status_labels=("status:done", "status:queued"),
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-
-        fake_forge.remove_label.reset_mock(side_effect=True)
-        mock_remove = fake_forge.remove_label
-        fake_forge.get_issue_labels.side_effect = (
-            ("status:done", "status:queued"),
-            ("status:queued",),
-        )
-        events = _reconcile_dual_status_tasks({1: dual_status_task}, config)
-
-        mock_remove.assert_called_once_with(1, "status:done")
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
-
-    def test_dry_run_does_not_call_github(self, tmp_path, fake_forge):
-        dual_status_task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            status_labels=("status:done", "status:queued"),
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=False,
-        )
-
-        fake_forge.remove_label.reset_mock(side_effect=True)
-        mock_remove = fake_forge.remove_label
-        _reconcile_dual_status_tasks({1: dual_status_task}, config)
-
-        mock_remove.assert_not_called()
 
 
 class TestSelfHealRunState:
@@ -288,7 +238,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=([], deviation_events, False, set()),
             ),
             patch(
-                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.cycle._run_status_repair_boundary",
                 return_value=[],
             ),
             patch("orchestune.dispatch.cycle._sync_external_locks"),

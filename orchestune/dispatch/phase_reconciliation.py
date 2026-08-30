@@ -2,8 +2,8 @@
 
 active worktreeごとの完了検知・CHANGES_REQUESTEDエスカレーション・自動リベース・
 footprint逸脱検知(rule chain評価)から、run_state自己修復・依存解決による
-status:blockedタスクの昇格・status:blocked-recompute自動復帰・dual-status
-Issueの自己修復までの、1サイクル中の「整合性回復」に関わる処理をまとめる。
+status:blocked-recompute自動復帰までの、1サイクル中の「整合性回復」に
+関わる処理をまとめる。status修復はcycleのConsistencySupervisorが所有する。
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ from orchestune.dispatch.rebase import (
 from orchestune.dispatch.reconciliation import (
     _handle_base_branch_red_recovery,
     _handle_blocked_recompute_recovery,
-    _promote_blocked_tasks,
-    _reconcile_dual_status_tasks,
     _reconcile_recovery_counters,
     _self_heal_launch_history,
     _self_heal_run_state,
@@ -139,41 +137,28 @@ def run_self_heal_phase(
     _self_heal_launch_history(run_state, config, time.time() if now is None else now)
 
 
-def run_blocked_promotion_phase(
+def run_post_gc_reconciliation(
     issues: Any,
     run_state: Any,
     ctx: CycleContext,
     completed_subtask_ids: set[str],
     config: DispatcherConfig,
 ) -> list[dict]:
-    """Maintenance GC Phaseの直後に行う依存解決の自動復帰処理。
+    """Maintenance GC Phaseの直後に行う非status自動復帰処理。
 
     #212: dirty worktreeの完了保留判定を同一サイクル内のゾンビGCが上書き
     しないよう、GCはこの関数より必ず先に(`_process_active_worktrees`の
     completion_eventsを参照して)実行される。そのため、この関数自体はGCの
     結果を必要とせず`completed_subtask_ids`のみを参照する。
 
-    以下を既存の`run_dispatch_cycle`と同一の順序で実行する:
-    1. 依存解決済みstatus:blockedタスクの昇格
-    2. status:blocked-recomputeの自動復帰
-
-    dual-status(status:done/status:queued同時付与)タスクの自己修復は、
-    既存の`run_dispatch_cycle`ではこの直後ではなく外部ロック同期
-    (`_sync_external_locks`)の後に行われる順序のため、
-    `run_dual_status_reconciliation`として別に公開する。
+    blocked promotionはこの関数より先にConsistencySupervisorが実行する。
+    ここではstatus:blocked-recomputeとbase-branch-redの既存復帰処理だけを
+    維持し、status commandの判断・実行は行わない。
     """
-    promotion_events = _promote_blocked_tasks(
-        issues.done + issues.not_needed,
-        completed_subtask_ids,
-        ctx.tasks_by_issue,
-        config,
-    )
-
     # 決定論的な自動復帰（ブロック解除）処理
-    recompute_resolved_promoted_events = _handle_blocked_recompute_recovery(
+    promotion_events = _handle_blocked_recompute_recovery(
         issues, run_state, ctx, completed_subtask_ids, config
     )
-    promotion_events.extend(recompute_resolved_promoted_events)
 
     # #555: ci:base-branch-red の自動復帰（base_sha前進による再キュー）
     base_branch_red_promoted_events = _handle_base_branch_red_recovery(
@@ -182,15 +167,3 @@ def run_blocked_promotion_phase(
     promotion_events.extend(base_branch_red_promoted_events)
 
     return promotion_events
-
-
-def run_dual_status_reconciliation(
-    ctx: CycleContext, config: DispatcherConfig
-) -> list[dict]:
-    """#254レビュー対応(#275): status:done/status:queuedを同時に持つ
-    中断状態のIssueについて、中断していたstatus:doneの除去を完了させる。
-
-    既存の`run_dispatch_cycle`と同じく、外部ロック同期
-    (`_sync_external_locks`)の後に呼び出す必要がある。
-    """
-    return _reconcile_dual_status_tasks(ctx.tasks_by_issue, config)

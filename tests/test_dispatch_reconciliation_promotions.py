@@ -1,7 +1,7 @@
 """dispatch_reconciliation.py の復元・整合性修復に関する境界値テスト (#337)。
 
-`_collect_active_conflict_subtask_ids` / `_promote_blocked_tasks` /
-`_handle_blocked_recompute_recovery` は既存の `tests/test_dispatch_cycle.py`
+`_collect_active_conflict_subtask_ids` / `_handle_blocked_recompute_recovery`
+は既存の `tests/test_dispatch_cycle.py`
 では実質未検証だったため、本ファイルで単体テストとして完結させる。
 """
 
@@ -18,8 +18,6 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.reconciliation import (
     _collect_active_conflict_subtask_ids,
     _handle_blocked_recompute_recovery,
-    _promote_blocked_tasks,
-    _reconcile_dual_status_tasks,
 )
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
@@ -353,88 +351,6 @@ class TestCollectActiveConflictSubtaskIds:
             )
 
         assert mock_recompute.call_args.kwargs.get("threshold") == 0.1
-
-
-class TestPromoteBlockedTasks:
-    def test_decide_and_apply_are_wired_together(self, tmp_path):
-        task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            depends_on=("task-x",),
-            status_labels=("status:blocked",),
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
-            patch(
-                "fake_forge_proxy.active_fake_forge.get_issue_labels",
-                side_effect=(("status:blocked",), ("status:queued",)),
-            ),
-        ):
-            events = _promote_blocked_tasks([], {"task-x"}, {1: task}, config)
-
-        mock_remove.assert_called_once_with(1, "status:blocked")
-        mock_add.assert_called_once_with(1, "status:queued")
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
-
-
-class TestDualStatusReconciliationMultipleTasks:
-    def test_only_dual_status_tasks_are_reconciled_among_several(self, tmp_path):
-        """複数タスクが混在する中で、status:done/status:queuedの重複を持つ
-        タスクのみが個別に整合修復されることを確認する（境界値: 複数ラベル重複）。"""
-        dual_a = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            status_labels=("status:done", "status:queued"),
-        )
-        dual_b = _task(
-            issue_number=2,
-            subtask_id="task-b",
-            status_labels=("status:done", "status:queued"),
-        )
-        queued_only = _task(
-            issue_number=3,
-            subtask_id="task-c",
-            status_labels=("status:queued",),
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch(
-                "fake_forge_proxy.active_fake_forge.get_issue_labels",
-                side_effect=(
-                    ("status:done", "status:queued"),
-                    ("status:queued",),
-                    ("status:done", "status:queued"),
-                    ("status:queued",),
-                ),
-            ),
-        ):
-            events = _reconcile_dual_status_tasks(
-                {2: dual_b, 1: dual_a, 3: queued_only}, config
-            )
-
-        assert mock_remove.call_args_list == [
-            ((2, "status:done"),),
-            ((1, "status:done"),),
-        ]
-        assert events == [
-            {"issue_number": 2, "subtask_id": "task-b"},
-            {"issue_number": 1, "subtask_id": "task-a"},
-        ]
 
 
 class TestHandleBlockedRecomputeRecovery:

@@ -767,7 +767,7 @@ class TestBranchStacking:
                 ],
             ),
             # #292: このシナリオのラベル遷移はdispatch_cycleの
-            # _promote_blocked_tasks（Forge注入経由）が行うため、
+            # Supervisor-owned blocked promotion（Forge注入経由）が行うため、
             # dispatch_rebase.github経由ではなくGitHubForge側をパッチする。
             patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
             patch(

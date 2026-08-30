@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import PRIMARY_STATUS_CONFLICT
+from orchestune.consistency.models import IntentStatus, RepairStatus
 from orchestune.consistency.supervisor import (
     ConsistencyMode,
     RepairDisposition,
@@ -246,3 +248,82 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         )
         == 1
     )
+
+
+def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
+    tmp_path, fake_forge
+):
+    labels = {
+        742: ["status:done"],
+        743: ["status:blocked"],
+    }
+    remove_attempts = 0
+
+    def current_issue(issue_number):
+        return make_issue(
+            issue_number,
+            labels=tuple(labels[issue_number]),
+            subtask_id="adapter-foundation"
+            if issue_number == 742
+            else "status-cutover",
+            depends_on=() if issue_number == 742 else ("adapter-foundation",),
+        )
+
+    def list_issues(label, *args, **kwargs):
+        return [
+            current_issue(issue_number)
+            for issue_number in labels
+            if label in labels[issue_number]
+        ]
+
+    def add_label(issue_number, label):
+        if label not in labels[issue_number]:
+            labels[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        nonlocal remove_attempts
+        if issue_number == 743 and label == "status:blocked":
+            remove_attempts += 1
+        if remove_attempts == 1 and label == "status:blocked":
+            raise RuntimeError("partial Forge failure")
+        labels[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = list_issues
+    fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
+        labels[issue_number]
+    )
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.return_value = "write"
+    fake_forge.add_label.side_effect = add_label
+    fake_forge.remove_label.side_effect = remove_label
+    config = DispatcherConfig(
+        apply=True,
+        consistency_mode=ConsistencyMode.REPAIR,
+        consistency_repair_allowlist=frozenset({PRIMARY_STATUS_CONFLICT}),
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+    )
+
+    with (
+        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle._sync_external_locks",
+            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+        ),
+    ):
+        first = run_dispatch_cycle(config)
+        second = run_dispatch_cycle(config)
+
+    assert first.consistency.repair_passes[-1].results[0].status is RepairStatus.FAILED
+    assert (
+        second.consistency.repair_passes[-1].results[0].status is RepairStatus.APPLIED
+    )
+    assert remove_attempts == 2
+    assert labels[743] == ["status:queued"]
+    journal = IntentJournal(status_intent_journal_path(config))
+    assert len(journal.load()) == 1
+    assert journal.load()[0].status is IntentStatus.VERIFIED

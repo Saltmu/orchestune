@@ -7,10 +7,20 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 
 import subprocess
 from contextlib import ExitStack, contextmanager
+from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
 import pytest
 
+from orchestune.consistency.invariants.status import (
+    BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+    PRIMARY_STATUS_CONFLICT,
+)
+from orchestune.consistency.repairs.status import (
+    COMMAND_REMOVE_LABEL,
+    COMMAND_TRANSITION_LABEL,
+)
+from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
@@ -20,6 +30,9 @@ from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     save_run_state,
+)
+from orchestune.dispatch.status_repair import (
+    execute_status_repair_command as execute_status_repair_command_real,
 )
 from orchestune.models import IssueRecord
 from orchestune.outcome_record import OutcomeRecord
@@ -97,6 +110,42 @@ def _track_forge_labels(fake_forge, *issues: IssueRecord) -> None:
     fake_forge.get_issue_state.side_effect = lambda issue_number: states.get(
         int(issue_number), "OPEN"
     )
+
+
+def _install_mutable_issue_snapshot(fake_forge, specs):
+    labels_by_issue = {
+        issue_number: list(labels) for issue_number, _, labels, _ in specs
+    }
+
+    def current_issues(label, **_):
+        return [
+            _full_issue(
+                issue_number,
+                labels=tuple(labels_by_issue[issue_number]),
+                subtask_id=subtask_id,
+                depends_on=depends_on,
+                parent_number=None,
+            )
+            for issue_number, subtask_id, _, depends_on in specs
+            if label in labels_by_issue[issue_number]
+        ]
+
+    def add_label(issue_number, label):
+        if label not in labels_by_issue[issue_number]:
+            labels_by_issue[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        labels_by_issue[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = current_issues
+    fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
+        labels_by_issue[issue_number]
+    )
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.add_label.side_effect = add_label
+    fake_forge.remove_label.side_effect = remove_label
+    fake_forge.list_open_prs.return_value = []
+    return labels_by_issue
 
 
 @contextmanager
@@ -409,6 +458,63 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+    def test_status_repairs_use_typed_executor_once_at_ordered_boundaries(
+        self, tmp_path, fake_forge
+    ):
+        labels = _install_mutable_issue_snapshot(
+            fake_forge,
+            (
+                (1, "task-a", ("status:done",), ()),
+                (2, "task-b", ("status:blocked",), ("task-a",)),
+                (3, "task-c", ("status:done", "status:queued"), ()),
+            ),
+        )
+        config = self._config(
+            tmp_path,
+            max_concurrent=0,
+            consistency_mode=ConsistencyMode.REPAIR,
+            consistency_repair_allowlist=frozenset(
+                {
+                    BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+                    PRIMARY_STATUS_CONFLICT,
+                }
+            ),
+        )
+        order = []
+
+        def execute(command, *args, **kwargs):
+            order.append(command.code)
+            return execute_status_repair_command_real(command, *args, **kwargs)
+
+        def sync_locks(*_args, **_kwargs):
+            order.append("external-lock-sync")
+            return SimpleNamespace(to_lock=[], to_unlock=[])
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                return_value=[],
+            ),
+            patch(
+                "orchestune.dispatch.cycle.execute_status_repair_command",
+                side_effect=execute,
+            ),
+            patch(
+                "orchestune.dispatch.cycle._sync_external_locks",
+                side_effect=sync_locks,
+            ),
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert order == [
+            COMMAND_TRANSITION_LABEL,
+            "external-lock-sync",
+            COMMAND_REMOVE_LABEL,
+        ]
+        assert labels[2] == ["status:queued"]
+        assert labels[3] == ["status:queued"]
         assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
 
     def test_yaml_error_transitions_to_blocked(self, tmp_path, fake_forge):

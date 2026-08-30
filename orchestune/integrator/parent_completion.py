@@ -9,7 +9,7 @@
    常に人間が行う。
 2. その最終PRが実際にマージされたことを検知したら、親Issueを決定論的にクローズする。
 
-`_promote_blocked_tasks`（`dispatch_cycle.py`）と同様、永続stateは持たず、
+dispatch cycleのSupervisor-owned blocked promotionと同様、永続stateは持たず、
 毎サイクルGitHub APIへ冪等に問い合わせるだけで十分なため、状態ファイルは使わない。
 """
 
