@@ -111,7 +111,10 @@ def _restored_base_branch(
         subtask_id_to_issue_number,
     )
     for pr in open_prs:
-        if any(pr_matches_issue(pr, dep_num) for dep_num in dependency_issue_numbers):
+        if any(
+            pr_matches_issue(pr, dep_num, issue_to_subtask_id.get(dep_num))
+            for dep_num in dependency_issue_numbers
+        ):
             return pr.head_ref
 
     return base_branch
