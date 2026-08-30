@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from orchestune.consistency.supervisor import ConsistencyMode
+from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.models import (
     DAG_TOOL_CONFIG_KEYS,
     compile_extra_ignore_patterns,
@@ -136,7 +136,20 @@ def _add_consistency_arguments(parser: argparse.ArgumentParser) -> None:
         "--consistency-mode",
         choices=[mode.value for mode in ConsistencyMode],
         default=ConsistencyMode.OFF.value,
-        help="#706: 整合性Supervisor。offは無効、shadowは副作用なしでscan/reportする。",
+        help="#706/#709: offは無効、shadowはread-only、repairはallowlist対象のみ修復する。",
+    )
+    parser.add_argument(
+        "--consistency-repair-code",
+        action="append",
+        default=[],
+        help="#709: repair modeで許可するfinding codeまたはcommand code（繰り返し指定可）。",
+    )
+    parser.add_argument(
+        "--consistency-max-repair-passes",
+        type=int,
+        choices=range(1, MAX_REPAIR_PASSES + 1),
+        default=1,
+        help="#709: 1 cycleで実行するrepair/re-observation passの上限（1..5）。",
     )
 
 
@@ -370,8 +383,11 @@ _NON_NEGATIVE_INT_KEYS = frozenset(
         "not_needed_review_timeout_seconds",
     }
 )
-_POSITIVE_INT_KEYS = frozenset({"window_seconds", "parent_issue"})
+_POSITIVE_INT_KEYS = frozenset(
+    {"window_seconds", "parent_issue", "consistency_max_repair_passes"}
+)
 _BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc", "allow_unsafe_agent_execution"})
+_STRING_LIST_CONFIG_KEYS = frozenset({"consistency_repair_code"})
 
 
 def _validate_config_entry(
@@ -389,6 +405,12 @@ def _validate_config_entry(
         if not isinstance(value, str):
             _config_error(parser, f"{key!r} must be a string path")
         return Path(value)
+    if normalized_key in _STRING_LIST_CONFIG_KEYS:
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item for item in value
+        ):
+            _config_error(parser, f"{key!r} must be a list of non-empty strings")
+        return value
     if normalized_key in _NON_NEGATIVE_INT_KEYS | _POSITIVE_INT_KEYS:
         if not isinstance(value, int) or isinstance(value, bool):
             _config_error(parser, f"{key!r} must be an integer")
@@ -396,6 +418,9 @@ def _validate_config_entry(
             _config_error(parser, f"{key!r} must be greater than or equal to 0")
         if normalized_key in _POSITIVE_INT_KEYS and value < 1:
             _config_error(parser, f"{key!r} must be greater than or equal to 1")
+        if action.choices is not None and value not in action.choices:
+            choices = ", ".join(repr(choice) for choice in action.choices)
+            _config_error(parser, f"{key!r} must be one of: {choices}")
         return value
     if action.choices is not None:
         if not isinstance(value, str) or value not in action.choices:
@@ -444,6 +469,18 @@ class _DispatcherRunResult:
     integrator_run_report: Any
 
 
+def _explicit_repair_codes(argv: list[str] | None) -> list[str] | None:
+    values: list[str] = []
+    arguments = sys.argv[1:] if argv is None else argv
+    option = "--consistency-repair-code"
+    for index, argument in enumerate(arguments):
+        if argument == option and index + 1 < len(arguments):
+            values.append(arguments[index + 1])
+        elif argument.startswith(f"{option}="):
+            values.append(argument.partition("=")[2])
+    return values or None
+
+
 def _load_dispatcher_inputs(
     parser: argparse.ArgumentParser,
     argv: list[str] | None,
@@ -469,8 +506,11 @@ def _load_dispatcher_inputs(
         if config_dag_similarity_threshold is not None
         else DEFAULT_SIMILARITY_THRESHOLD
     )
+    args = parser.parse_args(argv)
+    if (repair_codes := _explicit_repair_codes(argv)) is not None:
+        args.consistency_repair_code = repair_codes
     return _DispatcherInputs(
-        args=parser.parse_args(argv),
+        args=args,
         dag_ignore_patterns=dag_ignore_patterns,
         dag_similarity_threshold=dag_similarity_threshold,
         execution_profile_config=execution_profile_config,
@@ -522,6 +562,8 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         dag_ignore_patterns=inputs.dag_ignore_patterns,
         dag_similarity_threshold=inputs.dag_similarity_threshold,
         consistency_mode=ConsistencyMode(args.consistency_mode),
+        consistency_repair_allowlist=frozenset(args.consistency_repair_code),
+        consistency_max_repair_passes=args.consistency_max_repair_passes,
     )
 
 

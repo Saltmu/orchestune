@@ -220,6 +220,9 @@ orchestune-dispatch
 | `--max-concurrent <int>` | `2` | Maximum number of subtask agents running concurrently. |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, it is auto-selected from the runtime environment (the `GITHUB_ACTIONS` variable). `auto` detects a local CLI on `PATH`. You can explicitly select a local CLI, Claude Code Cloud Routine, or a Codex Cloud environment configured through `ORCHESTUNE_CODEX_CLOUD_ENV` (or `--codex-cloud-env`). `codex-cloud` pushes the task branch to `origin`, submits it to Codex Cloud, and combines Cloud task tracking with branch PR / outcome record status to determine completion. Only explicitly passing `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--reviewer-bot {auto,claude,codex}` | `auto` | Reviewer requested after implementation. `auto` is evaluated after the dispatch target is resolved and selects a cross-vendor reviewer: Claude targets use Codex; Codex and `agy` targets use Claude. An explicit value overrides this mapping. Generic `local` cannot be inferred and emits a warning. |
+| `--consistency-mode {off,shadow,repair}` | `off` | Repository consistency control loop. `off` keeps established behavior, `shadow` reports without mutation, and `repair` can execute only explicitly allowlisted codes. |
+| `--consistency-repair-code <code>` | - | Finding or command code allowed in `repair` mode. Repeat the option for multiple codes. An empty allowlist is report-only. |
+| `--consistency-max-repair-passes <1..5>` | `1` | Maximum guarded repair/re-observation passes per dispatch cycle. The same idempotency key is not executed twice in one cycle. |
 | `--codex-cloud-env <id>` | - | Codex Cloud environment ID used by `--dispatch-target codex-cloud`; defaults to `ORCHESTUNE_CODEX_CLOUD_ENV`. |
 | `--local-cmd <template>` | - | When using a local target, a command template for dispatching to a CLI. Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, and `{reviewer_bot}`. If omitted for generic `local`, the dry-run stub is used. With a local CLI preset, this option replaces the preset; Orchestune substitutes `{reviewer_bot}` when present but never appends review instructions to arbitrary custom commands. |
 | `--parent-issue <int>` | - | The parent GitHub Issue number that coordinates this plan. Created sub-issues will link to this parent. |
@@ -239,6 +242,8 @@ orchestune-dispatch
 | `--not-needed-review-timeout-seconds <int>` | `86400` | Maximum number of seconds a pending `status:not-needed` independent review (Cloud Routine target only) is kept without either outcome label appearing. An entry past the limit escalates to `status:blocked-human-review`; there is no value that makes it unlimited. |
 | `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
 
+In `repair` mode, inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repair_outcomes` in `--json` output or `events.jsonl`. Outcomes are `resolved`, `unresolved`, `deferred`, `failed`, or `observation-unknown`. Unknown/stale observations and non-repairable findings remain visible without being mutated. A failed partial status transition leaves its Intent journal beside `run_state.json` so the next cycle can resume it without duplicating the external side effect.
+
 ### Configuration File for Omitting Options
 
 You can place a configuration file in your project root directory to omit specifying options on the command line.
@@ -252,6 +257,9 @@ The dispatcher searches for configuration files in the following order and loads
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+consistency-mode = "shadow"
+consistency-repair-code = []
+consistency-max-repair-passes = 1
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
@@ -286,6 +294,9 @@ model = "gpt-4o"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+consistency-mode = "shadow"
+consistency-repair-code = []
+consistency-max-repair-passes = 1
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
@@ -308,7 +319,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
-> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`.
+> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `consistency-repair-code` must be a list of non-empty strings. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`, and `consistency-max-repair-passes` must be between `1` and `5`.
 >
 > In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 

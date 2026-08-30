@@ -220,6 +220,9 @@ orchestune-dispatch
 | `--max-concurrent <int>` | `2` | 同時に実行（起動）できるサブタスクエージェントの最大数。 |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は実行環境（`GITHUB_ACTIONS`環境変数）から自動選択される。`auto`はPATH上のローカルCLIを検出する。ローカル CLI、Claude Code Cloud Routine、または `ORCHESTUNE_CODEX_CLOUD_ENV`（もしくは `--codex-cloud-env`）で指定した Codex Cloud environment を明示選択できる。`codex-cloud` はタスクブランチを `origin` へ push してから Codex Cloud に投入し、実タスク状態追跡および対象ブランチの PR / outcome record を組み合わせて完了を判定する。`local`を明示指定した場合のみ、後方互換のダミー起動（no-op、テスト・dry-run用途）になる。 |
 | `--reviewer-bot {auto,claude,codex}` | `auto` | 実装後に依頼するレビュアー。`auto`はdispatch targetの解決後に評価され、Claude系にはCodex、Codex系と`agy`にはClaudeを選ぶ。明示値はこの対応表より優先される。汎用`local`からは推定できないため警告を出す。 |
+| `--consistency-mode {off,shadow,repair}` | `off` | リポジトリ整合性control loop。`off`は既存動作を維持し、`shadow`は変更せずreportだけを行い、`repair`は明示的にallowlistされたcodeだけを実行できる。 |
+| `--consistency-repair-code <code>` | - | `repair` modeで許可するfinding codeまたはcommand code。複数指定する場合は繰り返す。空のallowlistはreport-onlyとなる。 |
+| `--consistency-max-repair-passes <1..5>` | `1` | dispatch cycleあたりのguarded repair／再観測pass上限。同じidempotency keyを同一cycleで二度実行しない。 |
 | `--codex-cloud-env <id>` | - | `--dispatch-target codex-cloud` で利用する Codex Cloud environment ID。未指定時は `ORCHESTUNE_CODEX_CLOUD_ENV` 環境変数を使用。 |
 | `--local-cmd <template>` | - | ローカルターゲットへディスパッチするコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, `{reviewer_bot}`。汎用`local`で省略した場合はダミー起動になる。ローカルCLIプリセットで指定するとプリセット全体を置き換え、Orchestuneはテンプレート内にある`{reviewer_bot}`だけを置換し、任意のカスタムコマンドへレビュー指示を追記しない。 |
 | `--parent-issue <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。起票される子Issueがすべてこの親Issueに紐付けられます。 |
@@ -239,6 +242,8 @@ orchestune-dispatch
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
+`repair` modeでは、`--json`出力または`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
+
 ### 設定ファイルによるオプションの省略
 
 プロジェクトディレクトリに設定ファイルを配置することで、上記オプションの指定を省略し、デフォルト値として優先適用できます。
@@ -252,6 +257,9 @@ orchestune-dispatch
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+consistency-mode = "shadow"
+consistency-repair-code = []
+consistency-max-repair-passes = 1
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
@@ -286,6 +294,9 @@ model = "gpt-4o"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+consistency-mode = "shadow"
+consistency-repair-code = []
+consistency-max-repair-passes = 1
 parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
@@ -308,7 +319,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
-> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上です。
+> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`consistency-repair-code`は空でない文字列のlistです。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上、`consistency-max-repair-passes`は`1`～`5`です。
 >
 > `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 

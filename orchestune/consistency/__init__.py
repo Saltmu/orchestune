@@ -29,15 +29,24 @@ from orchestune.consistency.models import (
     TransitionIntent,
 )
 from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
     ConsistencyMode,
+    ConsistencyRepairOutcome,
+    ConsistencyRepairPass,
+    ConsistencyScanResult,
     ConsistencySupervisor,
+    RepairDisposition,
 )
 
 __all__ = [
+    "ConsistencyCycleReport",
     "ConsistencyEngine",
     "ConsistencyFinding",
     "ConsistencyMode",
+    "ConsistencyRepairOutcome",
+    "ConsistencyRepairPass",
     "ConsistencyReport",
+    "ConsistencyScanResult",
     "ConsistencyScope",
     "ConsistencySupervisor",
     "DesiredFact",
@@ -52,6 +61,7 @@ __all__ = [
     "ObservedRepositoryState",
     "Observer",
     "RepairCommand",
+    "RepairDisposition",
     "RepairExecutor",
     "RepairPlanner",
     "RepairResult",

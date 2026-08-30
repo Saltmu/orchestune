@@ -32,6 +32,8 @@ from orchestune.consistency.models import (
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
+    RepairResult,
+    RepairStatus,
     StateChanged,
 )
 from orchestune.consistency.observation import (
@@ -78,6 +80,7 @@ from orchestune.dispatch.phase_reconciliation import (
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_repair import (
+    execute_status_repair_command,
     status_intent_journal_path,
     task_lifecycle,
 )
@@ -255,6 +258,31 @@ class _DispatchConsistencyAdapter:
             now=observed.observed_at,
         )
 
+    @property
+    def tasks_by_issue(self):
+        return self._tasks_by_issue
+
+
+@dataclass(frozen=True, slots=True)
+class _DispatchRepairExecutor:
+    config: DispatcherConfig
+    adapter: _DispatchConsistencyAdapter
+    completed_subtask_ids: frozenset[str]
+
+    def execute(self, command: RepairCommand) -> RepairResult:
+        if command.code.startswith("status."):
+            return execute_status_repair_command(
+                command,
+                self.adapter.tasks_by_issue,
+                completed_subtask_ids=self.completed_subtask_ids,
+                config=self.config,
+            )
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("repair remains owned by its existing execution phase",),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class _ConsistencyRuntime:
@@ -266,7 +294,7 @@ class _ConsistencyRuntime:
 def _start_consistency_runtime(
     config, run_state, issues, ctx
 ) -> _ConsistencyRuntime | None:
-    if config.consistency_mode is not ConsistencyMode.SHADOW:
+    if config.consistency_mode is ConsistencyMode.OFF:
         return None
     supervisor = ConsistencySupervisor(
         repository_id=_repository_id(),
@@ -390,7 +418,11 @@ def _pipeline_state_changes(
 
 
 def _finish_consistency_runtime(
-    runtime: _ConsistencyRuntime | None, report: CycleReport, ctx, now: float
+    runtime: _ConsistencyRuntime | None,
+    report: CycleReport,
+    ctx,
+    now: float,
+    config: DispatcherConfig,
 ) -> None:
     if runtime is None:
         return
@@ -400,10 +432,23 @@ def _finish_consistency_runtime(
         observer=runtime.fresh_adapter,
         deriver=runtime.fresh_adapter,
     )
-    runtime.supervisor.full_scan(
+    final_scan = runtime.supervisor.full_scan(
         "end", observer=runtime.fresh_adapter, deriver=runtime.fresh_adapter
     )
-    report.consistency = runtime.supervisor.cycle_report(mode=ConsistencyMode.SHADOW)
+    if config.consistency_mode is ConsistencyMode.REPAIR:
+        runtime.supervisor.repair_until_stable(
+            final_scan,
+            observer=runtime.fresh_adapter,
+            deriver=runtime.fresh_adapter,
+            executor=_DispatchRepairExecutor(
+                config=config,
+                adapter=runtime.fresh_adapter,
+                completed_subtask_ids=frozenset(ctx.done_subtask_ids),
+            ),
+            allowlist=(config.consistency_repair_allowlist if config.apply else ()),
+            max_passes=config.consistency_max_repair_passes,
+        )
+    report.consistency = runtime.supervisor.cycle_report(mode=config.consistency_mode)
 
 
 def _prepare_cycle_issues(run_state, config: DispatcherConfig, now: float):
@@ -498,7 +543,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         ctx = _build_cycle_context(issues, run_state, config)
         consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
         report = _execute_cycle_pipeline(ctx, issues, run_state, config, now)
-        _finish_consistency_runtime(consistency_runtime, report, ctx, now)
+        _finish_consistency_runtime(consistency_runtime, report, ctx, now, config)
 
         if config.apply:
             append_event_log(build_event_log_entry(report, now), config.events_log_path)

@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.consistency.supervisor import ConsistencyMode
+from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.scoring import SCHEDULING_MODE_CRITICAL_PATH
@@ -82,12 +82,20 @@ class DispatcherConfig:
     scheduling_mode: str = SCHEDULING_MODE_CRITICAL_PATH
     # #668: リポジトリ定義の実行プロファイル設定（モデル・推論強度解決用）
     execution_profile_config: ExecutionProfileConfig | None = None
-    # #706: offは従来動作、shadowは副作用なしの整合性scan/reportのみを有効化する。
+    # #706/#709: offは従来動作、shadowはread-only、repairは明示allowlistのみ修復する。
     consistency_mode: ConsistencyMode = ConsistencyMode.OFF
+    consistency_repair_allowlist: frozenset[str] = frozenset()
+    consistency_max_repair_passes: int = 1
 
     def __post_init__(self) -> None:
         if not isinstance(self.consistency_mode, ConsistencyMode):
             self.consistency_mode = ConsistencyMode(self.consistency_mode)
+        self.consistency_repair_allowlist = frozenset(self.consistency_repair_allowlist)
+        if not 1 <= self.consistency_max_repair_passes <= MAX_REPAIR_PASSES:
+            raise ValueError(
+                "consistency_max_repair_passes must be between "
+                f"1 and {MAX_REPAIR_PASSES}"
+            )
         if self.execution_profile_config is None:
             self.execution_profile_config = ExecutionProfileConfig()
         if self.dispatch_target is None:

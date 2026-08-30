@@ -19,12 +19,15 @@ from orchestune.consistency.models import (
     ObservedRepositoryState,
     Repairability,
     RepairCommand,
+    RepairResult,
+    RepairStatus,
     ScopedObservations,
     StateChanged,
 )
 from orchestune.consistency.supervisor import (
     ConsistencyMode,
     ConsistencySupervisor,
+    RepairDisposition,
     ScanKind,
     consistency_cycle_to_dict,
 )
@@ -99,6 +102,7 @@ class _FindingInvariant:
     code: str
     scope: ConsistencyScope
     subject_id: str | None = None
+    repairability: Repairability = Repairability.AUTOMATIC
     calls: int = 0
 
     def evaluate(
@@ -115,7 +119,7 @@ class _FindingInvariant:
                 severity=FindingSeverity.WARNING,
                 expected=Evidence(summary="expected"),
                 observed=Evidence(summary="observed"),
-                repairability=Repairability.AUTOMATIC,
+                repairability=self.repairability,
             ),
         )
 
@@ -133,6 +137,51 @@ class _Planner:
                 subject_id="706",
                 idempotency_key="status:706",
             ),
+        )
+
+
+class _RecordingExecutor:
+    def __init__(self, status: RepairStatus = RepairStatus.APPLIED) -> None:
+        self.status = status
+        self.commands: list[RepairCommand] = []
+
+    def execute(self, command: RepairCommand) -> RepairResult:
+        self.commands.append(command)
+        return RepairResult(command=command, status=self.status)
+
+
+@dataclass
+class _ChangingInvariant:
+    code: str = "task.changing"
+    scope: ConsistencyScope = ConsistencyScope.TASK
+    calls: int = 0
+
+    def evaluate(self, observed, desired) -> tuple[ConsistencyFinding, ...]:
+        self.calls += 1
+        return (
+            ConsistencyFinding(
+                code=f"task.changing-{self.calls}",
+                scope=self.scope,
+                subject_id="706",
+                severity=FindingSeverity.WARNING,
+                expected=Evidence(summary="healthy"),
+                observed=Evidence(summary="drifted"),
+                repairability=Repairability.AUTOMATIC,
+            ),
+        )
+
+
+class _FindingPlanner:
+    def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
+        return tuple(
+            RepairCommand(
+                code="repair.changing",
+                scope=finding.scope,
+                subject_id=finding.subject_id,
+                idempotency_key=finding.code,
+                parameters=(("finding_code", finding.code),),
+            )
+            for finding in report.findings
         )
 
 
@@ -300,3 +349,143 @@ def test_cycle_report_serialization_is_stable_and_json_safe() -> None:
         "occurred_at": "2026-08-29T10:00:01+00:00",
     }
     json.dumps(payload)
+
+
+def test_repair_mode_executes_only_allowlisted_command_and_reobserves() -> None:
+    initial = _snapshot("queued")
+    repaired = _snapshot("healthy", observed_at=NOW + timedelta(seconds=1))
+    invariant = _FindingInvariant("task.status", ConsistencyScope.TASK, "706")
+    planner = _Planner()
+    executor = _RecordingExecutor()
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((invariant,)),
+        repair_planners=(planner,),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(initial), deriver=_StaticDeriver()
+    )
+
+    supervisor.repair_until_stable(
+        start,
+        observer=_SequenceObserver(repaired),
+        deriver=_StaticDeriver(),
+        executor=executor,
+        allowlist=("repair.status",),
+        max_passes=2,
+    )
+
+    report = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
+    assert executor.commands == list(start.repair_candidates)
+    assert len(report.repair_passes) == 1
+    assert report.repair_passes[0].number == 1
+    assert [scan.boundary for scan in report.scans] == ["end", "repair-1"]
+    assert report.repair_outcomes[0].disposition is RepairDisposition.UNRESOLVED
+
+
+def test_repair_mode_defers_non_allowlisted_and_reports_executor_failure() -> None:
+    invariant = _FindingInvariant("task.status", ConsistencyScope.TASK, "706")
+    planner = _Planner()
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((invariant,)),
+        repair_planners=(planner,),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(_snapshot("queued")), deriver=_StaticDeriver()
+    )
+    supervisor.repair_until_stable(
+        start,
+        observer=_SequenceObserver(_snapshot("queued")),
+        deriver=_StaticDeriver(),
+        executor=_RecordingExecutor(RepairStatus.FAILED),
+        allowlist=("repair.status",),
+        max_passes=1,
+    )
+    failed = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
+    assert failed.repair_outcomes[0].disposition is RepairDisposition.FAILED
+
+    deferred_supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((invariant,)),
+        repair_planners=(planner,),
+    )
+    deferred_start = deferred_supervisor.full_scan(
+        "end", observer=_SequenceObserver(_snapshot("queued")), deriver=_StaticDeriver()
+    )
+    deferred_supervisor.repair_until_stable(
+        deferred_start,
+        observer=_FailingObserver(),
+        deriver=_StaticDeriver(),
+        executor=_RecordingExecutor(),
+        allowlist=(),
+        max_passes=1,
+    )
+    deferred = deferred_supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
+    assert deferred.repair_passes == ()
+    assert deferred.repair_outcomes[0].disposition is RepairDisposition.DEFERRED
+
+
+def test_repair_mode_stops_at_configured_pass_bound() -> None:
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((_ChangingInvariant(),)),
+        repair_planners=(_FindingPlanner(),),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(_snapshot("one")), deriver=_StaticDeriver()
+    )
+    executor = _RecordingExecutor()
+
+    supervisor.repair_until_stable(
+        start,
+        observer=_SequenceObserver(_snapshot("two"), _snapshot("three")),
+        deriver=_StaticDeriver(),
+        executor=executor,
+        allowlist=("repair.changing",),
+        max_passes=2,
+    )
+
+    report = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
+    assert [repair_pass.number for repair_pass in report.repair_passes] == [1, 2]
+    assert [command.idempotency_key for command in executor.commands] == [
+        "task.changing-1",
+        "task.changing-2",
+    ]
+    assert any(
+        outcome.finding_code == "task.changing-3"
+        and outcome.disposition is RepairDisposition.DEFERRED
+        for outcome in report.repair_outcomes
+    )
+
+
+def test_repair_mode_never_executes_non_repairable_finding() -> None:
+    invariant = _FindingInvariant(
+        "task.manual",
+        ConsistencyScope.TASK,
+        "706",
+        repairability=Repairability.MANUAL,
+    )
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((invariant,)),
+        repair_planners=(_Planner(),),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(_snapshot("queued")), deriver=_StaticDeriver()
+    )
+    executor = _RecordingExecutor()
+
+    supervisor.repair_until_stable(
+        start,
+        observer=_FailingObserver(),
+        deriver=_StaticDeriver(),
+        executor=executor,
+        allowlist=("repair.status",),
+        max_passes=1,
+    )
+
+    report = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
+    assert executor.commands == []
+    assert report.repair_passes == ()
+    assert report.repair_outcomes[0].disposition is RepairDisposition.DEFERRED
