@@ -101,3 +101,19 @@ def test_setup_git_hooks_proactively_installs_gitleaks():
 
     assert "install-gitleaks.sh" in setup_hooks_sh.read_text(encoding="utf-8")
     assert "install-gitleaks.ps1" in setup_hooks_ps1.read_text(encoding="utf-8")
+
+
+def test_local_ci_auto_installs_dependencies_when_missing():
+    local_ci_sh = PROJECT_ROOT / "scripts" / "local-ci.sh"
+    content = local_ci_sh.read_text(encoding="utf-8")
+
+    assert "poetry install" in content
+    assert "poetry run python -c" in content
+
+
+def test_powershell_local_ci_auto_installs_dependencies_when_missing():
+    local_ci_ps1 = PROJECT_ROOT / "scripts" / "local-ci.ps1"
+    content = local_ci_ps1.read_text(encoding="utf-8")
+
+    assert "poetry install" in content
+    assert "poetry run python -c" in content
