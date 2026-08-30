@@ -210,7 +210,7 @@ stateDiagram-v2
 Orchestuneが実際にIssueをクローズする2箇所を説明する。いずれも
 [#170](https://github.com/Saltmu/orchestune/issues/170)で追加されたもので、
 ディスパッチャーが`--parent-issue <N>`付きで実行されていることが前提となる
-（[アーキテクチャ §3](./architecture.md#3-統合integrationと自動リベース)参照）。
+（[統合パイプライン (architecture/integration.md)](./architecture/integration.md)参照）。
 
 ### 子Issue: `status:done`（オープン） → クローズ（`completed`）
 - 発生元: `orchestune/integrator/`の`AutoMergeChildIntegrationStep`
@@ -276,4 +276,4 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   起動順序の優先度付けに使われるが、ライフサイクル遷移には関与しない。
 - `risk:flagged` / `progress:partial`:
   可視化目的のラベルであり、追加の承認ゲートとしては機能しない
-  （[アーキテクチャ](./architecture.md#4-人間の承認ポイント)参照）。
+  （[アーキテクチャ §2.4](./architecture.md#24-人間の承認ポイント)参照）。

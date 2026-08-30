@@ -213,7 +213,7 @@ section covers the two places where Orchestune actually closes an Issue for
 a normally-completed (non-`not-needed`) subtask, both added in
 [#170](https://github.com/Saltmu/orchestune/issues/170) and both gated on the
 dispatcher having been run with `--parent-issue <N>` (see
-[Architecture §3](./architecture.md#3-integration--auto-rebase)).
+[Integration Pipeline (architecture/integration.md)](./architecture/integration.md)).
 
 ### Child Issue: `status:done` (still open) → closed (`completed`)
 - Source: `AutoMergeChildIntegrationStep` in `orchestune/integrator/`
@@ -274,4 +274,4 @@ dispatcher having been run with `--parent-issue <N>` (see
   ordering, but do not participate in lifecycle transitions.
 - `risk:flagged` / `progress:partial`: visualization-only labels; they do not
   act as additional approval gates (see
-  [Architecture](./architecture.md#4-human-approval-points)).
+  [Architecture §2.4](./architecture.md#24-human-approval-points)).
