@@ -490,10 +490,9 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         """#516レビュー指摘: `add_label`成功後、`_persist_recovery_counters`が
         落ちる（プロセス停止・API失敗）と、GitHub上には永続的な
         `status:force-serial`ラベルが付いているのにIssue本文の
-        `forced_serial`はfalseのまま、という不整合が残る。自己修復
-        （`_decide_missing_active_worktrees`）は本文のみを信頼しラベルを
-        見ないため、既に強制直列化済みのタスクが「直列化されていない」と
-        誤って復元され、衝突するタスクが再び並列ディスパッチされ得る。
+        `forced_serial`はfalseのまま、という不整合が残る。typed recovery
+        projectionは本文とラベルを照合するが、本文を先に永続化すれば
+        どちらの観測経路でも既に強制直列化済みの事実を失わない。
 
         本文の永続化がラベル付与より先に行われることを検証する:
         `add_label`が例外を送出しても、その時点で本文は既に書き込み

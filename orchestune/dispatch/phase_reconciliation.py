@@ -8,7 +8,6 @@ status:blocked-recompute自動復帰までの、1サイクル中の「整合性�
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from orchestune.dispatch.config import DispatcherConfig
@@ -25,9 +24,6 @@ from orchestune.dispatch.rebase import (
 from orchestune.dispatch.reconciliation import (
     _handle_base_branch_red_recovery,
     _handle_blocked_recompute_recovery,
-    _reconcile_recovery_counters,
-    _self_heal_launch_history,
-    _self_heal_run_state,
 )
 from orchestune.dispatch.rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
@@ -113,28 +109,6 @@ def _process_active_worktrees(
         aggregates.any_forced_serial,
         aggregates.completed_subtask_ids,
     )
-
-
-def run_self_heal_phase(
-    run_state: Any, config: DispatcherConfig, now: float | None = None
-) -> None:
-    """run_state自己修復（薄いラッパー、呼び出し互換のため維持）。
-
-    Issue取得直後・`_build_cycle_context`より前に呼び出す必要があるため、
-    Reconciliation Phase本体（`run_post_gc_reconciliation`）とは別の
-    エントリポイントとして公開する。
-
-    #516再3巡目レビュー指摘: `_self_heal_run_state`は`run_state.json`欠落時
-    にしか動作しないため、`_reconcile_recovery_counters`（ファイル有無を
-    問わず毎サイクル、既存active_worktreesエントリのstaleなrecompute_count/
-    forced_serialを本文と再照合する）を別途呼び出す。再4巡目レビュー指摘
-    により、`_reconcile_recovery_counters`は`_self_heal_run_state`と同じく
-    リポジトリ全体のIssue一覧を独自に読み直すため、ここでは呼び出し元から
-    スコープ済みIssue一覧を受け取らない。
-    """
-    _self_heal_run_state(run_state, config)
-    _reconcile_recovery_counters(run_state, config)
-    _self_heal_launch_history(run_state, config, time.time() if now is None else now)
 
 
 def run_post_gc_reconciliation(

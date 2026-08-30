@@ -10,19 +10,254 @@ from unittest.mock import patch
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import PRIMARY_STATUS_CONFLICT
 from orchestune.consistency.models import IntentStatus, RepairStatus
+from orchestune.consistency.repairs.execution import (
+    COMMAND_BOOKKEEPING,
+    COMMAND_REQUEUE,
+)
 from orchestune.consistency.supervisor import (
     ConsistencyMode,
     RepairDisposition,
     consistency_cycle_to_dict,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle import (
+    _run_recovery_bookkeeping_boundary,
+    run_dispatch_cycle,
+)
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.dispatch.status_repair import status_intent_journal_path
-from tests.conftest import make_issue, make_task
+from tests.conftest import make_issue, make_pr, make_task
+
+
+def _repair_command_codes(report) -> list[str]:
+    return [
+        result.command.code
+        for repair_pass in report.repair_passes
+        for result in repair_pass.results
+    ]
+
+
+def test_recovery_boundary_restores_missing_run_state_and_reobserves(
+    tmp_path, in_memory_forge
+) -> None:
+    worktree_root = tmp_path / "worktrees"
+    restored_worktree = worktree_root / "claude-issue-744-recovery-cutover"
+    restored_worktree.mkdir(parents=True)
+    issue = make_issue(
+        744,
+        labels=("status:in-progress",),
+        subtask_id="recovery-cutover",
+        parent=None,
+    )
+    in_memory_forge.seed_issue(issue)
+    in_memory_forge.seed_pr(
+        make_pr(
+            755,
+            head_ref="claude/issue-744-recovery-cutover",
+            closes_issue_numbers=(744,),
+        )
+    )
+    run_state = RunState()
+    config = DispatcherConfig(
+        apply=True,
+        max_concurrent=0,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=worktree_root,
+        forge=in_memory_forge,
+    )
+
+    report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
+
+    assert _repair_command_codes(report) == [COMMAND_REQUEUE, COMMAND_BOOKKEEPING]
+    assert report.repair_passes[0].results[0].status is RepairStatus.SKIPPED
+    assert report.repair_passes[0].results[1].status is RepairStatus.APPLIED
+    assert [scan.boundary for scan in report.scans] == [
+        "recovery-bookkeeping",
+        "repair-1",
+    ]
+    assert run_state.active_worktrees["744"].worktree_path == str(restored_worktree)
+    assert (
+        load_run_state(config.run_state_path).active_worktrees["744"]
+        == (run_state.active_worktrees["744"])
+    )
+
+
+def test_recovery_boundary_requeues_missing_execution_without_restorable_resource(
+    tmp_path, in_memory_forge
+) -> None:
+    issue = make_issue(
+        744,
+        labels=("status:in-progress",),
+        subtask_id="recovery-cutover",
+        parent=None,
+    )
+    in_memory_forge.seed_issue(issue)
+    run_state = RunState()
+    config = DispatcherConfig(
+        apply=True,
+        max_concurrent=0,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    first = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
+    second = _run_recovery_bookkeeping_boundary(run_state, config, now=1_001.0)
+
+    assert _repair_command_codes(first) == [COMMAND_REQUEUE, COMMAND_BOOKKEEPING]
+    assert first.repair_passes[0].results[0].status is RepairStatus.APPLIED
+    assert first.repair_passes[0].results[1].status is RepairStatus.SKIPPED
+    assert in_memory_forge.get_issue_labels(744) == ("status:queued",)
+    assert run_state.active_worktrees == {}
+    assert second.repair_passes == ()
+
+
+def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
+    tmp_path, in_memory_forge
+) -> None:
+    now = datetime.now(UTC).timestamp()
+    parent = make_issue(
+        741,
+        body=(
+            "<!-- orchestune:launch-history -->\n"
+            f"```yaml\nlaunch_history:\n- {now - 60}\n- {now - 60}\n```\n"
+        ),
+        labels=(),
+        parent=None,
+    )
+    child = make_issue(
+        744,
+        body=(
+            "```yaml\nsubtask_id: recovery-cutover\nrecompute_count: 3\n"
+            "forced_serial: true\n```\n"
+        ),
+        labels=("status:in-progress", "status:force-serial"),
+        parent={"number": 741},
+    )
+    in_memory_forge.seed_issue(parent)
+    in_memory_forge.seed_issue(child)
+    active = ActiveWorktree(
+        issue_number=744,
+        branch="codex/issue-744-recovery-cutover",
+        worktree_path=str(tmp_path / "worktrees" / "issue-744"),
+        pid=744,
+        started_at=now - 120,
+        declared_footprint=(),
+        recompute_count=1,
+        forced_serial=False,
+    )
+    run_state = RunState(
+        active_worktrees={"744": active},
+        launch_history=[now - 60],
+    )
+    config = DispatcherConfig(
+        apply=True,
+        parent_issue_number=741,
+        window_seconds=3_600,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    with patch(
+        "orchestune.dispatch.execution_repair.is_process_alive", return_value=True
+    ):
+        first = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+        restarted = load_run_state(config.run_state_path)
+        second = _run_recovery_bookkeeping_boundary(restarted, config, now=now + 1)
+
+    assert _repair_command_codes(first) == [COMMAND_BOOKKEEPING, COMMAND_BOOKKEEPING]
+    assert restarted.active_worktrees["744"].recompute_count == 3
+    assert restarted.active_worktrees["744"].forced_serial is True
+    assert restarted.launch_history == [now - 60, now - 60]
+    assert second.repair_passes == ()
+
+
+def test_recovery_counters_use_repository_wide_in_progress_snapshot(
+    tmp_path, in_memory_forge
+) -> None:
+    """A parent-scoped cycle must still repair the repository-shared run state."""
+    issue = make_issue(
+        745,
+        body=(
+            "```yaml\nsubtask_id: recovery-other-parent\nrecompute_count: 4\n"
+            "forced_serial: true\n```\n"
+        ),
+        labels=("status:in-progress", "status:force-serial"),
+        parent={"number": 999},
+    )
+    in_memory_forge.seed_issue(issue)
+    active = ActiveWorktree(
+        issue_number=745,
+        branch="codex/issue-745-recovery-other-parent",
+        worktree_path=str(tmp_path / "worktrees" / "issue-745"),
+        pid=745,
+        started_at=900.0,
+        declared_footprint=(),
+        recompute_count=1,
+        forced_serial=False,
+    )
+    run_state = RunState(active_worktrees={"745": active})
+    config = DispatcherConfig(
+        apply=True,
+        parent_issue_number=741,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    with patch(
+        "orchestune.dispatch.execution_repair.is_process_alive", return_value=True
+    ):
+        report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
+
+    assert _repair_command_codes(report) == [COMMAND_BOOKKEEPING]
+    assert run_state.active_worktrees["745"].recompute_count == 4
+    assert run_state.active_worktrees["745"].forced_serial is True
+    persisted = load_run_state(config.run_state_path).active_worktrees["745"]
+    assert persisted.recompute_count == 4
+    assert persisted.forced_serial is True
+
+
+def test_recovery_launch_history_updates_preview_without_persisting(
+    tmp_path, in_memory_forge
+) -> None:
+    now = datetime.now(UTC).timestamp()
+    in_memory_forge.seed_issue(
+        make_issue(
+            741,
+            body=(
+                "<!-- orchestune:launch-history -->\n"
+                f"```yaml\nlaunch_history:\n- {now - 60}\n```\n"
+            ),
+            labels=(),
+            parent=None,
+        )
+    )
+    run_state = RunState()
+    config = DispatcherConfig(
+        apply=False,
+        parent_issue_number=741,
+        window_seconds=3_600,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+
+    assert _repair_command_codes(report) == [COMMAND_BOOKKEEPING]
+    assert report.repair_passes[0].results[0].status is RepairStatus.APPLIED
+    assert run_state.launch_history == [now - 60]
+    assert not config.run_state_path.exists()
 
 
 def _pipeline_report() -> CycleReport:

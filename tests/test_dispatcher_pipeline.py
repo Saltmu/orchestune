@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestune.consistency.models import RepairStatus
+from orchestune.consistency.repairs.execution import COMMAND_REQUEUE
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     CycleReport,
@@ -219,12 +221,10 @@ class TestAppendEventLog:
 
 
 class TestRecoveredActiveTask:
-    def test_run_cycle_reclaims_recovered_task_without_pr_or_worktree(
+    def test_run_cycle_requeues_missing_execution_without_resource(
         self, tmp_path, fake_forge
     ):
-        """#383: PRが見つからないまま自己修復されたエントリ（started_at=None、
-        物理worktreeも不在）は、同一サイクル内のゾンビGCにより即座に回収され、
-        status:queuedへ再キューイングされること（無期限のクオータ占有を防ぐ）。"""
+        """Supervisor の typed repair が実行資源のないタスクを再キューする。"""
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -244,6 +244,7 @@ class TestRecoveredActiveTask:
         fake_forge.remove_label.reset_mock(side_effect=True)
         mock_remove_label = fake_forge.remove_label
         fake_forge.add_comment.reset_mock(side_effect=True)
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
@@ -263,7 +264,20 @@ class TestRecoveredActiveTask:
             report = run_dispatch_cycle(config)
 
         assert "1" not in load_run_state(config.run_state_path).active_worktrees
-        assert [e["action"] for e in report.completion_events] == ["gc_reclaimed"]
+        assert report.completion_events == []
+        repair_results = tuple(
+            result
+            for repair_pass in report.consistency.repair_passes
+            for result in repair_pass.results
+        )
+        assert any(
+            result.command.code == COMMAND_REQUEUE
+            and result.status is RepairStatus.APPLIED
+            for result in repair_results
+        ), tuple(
+            (result.command.code, result.status, result.diagnostics)
+            for result in repair_results
+        )
         mock_remove_label.assert_called_once_with(1, "status:in-progress")
         mock_add_label.assert_called_once_with(1, "status:queued")
 

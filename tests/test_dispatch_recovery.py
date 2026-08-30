@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from orchestune.consistency.invariants.execution import RUN_STATE_MISSING
 from orchestune.consistency.models import (
     ConsistencyScope,
     RepairCommand,
@@ -8,16 +9,50 @@ from orchestune.consistency.models import (
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.recovery import (
-    _apply_restore_missing_active_worktrees,
-    _decide_missing_active_worktrees,
-    _decide_stale_recovery_counters,
+    RecoveryBookkeepingSnapshot,
+    _counter_targets,
     _extract_raw_subtask_id,
     _parse_subtask_info_from_issue,
+    _restoration_candidates,
     execute_bookkeeping_repair_command,
-    recover_run_state,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
+
+
+def _snapshot(*restorations):
+    return RecoveryBookkeepingSnapshot(
+        tasks_by_issue={},
+        open_prs=(),
+        restorations=restorations,
+        counter_targets=(),
+        launch_history=(),
+    )
+
+
+def _bookkeeping_command(subject_id: str) -> RepairCommand:
+    return RepairCommand(
+        code=COMMAND_BOOKKEEPING,
+        scope=ConsistencyScope.TASK,
+        subject_id=subject_id,
+        idempotency_key=f"execution:{subject_id}:bookkeeping",
+        parameters=(("finding_codes", (RUN_STATE_MISSING,)),),
+    )
+
+
+def _project_restoration_candidates(
+    _run_state: RunState,
+    issues: list[IssueRecord],
+    config: DispatcherConfig,
+):
+    """Project the adapter's authoritative Forge snapshot for focused tests."""
+    return list(
+        _restoration_candidates(
+            issues,
+            config.resolved_forge.list_open_prs(),
+            config,
+        )
+    )
 
 
 def _issue_with_footprint(
@@ -99,35 +134,8 @@ class TestParseSubtaskInfoFromIssue:
         assert footprint == ("src/foo.py",)
 
 
-class TestDecideMissingActiveWorktrees:
-    """decide層: githubのread-only呼び出し以外の副作用なしで復元計画のみを算出する。"""
-
-    def test_no_missing_issues_returns_empty_without_calling_github(self, tmp_path):
-        run_state = RunState(
-            active_worktrees={
-                "1": ActiveWorktree(
-                    issue_number=1,
-                    branch="claude/issue-1-task-a",
-                    worktree_path=str(tmp_path),
-                    pid=1,
-                    started_at=1.0,
-                    declared_footprint=(),
-                )
-            }
-        )
-        issue = _issue_with_footprint(1, subtask_id="task-a")
-        with patch("fake_forge_proxy.active_fake_forge.list_open_prs") as mock_prs:
-            result = _decide_missing_active_worktrees(
-                run_state,
-                [issue],
-                DispatcherConfig(
-                    events_log_path=tmp_path / "events.jsonl",
-                    run_state_path=tmp_path / "run_state.json",
-                    worktree_root=tmp_path / "worktrees",
-                ),
-            )
-        assert result == []
-        mock_prs.assert_not_called()
+class TestRestorationCandidateProjection:
+    """Supervisor adapter が観測する復元候補の projection を検証する。"""
 
     def test_missing_issue_without_pr_decides_synthetic_branch(self, tmp_path):
         run_state = RunState(active_worktrees={})
@@ -141,7 +149,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         assert len(result) == 1
         key, subtask_id, active = result[0]
@@ -172,7 +180,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         active = result[0][2]
         assert active.recompute_count == 2
@@ -192,7 +200,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         active = result[0][2]
         assert active.recompute_count == 0
@@ -222,7 +230,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         assert result[0][2].forced_serial is True
 
@@ -242,7 +250,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         assert result[0][2].started_at is None
 
@@ -269,7 +277,7 @@ class TestDecideMissingActiveWorktrees:
         with patch(
             "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
         ):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         active = result[0][2]
         assert active.external_id == "42"
@@ -297,7 +305,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(
+            result = _project_restoration_candidates(
                 run_state,
                 [issue_under_parent_100, issue_under_parent_200],
                 config,
@@ -333,7 +341,7 @@ class TestDecideMissingActiveWorktrees:
             "fake_forge_proxy.active_fake_forge.list_open_prs",
             return_value=[dependency_pr],
         ):
-            result = _decide_missing_active_worktrees(
+            result = _project_restoration_candidates(
                 run_state,
                 [dependency, dependent],
                 config,
@@ -374,7 +382,7 @@ class TestDecideMissingActiveWorktrees:
             "fake_forge_proxy.active_fake_forge.list_open_prs",
             return_value=[yaml_dependency_pr, native_dependency_pr],
         ):
-            result = _decide_missing_active_worktrees(
+            result = _project_restoration_candidates(
                 run_state,
                 [yaml_dependency, native_dependency, dependent],
                 config,
@@ -398,7 +406,7 @@ class TestDecideMissingActiveWorktrees:
         )
 
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            result = _decide_missing_active_worktrees(
+            result = _project_restoration_candidates(
                 run_state,
                 [dependent],
                 config,
@@ -432,7 +440,7 @@ class TestDecideMissingActiveWorktrees:
         with patch(
             "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
         ):
-            result = _decide_missing_active_worktrees(run_state, [issue], config)
+            result = _project_restoration_candidates(run_state, [issue], config)
 
         assert len(result) == 1
         key, subtask_id, active = result[0]
@@ -470,7 +478,7 @@ class TestDecideMissingActiveWorktrees:
             "fake_forge_proxy.active_fake_forge.list_open_prs",
             return_value=[dependency_pr],
         ):
-            result = _decide_missing_active_worktrees(
+            result = _project_restoration_candidates(
                 run_state,
                 [dependency, dependent],
                 config,
@@ -480,15 +488,12 @@ class TestDecideMissingActiveWorktrees:
         assert active_by_key["710"].base_branch == "codex/issue-709-task-a"
 
 
-class TestApplyRestoreMissingActiveWorktrees:
-    """act層: decideが算出した内容のみをrun_stateへ書き込む。"""
+class TestBookkeepingRepairCommand:
+    """Typed handler applies only its observed command subject."""
 
-    def test_empty_restorations_returns_false(self):
-        run_state = RunState(active_worktrees={})
-        assert _apply_restore_missing_active_worktrees(run_state, []) is False
-        assert run_state.active_worktrees == {}
-
-    def test_writes_decided_restorations_into_run_state(self):
+    def test_typed_bookkeeping_command_applies_only_its_observed_subject(
+        self, tmp_path, fake_forge
+    ):
         run_state = RunState(active_worktrees={})
         active = ActiveWorktree(
             issue_number=101,
@@ -497,57 +502,52 @@ class TestApplyRestoreMissingActiveWorktrees:
             pid=None,
             started_at=0.0,
             declared_footprint=("src/foo.py",),
+            external_id="50",
         )
-        modified = _apply_restore_missing_active_worktrees(
-            run_state, [("101", "task-a", active)]
+        command = _bookkeeping_command("101")
+        config = DispatcherConfig(
+            apply=True,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         )
-        assert modified is True
-        assert run_state.active_worktrees["101"] is active
-
-    def test_typed_bookkeeping_command_applies_only_its_observed_subject(self):
-        run_state = RunState(active_worktrees={})
-        active = ActiveWorktree(
-            issue_number=101,
-            branch="claude/issue-101-task-a",
-            worktree_path="worktrees/claude-issue-101-task-a",
-            pid=None,
-            started_at=0.0,
-            declared_footprint=("src/foo.py",),
-        )
-        command = RepairCommand(
-            code=COMMAND_BOOKKEEPING,
-            scope=ConsistencyScope.TASK,
-            subject_id="101",
-            idempotency_key="execution:101:bookkeeping",
-        )
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
 
         result = execute_bookkeeping_repair_command(
             command,
             run_state,
-            (("101", "task-a", active),),
+            _snapshot(("101", "task-a", active)),
+            config,
         )
 
         assert result.status is RepairStatus.APPLIED
         assert run_state.active_worktrees == {"101": active}
 
-    def test_typed_bookkeeping_command_defers_when_subject_is_not_observed(self):
+    def test_typed_bookkeeping_command_defers_when_subject_is_not_observed(
+        self, tmp_path, fake_forge
+    ):
         run_state = RunState(active_worktrees={})
-        command = RepairCommand(
-            code=COMMAND_BOOKKEEPING,
-            scope=ConsistencyScope.TASK,
-            subject_id="102",
-            idempotency_key="execution:102:bookkeeping",
+        command = _bookkeeping_command("102")
+        config = DispatcherConfig(
+            apply=True,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         )
 
-        result = execute_bookkeeping_repair_command(command, run_state, ())
+        result = execute_bookkeeping_repair_command(
+            command, run_state, _snapshot(), config
+        )
 
         assert result.status is RepairStatus.SKIPPED
-        assert result.diagnostics == (
-            "bookkeeping precondition no longer holds for subject 102",
-        )
+        assert result.diagnostics == ("missing-entry precondition no longer holds",)
         assert run_state.active_worktrees == {}
 
-    def test_typed_bookkeeping_command_does_not_overwrite_an_occupied_key(self):
+    def test_typed_bookkeeping_command_does_not_overwrite_an_occupied_key(
+        self, tmp_path, fake_forge
+    ):
         occupied = ActiveWorktree(
             issue_number=999,
             branch="codex/issue-999",
@@ -563,32 +563,36 @@ class TestApplyRestoreMissingActiveWorktrees:
             pid=None,
             started_at=None,
             declared_footprint=(),
+            external_id="51",
         )
         run_state = RunState(active_worktrees={"101": occupied})
-        command = RepairCommand(
-            code=COMMAND_BOOKKEEPING,
-            scope=ConsistencyScope.TASK,
-            subject_id="101",
-            idempotency_key="execution:101:bookkeeping",
+        command = _bookkeeping_command("101")
+        config = DispatcherConfig(
+            apply=True,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         )
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
 
         result = execute_bookkeeping_repair_command(
             command,
             run_state,
-            (("101", "task-101", restoration),),
+            _snapshot(("101", "task-101", restoration)),
+            config,
         )
 
         assert result.status is RepairStatus.SKIPPED
         assert run_state.active_worktrees == {"101": occupied}
 
 
-class TestDecideStaleRecoveryCounters:
+class TestRecoveryCounterTargets:
     """#516再2巡目レビュー指摘: `_persist_recovery_counters`がIssue本文への
     書き込みに成功した直後、サイクル終端の`save_run_state`前にプロセスが
-    停止すると、run_state.json上のActiveWorktreeは古い値のまま残る。この
-    エントリは`active_worktrees`に既に存在するため`_decide_missing_active_worktrees`
-    の対象外——recover_run_stateは既存エントリも本文/ラベルと突き合わせて
-    再照合しなければならない。
+    停止すると、run_state.json上のActiveWorktreeは古い値のまま残る。
+    typed bookkeeping の desired state は既存entryも本文/ラベルと突き合わせ、
+    常に単調なtargetを導出しなければならない。
     """
 
     def test_reconciles_forced_serial_from_body_into_stale_existing_entry(
@@ -613,9 +617,9 @@ class TestDecideStaleRecoveryCounters:
             forced_serial=True,  # 本文側は既に更新済み
         )
 
-        reconciliations = _decide_stale_recovery_counters(run_state, [issue])
+        targets = _counter_targets(run_state, [issue])
 
-        assert reconciliations == [("101", 2, True)]
+        assert targets == (("101", 2, True),)
 
     def test_never_rolls_back_recompute_count_when_body_lags_behind(self, tmp_path):
         """本文の書き込みがまだ追いついていないだけの一時的なラグで、
@@ -639,11 +643,11 @@ class TestDecideStaleRecoveryCounters:
             forced_serial=False,
         )
 
-        reconciliations = _decide_stale_recovery_counters(run_state, [issue])
+        targets = _counter_targets(run_state, [issue])
 
-        assert reconciliations == []
+        assert targets == (("101", 2, False),)
 
-    def test_no_reconciliation_when_values_already_match(self, tmp_path):
+    def test_target_matches_current_values_when_already_consistent(self, tmp_path):
         active = ActiveWorktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
@@ -663,7 +667,7 @@ class TestDecideStaleRecoveryCounters:
             forced_serial=True,
         )
 
-        assert _decide_stale_recovery_counters(run_state, [issue]) == []
+        assert _counter_targets(run_state, [issue]) == (("101", 1, True),)
 
     def test_skips_entries_with_no_corresponding_in_progress_issue(self, tmp_path):
         """対応するIssueがin_progress_issuesに無い（クローズ済み等）場合は
@@ -680,40 +684,4 @@ class TestDecideStaleRecoveryCounters:
         )
         run_state = RunState(active_worktrees={"101": active})
 
-        assert _decide_stale_recovery_counters(run_state, []) == []
-
-
-class TestRecoverRunStateReconcilesStaleEntries:
-    """decide+applyの統合入口（recover_run_state）が既存エントリも
-    実際に更新することを確認する。"""
-
-    def test_updates_existing_active_worktree_in_place(self, tmp_path):
-        active = ActiveWorktree(
-            issue_number=101,
-            branch="claude/issue-101-task-a",
-            worktree_path="worktrees/w1",
-            pid=None,
-            started_at=1_699_999_000.0,
-            declared_footprint=("src/foo.py",),
-            recompute_count=2,
-            forced_serial=False,
-        )
-        run_state = RunState(active_worktrees={"101": active})
-        issue = _issue_with_footprint(
-            101,
-            subtask_id="task-a",
-            footprint=["src/foo.py"],
-            recompute_count=2,
-            forced_serial=True,
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        )
-
-        with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
-            modified = recover_run_state(run_state, [issue], config)
-
-        assert modified is True
-        assert run_state.active_worktrees["101"].forced_serial is True
+        assert _counter_targets(run_state, []) == ()

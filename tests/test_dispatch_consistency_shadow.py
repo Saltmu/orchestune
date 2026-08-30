@@ -323,7 +323,9 @@ def test_shadow_records_targeted_events_and_authoritative_end_diff(
         change.scope.value == "task" and change.subject_id == "706"
         for change in end.state_changes
     )
-    assert fake_forge.list_open_prs.call_count == 2
+    # Recovery bookkeeping takes one authoritative snapshot before the shadow
+    # supervisor's start/end observations.
+    assert fake_forge.list_open_prs.call_count == 3
 
 
 def test_shadow_observation_failure_is_reported_without_failing_cycle(

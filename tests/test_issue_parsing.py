@@ -373,7 +373,7 @@ class TestLaunchHistoryFromBody:
 
 class TestLaunchHistoryInWindow:
     """#519レビュー7巡目(P2): ウィンドウ正規化の共通意味論（永続化側の
-    `_persist_launch_history`と復元側の`_restore_launch_history`が共有する）。"""
+    `_persist_launch_history`とSupervisorのdesired-state導出が共有する）。"""
 
     def test_drops_timestamps_older_than_the_window(self):
         assert launch_history_in_window(
