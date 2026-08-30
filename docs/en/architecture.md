@@ -184,13 +184,7 @@ L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
 "contains only argparse wiring". `cli` is the exception because it dispatches to
 the other five; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
 
-All code that predated this boundary has since been resolved. Three modules used to carry such code:
-
-* `dag`: a compatibility facade re-exporting the whole `dag_*` package. Callers now import the concrete `dag_*` module directly, and `dag.cli` — the module that actually owns `main()` — is the real L4 entrypoint.
-* `dispatcher`: held the dispatch cycle's best-effort post-cycle orchestration directly. That has moved to `dispatch.postcycle` (L3), leaving only argument parsing, config loading, and `main()`.
-* `monitor`: built its own status snapshots (`MonitorState`/`build_status_snapshot`/`format_status_report` and friends) directly. That has moved to `status_snapshot` (L2), leaving only argument parsing, the `--watch` loop, and `main()`.
-
-This is not a licence to skip the layering going forward. New code still belongs in the layer that owns the behaviour, and this section and `tests/test_architecture.py` keep enforcing it mechanically.
+New code belongs in the layer that owns the behaviour, and this section and `tests/test_architecture.py` keep enforcing it mechanically.
 
 ### 4.2 Invariants enforced by CI
 
@@ -252,12 +246,3 @@ Because the abstraction is a protocol, a test can inject a fake instead of
 patching module attributes: `IntegratorConfig(forge=...)` and
 `DispatcherConfig(forge=...)` accept any object satisfying it, and the shared
 `fake_forge` fixture supplies one.
-
-That migration is complete for test modules. Tests inject `fake_forge` (or a
-purpose-built in-memory forge) through the configuration or function boundary;
-they no longer patch methods on the concrete `GitHubForge` class. The
-`test_tests_do_not_patch_github_forge` architecture invariant parses every
-Python module under `tests/`, including shared fixtures and support modules,
-except `test_forge.py`. It reports the file and line of any direct
-`unittest.mock.patch` or `patch.object` regression. `test_forge.py` is the
-explicit exception because it owns the concrete adapter contract.

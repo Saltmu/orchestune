@@ -184,13 +184,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」ことであって、「argparse配線しか含まない」ことではありません。`cli` が例外なのは、残り5つへ処理を振り分ける役割だからです（ガード側では `ALLOWED_L4_DEPENDENTS` として表現されています）。
 
-境界を定める前から存在するコードは、現時点ではすべて解消済みです。かつては`dag`・`dispatcher`・`monitor`の3つに残滓がありました。
-
-* `dag`: `dag_*`パッケージ全体を再エクスポートする互換ファサードでした。呼び出し側が具体的な`dag_*`モジュールを直接importするようになり、実際に`main()`を持つ`dag.cli`が本来のL4エントリポイントとして扱われています。
-* `dispatcher`: dispatch cycle後のベストエフォート後処理オーケストレーションを直接抱えていました。これは`dispatch.postcycle`（L3）へ切り出し済みで、現在は引数解析・設定読み込み・`main()`のみが残っています。
-* `monitor`: 自前のステータススナップショット構築（`MonitorState`/`build_status_snapshot`/`format_status_report`等）を直接抱えていました。これは`status_snapshot`（L2）へ切り出し済みで、現在は引数解析・`--watch`ループ・`main()`のみが残っています。
-
-これは新規のコードをその振る舞いを所有する層に置かなくてよいという意味ではありません。境界は引き続きこの節と`tests/test_architecture.py`で機械的に検証されます。
+新規のコードは常にその振る舞いを所有する層に配置する必要があり、境界は引き続きこの節と`tests/test_architecture.py`で機械的に検証されます。
 
 ### 4.2 CIで機械的に検証される不変条件
 
@@ -240,12 +234,3 @@ L1の境界は、単一の具象クライアントではなく3つの `Protocol`
 フェイクを注入できます。`IntegratorConfig(forge=...)` や
 `DispatcherConfig(forge=...)` はプロトコルを満たす任意のオブジェクトを
 受け付け、共有フィクスチャ `fake_forge` がその実体を提供します。
-
-テストモジュールの移行は完了しています。各テストは設定または関数の境界から
-`fake_forge`（あるいは用途別のインメモリForge）を注入し、具象
-`GitHubForge` クラスのメソッドを直接パッチしません。
-`test_tests_do_not_patch_github_forge` アーキテクチャ不変条件は、
-共有fixture・支援モジュールを含む `tests/` 配下のすべてのPythonモジュールを、
-`test_forge.py` だけ除外してASTで解析します。`unittest.mock.patch` または
-`patch.object` による直接patchが再導入された場合、そのファイルと行を報告します。
-具象アダプタ自身の契約を検証する `test_forge.py` だけが明示的な例外です。
