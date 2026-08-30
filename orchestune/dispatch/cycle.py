@@ -20,10 +20,10 @@ from pathlib import Path
 from orchestune.consistency.desired import (
     DesiredTaskInput,
     DispatchPolicy,
-    TaskLifecycle,
     derive_desired_repository_state,
 )
 from orchestune.consistency.engine import ConsistencyEngine
+from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.execution import execution_invariants
 from orchestune.consistency.invariants.status import status_invariants
 from orchestune.consistency.models import (
@@ -77,6 +77,10 @@ from orchestune.dispatch.phase_reconciliation import (
 )
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.state import load_run_state
+from orchestune.dispatch.status_repair import (
+    status_intent_journal_path,
+    task_lifecycle,
+)
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.dispatch.worktree import file_lock
 from orchestune.infra.process_utils import is_process_alive
@@ -128,19 +132,6 @@ class _ExternalExecutionProbe:
 
 def _repository_id() -> str:
     return os.environ.get("GITHUB_REPOSITORY") or "orchestune-repository"
-
-
-def _task_lifecycle(status_labels: tuple[str, ...]) -> TaskLifecycle:
-    if "status:done" in status_labels:
-        return TaskLifecycle.DONE
-    if "status:not-needed" in status_labels:
-        return TaskLifecycle.NOT_NEEDED
-    if any(
-        label in status_labels
-        for label in ("status:blocked-human-review", "status:manual-merge-required")
-    ):
-        return TaskLifecycle.HUMAN_REVIEW
-    return TaskLifecycle.OPEN
 
 
 class _DispatchConsistencyAdapter:
@@ -238,7 +229,7 @@ class _DispatchConsistencyAdapter:
                 subject_id=str(task.issue_number),
                 depends_on=task.depends_on,
                 footprint=task.footprint,
-                lifecycle=_task_lifecycle(task.status_labels),
+                lifecycle=task_lifecycle(task.status_labels),
                 forced_serial=task.issue_number in forced_serial_issues,
             )
             for task in sorted(
@@ -248,6 +239,9 @@ class _DispatchConsistencyAdapter:
         )
 
     def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState:
+        intents = IntentJournal(status_intent_journal_path(self._config)).pending(
+            now=observed.observed_at
+        )
         return derive_desired_repository_state(
             observed.repository_id,
             self._desired_tasks(),
@@ -257,6 +251,7 @@ class _DispatchConsistencyAdapter:
                 task_timeout_seconds=self._config.task_timeout_seconds,
                 zombie_gc_enabled=self._config.zombie_gc,
             ),
+            intents=intents,
             now=observed.observed_at,
         )
 

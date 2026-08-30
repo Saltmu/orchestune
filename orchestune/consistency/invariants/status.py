@@ -83,7 +83,7 @@ TERMINAL_ESCALATION_LABELS = (
 )
 
 # Labels that intentionally hold a `status:blocked` task back even once its
-# dependencies resolve (`dispatch.reconciliation._decide_blocked_promotions`).
+# dependencies resolve during status repair execution.
 PROMOTION_HOLD_LABELS = ("ci:base-branch-red", "status:blocked-recompute")
 
 FORCE_SERIAL_LABEL = "status:force-serial"

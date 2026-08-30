@@ -1,4 +1,5 @@
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
@@ -484,7 +485,7 @@ class TestApplyTaskLaunches:
         from unittest.mock import MagicMock, patch
 
         from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
-        from orchestune.dispatch.reconciliation import _decide_blocked_promotions
+        from orchestune.dispatch.status_repair import evaluate_status_repair_plan
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -545,16 +546,14 @@ class TestApplyTaskLaunches:
         assert selected == []
         assert (2, "status:blocked-human-review") in added_labels
 
-        # 2サイクル目: GitHub側は status:blocked-human-review ラベルが付与された状態
-        # blocked_issues には status:blocked-human-review のIssueは入らない
-        blocked_issues_cycle2 = []
-        promotable = _decide_blocked_promotions(
-            blocked_issues=blocked_issues_cycle2,
-            done_issues=[],
+        # 2サイクル目: GitHub側は status:blocked-human-review ラベルが付与された状態。
+        # カーネルが人手確認状態を期待値として扱い、再キュー計画を返さない。
+        cycle2_task = replace(bad_task, status_labels=("status:blocked-human-review",))
+        evaluation = evaluate_status_repair_plan(
+            {2: cycle2_task},
             completed_subtask_ids={"dep-task"},
-            tasks_by_issue={2: bad_task},
         )
-        assert bad_task not in promotable
+        assert evaluation.commands == ()
 
 
 class TestApplyTaskLaunchesLabelOrdering:
