@@ -291,7 +291,7 @@ def command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
     return tuple(code for code in values if isinstance(code, str))
 
 
-def _collect_observed_state(
+def collect_execution_observed_state(
     run_state: RunState,
     tasks_by_issue: Mapping[int, Task],
     config: DispatcherConfig,
@@ -322,7 +322,7 @@ def _collect_observed_state(
     )
 
 
-def _derive_desired_state(
+def derive_execution_desired_state(
     tasks_by_issue: Mapping[int, Task],
     config: DispatcherConfig,
     repository_id: str,
@@ -354,7 +354,7 @@ def evaluate_execution_repair_plan(
     """Observe, evaluate, and plan execution repairs without applying them."""
     observed_at = datetime.now(UTC) if now is None else datetime.fromtimestamp(now, UTC)
     repository_id = _repository_id()
-    observed = _collect_observed_state(
+    observed = collect_execution_observed_state(
         run_state,
         tasks_by_issue,
         config,
@@ -363,7 +363,7 @@ def evaluate_execution_repair_plan(
         repository_id,
         observed_at,
     )
-    desired = _derive_desired_state(
+    desired = derive_execution_desired_state(
         tasks_by_issue,
         config,
         repository_id,
@@ -387,6 +387,8 @@ __all__ = [
     "RepairCommandDomain",
     "RepairCommandOperation",
     "RepairCommandHandler",
+    "collect_execution_observed_state",
     "command_finding_codes",
+    "derive_execution_desired_state",
     "evaluate_execution_repair_plan",
 ]

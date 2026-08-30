@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,7 +53,11 @@ from orchestune.consistency.observation import (
     ForgeSnapshot,
     ObservationCollector,
 )
-from orchestune.consistency.repairs.execution import plan_execution_repairs
+from orchestune.consistency.repairs.execution import (
+    COMMAND_BOOKKEEPING,
+    COMMAND_REQUEUE,
+    plan_execution_repairs,
+)
 from orchestune.consistency.repairs.status import plan_status_repairs
 from orchestune.consistency.supervisor import (
     ConsistencyCycleReport,
@@ -73,6 +77,10 @@ from orchestune.dispatch.cycle_report import (
     append_event_log,
     build_event_log_entry,
 )
+from orchestune.dispatch.execution_repair import (
+    DispatchRepairExecutorAdapter,
+    RepairCommandHandler,
+)
 from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.phase_rebase import (
     _sync_external_locks,
@@ -81,9 +89,16 @@ from orchestune.dispatch.phase_rebase import (
 from orchestune.dispatch.phase_reconciliation import (
     _process_active_worktrees,
     run_post_gc_reconciliation,
-    run_self_heal_phase,
 )
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
+from orchestune.dispatch.recovery import (
+    LAUNCH_HISTORY_STALE,
+    RecoveryBookkeepingAdapter,
+    execute_bookkeeping_repair_command,
+    execute_recovery_requeue_command,
+    plan_recovery_bookkeeping_repairs,
+    recovery_bookkeeping_invariants,
+)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_repair import (
@@ -294,8 +309,9 @@ class _DispatchConsistencyAdapter:
 @dataclass(frozen=True, slots=True)
 class _DispatchRepairExecutor:
     config: DispatcherConfig
-    adapter: _DispatchConsistencyAdapter
+    adapter: _DispatchConsistencyAdapter | RecoveryBookkeepingAdapter
     completed_subtask_ids: frozenset[str]
+    execution_handlers: Mapping[str, RepairCommandHandler] = field(default_factory=dict)
 
     def execute(self, command: RepairCommand) -> RepairResult:
         if command.code.startswith("status."):
@@ -304,6 +320,10 @@ class _DispatchRepairExecutor:
                 self.adapter.tasks_by_issue,
                 completed_subtask_ids=self.completed_subtask_ids,
                 config=self.config,
+            )
+        if self.execution_handlers:
+            return DispatchRepairExecutorAdapter(self.execution_handlers).execute(
+                command
             )
         return RepairResult(
             command=command,
@@ -662,13 +682,62 @@ def _finish_consistency_runtime(
     report.consistency = _merge_consistency_reports(main_report, status_cycle.reports)
 
 
-def _prepare_cycle_issues(run_state, config: DispatcherConfig, now: float):
+def _run_recovery_bookkeeping_boundary(
+    run_state, config: DispatcherConfig, *, now: float
+) -> ConsistencyCycleReport:
+    """Run startup recovery only through Supervisor and typed repair handlers."""
+    adapter = RecoveryBookkeepingAdapter(_repository_id(), run_state, config, now=now)
+    supervisor = ConsistencySupervisor(
+        repository_id=_repository_id(),
+        engine=ConsistencyEngine(recovery_bookkeeping_invariants()),
+        repair_planners=(_FunctionPlanner(plan_recovery_bookkeeping_repairs),),
+    )
+    initial_scan = supervisor.full_scan(
+        "recovery-bookkeeping", observer=adapter, deriver=adapter
+    )
+    handlers: Mapping[str, RepairCommandHandler] = {
+        COMMAND_REQUEUE: lambda command: execute_recovery_requeue_command(
+            command, run_state, adapter.snapshot, config
+        ),
+        COMMAND_BOOKKEEPING: lambda command: execute_bookkeeping_repair_command(
+            command, run_state, adapter.snapshot, config
+        ),
+    }
+    allowlist = (
+        {COMMAND_REQUEUE, COMMAND_BOOKKEEPING}
+        if config.apply
+        else {LAUNCH_HISTORY_STALE}
+    )
+    supervisor.repair_until_stable(
+        initial_scan,
+        observer=adapter,
+        deriver=adapter,
+        executor=_DispatchRepairExecutor(
+            config=config,
+            adapter=adapter,
+            completed_subtask_ids=frozenset(),
+            execution_handlers=handlers,
+        ),
+        allowlist=allowlist,
+        max_passes=1,
+    )
+    return supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
+
+
+def _recovery_requeued(report: ConsistencyCycleReport) -> bool:
+    return any(
+        result.command.code == COMMAND_REQUEUE and result.status is RepairStatus.APPLIED
+        for repair_pass in report.repair_passes
+        for result in repair_pass.results
+    )
+
+
+def _prepare_cycle_issues(run_state, config: DispatcherConfig, _now: float):
     ensure_parent_branch_ready(config)
     issues = _fetch_issues(config)
     # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
     # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
     discard_reclaim_counts_for_closed_issues(run_state, issues, config)
-    run_self_heal_phase(run_state, config, now)
     return issues.filtered_by_parent(config.parent_issue_number)
 
 
@@ -830,9 +899,16 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         run_state = load_run_state(config.run_state_path)
         now = time.time()
         issues = _prepare_cycle_issues(run_state, config, now)
+        recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+        if _recovery_requeued(recovery_report):
+            issues = _fetch_issues(config).filtered_by_parent(
+                config.parent_issue_number
+            )
         ctx = _build_cycle_context(issues, run_state, config)
         consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
-        status_cycle = _StatusRepairCycleState()
+        status_cycle = _StatusRepairCycleState(
+            reports=[recovery_report] if recovery_report.repair_passes else []
+        )
         report = _execute_cycle_pipeline(
             ctx, issues, run_state, config, now, status_cycle
         )
