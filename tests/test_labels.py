@@ -12,11 +12,6 @@ from orchestune import StatusLabel
 from orchestune.forge.admin import REQUIRED_LABELS
 from orchestune.labels import (
     ALL_STATUS_LABELS,
-    CI_BASE_BRANCH_RED,
-    INTEGRATION_INCLUDED,
-    INTEGRATION_PARENT_BRANCH_STALE,
-    NOT_NEEDED_REVIEW_FAILED,
-    NOT_NEEDED_REVIEW_PASSED,
     STATUS_LABEL_PREFIX,
 )
 
@@ -74,15 +69,6 @@ def test_status_label_enum_values() -> None:
     for label in StatusLabel:
         assert label.startswith(STATUS_LABEL_PREFIX)
         assert label in ALL_STATUS_LABELS
-
-
-def test_related_label_constants() -> None:
-    """Verify related label constants."""
-    assert CI_BASE_BRANCH_RED == "ci:base-branch-red"
-    assert INTEGRATION_INCLUDED == "integration:included"
-    assert INTEGRATION_PARENT_BRANCH_STALE == "integration:parent-branch-stale"
-    assert NOT_NEEDED_REVIEW_PASSED == "not-needed-review:passed"
-    assert NOT_NEEDED_REVIEW_FAILED == "not-needed-review:failed"
 
 
 def test_all_status_labels_in_required_labels() -> None:

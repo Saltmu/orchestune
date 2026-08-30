@@ -24,20 +24,8 @@ class StatusLabel(StrEnum):
 
 ALL_STATUS_LABELS: tuple[StatusLabel, ...] = tuple(StatusLabel)
 
-# Related labels used across orchestration workflows
-CI_BASE_BRANCH_RED = "ci:base-branch-red"
-INTEGRATION_INCLUDED = "integration:included"
-INTEGRATION_PARENT_BRANCH_STALE = "integration:parent-branch-stale"
-NOT_NEEDED_REVIEW_PASSED = "not-needed-review:passed"
-NOT_NEEDED_REVIEW_FAILED = "not-needed-review:failed"
-
 __all__ = [
     "ALL_STATUS_LABELS",
-    "CI_BASE_BRANCH_RED",
-    "INTEGRATION_INCLUDED",
-    "INTEGRATION_PARENT_BRANCH_STALE",
-    "NOT_NEEDED_REVIEW_FAILED",
-    "NOT_NEEDED_REVIEW_PASSED",
     "STATUS_LABEL_PREFIX",
     "StatusLabel",
 ]

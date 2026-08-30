@@ -3,11 +3,10 @@
 Orchestuneは、各サブタスクの進行状況をGitHub Issueの`status:*`ラベルとして
 Source of Truthに保持します（[アーキテクチャ](./architecture.md)の「自己修復」で
 述べた通り、`run_state.json`が消失してもこのラベルとオープンなPRから状態を
-再構築できます）。本ドキュメントでは、9種類の`status:*`ラベルそれぞれが
+再構築できます）。本ドキュメントでは、10種類の`status:*`ラベルそれぞれが
 「いつ・どのコードによって・どんな条件で」付与・解除・遷移されるかを一覧します。
 
-対象ラベルとその定義は`orchestune/labels.py`の`StatusLabel`（および`orchestune/forge/admin.py`の`REQUIRED_LABELS`。`orchestune
-bootstrap`実行時にGitHub上へ自動作成される）を正としています。
+対象ラベルとその定義は`orchestune/labels.py`の`StatusLabel`および`orchestune/forge/admin.py`の`REQUIRED_LABELS`（`orchestune bootstrap`実行時にGitHub上へ自動作成）を正としています。
 
 ## ラベル一覧
 
