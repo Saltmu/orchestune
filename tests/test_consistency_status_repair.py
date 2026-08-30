@@ -14,7 +14,7 @@ from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     PRIMARY_STATUS_CONFLICT,
 )
-from orchestune.consistency.models import IntentStatus
+from orchestune.consistency.models import IntentStatus, RepairStatus
 from orchestune.consistency.repairs.status import (
     COMMAND_REMOVE_LABEL,
     COMMAND_TRANSITION_LABEL,
@@ -23,6 +23,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.status_repair import (
     StatusRepairPhase,
     evaluate_status_repair_plan,
+    execute_status_repair_command,
     reconcile_status_repairs,
     status_intent_journal_path,
     task_lifecycle,
@@ -208,6 +209,48 @@ def test_partial_transition_resumes_the_live_intent_without_new_conflicting_plan
 
     assert repaired == (resumed_task,)
     assert len(journal.load()) == 1
+    assert journal.load()[0].status is IntentStatus.VERIFIED
+    assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
+
+
+def test_closed_loop_command_resumes_after_interrupted_forge_mutation(
+    tmp_path, in_memory_forge
+):
+    task = make_task(
+        708,
+        subtask_id="status-migration",
+        status_labels=("status:done", "status:queued"),
+    )
+    in_memory_forge.seed_issue(
+        make_issue(708, labels=task.status_labels, subtask_id=task.subtask_id)
+    )
+    config = _config(tmp_path, in_memory_forge)
+    command = evaluate_status_repair_plan({708: task}, now=NOW).commands[0]
+    original_remove = in_memory_forge.remove_label
+    in_memory_forge.remove_label = lambda *args: (_ for _ in ()).throw(
+        RuntimeError("interrupted Forge mutation")
+    )
+
+    failed = execute_status_repair_command(
+        command,
+        {708: task},
+        completed_subtask_ids=(),
+        config=config,
+        now=NOW,
+    )
+    assert failed.status is RepairStatus.FAILED
+    journal = IntentJournal(status_intent_journal_path(config))
+    assert len(journal.pending(now=NOW)) == 1
+
+    in_memory_forge.remove_label = original_remove
+    resumed = execute_status_repair_command(
+        command,
+        {708: task},
+        completed_subtask_ids=(),
+        config=config,
+        now=NOW,
+    )
+    assert resumed.status is RepairStatus.APPLIED
     assert journal.load()[0].status is IntentStatus.VERIFIED
     assert in_memory_forge.get_issue_labels(708) == ("status:queued",)
 

@@ -31,6 +31,8 @@ from orchestune.consistency.models import (
     DesiredFact,
     IntentStatus,
     RepairCommand,
+    RepairResult,
+    RepairStatus,
     TransitionIntent,
 )
 from orchestune.consistency.observation import ForgeSnapshot, ObservationCollector
@@ -52,6 +54,7 @@ class StatusRepairPhase(StrEnum):
 
     BLOCKED_PROMOTION = "blocked-promotion"
     DUAL_STATUS = "dual-status"
+    CLOSED_LOOP = "closed-loop"
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,10 +591,89 @@ def reconcile_status_repairs(
     return tuple(dict.fromkeys(repaired))
 
 
+def _repair_subject_task(
+    command: RepairCommand, tasks_by_issue: Mapping[int, Task]
+) -> Task | None:
+    if command.subject_id is None:
+        return None
+    try:
+        return tasks_by_issue.get(int(command.subject_id))
+    except ValueError:
+        return None
+
+
+def _matching_pending_intent(
+    command: RepairCommand, pending: Iterable[TransitionIntent]
+) -> TransitionIntent | None:
+    operation_suffix = f":{command.code}:{_finding_code(command) or 'unknown'}"
+    return next(
+        (
+            candidate
+            for candidate in pending
+            if candidate.subject_id == command.subject_id
+            and _intent_expected_label(candidate) == _expected_label(command)
+            and candidate.operation.endswith(operation_suffix)
+        ),
+        None,
+    )
+
+
+def _failed_repair_result(command: RepairCommand, exc: Exception) -> RepairResult:
+    detail = str(exc).strip()
+    diagnostic = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+    return RepairResult(
+        command=command,
+        status=RepairStatus.FAILED,
+        diagnostics=(diagnostic,),
+    )
+
+
+def execute_status_repair_command(
+    command: RepairCommand,
+    tasks_by_issue: Mapping[int, Task],
+    *,
+    completed_subtask_ids: Iterable[str],
+    config: DispatcherConfig,
+    now: datetime | None = None,
+) -> RepairResult:
+    """Execute one supervisor-selected command through the existing safeguards."""
+    if not config.apply:
+        return RepairResult(command=command, status=RepairStatus.SKIPPED)
+    task = _repair_subject_task(command, tasks_by_issue)
+    if task is None:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("repair subject is not an observed task",),
+        )
+    observed_at = datetime.now(UTC) if now is None else now
+    journal = IntentJournal(status_intent_journal_path(config))
+    intent = _matching_pending_intent(command, journal.pending(now=observed_at))
+    try:
+        applied = _execute(
+            command,
+            task,
+            tasks_by_issue,
+            frozenset(completed_subtask_ids),
+            config,
+            journal,
+            StatusRepairPhase.CLOSED_LOOP,
+            observed_at,
+            intent,
+        )
+    except Exception as exc:  # noqa: BLE001 - retain the Intent for restart
+        return _failed_repair_result(command, exc)
+    return RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED if applied else RepairStatus.SKIPPED,
+    )
+
+
 __all__ = [
     "StatusRepairEvaluation",
     "StatusRepairPhase",
     "evaluate_status_repair_plan",
+    "execute_status_repair_command",
     "reconcile_status_repairs",
     "status_intent_journal_path",
     "task_lifecycle",

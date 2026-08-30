@@ -1,8 +1,8 @@
-"""Read-only orchestration for repository consistency scans.
+"""Orchestration for repository consistency scans and guarded repair.
 
 The supervisor coordinates observation, desired-state derivation, invariant
-evaluation, and repair planning.  It deliberately has no repair executor:
-shadow scans can describe candidates but cannot apply them.
+evaluation, and repair planning. Shadow scans never receive an executor;
+repair mode accepts one explicitly and keeps every mutation bounded.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from orchestune.consistency.contracts import Observer, RepairPlanner
+from orchestune.consistency.contracts import Observer, RepairExecutor, RepairPlanner
 from orchestune.consistency.engine import ConsistencyEngine
 from orchestune.consistency.models import (
     ConsistencyFinding,
@@ -25,6 +25,8 @@ from orchestune.consistency.models import (
     ObservedRepositoryState,
     Repairability,
     RepairCommand,
+    RepairResult,
+    RepairStatus,
     StateChanged,
 )
 
@@ -38,6 +40,15 @@ _SCOPE_ORDER = {
 class ConsistencyMode(StrEnum):
     OFF = "off"
     SHADOW = "shadow"
+    REPAIR = "repair"
+
+
+class RepairDisposition(StrEnum):
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+    DEFERRED = "deferred"
+    FAILED = "failed"
+    OBSERVATION_UNKNOWN = "observation-unknown"
 
 
 class ScanKind(StrEnum):
@@ -73,9 +84,29 @@ class ConsistencyScanResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ConsistencyRepairPass:
+    number: int
+    results: tuple[RepairResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ConsistencyRepairOutcome:
+    finding_code: str
+    scope: ConsistencyScope
+    disposition: RepairDisposition
+    subject_id: str | None = None
+    diagnostics: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ConsistencyCycleReport:
     mode: ConsistencyMode
     scans: tuple[ConsistencyScanResult, ...] = ()
+    repair_passes: tuple[ConsistencyRepairPass, ...] = ()
+    repair_outcomes: tuple[ConsistencyRepairOutcome, ...] = ()
+
+
+MAX_REPAIR_PASSES = 5
 
 
 def _describe(exc: Exception) -> str:
@@ -250,8 +281,137 @@ def _finding_is_impacted(
     )
 
 
+def _finding_key(finding: ConsistencyFinding) -> tuple[str, str, str]:
+    return (finding.scope.value, finding.subject_id or "", finding.code)
+
+
+def _command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
+    parameters = dict(command.parameters)
+    single = parameters.get("finding_code")
+    multiple = parameters.get("finding_codes")
+    if isinstance(single, str):
+        return (single,)
+    if isinstance(multiple, tuple):
+        return tuple(value for value in multiple if isinstance(value, str))
+    return ()
+
+
+def _command_is_allowed(command: RepairCommand, allowlist: frozenset[str]) -> bool:
+    finding_codes = _command_finding_codes(command)
+    return command.code in allowlist or (
+        bool(finding_codes) and set(finding_codes).issubset(allowlist)
+    )
+
+
+def _matching_findings(
+    command: RepairCommand, findings: Iterable[ConsistencyFinding]
+) -> tuple[ConsistencyFinding, ...]:
+    codes = frozenset(_command_finding_codes(command))
+    if not codes:
+        return ()
+    return tuple(
+        finding
+        for finding in findings
+        if finding.scope is command.scope
+        and finding.subject_id == command.subject_id
+        and finding.code in codes
+    )
+
+
+def _command_is_executable(
+    command: RepairCommand,
+    scan: ConsistencyScanResult,
+    allowlist: frozenset[str],
+) -> bool:
+    matching = _matching_findings(command, scan.report.findings)
+    return (
+        _command_is_allowed(command, allowlist)
+        and bool(matching)
+        and all(
+            finding.repairability is Repairability.AUTOMATIC for finding in matching
+        )
+    )
+
+
+def _execute_repair(executor: RepairExecutor, command: RepairCommand) -> RepairResult:
+    try:
+        result = executor.execute(command)
+        if result.command != command:
+            raise ValueError("repair executor returned a result for another command")
+        return result
+    except Exception as exc:  # noqa: BLE001 - failure belongs in the cycle report
+        return RepairResult(
+            command=command,
+            status=RepairStatus.FAILED,
+            diagnostics=(_describe(exc),),
+        )
+
+
+def _outcome_disposition(
+    finding: ConsistencyFinding,
+    final_keys: frozenset[tuple[str, str, str]],
+    results: tuple[RepairResult, ...],
+) -> RepairDisposition:
+    if any(result.status is RepairStatus.FAILED for result in results):
+        return RepairDisposition.FAILED
+    if _finding_key(finding) not in final_keys:
+        return RepairDisposition.RESOLVED
+    if any(result.status is RepairStatus.APPLIED for result in results):
+        return RepairDisposition.UNRESOLVED
+    if "observation-unknown" in finding.code or finding.code.startswith("supervisor."):
+        return RepairDisposition.OBSERVATION_UNKNOWN
+    return RepairDisposition.DEFERRED
+
+
+def _repair_outcomes(
+    findings: Iterable[ConsistencyFinding],
+    final_scan: ConsistencyScanResult,
+    results_by_finding: dict[tuple[str, str, str], list[RepairResult]],
+) -> tuple[ConsistencyRepairOutcome, ...]:
+    indexed = {_finding_key(finding): finding for finding in findings}
+    final_keys = frozenset(
+        _finding_key(finding) for finding in final_scan.report.findings
+    )
+    outcomes = [
+        ConsistencyRepairOutcome(
+            finding_code=finding.code,
+            scope=finding.scope,
+            subject_id=finding.subject_id,
+            disposition=_outcome_disposition(
+                finding, final_keys, tuple(results_by_finding.get(key, ()))
+            ),
+            diagnostics=tuple(
+                diagnostic
+                for result in results_by_finding.get(key, ())
+                for diagnostic in result.diagnostics
+            ),
+        )
+        for key, finding in sorted(indexed.items())
+    ]
+    outcomes.extend(
+        ConsistencyRepairOutcome(
+            finding_code=f"observation.{fact.name}",
+            scope=fact.scope,
+            subject_id=fact.subject_id,
+            disposition=RepairDisposition.OBSERVATION_UNKNOWN,
+            diagnostics=fact.diagnostics,
+        )
+        for fact in final_scan.unknown_facts
+    )
+    return tuple(
+        sorted(
+            outcomes,
+            key=lambda item: (
+                item.scope.value,
+                item.subject_id or "",
+                item.finding_code,
+            ),
+        )
+    )
+
+
 class ConsistencySupervisor:
-    """Coordinates deterministic scans without possessing mutation capability."""
+    """Coordinate scans and use only the executor explicitly supplied per repair."""
 
     def __init__(
         self,
@@ -268,6 +428,8 @@ class ConsistencySupervisor:
         self._previous_full_snapshot: ObservedRepositoryState | None = None
         self._seen_changes: set[tuple[object, ...]] = set()
         self._scans: list[ConsistencyScanResult] = []
+        self._repair_passes: list[ConsistencyRepairPass] = []
+        self._repair_outcomes: tuple[ConsistencyRepairOutcome, ...] = ()
 
     def _new_changes(self, changes: Iterable[StateChanged]) -> tuple[StateChanged, ...]:
         normalized: dict[tuple[object, ...], StateChanged] = {}
@@ -399,8 +561,59 @@ class ConsistencySupervisor:
         self._scans.append(scan)
         return scan
 
+    def repair_until_stable(
+        self,
+        initial_scan: ConsistencyScanResult,
+        *,
+        observer: Observer,
+        deriver: DesiredStateDeriver,
+        executor: RepairExecutor,
+        allowlist: Iterable[str],
+        max_passes: int,
+    ) -> ConsistencyScanResult:
+        """Apply explicitly allowed commands, re-observing after every pass."""
+        if not 1 <= max_passes <= MAX_REPAIR_PASSES:
+            raise ValueError(f"max_passes must be between 1 and {MAX_REPAIR_PASSES}")
+        allowed = frozenset(allowlist)
+        current = initial_scan
+        findings = list(current.report.findings)
+        executed: set[str] = set()
+        results_by_finding: dict[tuple[str, str, str], list[RepairResult]] = {}
+        for number in range(1, max_passes + 1):
+            commands = tuple(
+                command
+                for command in current.repair_candidates
+                if command.idempotency_key not in executed
+                and _command_is_executable(command, current, allowed)
+            )
+            if not commands:
+                break
+            results = tuple(_execute_repair(executor, command) for command in commands)
+            executed.update(command.idempotency_key for command in commands)
+            for command, result in zip(commands, results, strict=True):
+                for finding in _matching_findings(command, current.report.findings):
+                    results_by_finding.setdefault(_finding_key(finding), []).append(
+                        result
+                    )
+            self._repair_passes.append(
+                ConsistencyRepairPass(number=number, results=results)
+            )
+            current = self.full_scan(
+                f"repair-{number}", observer=observer, deriver=deriver
+            )
+            findings.extend(current.report.findings)
+            if not any(result.status is RepairStatus.APPLIED for result in results):
+                break
+        self._repair_outcomes = _repair_outcomes(findings, current, results_by_finding)
+        return current
+
     def cycle_report(self, *, mode: ConsistencyMode) -> ConsistencyCycleReport:
-        return ConsistencyCycleReport(mode=mode, scans=tuple(self._scans))
+        return ConsistencyCycleReport(
+            mode=mode,
+            scans=tuple(self._scans),
+            repair_passes=tuple(self._repair_passes),
+            repair_outcomes=self._repair_outcomes,
+        )
 
 
 def _evidence_to_dict(evidence: Evidence) -> dict:
@@ -455,6 +668,24 @@ def _change_to_dict(change: StateChanged) -> dict:
     }
 
 
+def _repair_result_to_dict(result: RepairResult) -> dict:
+    return {
+        "command": _command_to_dict(result.command),
+        "status": result.status.value,
+        "diagnostics": list(result.diagnostics),
+    }
+
+
+def _repair_outcome_to_dict(outcome: ConsistencyRepairOutcome) -> dict:
+    return {
+        "finding_code": outcome.finding_code,
+        "scope": outcome.scope.value,
+        "subject_id": outcome.subject_id,
+        "disposition": outcome.disposition.value,
+        "diagnostics": list(outcome.diagnostics),
+    }
+
+
 def _scan_to_dict(scan: ConsistencyScanResult) -> dict:
     return {
         "boundary": scan.boundary,
@@ -475,16 +706,32 @@ def consistency_cycle_to_dict(report: ConsistencyCycleReport) -> dict:
     return {
         "mode": report.mode.value,
         "scans": [_scan_to_dict(scan) for scan in report.scans],
+        "repair_passes": [
+            {
+                "number": repair_pass.number,
+                "results": [
+                    _repair_result_to_dict(result) for result in repair_pass.results
+                ],
+            }
+            for repair_pass in report.repair_passes
+        ],
+        "repair_outcomes": [
+            _repair_outcome_to_dict(outcome) for outcome in report.repair_outcomes
+        ],
     }
 
 
 __all__ = [
     "ConsistencyCycleReport",
     "ConsistencyMode",
+    "ConsistencyRepairOutcome",
+    "ConsistencyRepairPass",
     "ConsistencyScanResult",
     "ConsistencySupervisor",
     "ConsistencyUnknownFact",
     "DesiredStateDeriver",
+    "MAX_REPAIR_PASSES",
+    "RepairDisposition",
     "ScanKind",
     "consistency_cycle_to_dict",
     "diff_snapshots",

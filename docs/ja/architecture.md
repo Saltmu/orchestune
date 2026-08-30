@@ -292,6 +292,20 @@ Orchestuneのディスパッチャーは、GitHub Actionsなどの**「実行が
 * **回収回数の扱い（#512）**:
   ゾンビ／タイムアウト回収の回数（`--max-task-reclaims`の判定に使う`task_reclaim_counts`台帳）は`run_state.json`にのみ保持されるため、`run_state.json`が消失すると0へ戻ります。ただし、既に上限を超えて`status:blocked-human-review`へ遷移したタスクは、GitHubのラベルが真実であるため復元後も再投入されません（上限判定がやり直しになるのは、まだ上限に達していないタスクだけです）。
 
+### 2.1 リポジトリ整合性control loop
+
+ステートリカバリを補完するため、リポジトリ全体を扱う整合性カーネルを備えています。ObserverはGitHub、Git、worktree、process、外部execution、`run_state.json`の事実を不変な`ObservedRepositoryState`へ正規化します。純粋な導出処理は、task lifecycle、依存関係、dispatch policy、保留中の`TransitionIntent` journalから`DesiredRepositoryState`を構築します。純粋なInvariantが両モデルを比較して安定したcodeと根拠を持つfindingを生成し、Plannerはknownかつautomaticなfindingだけをtyped `RepairCommand`へ変換できます。Forge、filesystem、process、state fileへの変更は、既存dispatch phase境界の明示的なExecutor内に残します。
+
+Supervisorはcycle開始時と終了時にauthoritativeなfull scanを実行し、process内の`StateChanged` eventにはtargeted scanを実行します。そのため終了時scanはeventを発生させないprocess外の変更も捕捉します。導入modeは意図的に段階化されています。
+
+| Mode | 意味 |
+|---|---|
+| `off` | 整合性scanを行わず、既存self-healing phaseのdefault動作を維持する。 |
+| `shadow` | observe、derive、evaluate、planだけを行い、repairは実行しない。 |
+| `repair` | repair allowlistへ明示したfinding codeまたはcommand codeだけを実行する。空のallowlistはreport-onlyであり、新規policyは明示的に有効化されるまでshadow-onlyとなる。 |
+
+Repair modeのpass数は設定値（1～5）を超えません。各passはlive preconditionを再検証し、非atomicなstatus遷移の前にIntentを記録し、同じidempotency keyをcycle内で一度だけ実行して、その後に新しいfull observationを行います。unknown／staleな観測、曖昧なownership、manual／non-repairable finding、既存phaseが所有する未対応command、allowlist外のfindingはreport-onlyです。最終cycle JSONと`events.jsonl`は`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別し、各passもcommand statusと診断を保持します。Observer、Invariant、Planner、Executorの拡張は各Protocol境界で行い、不変state modelへcallbackを追加しません。
+
 ---
 
 ## 3. 統合（Integration）と自動リベース

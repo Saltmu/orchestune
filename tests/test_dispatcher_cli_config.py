@@ -155,6 +155,68 @@ class TestDispatcherConfigLoading:
         with pytest.raises(SystemExit):
             main(["--no-apply"], cwd=tmp_path)
 
+    def test_consistency_repair_is_configurable_from_the_config_file(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            "consistency-mode = 'repair'\n"
+            "consistency-repair-code = ['status.primary-status-conflict']\n"
+            "consistency-max-repair-passes = 2\n"
+            "events-log-path = 'custom_events.jsonl'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(["--no-apply"], cwd=tmp_path)
+
+        config = mock_run.call_args.args[0]
+        assert config.consistency_mode.value == "repair"
+        assert config.consistency_repair_allowlist == frozenset(
+            {"status.primary-status-conflict"}
+        )
+        assert config.consistency_max_repair_passes == 2
+
+    def test_consistency_repair_pass_bound_is_validated_in_config_file(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            "consistency-max-repair-passes = 6\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit):
+            main(["--no-apply"], cwd=tmp_path)
+
+    def test_cli_repair_allowlist_replaces_config_file_allowlist(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            "consistency-mode = 'repair'\n"
+            "consistency-repair-code = ['status.from-config']\n"
+            "events-log-path = 'custom_events.jsonl'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                return_value=self._empty_report(),
+            ) as mock_run,
+        ):
+            main(
+                [
+                    "--no-apply",
+                    "--consistency-repair-code",
+                    "status.from-cli",
+                ],
+                cwd=tmp_path,
+            )
+
+        assert mock_run.call_args.args[0].consistency_repair_allowlist == frozenset(
+            {"status.from-cli"}
+        )
+
     def test_orchestune_toml_with_dag_ignore_patterns_does_not_crash_dispatcher(
         self, tmp_path
     ):

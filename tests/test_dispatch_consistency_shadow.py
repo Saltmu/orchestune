@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.consistency.supervisor import ConsistencyMode, ScanKind
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
@@ -89,6 +91,19 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
     assert (
         parser.parse_args(["--consistency-mode", "shadow"]).consistency_mode == "shadow"
     )
+    repair_args = parser.parse_args(
+        [
+            "--consistency-mode",
+            "repair",
+            "--consistency-repair-code",
+            "status.primary-conflict",
+            "--consistency-max-repair-passes",
+            "2",
+        ]
+    )
+    assert repair_args.consistency_mode == "repair"
+    assert repair_args.consistency_repair_code == ["status.primary-conflict"]
+    assert repair_args.consistency_max_repair_passes == 2
 
     captured = []
 
@@ -122,6 +137,24 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
         consistency_mode="shadow",  # type: ignore[arg-type]
     )
     assert direct.consistency_mode is ConsistencyMode.SHADOW
+
+
+def test_repair_configuration_is_bounded(tmp_path) -> None:
+    config = DispatcherConfig(
+        consistency_mode="repair",  # type: ignore[arg-type]
+        consistency_repair_allowlist=("status.primary-conflict",),  # type: ignore[arg-type]
+        consistency_max_repair_passes=2,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+    )
+    assert config.consistency_mode is ConsistencyMode.REPAIR
+    assert config.consistency_repair_allowlist == frozenset({"status.primary-conflict"})
+
+    with pytest.raises(ValueError, match="consistency_max_repair_passes"):
+        DispatcherConfig(
+            consistency_max_repair_passes=0,
+            events_log_path=tmp_path / "invalid-events.jsonl",
+        )
 
 
 def test_real_pipeline_shadow_is_read_only_and_keeps_scheduling(

@@ -20,10 +20,14 @@ five; `tests/test_architecture.py` encodes that as `ALLOWED_L4_DEPENDENTS`.
 """
 
 from orchestune.consistency import (
+    ConsistencyCycleReport,
     ConsistencyEngine,
     ConsistencyFinding,
     ConsistencyMode,
+    ConsistencyRepairOutcome,
+    ConsistencyRepairPass,
     ConsistencyReport,
+    ConsistencyScanResult,
     ConsistencyScope,
     ConsistencySupervisor,
     DesiredFact,
@@ -39,6 +43,7 @@ from orchestune.consistency import (
     Observer,
     Repairability,
     RepairCommand,
+    RepairDisposition,
     RepairExecutor,
     RepairPlanner,
     RepairResult,
@@ -75,10 +80,14 @@ __version__ = get_version()
 
 __all__ = [
     "BootstrapResult",
+    "ConsistencyCycleReport",
     "ConsistencyEngine",
     "ConsistencyFinding",
     "ConsistencyMode",
+    "ConsistencyRepairOutcome",
+    "ConsistencyRepairPass",
     "ConsistencyReport",
+    "ConsistencyScanResult",
     "ConsistencyScope",
     "ConsistencySupervisor",
     "DesiredFact",
@@ -108,6 +117,7 @@ __all__ = [
     "RESULT_DONE",
     "RESULT_NOT_NEEDED",
     "RepairCommand",
+    "RepairDisposition",
     "RepairExecutor",
     "RepairPlanner",
     "RepairResult",
