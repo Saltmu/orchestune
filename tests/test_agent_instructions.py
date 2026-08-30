@@ -98,3 +98,4 @@ def test_agent_rules_bloat_autonomous_refactoring():
 
     assert "自律的リファクタリング" in instructions
     assert "承認" not in instructions
+    assert "エスカレーション" in instructions

@@ -750,6 +750,7 @@ def test_local_ci_developer_bloat_autonomous_refactoring():
     assert "autonomously" in tdd_md_lower or "autonomous" in tdd_md_lower
     assert "for approval" not in tdd_md_lower
     assert "pause code modification" not in tdd_md_lower
+    assert "escalat" in tdd_md_lower
 
 
 def test_workflow_template_bloat_autonomous_refactoring():
@@ -761,3 +762,4 @@ def test_workflow_template_bloat_autonomous_refactoring():
     assert "autonomously" in tdd_md_lower or "autonomous" in tdd_md_lower
     assert "for approval" not in tdd_md_lower
     assert "pause code modification" not in tdd_md_lower
+    assert "escalat" in tdd_md_lower
