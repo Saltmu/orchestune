@@ -274,4 +274,4 @@ dispatcher having been run with `--parent-issue <N>` (see
   ordering, but do not participate in lifecycle transitions.
 - `risk:flagged` / `progress:partial`: visualization-only labels; they do not
   act as additional approval gates (see
-  [Architecture §2.4](./architecture.md#24-human-approval-points)).
+  [Architecture §0.2](./architecture.md#02-human-approval-points)).

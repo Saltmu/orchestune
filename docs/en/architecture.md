@@ -89,10 +89,10 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 
 | Deviation | Detection | Deterministic handling |
 |---|---|---|
-| Bad decomposition (an unestablished shared extension point) | Shared-contract gate | Warning |
-| Stale plan (a declared `symbol` does not exist) | AST symbol verification | Neutral note in the Issue body |
+| Bad decomposition (an unestablished shared extension point) | [Shared-contract gate (dag-and-scheduling.md)](architecture/dag-and-scheduling.md#5-ordinary-footprint-overlap-vs-the-shared-contract-gate) | Warning |
+| Stale plan (a declared `symbol` does not exist) | [AST symbol verification (dag-and-scheduling.md)](architecture/dag-and-scheduling.md#6-reconciling-the-decomposition-plan-against-the-codebase-staleness-detection) | Neutral note in the Issue body |
 | Bad declaration (a change outside the footprint) | Runtime deviation detection (`dispatch.locks.check_footprint_deviation`) | Conflict Graph recomputation (with exclusion rules and a retry cap) |
-| Infrastructure failure (local state lost) | — | Rebuild from GitHub as the source of truth |
+| Infrastructure failure (local state lost) | — | [Rebuild from GitHub as the source of truth (state-recovery.md)](architecture/state-recovery.md#2-github-as-the-source-of-truth) |
 | The agent's own report (`result: not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by the outcome record and status label |
 
 And **loops are bounded, with a terminal state** — though not on every path today. Runtime Conflict Graph recomputation retries, launches per window, and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default) are bounded by default, but task timeouts and token caps are **off by default** and must be set explicitly before leaving a long run unattended (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops. `tests/test_architecture.py` mechanically checks the finite retry/reclaim/review-timeout settings against their declared terminal behaviour. The check deliberately uses an explicit registry: it rejects new settings that match this recovery-loop naming contract without a terminal mapping, while leaving unrelated bounded controls to their feature-specific tests.
@@ -102,7 +102,7 @@ And **loops are bounded, with a terminal state** — though not on every path to
 
 What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.
 
-### 2.4 Human Approval Points
+### 0.2 Human Approval Points
 
 Orchestune is designed so a human makes a decision at exactly two points in the lifecycle — everything between them runs autonomously.
 
@@ -254,7 +254,7 @@ patching module attributes: `IntegratorConfig(forge=...)` and
 `fake_forge` fixture supplies one.
 
 That migration is complete for test modules. Tests inject `fake_forge` (or a
-`purpose-built in-memory forge) through the configuration or function boundary;
+purpose-built in-memory forge) through the configuration or function boundary;
 they no longer patch methods on the concrete `GitHubForge` class. The
 `test_tests_do_not_patch_github_forge` architecture invariant parses every
 Python module under `tests/`, including shared fixtures and support modules,

@@ -192,7 +192,7 @@ orchestune dispatch --dispatch-target auto
 
 ## 6. GitHub Actions上での定期実行とcross-runner直列化
 
-`orchestune dispatch` をGitHub Actionsのcron等で定期実行するワークフローを組む場合、`concurrency`グループの設定を強く推奨します。[統合パイプライン (architecture/integration.md)](architecture/integration.md#3-排他制御と設計前提)に記載の設計前提（#377）の通り、Integratorの排他は同一マシン上のファイルロック（`orchestune/integrator/worktree.py`の`file_lock`）でのみ成立しており、複数のCIランナー/マシンをまたいだ同時実行には効きません。`concurrency`グループを使えば、コード変更なしに、リポジトリ全体（＝全ランナー）で親Issue単位の直列化が得られます。
+`orchestune dispatch` をGitHub Actionsのcron等で定期実行するワークフローを組む場合、`concurrency`グループの設定を強く推奨します。[統合パイプライン (architecture/integration.md)](architecture/integration.md#3-排他制御と設計前提)に記載の設計前提（#377）の通り、Integratorの排他は同一マシン上のファイルロック（`orchestune/infra/process_utils.py`の`file_lock`）でのみ成立しており、複数のCIランナー/マシンをまたいだ同時実行には効きません。`concurrency`グループを使えば、コード変更なしに、リポジトリ全体（＝全ランナー）で親Issue単位の直列化が得られます。
 
 ```yaml
 concurrency:
