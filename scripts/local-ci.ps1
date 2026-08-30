@@ -35,7 +35,7 @@ if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
 & poetry run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Virtual environment or dependencies not found; running poetry install..." -ForegroundColor Cyan
-    poetry install
+    poetry install --no-interaction
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: poetry install failed." -ForegroundColor Red
         exit $LASTEXITCODE

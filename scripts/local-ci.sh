@@ -19,7 +19,7 @@ fi
 # Ensure virtual environment and dependencies are installed
 if ! poetry run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev/null 2>&1; then
   echo "Virtual environment or dependencies not found; running poetry install..."
-  poetry install
+  poetry install --no-interaction
 fi
 
 echo "[1/6] Checking code format (ruff format)..."
