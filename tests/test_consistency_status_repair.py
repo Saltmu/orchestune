@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestune.consistency.desired import TaskLifecycle
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -24,6 +25,7 @@ from orchestune.dispatch.status_repair import (
     evaluate_status_repair_plan,
     reconcile_status_repairs,
     status_intent_journal_path,
+    task_lifecycle,
 )
 from tests.conftest import make_issue, make_task
 
@@ -42,6 +44,13 @@ def _config(tmp_path, forge, *, apply=True) -> DispatcherConfig:
 
 def _finding_code(command) -> object:
     return dict(command.parameters).get("finding_code")
+
+
+def test_task_lifecycle_uses_one_shared_completion_override():
+    dual_status = ("status:done", "status:queued")
+
+    assert task_lifecycle(dual_status) is TaskLifecycle.OPEN
+    assert task_lifecycle(dual_status, completed=True) is TaskLifecycle.DONE
 
 
 def test_blocked_promotion_is_selected_from_kernel_finding_and_typed_plan():
@@ -518,13 +527,18 @@ def test_dry_run_preserves_event_candidate_without_writing_intent(
     )
     config = _config(tmp_path, in_memory_forge, apply=False)
 
-    repaired = reconcile_status_repairs(
-        {708: task},
-        completed_subtask_ids=set(),
-        config=config,
-        phase=StatusRepairPhase.DUAL_STATUS,
-        now=NOW,
-    )
+    with patch(
+        "orchestune.dispatch.status_repair.evaluate_status_repair_plan",
+        wraps=evaluate_status_repair_plan,
+    ) as evaluate:
+        repaired = reconcile_status_repairs(
+            {708: task},
+            completed_subtask_ids=set(),
+            config=config,
+            phase=StatusRepairPhase.DUAL_STATUS,
+            now=NOW,
+        )
 
     assert repaired == (task,)
+    assert evaluate.call_count == 1
     assert not status_intent_journal_path(config).exists()

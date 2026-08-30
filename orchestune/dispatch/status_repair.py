@@ -79,21 +79,23 @@ def _observed_issue(task: Task) -> IssueRecord:
     )
 
 
-def _task_lifecycle(task: Task, completed_subtask_ids: frozenset[str]) -> TaskLifecycle:
-    labels = task.status_labels
-    if task.subtask_id in completed_subtask_ids:
+def task_lifecycle(
+    status_labels: tuple[str, ...], *, completed: bool = False
+) -> TaskLifecycle:
+    """Resolve lifecycle with an explicit same-cycle completion override."""
+    if completed:
         return TaskLifecycle.DONE
     # Preserve the dispatch adapter's existing lifecycle precedence everywhere
     # except the one interrupted rollback this phase owns.  In `done + queued`,
     # queued is the durable destination and done is the label to remove.
-    if "status:done" in labels and "status:queued" in labels:
+    if "status:done" in status_labels and "status:queued" in status_labels:
         return TaskLifecycle.OPEN
-    if "status:done" in labels:
+    if "status:done" in status_labels:
         return TaskLifecycle.DONE
-    if "status:not-needed" in labels:
+    if "status:not-needed" in status_labels:
         return TaskLifecycle.NOT_NEEDED
     if any(
-        label in labels
+        label in status_labels
         for label in ("status:blocked-human-review", "status:manual-merge-required")
     ):
         return TaskLifecycle.HUMAN_REVIEW
@@ -109,7 +111,10 @@ def _desired_tasks(
             subject_id=str(task.issue_number),
             depends_on=task.depends_on,
             footprint=task.footprint,
-            lifecycle=_task_lifecycle(task, completed_subtask_ids),
+            lifecycle=task_lifecycle(
+                task.status_labels,
+                completed=task.subtask_id in completed_subtask_ids,
+            ),
         )
         for task in sorted(tasks_by_issue.values(), key=lambda item: item.issue_number)
         if task.subtask_id
@@ -467,6 +472,11 @@ def _evaluate_candidates(
         completed_subtask_ids=completed,
         now=now,
     )
+    if not pending:
+        selected = tuple(
+            command for command in base.commands if _selected(command, phase)
+        )
+        return base.commands, selected
     guarded = evaluate_status_repair_plan(
         tasks_by_issue,
         completed_subtask_ids=completed,
@@ -584,4 +594,5 @@ __all__ = [
     "evaluate_status_repair_plan",
     "reconcile_status_repairs",
     "status_intent_journal_path",
+    "task_lifecycle",
 ]

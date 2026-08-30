@@ -378,9 +378,7 @@ class TestPromoteBlockedTasks:
                 side_effect=(("status:blocked",), ("status:queued",)),
             ),
         ):
-            events = _promote_blocked_tasks(
-                [_issue(1)], [], {"task-x"}, {1: task}, config
-            )
+            events = _promote_blocked_tasks([], {"task-x"}, {1: task}, config)
 
         mock_remove.assert_called_once_with(1, "status:blocked")
         mock_add.assert_called_once_with(1, "status:queued")

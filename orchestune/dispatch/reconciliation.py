@@ -76,7 +76,6 @@ def _collect_active_conflict_subtask_ids(
 
 
 def _promote_blocked_tasks(
-    blocked_issues: list[IssueRecord],
     done_issues: list[IssueRecord],
     completed_subtask_ids: set[str],
     tasks_by_issue: dict[int, Task],
