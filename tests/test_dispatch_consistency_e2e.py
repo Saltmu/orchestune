@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -300,8 +301,6 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
     fake_forge.remove_label.side_effect = remove_label
     config = DispatcherConfig(
         apply=True,
-        consistency_mode=ConsistencyMode.REPAIR,
-        consistency_repair_allowlist=frozenset({PRIMARY_STATUS_CONFLICT}),
         max_concurrent=0,
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
@@ -318,10 +317,23 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
         first = run_dispatch_cycle(config)
         second = run_dispatch_cycle(config)
 
+    assert first.consistency.mode is ConsistencyMode.OFF
+    assert second.consistency.mode is ConsistencyMode.OFF
     assert first.consistency.repair_passes[-1].results[0].status is RepairStatus.FAILED
     assert (
         second.consistency.repair_passes[-1].results[0].status is RepairStatus.APPLIED
     )
+    persisted = [
+        json.loads(line)["consistency"]
+        for line in config.events_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [item["mode"] for item in persisted] == ["off", "off"]
+    assert [
+        item["repair_passes"][-1]["results"][0]["status"] for item in persisted
+    ] == [
+        "failed",
+        "applied",
+    ]
     assert remove_attempts == 2
     assert labels[743] == ["status:queued"]
     journal = IntentJournal(status_intent_journal_path(config))

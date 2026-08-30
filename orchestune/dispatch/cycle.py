@@ -627,6 +627,9 @@ def _finish_consistency_runtime(
     status_cycle: _StatusRepairCycleState,
 ) -> None:
     if runtime is None:
+        report.consistency = _merge_consistency_reports(
+            ConsistencyCycleReport(mode=config.consistency_mode), status_cycle.reports
+        )
         return
     runtime.supervisor.targeted_scan(
         "pipeline",
