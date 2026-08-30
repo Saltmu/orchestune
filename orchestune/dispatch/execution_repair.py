@@ -8,6 +8,7 @@ Recovery and GC remain the only side-effect boundaries that execute the plan.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,7 +23,12 @@ from orchestune.consistency.desired import (
     derive_desired_repository_state,
 )
 from orchestune.consistency.engine import ConsistencyEngine
-from orchestune.consistency.invariants.execution import execution_invariants
+from orchestune.consistency.invariants.execution import (
+    EXECUTION_TIMED_OUT,
+    HANDLELESS_EXECUTION_ORPHAN,
+    LOCAL_PROCESS_DEAD,
+    execution_invariants,
+)
 from orchestune.consistency.models import (
     ConsistencyReport,
     DesiredRepositoryState,
@@ -51,7 +57,7 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
@@ -291,6 +297,112 @@ def command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
     return tuple(code for code in values if isinstance(code, str))
 
 
+@dataclass(frozen=True, slots=True)
+class ReclaimPrecondition:
+    """Fresh execution facts retained for the low-level reclaim lifecycle."""
+
+    active: ActiveWorktree
+    observed_at: float
+    process_alive: bool
+    timed_out: bool
+
+
+def _external_execution_is_running(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> bool:
+    if active.external_id is None:
+        return True
+    if config.dispatch_target is None:
+        return False
+    try:
+        status = config.dispatch_target.completion_status(
+            DispatchHandle(external_id=active.external_id),
+            forge=config.resolved_forge,
+        )
+    except Exception:
+        return False
+    return status == "running"
+
+
+def _timed_out(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+    observed_at: float,
+) -> bool:
+    return bool(
+        EXECUTION_TIMED_OUT in finding_codes
+        and active.started_at is not None
+        and config.task_timeout_seconds > 0
+        and observed_at - active.started_at > config.task_timeout_seconds
+        and _external_execution_is_running(active, config)
+    )
+
+
+def _dead_local_process(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+    process_alive: bool,
+) -> bool:
+    return bool(
+        LOCAL_PROCESS_DEAD in finding_codes
+        and active.external_id is None
+        and active.pid is not None
+        and not process_alive
+        and config.zombie_gc
+    )
+
+
+def _handleless_orphan(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+) -> bool:
+    return bool(
+        HANDLELESS_EXECUTION_ORPHAN in finding_codes
+        and active.pid is None
+        and active.external_id is None
+        and active.started_at is None
+        and not os.path.exists(active.worktree_path)
+        and config.zombie_gc
+    )
+
+
+def revalidate_reclaim_preconditions(
+    command: RepairCommand,
+    run_state: RunState,
+    *,
+    key: str,
+    expected_active: ActiveWorktree,
+    expected_finding_codes: tuple[str, ...],
+    config: DispatcherConfig,
+    held_worktree_paths: frozenset[str],
+    now: float | None = None,
+) -> ReclaimPrecondition | None:
+    """Return fresh known facts only while the typed command is still safe."""
+    active = run_state.active_worktrees.get(key)
+    finding_codes = frozenset(command_finding_codes(command))
+    if (
+        active is None
+        or command.subject_id != str(expected_active.issue_number)
+        or active != expected_active
+        or not finding_codes.intersection(expected_finding_codes)
+        or active.worktree_path in held_worktree_paths
+    ):
+        return None
+    observed_at = time.time() if now is None else now
+    process_alive = bool(active.pid is not None and is_process_alive(active.pid))
+    timed_out = _timed_out(active, finding_codes, config, observed_at)
+    if not (
+        timed_out
+        or _dead_local_process(active, finding_codes, config, process_alive)
+        or _handleless_orphan(active, finding_codes, config)
+    ):
+        return None
+    return ReclaimPrecondition(active, observed_at, process_alive, timed_out)
+
+
 def collect_execution_observed_state(
     run_state: RunState,
     tasks_by_issue: Mapping[int, Task],
@@ -387,8 +499,10 @@ __all__ = [
     "RepairCommandDomain",
     "RepairCommandOperation",
     "RepairCommandHandler",
+    "ReclaimPrecondition",
     "collect_execution_observed_state",
     "command_finding_codes",
     "derive_execution_desired_state",
     "evaluate_execution_repair_plan",
+    "revalidate_reclaim_preconditions",
 ]

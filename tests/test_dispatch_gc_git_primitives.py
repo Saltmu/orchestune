@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 from orchestune.dispatch.gc import (
     ZombieOrTimeoutReclaim,
-    _collect_zombies_and_timeouts,
     _finalize_completed_worktree,
     backup_wip_commit,
     remote_branch_commit_sha_if_ahead,
@@ -34,9 +33,6 @@ from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim as ExtractedZombieOrTimeoutReclaim,
 )
-from orchestune.dispatch.gc.zombies import (
-    _collect_zombies_and_timeouts as extracted_collect_zombies_and_timeouts,
-)
 from orchestune.models import PrRecord
 
 
@@ -47,7 +43,6 @@ def test_extracted_gc_symbols_remain_available_from_legacy_module():
     assert CompletedWorktreeDecision is ExtractedCompletedWorktreeDecision
     assert _finalize_completed_worktree is extracted_finalize_completed_worktree
     assert ZombieOrTimeoutReclaim is ExtractedZombieOrTimeoutReclaim
-    assert _collect_zombies_and_timeouts is extracted_collect_zombies_and_timeouts
 
 
 class TestWorktreeHasUncommittedChanges:

@@ -48,8 +48,6 @@ from orchestune.dispatch.gc.git import (
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
-    _collect_zombies_and_timeouts,
-    _decide_zombie_or_timeout_reclaims,
 )
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch.scoring import Task
@@ -73,10 +71,8 @@ __all__ = [
     "_apply_zombie_or_timeout_reclaim",
     "_call_is_complete",
     "_cloud_worktree_completion_status",
-    "_collect_zombies_and_timeouts",
     "_decide_completed_worktree_outcome",
     "_decide_not_needed_dirty_worktree",
-    "_decide_zombie_or_timeout_reclaims",
     "_finalize_abandoned_cloud_worktree",
     "_finalize_completed_worktree",
     "_finalize_not_needed_worktree",
