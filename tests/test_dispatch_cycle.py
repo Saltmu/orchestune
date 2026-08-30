@@ -873,63 +873,6 @@ class TestRunDispatchCycle:
         mock_list.assert_called_once_with(100)
         assert [t.issue_number for t in report.selected] == [1]
 
-    def test_run_dispatch_cycle_resolves_depends_on_from_blocked_by(
-        self, tmp_path, fake_forge
-    ):
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            max_concurrent=2,
-            max_launches_per_window=2,
-            window_seconds=3600,
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            log_dir=tmp_path / "logs",
-            apply=True,
-        )
-        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
-        blocked_issue = _full_issue(
-            2,
-            labels=("status:blocked",),
-            subtask_id="task-b",
-            depends_on=(),
-        )
-        blocked_issue = IssueRecord(
-            number=blocked_issue.number,
-            title=blocked_issue.title,
-            body=blocked_issue.body,
-            labels=blocked_issue.labels,
-            created_at=blocked_issue.created_at,
-            blocked_by=(1,),
-        )
-        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
-        mock_list = fake_forge.list_issues_by_label
-        fake_forge.list_open_prs.reset_mock(side_effect=True)
-        fake_forge.list_open_prs.return_value = []
-        fake_forge.add_label.reset_mock(side_effect=True)
-        mock_add_label = fake_forge.add_label
-        fake_forge.remove_label.reset_mock(side_effect=True)
-        mock_remove_label = fake_forge.remove_label
-        with (
-            patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
-            ),
-        ):
-
-            def _list(label, **_):
-                if label == "status:done":
-                    return [done_issue]
-                if label == "status:blocked":
-                    return [blocked_issue]
-                return []
-
-            mock_list.side_effect = _list
-            report = run_dispatch_cycle(config)
-
-        # BがAの完了により昇格したことを確認
-        mock_remove_label.assert_any_call(2, "status:blocked")
-        mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
-
 
 class TestRunDispatchCycleParentIssueValidation:
     """#327: `--parent-issue`が本物のEPIC Issueかどうかを`ensure_parent_branch`

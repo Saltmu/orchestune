@@ -1,6 +1,6 @@
 """dispatch_reconciliation.py の復元・整合性修復に関する境界値テスト (#337)。
 
-`_collect_active_conflict_subtask_ids` / `_decide_blocked_promotions` /
+`_collect_active_conflict_subtask_ids` / `_promote_blocked_tasks` /
 `_handle_blocked_recompute_recovery` は既存の `tests/test_dispatch_cycle.py`
 では実質未検証だったため、本ファイルで単体テストとして完結させる。
 """
@@ -16,9 +16,7 @@ from orchestune.dag.models import (
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.reconciliation import (
-    _apply_blocked_promotions,
     _collect_active_conflict_subtask_ids,
-    _decide_blocked_promotions,
     _handle_blocked_recompute_recovery,
     _promote_blocked_tasks,
     _reconcile_dual_status_tasks,
@@ -357,99 +355,14 @@ class TestCollectActiveConflictSubtaskIds:
         assert mock_recompute.call_args.kwargs.get("threshold") == 0.1
 
 
-class TestDecideBlockedPromotions:
-    def test_issue_without_matching_task_is_skipped(self):
-        promotable = _decide_blocked_promotions([_issue(1)], [], set(), {})
-        assert promotable == []
-
-    def test_issue_with_task_missing_depends_on_is_skipped(self):
-        task = _task(issue_number=1, depends_on=())
-        promotable = _decide_blocked_promotions([_issue(1)], [], set(), {1: task})
-        assert promotable == []
-
-    def test_issue_with_ci_base_branch_red_is_skipped(self):
-        # #555: ci:base-branch-redを持つタスクは依存関係が解決しても昇格対象から除外される
-        task = _task(issue_number=1, depends_on=("task-x",))
-        issue = _issue(1, labels=("status:blocked", "ci:base-branch-red"))
-        promotable = _decide_blocked_promotions([issue], [], {"task-x"}, {1: task})
-        assert promotable == []
-
-    def test_issue_without_ci_base_branch_red_is_promoted_when_deps_resolved(self):
-        task = _task(issue_number=1, depends_on=("task-x",))
-        issue = _issue(1, labels=("status:blocked",))
-        promotable = _decide_blocked_promotions([issue], [], {"task-x"}, {1: task})
-        assert promotable == [task]
-
-
-class TestApplyBlockedPromotions:
-    def test_dry_run_returns_events_without_calling_github(self, tmp_path):
-        task = _task(issue_number=5, subtask_id="task-e")
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=False,
-        )
-
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
-        ):
-            events = _apply_blocked_promotions([task], config)
-
-        mock_remove.assert_not_called()
-        mock_add.assert_not_called()
-        assert events == [{"issue_number": 5, "subtask_id": "task-e"}]
-
-    def test_apply_swaps_blocked_label_for_queued(self, tmp_path):
-        task = _task(issue_number=5, subtask_id="task-e")
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
-        ):
-            events = _apply_blocked_promotions([task], config)
-
-        mock_remove.assert_called_once_with(5, "status:blocked")
-        mock_add.assert_called_once_with(5, "status:queued")
-        assert events == [{"issue_number": 5, "subtask_id": "task-e"}]
-
-    def test_adds_queued_before_removing_blocked(self, tmp_path):
-        # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
-        # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
-        task = _task(issue_number=5, subtask_id="task-e")
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-        call_order: list[tuple[str, str]] = []
-
-        with (
-            patch(
-                "fake_forge_proxy.active_fake_forge.remove_label",
-                side_effect=lambda issue, label: call_order.append(("remove", label)),
-            ),
-            patch(
-                "fake_forge_proxy.active_fake_forge.add_label",
-                side_effect=lambda issue, label: call_order.append(("add", label)),
-            ),
-        ):
-            _apply_blocked_promotions([task], config)
-
-        assert call_order == [("add", "status:queued"), ("remove", "status:blocked")]
-
-
 class TestPromoteBlockedTasks:
     def test_decide_and_apply_are_wired_together(self, tmp_path):
-        task = _task(issue_number=1, subtask_id="task-a", depends_on=("task-x",))
+        task = _task(
+            issue_number=1,
+            subtask_id="task-a",
+            depends_on=("task-x",),
+            status_labels=("status:blocked",),
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -460,10 +373,12 @@ class TestPromoteBlockedTasks:
         with (
             patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
             patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
+            patch(
+                "fake_forge_proxy.active_fake_forge.get_issue_labels",
+                side_effect=(("status:blocked",), ("status:queued",)),
+            ),
         ):
-            events = _promote_blocked_tasks(
-                [_issue(1)], [], {"task-x"}, {1: task}, config
-            )
+            events = _promote_blocked_tasks([], {"task-x"}, {1: task}, config)
 
         mock_remove.assert_called_once_with(1, "status:blocked")
         mock_add.assert_called_once_with(1, "status:queued")
@@ -496,18 +411,29 @@ class TestDualStatusReconciliationMultipleTasks:
             apply=True,
         )
 
-        with patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove:
+        with (
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch(
+                "fake_forge_proxy.active_fake_forge.get_issue_labels",
+                side_effect=(
+                    ("status:done", "status:queued"),
+                    ("status:queued",),
+                    ("status:done", "status:queued"),
+                    ("status:queued",),
+                ),
+            ),
+        ):
             events = _reconcile_dual_status_tasks(
-                {1: dual_a, 2: dual_b, 3: queued_only}, config
+                {2: dual_b, 1: dual_a, 3: queued_only}, config
             )
 
         assert mock_remove.call_args_list == [
-            ((1, "status:done"),),
             ((2, "status:done"),),
+            ((1, "status:done"),),
         ]
         assert events == [
-            {"issue_number": 1, "subtask_id": "task-a"},
             {"issue_number": 2, "subtask_id": "task-b"},
+            {"issue_number": 1, "subtask_id": "task-a"},
         ]
 
 

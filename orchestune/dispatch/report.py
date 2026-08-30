@@ -6,6 +6,7 @@ import dataclasses
 import os
 import sys
 
+from orchestune.consistency.supervisor import consistency_cycle_to_dict
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.scoring import decision_to_dict
@@ -200,4 +201,5 @@ def _report_to_dict(report: CycleReport) -> dict:
         }
         if report.execution_selections
         else {},
+        "consistency": consistency_cycle_to_dict(report.consistency),
     }

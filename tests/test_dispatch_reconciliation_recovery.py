@@ -1,8 +1,8 @@
 """dispatch_reconciliation.py の復元・整合性修復に関する境界値テスト (#337)。
 
-`_collect_active_conflict_subtask_ids` / `_decide_blocked_promotions` /
-`_handle_blocked_recompute_recovery` は既存の `tests/test_dispatch_cycle.py`
-では実質未検証だったため、本ファイルで単体テストとして完結させる。
+run state・launch history・base branch redの復元境界は既存の
+`tests/test_dispatch_cycle.py`では実質未検証だったため、本ファイルで
+単体テストとして完結させる。
 """
 
 import tempfile

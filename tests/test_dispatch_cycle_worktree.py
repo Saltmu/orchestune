@@ -470,8 +470,8 @@ class TestProcessActiveWorktrees:
                 return_value={"action": "not_needed"},
             ),
             patch(
-                "orchestune.dispatch.gc._decide_stale_active_entry",
-                side_effect=AssertionError("Should not call decide stale active entry"),
+                "orchestune.dispatch.gc.evaluate_execution_repair_plan",
+                side_effect=AssertionError("Should not plan stale active repair"),
             ),
         ):
             (

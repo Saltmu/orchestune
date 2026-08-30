@@ -163,7 +163,6 @@ def run_blocked_promotion_phase(
     `run_dual_status_reconciliation`として別に公開する。
     """
     promotion_events = _promote_blocked_tasks(
-        issues.blocked,
         issues.done + issues.not_needed,
         completed_subtask_ids,
         ctx.tasks_by_issue,

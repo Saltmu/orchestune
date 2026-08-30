@@ -305,6 +305,10 @@ class TestReclaimRetryBound:
             patch("orchestune.dispatch.gc.zombies.time.time", return_value=_NOW),
             patch("orchestune.dispatch.gc.zombies.is_process_alive", return_value=True),
             patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=True,
+            ),
+            patch(
                 "orchestune.dispatch.gc.zombies.save_run_state",
                 side_effect=OSError("no space left on device"),
             ),

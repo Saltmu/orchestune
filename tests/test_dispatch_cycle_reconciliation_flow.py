@@ -75,6 +75,30 @@ def _full_issue(
     )
 
 
+def _track_forge_labels(fake_forge, *issues: IssueRecord) -> None:
+    """Make label mutation mocks observable by fresh status precondition probes."""
+    labels = {issue.number: list(issue.labels) for issue in issues}
+    states = {issue.number: issue.state for issue in issues}
+
+    def add_label(issue_number, label):
+        current = labels.setdefault(int(issue_number), [])
+        if label not in current:
+            current.append(label)
+
+    def remove_label(issue_number, label):
+        current = labels.setdefault(int(issue_number), [])
+        labels[int(issue_number)] = [item for item in current if item != label]
+
+    fake_forge.add_label.side_effect = add_label
+    fake_forge.remove_label.side_effect = remove_label
+    fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
+        labels.get(int(issue_number), ())
+    )
+    fake_forge.get_issue_state.side_effect = lambda issue_number: states.get(
+        int(issue_number), "OPEN"
+    )
+
+
 @contextmanager
 def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
@@ -137,10 +161,52 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         mock_remove_label = fake_forge.remove_label
+        _track_forge_labels(fake_forge, done_issue, blocked_issue)
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
             ),
+        ):
+
+            def _list(label, **_):
+                if label == "status:done":
+                    return [done_issue]
+                if label == "status:blocked":
+                    return [blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+    def test_resolves_depends_on_from_blocked_by(self, tmp_path, fake_forge):
+        config = self._config(tmp_path)
+        done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
+        blocked = _full_issue(
+            2, labels=("status:blocked",), subtask_id="task-b", depends_on=()
+        )
+        blocked_issue = IssueRecord(
+            number=blocked.number,
+            title=blocked.title,
+            body=blocked.body,
+            labels=blocked.labels,
+            created_at=blocked.created_at,
+            blocked_by=(1,),
+        )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        _track_forge_labels(fake_forge, done_issue, blocked_issue)
+        with patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
         ):
 
             def _list(label, **_):
@@ -178,6 +244,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         mock_remove_label = fake_forge.remove_label
+        _track_forge_labels(fake_forge, done_issue, blocked_issue)
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
@@ -276,6 +343,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         mock_remove_label = fake_forge.remove_label
+        _track_forge_labels(fake_forge, in_progress_issue, blocked_issue)
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]

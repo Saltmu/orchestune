@@ -96,7 +96,18 @@ class TestDecideMissingActiveWorktrees:
     """decide層: githubのread-only呼び出し以外の副作用なしで復元計画のみを算出する。"""
 
     def test_no_missing_issues_returns_empty_without_calling_github(self, tmp_path):
-        run_state = RunState(active_worktrees={"1": None})  # type: ignore[arg-type]
+        run_state = RunState(
+            active_worktrees={
+                "1": ActiveWorktree(
+                    issue_number=1,
+                    branch="claude/issue-1-task-a",
+                    worktree_path=str(tmp_path),
+                    pid=1,
+                    started_at=1.0,
+                    declared_footprint=(),
+                )
+            }
+        )
         issue = _issue_with_footprint(1, subtask_id="task-a")
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs") as mock_prs:
             result = _decide_missing_active_worktrees(

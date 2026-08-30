@@ -35,6 +35,7 @@ def _patch_gc_process_alive(*, return_value: bool):
             "orchestune.dispatch.gc.is_process_alive",
             "orchestune.dispatch.gc.completion.is_process_alive",
             "orchestune.dispatch.gc.zombies.is_process_alive",
+            "orchestune.dispatch.execution_repair.is_process_alive",
         ):
             stack.enter_context(patch(target, return_value=return_value))
         yield

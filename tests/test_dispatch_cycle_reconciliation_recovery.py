@@ -15,8 +15,6 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from orchestune.dispatch.reconciliation import (
-    _decide_blocked_promotions,
-    _decide_dual_status_reconciliation,
     _reconcile_dual_status_tasks,
     _self_heal_run_state,
 )
@@ -105,29 +103,6 @@ def _stub_label_actor_permission_by_default(fake_forge):
 
 
 class TestDualStatusReconciliation:
-    def test_detects_tasks_with_both_done_and_queued(self):
-        dual_status_task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            status_labels=("status:done", "status:queued"),
-        )
-        queued_only_task = _task(
-            issue_number=2,
-            subtask_id="task-b",
-            status_labels=("status:queued",),
-        )
-        done_only_task = _task(
-            issue_number=3,
-            subtask_id="task-c",
-            status_labels=("status:done",),
-        )
-
-        result = _decide_dual_status_reconciliation(
-            {1: dual_status_task, 2: queued_only_task, 3: done_only_task}
-        )
-
-        assert [t.issue_number for t in result] == [1]
-
     def test_apply_removes_status_done_for_dual_status_tasks(
         self, tmp_path, fake_forge
     ):
@@ -145,6 +120,10 @@ class TestDualStatusReconciliation:
 
         fake_forge.remove_label.reset_mock(side_effect=True)
         mock_remove = fake_forge.remove_label
+        fake_forge.get_issue_labels.side_effect = (
+            ("status:done", "status:queued"),
+            ("status:queued",),
+        )
         events = _reconcile_dual_status_tasks({1: dual_status_task}, config)
 
         mock_remove.assert_called_once_with(1, "status:done")
@@ -168,43 +147,6 @@ class TestDualStatusReconciliation:
         _reconcile_dual_status_tasks({1: dual_status_task}, config)
 
         mock_remove.assert_not_called()
-
-
-class TestDecideBlockedPromotions:
-    """decide層: 依存解決済みタスクの判定のみを行い、githubラベルは変更しない。"""
-
-    def test_no_depends_on_is_not_promotable(self):
-        task = _task(depends_on=())
-        promotable = _decide_blocked_promotions([], [], set(), {1: task})
-        assert promotable == []
-
-    def test_unresolved_dependency_is_not_promotable(self):
-        task = _task(depends_on=("task-x",))
-        issue = IssueRecord(
-            number=1, title="t", body="", labels=(), created_at="2026-01-01T00:00:00Z"
-        )
-        promotable = _decide_blocked_promotions([issue], [], set(), {1: task})
-        assert promotable == []
-
-    def test_resolved_via_completed_subtask_ids_is_promotable(self):
-        task = _task(depends_on=("task-x",))
-        issue = IssueRecord(
-            number=1, title="t", body="", labels=(), created_at="2026-01-01T00:00:00Z"
-        )
-        promotable = _decide_blocked_promotions([issue], [], {"task-x"}, {1: task})
-        assert promotable == [task]
-
-    def test_ci_base_branch_red_not_promoted_by_dependency_resolution(self):
-        task = _task(depends_on=("task-x",))
-        issue = IssueRecord(
-            number=1,
-            title="t",
-            body="",
-            labels=("status:blocked", "ci:base-branch-red"),
-            created_at="2026-01-01T00:00:00Z",
-        )
-        promotable = _decide_blocked_promotions([issue], [], {"task-x"}, {1: task})
-        assert promotable == []
 
 
 class TestSelfHealRunState:
@@ -543,40 +485,6 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
         # remove_label が呼ばれない（fail-closed）ことを検証
         mock_remove_label.assert_not_called()
-
-    def test_blocked_promotion_excludes_blocked_recompute(self):
-        """status:blocked-recomputeを持つタスクは、通常のblocked昇格判定から除外されること"""
-        from orchestune.dispatch.reconciliation import _decide_blocked_promotions
-
-        task = _task(
-            issue_number=2,
-            subtask_id="task-blocked",
-            status_labels=("status:blocked", "status:blocked-recompute"),
-        )
-        issue = IssueRecord(
-            number=2,
-            title="t",
-            body="subtask_id: task-blocked\ndepends_on:\n  - task-dep",
-            labels=("status:blocked", "status:blocked-recompute"),
-            created_at="2026-01-01T00:00:00Z",
-        )
-
-        # 依存先が完了している（done_issuesに含まれる）が、status:blocked-recompute があるため昇格しないはず
-        dep_issue = IssueRecord(
-            3, "dep", "subtask_id: task-dep", ("status:done",), "2026-01-01T00:00:00Z"
-        )
-        dep_task = _task(
-            issue_number=3, subtask_id="task-dep", status_labels=("status:done",)
-        )
-
-        promotable = _decide_blocked_promotions(
-            [issue],
-            [dep_issue],
-            completed_subtask_ids=set(),
-            tasks_by_issue={2: task, 3: dep_task},
-        )
-
-        assert task not in promotable
 
     def test_recompute_dag_error_fail_closed(self, tmp_path, fake_forge):
         """DAG再計算で例外が発生した際、自動復帰が抑止されること (fail-closed)"""
