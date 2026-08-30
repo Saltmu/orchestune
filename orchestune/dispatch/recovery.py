@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
     WORKTREE_MISSING,
 )
+from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.execution_profiles import resolve_execution_profile
 from orchestune.dispatch.execution_repair import (
@@ -265,6 +267,47 @@ def _apply_restore_missing_active_worktrees(
         )
 
     return True
+
+
+def execute_bookkeeping_repair_command(
+    command: RepairCommand,
+    run_state: RunState,
+    restorations: Sequence[tuple[str, str, ActiveWorktree]],
+) -> RepairResult:
+    """Apply one observed run-state restoration behind a typed command."""
+    if command.code != COMMAND_BOOKKEEPING:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.FAILED,
+            diagnostics=(f"unsupported recovery repair command: {command.code}",),
+        )
+    subject_id = command.subject_id
+    selected = tuple(item for item in restorations if item[0] == subject_id)
+    subject_is_active = any(
+        str(active.issue_number) == subject_id
+        for active in run_state.active_worktrees.values()
+    )
+    selected_key_is_occupied = any(
+        key in run_state.active_worktrees for key, _, _ in selected
+    )
+    if (
+        subject_id is None
+        or subject_is_active
+        or selected_key_is_occupied
+        or len(selected) != 1
+    ):
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=(
+                f"bookkeeping precondition no longer holds for subject {subject_id}",
+            ),
+        )
+    applied = _apply_restore_missing_active_worktrees(run_state, list(selected))
+    return RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED if applied else RepairStatus.SKIPPED,
+    )
 
 
 def _restore_missing_active_worktrees(

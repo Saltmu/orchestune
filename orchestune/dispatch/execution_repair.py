@@ -8,10 +8,12 @@ Recovery and GC remain the only side-effect boundaries that execute the plan.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 from orchestune.consistency.desired import (
     DesiredTaskInput,
@@ -26,6 +28,8 @@ from orchestune.consistency.models import (
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
+    RepairResult,
+    RepairStatus,
 )
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
@@ -34,7 +38,17 @@ from orchestune.consistency.observation import (
     ForgeSnapshot,
     ObservationCollector,
 )
-from orchestune.consistency.repairs.execution import plan_execution_repairs
+from orchestune.consistency.repairs.execution import (
+    COMMAND_BOOKKEEPING,
+    COMMAND_RECLAIM,
+    COMMAND_REQUEUE,
+    plan_execution_repairs,
+)
+from orchestune.consistency.repairs.status import (
+    COMMAND_ADD_LABEL,
+    COMMAND_REMOVE_LABEL,
+    COMMAND_TRANSITION_LABEL,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState
@@ -50,6 +64,111 @@ class ExecutionRepairEvaluation:
 
     report: ConsistencyReport
     commands: tuple[RepairCommand, ...]
+
+
+class RepairCommandDomain(StrEnum):
+    """Side-effect boundary that owns one typed repair command."""
+
+    STATUS = "status"
+    EXECUTION = "execution"
+    RECOVERY = "recovery"
+    GC = "gc"
+
+
+class RepairCommandOperation(StrEnum):
+    """Existing low-level operation reused by one typed command."""
+
+    FORGE_ADD_LABEL = "forge.add-label"
+    FORGE_REMOVE_LABEL = "forge.remove-label"
+    FORGE_TRANSITION_LABEL = "forge.transition-label"
+    GC_RECLAIM_LIFECYCLE = "gc.reclaim-lifecycle"
+    GC_REQUEUE_NOTIFICATION = "gc.requeue-notification"
+    RECOVERY_BOOKKEEPING = "recovery.update-bookkeeping"
+
+
+@dataclass(frozen=True, slots=True)
+class RepairCommandBinding:
+    """Stable ownership metadata for one automatic repair command."""
+
+    domain: RepairCommandDomain
+    operation: RepairCommandOperation
+
+
+REPAIR_COMMAND_BINDINGS: Mapping[str, RepairCommandBinding] = MappingProxyType(
+    {
+        COMMAND_ADD_LABEL: RepairCommandBinding(
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_ADD_LABEL,
+        ),
+        COMMAND_REMOVE_LABEL: RepairCommandBinding(
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_REMOVE_LABEL,
+        ),
+        COMMAND_TRANSITION_LABEL: RepairCommandBinding(
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_TRANSITION_LABEL,
+        ),
+        COMMAND_RECLAIM: RepairCommandBinding(
+            RepairCommandDomain.GC,
+            RepairCommandOperation.GC_RECLAIM_LIFECYCLE,
+        ),
+        COMMAND_REQUEUE: RepairCommandBinding(
+            RepairCommandDomain.EXECUTION,
+            RepairCommandOperation.GC_REQUEUE_NOTIFICATION,
+        ),
+        COMMAND_BOOKKEEPING: RepairCommandBinding(
+            RepairCommandDomain.RECOVERY,
+            RepairCommandOperation.RECOVERY_BOOKKEEPING,
+        ),
+    }
+)
+
+type RepairCommandHandler = Callable[[RepairCommand], RepairResult]
+
+
+def _failed_result(command: RepairCommand, diagnostic: str) -> RepairResult:
+    return RepairResult(
+        command=command,
+        status=RepairStatus.FAILED,
+        diagnostics=(diagnostic,),
+    )
+
+
+def _describe_exception(exc: Exception) -> str:
+    detail = str(exc).strip()
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchRepairExecutorAdapter:
+    """Route typed commands to bound domain handlers and fail closed."""
+
+    handlers: Mapping[str, RepairCommandHandler]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "handlers", MappingProxyType(dict(self.handlers)))
+
+    def execute(self, command: RepairCommand) -> RepairResult:
+        binding = REPAIR_COMMAND_BINDINGS.get(command.code)
+        if binding is None:
+            return _failed_result(
+                command, f"unsupported repair command: {command.code}"
+            )
+        handler = self.handlers.get(command.code)
+        if handler is None:
+            return _failed_result(
+                command,
+                f"unbound {binding.domain.value} repair command: {command.code}",
+            )
+        try:
+            result = handler(command)
+        except Exception as exc:  # noqa: BLE001 - report through RepairResult
+            return _failed_result(command, _describe_exception(exc))
+        if result.command != command:
+            return _failed_result(
+                command, "repair handler returned a result for another command"
+            )
+        return result
 
 
 class _WorktreeProbe:
@@ -261,7 +380,13 @@ def evaluate_execution_repair_plan(
 
 
 __all__ = [
+    "REPAIR_COMMAND_BINDINGS",
+    "DispatchRepairExecutorAdapter",
     "ExecutionRepairEvaluation",
+    "RepairCommandBinding",
+    "RepairCommandDomain",
+    "RepairCommandOperation",
+    "RepairCommandHandler",
     "command_finding_codes",
     "evaluate_execution_repair_plan",
 ]

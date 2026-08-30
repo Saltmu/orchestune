@@ -8,12 +8,20 @@
 
 from unittest.mock import patch
 
+from orchestune.consistency.invariants.execution import LOCAL_PROCESS_DEAD
+from orchestune.consistency.models import (
+    ConsistencyScope,
+    RepairCommand,
+    RepairStatus,
+)
+from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
     _collect_zombies_and_timeouts,
     _decide_zombie_or_timeout_reclaims,
+    execute_reclaim_repair_command,
 )
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
@@ -421,6 +429,83 @@ class TestApplyZombieOrTimeoutReclaim:
         )
         defaults.update(overrides)
         return ZombieOrTimeoutReclaim(**defaults)
+
+    def test_typed_reclaim_command_uses_existing_safe_lifecycle(
+        self, tmp_path, fake_forge
+    ):
+        active = _active(worktree_path=str(tmp_path))
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
+        command = RepairCommand(
+            code=COMMAND_RECLAIM,
+            scope=ConsistencyScope.TASK,
+            subject_id="280",
+            idempotency_key="execution:280:reclaim",
+            parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            forge=fake_forge,
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
+            ) as backup,
+            patch("orchestune.dispatch.gc.zombies.remove_worktree") as remove,
+        ):
+            result = execute_reclaim_repair_command(
+                command,
+                run_state,
+                reclaim,
+                config,
+            )
+
+        assert result.status is RepairStatus.APPLIED
+        backup.assert_called_once()
+        remove.assert_called_once_with(active.worktree_path)
+        assert run_state.active_worktrees == {}
+
+    def test_typed_reclaim_command_defers_after_active_execution_changes(
+        self, tmp_path, fake_forge
+    ):
+        active = _active(worktree_path=str(tmp_path))
+        replacement = _active(
+            pid=999,
+            worktree_path=str(tmp_path / "replacement"),
+        )
+        reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
+        command = RepairCommand(
+            code=COMMAND_RECLAIM,
+            scope=ConsistencyScope.TASK,
+            subject_id="280",
+            idempotency_key="execution:280:reclaim",
+            parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            forge=fake_forge,
+        )
+
+        with patch(
+            "orchestune.dispatch.gc.zombies._apply_zombie_or_timeout_reclaim"
+        ) as apply_reclaim:
+            result = execute_reclaim_repair_command(
+                command,
+                RunState(active_worktrees={"280": replacement}),
+                reclaim,
+                config,
+            )
+
+        assert result.status is RepairStatus.SKIPPED
+        assert result.diagnostics == (
+            "reclaim precondition no longer holds for subject 280",
+        )
+        apply_reclaim.assert_not_called()
 
     def test_zombie_apply_removes_worktree_and_requeues(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path))

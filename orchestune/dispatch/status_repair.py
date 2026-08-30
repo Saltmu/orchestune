@@ -643,6 +643,16 @@ def execute_status_repair_command(
     now: datetime | None = None,
 ) -> RepairResult:
     """Execute one supervisor-selected command through the existing safeguards."""
+    if command.code not in {
+        COMMAND_ADD_LABEL,
+        COMMAND_REMOVE_LABEL,
+        COMMAND_TRANSITION_LABEL,
+    }:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.FAILED,
+            diagnostics=(f"unsupported status repair command: {command.code}",),
+        )
     if not config.apply:
         return RepairResult(command=command, status=RepairStatus.SKIPPED)
     task = _repair_subject_task(command, tasks_by_issue)
