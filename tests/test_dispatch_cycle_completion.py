@@ -803,6 +803,11 @@ class TestRunDispatchCycleNotNeeded:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         mock_remove_label = fake_forge.remove_label
+        fake_forge.get_issue_labels.side_effect = (
+            ("status:blocked",),
+            ("status:not-needed",),
+            ("status:queued",),
+        )
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]

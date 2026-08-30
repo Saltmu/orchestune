@@ -21,8 +21,8 @@ against live state:
     The label that must survive the removal is present, so an interrupted
     removal can never leave the Issue without a primary status (#381).
 ``dependencies-declared``
-    The task declares at least one dependency, matching the guard in
-    ``dispatch.reconciliation._decide_blocked_promotions``.
+    The task declares at least one dependency, matching the blocked-promotion
+    policy guard.
 ``dependencies-resolved`` / ``dependencies-unresolved``
     The dependency state that justified the transition still holds.  A plan
     outlives the snapshot it came from: without re-checking, a task whose

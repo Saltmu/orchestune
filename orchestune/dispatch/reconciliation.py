@@ -18,6 +18,10 @@ from orchestune.dispatch.recovery import (
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState, save_run_state
+from orchestune.dispatch.status_repair import (
+    StatusRepairPhase,
+    reconcile_status_repairs,
+)
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.issue_parsing import (
     launch_history_from_body,
@@ -71,57 +75,6 @@ def _collect_active_conflict_subtask_ids(
     return active_conflict_subtask_ids
 
 
-def _decide_blocked_promotions(
-    blocked_issues: list[IssueRecord],
-    done_issues: list[IssueRecord],
-    completed_subtask_ids: set[str],
-    tasks_by_issue: dict[int, Task],
-) -> list[Task]:
-    """#193: 依存先が全て解決したstatus:blockedタスクを副作用なしで判定する。
-
-    #280: `done_issues`には`status:done`と`status:not-needed`の両方を
-    呼び出し側で合流させて渡すことで、対応不要と判定された依存先も
-    「解決済み」として扱われる（このタスク自体は依存先の状態を区別しない）。
-    """
-    done_subtask_ids = {
-        tasks_by_issue[issue.number].subtask_id
-        for issue in done_issues
-        if issue.number in tasks_by_issue and tasks_by_issue[issue.number].subtask_id
-    } | completed_subtask_ids
-
-    promotable = []
-    for issue in blocked_issues:
-        if "status:blocked-recompute" in issue.labels:
-            continue
-        if "ci:base-branch-red" in issue.labels:
-            continue
-        task = tasks_by_issue.get(issue.number)
-        if task is None or not task.depends_on:
-            continue
-        if not all(dep in done_subtask_ids for dep in task.depends_on):
-            continue
-        promotable.append(task)
-    return promotable
-
-
-def _apply_blocked_promotions(
-    promotable: list[Task], config: DispatcherConfig
-) -> list[dict]:
-    events: list[dict] = []
-    for task in promotable:
-        if config.apply:
-            transition_status_label(
-                config.resolved_forge,
-                task.issue_number,
-                "status:queued",
-                ("status:blocked",),
-            )
-        events.append(
-            {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
-        )
-    return events
-
-
 def _promote_blocked_tasks(
     blocked_issues: list[IssueRecord],
     done_issues: list[IssueRecord],
@@ -129,11 +82,23 @@ def _promote_blocked_tasks(
     tasks_by_issue: dict[int, Task],
     config: DispatcherConfig,
 ) -> list[dict]:
-    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    promotable = _decide_blocked_promotions(
-        blocked_issues, done_issues, completed_subtask_ids, tasks_by_issue
+    """カーネルのstatus finding/typed planを既存の昇格境界で適用する。"""
+    done_issue_numbers = {issue.number for issue in done_issues}
+    done_subtask_ids = {
+        task.subtask_id
+        for issue_number, task in tasks_by_issue.items()
+        if issue_number in done_issue_numbers and task.subtask_id
+    }
+    repaired = reconcile_status_repairs(
+        tasks_by_issue,
+        completed_subtask_ids=done_subtask_ids | completed_subtask_ids,
+        config=config,
+        phase=StatusRepairPhase.BLOCKED_PROMOTION,
     )
-    return _apply_blocked_promotions(promotable, config)
+    return [
+        {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
+        for task in repaired
+    ]
 
 
 def _self_heal_run_state(
@@ -268,41 +233,20 @@ def _reconcile_recovery_counters(
         )
 
 
-def _decide_dual_status_reconciliation(
-    tasks_by_issue: dict[int, Task],
-) -> list[Task]:
-    """#254レビュー対応(#275 Codex P1): `handle_merge_failure`がadd(queued)
-    成功後にremove(done)で失敗すると、Issueが`status:done`/`status:queued`
-    を同時に持つ中断状態のまま残りうる。この関数はそうしたdual-status
-    タスクを副作用なしで検出する（`_determine_candidate_tasks`が起動候補
-    から既に除外しているため、これは中断していた遷移を完了させるための
-    自己修復であり、安全性そのものはこの関数の実行有無に依存しない）。"""
-    return [
-        task
-        for task in tasks_by_issue.values()
-        if "status:done" in task.status_labels and "status:queued" in task.status_labels
-    ]
-
-
-def _apply_dual_status_reconciliation(
-    tasks: list[Task], config: DispatcherConfig
-) -> list[dict]:
-    events: list[dict] = []
-    for task in tasks:
-        if config.apply:
-            config.resolved_forge.remove_label(task.issue_number, "status:done")
-        events.append(
-            {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
-        )
-    return events
-
-
 def _reconcile_dual_status_tasks(
     tasks_by_issue: dict[int, Task], config: DispatcherConfig
 ) -> list[dict]:
-    """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    dual_status_tasks = _decide_dual_status_reconciliation(tasks_by_issue)
-    return _apply_dual_status_reconciliation(dual_status_tasks, config)
+    """カーネルのconflict finding/typed planで中断したrollbackを完了する。"""
+    repaired = reconcile_status_repairs(
+        tasks_by_issue,
+        completed_subtask_ids=(),
+        config=config,
+        phase=StatusRepairPhase.DUAL_STATUS,
+    )
+    return [
+        {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
+        for task in repaired
+    ]
 
 
 def _handle_blocked_recompute_recovery(
