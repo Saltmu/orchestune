@@ -63,6 +63,7 @@ from orchestune.consistency.vocabulary import (
     FACT_WORKTREE_PATH,
 )
 from orchestune.issue_parsing import effective_parent_number
+from orchestune.labels import STATUS_LABEL_PREFIX
 from orchestune.models import IssueRecord, PrRecord
 
 # Provenance recorded on every observation, so a finding can name where the
@@ -82,8 +83,6 @@ EXECUTION_KIND_CLOUD = "cloud"
 EXECUTION_KIND_LOCAL = "local"
 EXECUTION_KIND_NONE = "none"
 EXECUTION_KIND_UNKNOWN = "unknown"
-
-STATUS_LABEL_PREFIX = "status:"
 
 _KNOWN = ObservationCertainty.KNOWN
 _STALE = ObservationCertainty.STALE

@@ -46,6 +46,7 @@ from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 
 
@@ -91,15 +92,18 @@ def task_lifecycle(
     # Preserve the dispatch adapter's existing lifecycle precedence everywhere
     # except the one interrupted rollback this phase owns.  In `done + queued`,
     # queued is the durable destination and done is the label to remove.
-    if "status:done" in status_labels and "status:queued" in status_labels:
+    if StatusLabel.DONE in status_labels and StatusLabel.QUEUED in status_labels:
         return TaskLifecycle.OPEN
-    if "status:done" in status_labels:
+    if StatusLabel.DONE in status_labels:
         return TaskLifecycle.DONE
-    if "status:not-needed" in status_labels:
+    if StatusLabel.NOT_NEEDED in status_labels:
         return TaskLifecycle.NOT_NEEDED
     if any(
         label in status_labels
-        for label in ("status:blocked-human-review", "status:manual-merge-required")
+        for label in (
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
+            StatusLabel.MANUAL_MERGE_REQUIRED,
+        )
     ):
         return TaskLifecycle.HUMAN_REVIEW
     return TaskLifecycle.OPEN
@@ -204,14 +208,14 @@ def _selected(command: RepairCommand, phase: StatusRepairPhase) -> bool:
         return (
             command.code == COMMAND_TRANSITION_LABEL
             and _finding_code(command) == BLOCKED_WITH_RESOLVED_DEPENDENCIES
-            and parameters.get("new_label") == "status:queued"
-            and parameters.get("old_labels") == ("status:blocked",)
+            and parameters.get("new_label") == StatusLabel.QUEUED
+            and parameters.get("old_labels") == (StatusLabel.BLOCKED,)
         )
     return (
         command.code == COMMAND_REMOVE_LABEL
         and _finding_code(command) == PRIMARY_STATUS_CONFLICT
-        and parameters.get("label") == "status:done"
-        and _retained_label(command) == "status:queued"
+        and parameters.get("label") == StatusLabel.DONE
+        and _retained_label(command) == StatusLabel.QUEUED
     )
 
 
@@ -304,7 +308,9 @@ def _fresh_dependencies_resolved(
         if dependency_task is None:
             continue
         labels = config.resolved_forge.get_issue_labels(dependency_task.issue_number)
-        if not any(label in labels for label in ("status:done", "status:not-needed")):
+        if not any(
+            label in labels for label in (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
+        ):
             return False
     return True
 

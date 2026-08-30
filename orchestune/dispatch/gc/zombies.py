@@ -39,6 +39,7 @@ from orchestune.dispatch.state import (
     save_run_state,
 )
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
 
 
@@ -50,7 +51,7 @@ class ZombieOrTimeoutReclaim:
     reason: str
     is_timeout: bool
     process_alive: bool
-    status_labels: tuple[str, ...] = ("status:in-progress",)
+    status_labels: tuple[str, ...] = (StatusLabel.IN_PROGRESS,)
     # #512: この回収を含めた累計回収回数（1始まり）と、上限超過の判定結果。
     reclaim_count: int = 1
     escalate: bool = False
@@ -98,7 +99,7 @@ def _build_reclaim_candidate(
         status_labels=(
             active_task.status_labels
             if active_task is not None
-            else ("status:in-progress",)
+            else (StatusLabel.IN_PROGRESS,)
         ),
         reclaim_count=reclaim_count,
         escalate=exceeds_limit(reclaim_count, max_task_reclaims),
@@ -378,13 +379,13 @@ def _notify_requeued_reclaim(
     reason = reclaim.reason
     stale_labels = tuple(
         label
-        for label in ("status:in-progress", "status:blocked")
+        for label in (StatusLabel.IN_PROGRESS, StatusLabel.BLOCKED)
         if label in reclaim.status_labels
     )
     transition_status_label(
         config.resolved_forge,
         active.issue_number,
-        "status:queued",
+        StatusLabel.QUEUED,
         stale_labels,
     )
     settle()

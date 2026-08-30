@@ -57,6 +57,7 @@ from orchestune.consistency.models import (
     Repairability,
     RepairCommand,
 )
+from orchestune.labels import StatusLabel
 
 COMMAND_ADD_LABEL = "status.add-label"
 COMMAND_REMOVE_LABEL = "status.remove-label"
@@ -71,13 +72,13 @@ _COMMAND_ORDER = {
 #: conditions the executor must confirm again before it does.
 _TRANSITION_PLANS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     BLOCKED_WITH_RESOLVED_DEPENDENCIES: (
-        "status:blocked",
-        "status:queued",
+        StatusLabel.BLOCKED,
+        StatusLabel.QUEUED,
         ("dependencies-declared", "dependencies-resolved", "no-promotion-hold"),
     ),
     QUEUED_WITH_UNRESOLVED_DEPENDENCIES: (
-        "status:queued",
-        "status:blocked",
+        StatusLabel.QUEUED,
+        StatusLabel.BLOCKED,
         ("dependencies-unresolved",),
     ),
 }

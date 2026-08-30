@@ -134,6 +134,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "infra",
             "infra.json_state",
             "infra.process_utils",
+            "labels",
             "models",
             "outcome_record",
             "plan_writer",

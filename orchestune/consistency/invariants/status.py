@@ -60,33 +60,34 @@ from orchestune.consistency.vocabulary import (
     FACT_ISSUE_STATE,
     FACT_ISSUE_STATUS_LABELS,
 )
+from orchestune.labels import StatusLabel
 
 # The mutually exclusive lifecycle positions of `docs/ja/status-labels.md`.
 # `orchestune.dispatch.labels.PRIMARY_STATUS_LABELS` is a deliberately narrower
 # tuple — the labels one `transition_status_label` call sweeps away — while this
 # is the full set a task must hold exactly one of.
 PRIMARY_STATUS_LABELS = (
-    "status:blocked",
-    "status:blocked-human-review",
-    "status:done",
-    "status:in-progress",
-    "status:manual-merge-required",
-    "status:not-needed",
-    "status:queued",
+    StatusLabel.BLOCKED,
+    StatusLabel.BLOCKED_HUMAN_REVIEW,
+    StatusLabel.DONE,
+    StatusLabel.IN_PROGRESS,
+    StatusLabel.MANUAL_MERGE_REQUIRED,
+    StatusLabel.NOT_NEEDED,
+    StatusLabel.QUEUED,
 )
 
 # Statuses that record a human gate.  Automation may add a label beside one of
 # these, but must never remove one to settle a conflict on its own.
 TERMINAL_ESCALATION_LABELS = (
-    "status:blocked-human-review",
-    "status:manual-merge-required",
+    StatusLabel.BLOCKED_HUMAN_REVIEW,
+    StatusLabel.MANUAL_MERGE_REQUIRED,
 )
 
 # Labels that intentionally hold a `status:blocked` task back even once its
 # dependencies resolve during status repair execution.
-PROMOTION_HOLD_LABELS = ("ci:base-branch-red", "status:blocked-recompute")
+PROMOTION_HOLD_LABELS = ("ci:base-branch-red", StatusLabel.BLOCKED_RECOMPUTE)
 
-FORCE_SERIAL_LABEL = "status:force-serial"
+FORCE_SERIAL_LABEL = StatusLabel.FORCE_SERIAL
 
 # Stable finding codes.  These values are persisted in reports and repair
 # allowlists, so changing one is a compatibility change.
@@ -557,7 +558,7 @@ def _cardinality_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
 
 
 def _in_progress_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
-    if view.primary != ("status:in-progress",) or view.active or view.in_transition:
+    if view.primary != (StatusLabel.IN_PROGRESS,) or view.active or view.in_transition:
         return ()
     return (
         _task_finding(
@@ -576,7 +577,7 @@ def _in_progress_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
 
 
 def _done_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
-    if view.primary != ("status:done",) or not view.active or view.in_transition:
+    if view.primary != (StatusLabel.DONE,) or not view.active or view.in_transition:
         return ()
     return (
         _task_finding(
@@ -597,7 +598,7 @@ def _promotion_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
             _task_finding(
                 view,
                 BLOCKED_PROMOTION_HELD,
-                expected="status:blocked",
+                expected=StatusLabel.BLOCKED,
                 expected_summary="promotion stays held while a hold label is present",
                 observed_summary=(
                     "dependencies are resolved but promotion is intentionally held"
@@ -612,7 +613,7 @@ def _promotion_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
         _task_finding(
             view,
             BLOCKED_WITH_RESOLVED_DEPENDENCIES,
-            expected="status:queued",
+            expected=StatusLabel.QUEUED,
             expected_summary="a task whose dependencies resolved is queued",
             observed_summary="status:blocked while every dependency is resolved",
             repairability=repairability,
@@ -627,7 +628,7 @@ def _demotion_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
         _task_finding(
             view,
             QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
-            expected="status:blocked",
+            expected=StatusLabel.BLOCKED,
             expected_summary="a task with unresolved dependencies stays blocked",
             observed_summary="status:queued while a dependency is unresolved",
             repairability=repairability,
@@ -642,9 +643,9 @@ def _demotion_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
 def _dependency_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
     if view.dependencies_resolved is None:
         return ()
-    if view.primary == ("status:blocked",) and view.dependencies_resolved:
+    if view.primary == (StatusLabel.BLOCKED,) and view.dependencies_resolved:
         return _promotion_findings(view)
-    if view.primary == ("status:queued",) and not view.dependencies_resolved:
+    if view.primary == (StatusLabel.QUEUED,) and not view.dependencies_resolved:
         return _demotion_findings(view)
     return ()
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from orchestune.dispatch.state import load_run_state
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
 
 _TAIL_CHUNK_SIZE = 8192
 _LABEL_CACHE_TTL_SECONDS = 15.0
@@ -55,13 +56,13 @@ _STATE_DESCRIPTIONS: dict[MonitorState, str] = {
 # docs/ja/status-labels.md の遷移表に基づく優先順位。上位ほど「run_state側の
 # 帳簿がstaleである（GitHubラベルは既に次の状態へ進んでいる）」ことを示す。
 _LABEL_PRIORITY: tuple[tuple[str, MonitorState], ...] = (
-    ("status:done", MonitorState.DONE),
-    ("status:blocked-human-review", MonitorState.BLOCKED_HUMAN_REVIEW),
-    ("status:not-needed", MonitorState.NOT_NEEDED),
-    ("status:manual-merge-required", MonitorState.MANUAL_MERGE_REQUIRED),
-    ("status:blocked", MonitorState.BLOCKED),
-    ("status:external-lock", MonitorState.EXTERNAL_LOCK),
-    ("status:queued", MonitorState.QUEUED),
+    (StatusLabel.DONE, MonitorState.DONE),
+    (StatusLabel.BLOCKED_HUMAN_REVIEW, MonitorState.BLOCKED_HUMAN_REVIEW),
+    (StatusLabel.NOT_NEEDED, MonitorState.NOT_NEEDED),
+    (StatusLabel.MANUAL_MERGE_REQUIRED, MonitorState.MANUAL_MERGE_REQUIRED),
+    (StatusLabel.BLOCKED, MonitorState.BLOCKED),
+    (StatusLabel.EXTERNAL_LOCK, MonitorState.EXTERNAL_LOCK),
+    (StatusLabel.QUEUED, MonitorState.QUEUED),
 )
 
 
@@ -84,7 +85,7 @@ def _derive_monitor_state(
         if label in labels:
             return state
 
-    if "status:in-progress" in labels:
+    if StatusLabel.IN_PROGRESS in labels:
         if alive:
             return MonitorState.RUNNING
         if external_id is not None:

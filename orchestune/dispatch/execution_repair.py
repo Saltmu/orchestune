@@ -40,6 +40,7 @@ from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
 
 
@@ -95,13 +96,16 @@ def _task_issue(task: Task) -> IssueRecord:
 
 
 def _task_lifecycle(task: Task) -> TaskLifecycle:
-    if "status:done" in task.status_labels:
+    if StatusLabel.DONE in task.status_labels:
         return TaskLifecycle.DONE
-    if "status:not-needed" in task.status_labels:
+    if StatusLabel.NOT_NEEDED in task.status_labels:
         return TaskLifecycle.NOT_NEEDED
     if any(
         label in task.status_labels
-        for label in ("status:blocked-human-review", "status:manual-merge-required")
+        for label in (
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
+            StatusLabel.MANUAL_MERGE_REQUIRED,
+        )
     ):
         return TaskLifecycle.HUMAN_REVIEW
     return TaskLifecycle.OPEN
@@ -123,7 +127,7 @@ def _active_task_ids(tasks_by_issue: Mapping[int, Task]) -> tuple[str, ...]:
     return tuple(
         f"issue-{task.issue_number}"
         for task in sorted(tasks_by_issue.values(), key=lambda item: item.issue_number)
-        if "status:in-progress" in task.status_labels
+        if StatusLabel.IN_PROGRESS in task.status_labels
     )
 
 

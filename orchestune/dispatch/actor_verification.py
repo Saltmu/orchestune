@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.scoring import Task
 from orchestune.forge import Forge, GitHubForge
+from orchestune.labels import StatusLabel
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
@@ -38,7 +39,7 @@ def _decide_actor_verification(
     for task in candidate_tasks:
         actor = ""
         try:
-            actor = forge.get_label_actor(task.issue_number, "status:queued")
+            actor = forge.get_label_actor(task.issue_number, StatusLabel.QUEUED)
             permission = forge.get_actor_permission(actor)
         except Exception as exc:
             print(

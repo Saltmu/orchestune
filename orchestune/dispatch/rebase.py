@@ -27,6 +27,7 @@ from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
+from orchestune.labels import StatusLabel
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,9 @@ def notify_recompute(
             forge.add_comment(parent_issue_number, bodies[-1])
         if blocked_issue is not None:
             transition_status_label(
-                forge, blocked_issue, "status:blocked", ("status:queued",)
+                forge, blocked_issue, StatusLabel.BLOCKED, (StatusLabel.QUEUED,)
             )
-            forge.add_label(blocked_issue, "status:blocked-recompute")
+            forge.add_label(blocked_issue, StatusLabel.BLOCKED_RECOMPUTE)
 
     return bodies
 
@@ -210,7 +211,7 @@ def _apply_forced_serial_event(
     if config.apply:
         active.forced_serial = True
         _persist_recovery_counters(active, config)
-        config.resolved_forge.add_label(active.issue_number, "status:force-serial")
+        config.resolved_forge.add_label(active.issue_number, StatusLabel.FORCE_SERIAL)
     return {"recompute_count": decision.recompute_count}
 
 
@@ -383,8 +384,8 @@ def _prepare_wip_backup_for_rebase(
         transition_status_label(
             config.resolved_forge,
             active.issue_number,
-            "status:manual-merge-required",
-            ("status:in-progress",),
+            StatusLabel.MANUAL_MERGE_REQUIRED,
+            (StatusLabel.IN_PROGRESS,),
         )
         config.resolved_forge.add_comment(
             active.issue_number,
@@ -413,8 +414,8 @@ def _handle_rebase_failure(
     transition_status_label(
         config.resolved_forge,
         active.issue_number,
-        "status:manual-merge-required",
-        ("status:in-progress",),
+        StatusLabel.MANUAL_MERGE_REQUIRED,
+        (StatusLabel.IN_PROGRESS,),
     )
     cmd_args = getattr(e, "cmd", [])
     if cmd_args == default_ci_command():

@@ -37,6 +37,7 @@ import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from orchestune.labels import StatusLabel
 from orchestune.models import Task
 
 # 推定所要時間が渡されなかったノードの既定値。1.0にすることで、履歴が無い
@@ -49,7 +50,7 @@ MAX_TRANSITIVE_CLOSURE_NODES = 512
 
 # 「もう起動対象ではない」ことをラベルから判定するための集合。完了済みの後続を
 # rankへ含めると、既に解放済みのチェーンの分だけbottom levelが過大評価される。
-_FINISHED_STATUS_LABELS = frozenset({"status:done", "status:not-needed"})
+_FINISHED_STATUS_LABELS = frozenset({StatusLabel.DONE, StatusLabel.NOT_NEEDED})
 
 
 def pending_tasks(tasks: Iterable[Task]) -> list[Task]:

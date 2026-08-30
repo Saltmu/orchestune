@@ -64,6 +64,7 @@ from orchestune.forge import (
     PullRequestForge,
     RepoAdminForge,
 )
+from orchestune.labels import STATUS_LABEL_PREFIX, StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.outcome_record import (
     OUTCOME_MARKER,
@@ -125,8 +126,10 @@ __all__ = [
     "Repairability",
     "RepoAdminForge",
     "ReviewSummary",
+    "STATUS_LABEL_PREFIX",
     "ScopedObservations",
     "StateChanged",
+    "StatusLabel",
     "Task",
     "TransitionIntent",
     "__version__",

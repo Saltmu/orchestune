@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+from orchestune.labels import StatusLabel
 from orchestune.validation import validate_label
 
 
@@ -116,35 +117,39 @@ class GitHubRepoAdminMixin:
 
 REQUIRED_LABELS: tuple[LabelSpec, ...] = (
     LabelSpec(
-        "status:queued", "0E8A16", "Issue is ready to be picked up by the dispatcher"
+        StatusLabel.QUEUED, "0E8A16", "Issue is ready to be picked up by the dispatcher"
     ),
     LabelSpec(
-        "status:blocked", "B60205", "Issue is blocked on unresolved dependencies"
+        StatusLabel.BLOCKED, "B60205", "Issue is blocked on unresolved dependencies"
     ),
     LabelSpec(
-        "status:blocked-recompute",
+        StatusLabel.BLOCKED_RECOMPUTE,
         "B60205",
         "Blocked pending Conflict Graph recomputation",
     ),
-    LabelSpec("status:blocked-human-review", "B60205", "Blocked pending human review"),
-    LabelSpec("status:done", "0E8A16", "Subtask work is complete"),
     LabelSpec(
-        "status:external-lock",
+        StatusLabel.BLOCKED_HUMAN_REVIEW, "B60205", "Blocked pending human review"
+    ),
+    LabelSpec(StatusLabel.DONE, "0E8A16", "Subtask work is complete"),
+    LabelSpec(
+        StatusLabel.EXTERNAL_LOCK,
         "5319E7",
         "Blocked by an externally-held footprint lock",
     ),
     LabelSpec(
-        "status:force-serial",
+        StatusLabel.FORCE_SERIAL,
         "5319E7",
         "Forced to run serially after recompute retries exhausted",
     ),
     LabelSpec(
-        "status:in-progress", "1D76DB", "Currently being worked by a dispatched agent"
+        StatusLabel.IN_PROGRESS,
+        "1D76DB",
+        "Currently being worked by a dispatched agent",
     ),
     LabelSpec(
-        "status:manual-merge-required", "FBCA04", "Needs a human to manually merge"
+        StatusLabel.MANUAL_MERGE_REQUIRED, "FBCA04", "Needs a human to manually merge"
     ),
-    LabelSpec("status:not-needed", "CCCCCC", "Subtask determined to be unnecessary"),
+    LabelSpec(StatusLabel.NOT_NEEDED, "CCCCCC", "Subtask determined to be unnecessary"),
     LabelSpec("priority:high", "D93F0B", "High priority subtask"),
     LabelSpec("priority:medium", "FBCA04", "Medium priority subtask"),
     LabelSpec("priority:low", "C2E0C6", "Low priority subtask"),

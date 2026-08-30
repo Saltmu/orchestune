@@ -41,6 +41,7 @@ from orchestune.dispatch.targets import (
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import (
     REASON_BASE_BRANCH_RED,
@@ -178,12 +179,12 @@ def _apply_blocked_base_branch_red(
             if label in active_task.status_labels
         )
         if active_task is not None
-        else ("status:in-progress",)
+        else (StatusLabel.IN_PROGRESS,)
     )
     transition_status_label(
         config.resolved_forge,
         active.issue_number,
-        "status:blocked",
+        StatusLabel.BLOCKED,
         stale_labels,
     )
     config.resolved_forge.add_label(active.issue_number, "ci:base-branch-red")
@@ -216,7 +217,7 @@ def _apply_escalated_base_branch_red(
             if label in active_task.status_labels
         )
         if active_task is not None
-        else ("status:in-progress",)
+        else (StatusLabel.IN_PROGRESS,)
     )
     attempt = (
         decision.outcome.attempt
@@ -245,7 +246,7 @@ def _apply_no_commits_escalation(
     remove_worktree(active.worktree_path)
     apply_human_review_escalation(
         active.issue_number,
-        ("status:in-progress",),
+        (StatusLabel.IN_PROGRESS,),
         "エージェントプロセスの終了を検知しましたが、ベースブランチ"
         f"(`{active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
         "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、"
@@ -309,12 +310,12 @@ def _publish_early_death_requeue(
     )
     remove_worktree(active.worktree_path)
     status_labels = (
-        active_task.status_labels if active_task else ("status:in-progress",)
+        active_task.status_labels if active_task else (StatusLabel.IN_PROGRESS,)
     )
     transition_status_label(
         config.resolved_forge,
         active.issue_number,
-        "status:queued",
+        StatusLabel.QUEUED,
         tuple(label for label in PRIMARY_STATUS_LABELS if label in status_labels),
         on_label_added=on_requeue_applied,
     )
@@ -368,7 +369,7 @@ def _apply_without_outcome_escalation(
     remove_worktree(active.worktree_path)
     apply_human_review_escalation(
         active.issue_number,
-        ("status:in-progress",),
+        (StatusLabel.IN_PROGRESS,),
         "エージェントプロセスの終了とコミットを検知しましたが、"
         "完了宣言レコード（orchestune:outcome）が検出できませんでした。"
         "レビューサイクルが未完了または作業途中で終了した可能性があるため、"
@@ -387,7 +388,7 @@ def _apply_token_limit_escalation(
     model_info = f"（モデル: {usage.model}）" if usage.model else ""
     apply_human_review_escalation(
         active.issue_number,
-        ("status:in-progress",),
+        (StatusLabel.IN_PROGRESS,),
         f"サブタスクのトークン消費量が上限（{config.max_tokens_per_task:,} tokens）を超過しました"
         f"{model_info}。\n実消費量: {usage.total_tokens:,} tokens "
         f"(Input: {usage.input_tokens:,}, Output: {usage.output_tokens:,})。\n"
@@ -417,12 +418,12 @@ def _apply_done_worktree_cleanup(
             if label in active_task.status_labels
         )
         if active_task is not None
-        else ("status:in-progress",)
+        else (StatusLabel.IN_PROGRESS,)
     )
     transition_status_label(
         config.resolved_forge,
         active.issue_number,
-        "status:done",
+        StatusLabel.DONE,
         stale_labels,
     )
     return commit_sha
@@ -603,7 +604,7 @@ def _finalize_not_needed_worktree(
     subtask_id = active_task.subtask_id if active_task else ""
     if config.apply:
         remove_worktree(active.worktree_path)
-        config.resolved_forge.remove_label(active.issue_number, "status:in-progress")
+        config.resolved_forge.remove_label(active.issue_number, StatusLabel.IN_PROGRESS)
         if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
             if dispatch_not_needed_review is None:
                 raise RuntimeError("not-needed review dispatcher is not configured")
@@ -806,7 +807,7 @@ def _requeue_abandoned_cloud_worktree(
     transition_status_label(
         config.resolved_forge,
         active.issue_number,
-        "status:queued",
+        StatusLabel.QUEUED,
         stale_labels,
         on_label_added=on_settle_reclaim,
     )
@@ -876,7 +877,7 @@ def _finalize_abandoned_cloud_worktree(
         return event
 
     status_labels = (
-        active_task.status_labels if active_task else ("status:in-progress",)
+        active_task.status_labels if active_task else (StatusLabel.IN_PROGRESS,)
     )
     if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
         remove_worktree(active.worktree_path)

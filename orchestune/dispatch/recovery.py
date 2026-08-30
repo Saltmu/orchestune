@@ -25,13 +25,14 @@ from orchestune.issue_parsing import (
     parse_task_from_issue,
     recovery_counters_from_body,
 )
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.pr_link_notice import pr_matches_issue
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
 
-_FORCE_SERIAL_LABEL = "status:force-serial"
+_FORCE_SERIAL_LABEL = StatusLabel.FORCE_SERIAL
 
 
 def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:

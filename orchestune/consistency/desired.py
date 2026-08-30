@@ -31,6 +31,7 @@ from orchestune.consistency.vocabulary import (
     DESIRED_UNRESOLVED_DEPENDENCIES,
     DESIRED_ZOMBIE_GC_ENABLED,
 )
+from orchestune.labels import StatusLabel
 
 
 class TaskLifecycle(StrEnum):
@@ -90,9 +91,9 @@ class DispatchPolicy:
 
 
 _TERMINAL_STATUS = {
-    TaskLifecycle.DONE: "status:done",
-    TaskLifecycle.NOT_NEEDED: "status:not-needed",
-    TaskLifecycle.HUMAN_REVIEW: "status:blocked-human-review",
+    TaskLifecycle.DONE: StatusLabel.DONE,
+    TaskLifecycle.NOT_NEEDED: StatusLabel.NOT_NEEDED,
+    TaskLifecycle.HUMAN_REVIEW: StatusLabel.BLOCKED_HUMAN_REVIEW,
 }
 
 
@@ -190,10 +191,10 @@ def _task_status(
     if terminal is not None:
         return terminal
     if is_active:
-        return "status:in-progress"
+        return StatusLabel.IN_PROGRESS
     if unresolved:
-        return "status:blocked"
-    return "status:queued"
+        return StatusLabel.BLOCKED
+    return StatusLabel.QUEUED
 
 
 def _is_dispatch_eligible(

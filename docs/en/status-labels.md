@@ -4,11 +4,11 @@ Orchestune keeps each subtask's progress as the Source of Truth in the
 `status:*` labels on its GitHub Issue (as described in the "Self-Healing"
 section of [Architecture](./architecture.md): even if `run_state.json` is
 lost, state can be reconstructed from these labels and open PRs). This
-document lists, for each of the nine `status:*` labels, when it is applied,
+document lists, for each of the ten `status:*` labels, when it is applied,
 removed, or transitioned, by which code, and under what condition.
 
-The canonical list of labels is `REQUIRED_LABELS` in `orchestune/forge.py`
-(automatically created on GitHub when `orchestune bootstrap` runs).
+The canonical list of labels is `StatusLabel` in `orchestune/labels.py`
+(and `REQUIRED_LABELS` in `orchestune/forge/admin.py`, automatically created on GitHub when `orchestune bootstrap` runs).
 
 ## Label overview
 

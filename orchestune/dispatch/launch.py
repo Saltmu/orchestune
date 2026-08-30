@@ -24,6 +24,7 @@ from orchestune.issue_parsing import (
     launch_history_from_body,
     launch_history_in_window,
 )
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
 
 if TYPE_CHECKING:
@@ -77,7 +78,7 @@ def _get_stack_eligible_tasks(
         task = tasks_by_issue.get(issue.number) or parse_task_from_issue(issue)
         if not task.subtask_id or not task.depends_on:
             continue
-        if "status:in-progress" in task.status_labels:
+        if StatusLabel.IN_PROGRESS in task.status_labels:
             continue
         if issue.blocked_by and len(task.depends_on) < len(issue.blocked_by):
             continue
@@ -221,8 +222,8 @@ def _apply_yaml_error_blocking(
         transition_status_label(
             config.resolved_forge,
             task.issue_number,
-            "status:blocked",
-            ("status:queued",),
+            StatusLabel.BLOCKED,
+            (StatusLabel.QUEUED,),
         )
         config.resolved_forge.add_comment(
             task.issue_number,
@@ -345,14 +346,14 @@ def _launch_reservation(
 def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None:
     old_labels = tuple(
         label
-        for label in ("status:queued", "status:blocked")
+        for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED)
         if label in task.status_labels
     )
     if launch.validation_error:
         transition_status_label(
             config.resolved_forge,
             task.issue_number,
-            "status:blocked-human-review",
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
             old_labels,
         )
         config.resolved_forge.add_comment(
@@ -364,7 +365,7 @@ def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None
         transition_status_label(
             config.resolved_forge,
             task.issue_number,
-            "status:blocked",
+            StatusLabel.BLOCKED,
             old_labels,
         )
         config.resolved_forge.add_comment(
@@ -436,10 +437,10 @@ def _record_successful_launch(
     transition_status_label(
         config.resolved_forge,
         task.issue_number,
-        "status:in-progress",
+        StatusLabel.IN_PROGRESS,
         (
             label
-            for label in ("status:queued", "status:blocked")
+            for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED)
             if label in task.status_labels
         ),
     )

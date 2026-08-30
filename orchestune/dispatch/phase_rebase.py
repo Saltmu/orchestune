@@ -20,6 +20,7 @@ from orchestune.infra.git_cli import (
     list_remote_branches,
 )
 from orchestune.issue_parsing import is_epic_issue
+from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
 
 
@@ -79,16 +80,16 @@ def _apply_external_lock_sync(
     if not config.apply:
         return
     for task in lock_result.to_lock:
-        config.resolved_forge.add_label(task.issue_number, "status:external-lock")
+        config.resolved_forge.add_label(task.issue_number, StatusLabel.EXTERNAL_LOCK)
     for task in lock_result.to_unlock:
-        config.resolved_forge.remove_label(task.issue_number, "status:external-lock")
+        config.resolved_forge.remove_label(task.issue_number, StatusLabel.EXTERNAL_LOCK)
         # #197 / #214: ロック解除時、Taskの現在のラベル状態に基づき status:queued を冪等に再付与・同期する。
         # 既に Task オブジェクトが status:queued を持つ場合でも、GitHub上の実ラベル状態を確実に同期するための明示的処理。
         if (
-            "status:queued" in task.status_labels
-            and "status:done" not in task.status_labels
+            StatusLabel.QUEUED in task.status_labels
+            and StatusLabel.DONE not in task.status_labels
         ):
-            config.resolved_forge.add_label(task.issue_number, "status:queued")
+            config.resolved_forge.add_label(task.issue_number, StatusLabel.QUEUED)
 
 
 def _sync_external_locks(

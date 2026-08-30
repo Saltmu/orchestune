@@ -11,6 +11,7 @@ from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
+from orchestune.labels import StatusLabel
 
 # #511: `status:not-needed`（対応不要）検証レビューのタイムアウト時にも
 # この共通処理を再利用するため対象へ含める。既存の呼び出し元（GC/actor検証/
@@ -18,10 +19,10 @@ from orchestune.forge import Forge, GitHubForge
 # タスクにしか作用しないため、`status:not-needed`が`current_status_labels`に
 # 含まれることはなく、この拡張は既存呼び出し元には影響しない。
 _REMOVABLE_STATUS_LABELS = (
-    "status:in-progress",
-    "status:queued",
-    "status:blocked",
-    "status:not-needed",
+    StatusLabel.IN_PROGRESS,
+    StatusLabel.QUEUED,
+    StatusLabel.BLOCKED,
+    StatusLabel.NOT_NEEDED,
 )
 
 
@@ -51,7 +52,7 @@ def apply_human_review_escalation(
     transition_status_label(
         forge,
         issue_number,
-        "status:blocked-human-review",
+        StatusLabel.BLOCKED_HUMAN_REVIEW,
         (label for label in _REMOVABLE_STATUS_LABELS if label in current_status_labels),
         # #512/PR#520レビュー16巡目対応(Codex P1): 旧ラベルの除去より前、
         # status:blocked-human-reviewが付いた瞬間に確定させる。
@@ -88,7 +89,7 @@ def _apply_changes_requested_escalation(
                 pass
         apply_human_review_escalation(
             active.issue_number,
-            ("status:in-progress",),
+            (StatusLabel.IN_PROGRESS,),
             "依存元PRが変更要求（Request Changes）を受けたため、スタックされたタスクを一時停止しました。",
             forge=config.resolved_forge,
         )
