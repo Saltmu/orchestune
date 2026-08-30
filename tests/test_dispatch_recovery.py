@@ -399,6 +399,79 @@ class TestDecideMissingActiveWorktrees:
 
         assert result[0][2].base_branch == "parent/issue-100"
 
+    def test_restores_active_worktree_from_open_pr_with_empty_closes_issues_via_head_ref(
+        self, tmp_path
+    ):
+        """#739: 非デフォルトブランチ宛てPRでcloses_issue_numbersが空でも、
+        head_ref（例: codex/issue-709-guarded-repair-rollout）からPR番号とブランチを復元する。
+        """
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            709, subtask_id="guarded-repair-rollout", footprint=["src/foo.py"]
+        )
+        pr = PrRecord(
+            number=737,
+            head_ref="codex/issue-709-guarded-repair-rollout",
+            changed_files=("src/foo.py",),
+            closes_issue_numbers=(),
+            base_ref="parent/issue-700",
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
+        ):
+            result = _decide_missing_active_worktrees(run_state, [issue], config)
+
+        assert len(result) == 1
+        key, subtask_id, active = result[0]
+        assert key == "709"
+        assert subtask_id == "guarded-repair-rollout"
+        assert active.branch == "codex/issue-709-guarded-repair-rollout"
+        assert active.external_id == "737"
+        assert active.external_url == "PR#737"
+
+    def test_restores_open_dependency_pr_with_empty_closes_issues_as_base_branch(
+        self, tmp_path
+    ):
+        """#739: 依存先PRのcloses_issue_numbersが空でもhead_refから依存PRを解決する。"""
+        run_state = RunState(active_worktrees={})
+        dependency = _issue_with_footprint(709, subtask_id="task-a")
+        dependent = _issue_with_footprint(
+            710,
+            subtask_id="task-b",
+            depends_on=["task-a"],
+        )
+        dependency_pr = PrRecord(
+            number=737,
+            head_ref="codex/issue-709-task-a",
+            changed_files=(),
+            closes_issue_numbers=(),
+            base_ref="parent/issue-700",
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "fake_forge_proxy.active_fake_forge.list_open_prs",
+            return_value=[dependency_pr],
+        ):
+            result = _decide_missing_active_worktrees(
+                run_state,
+                [dependency, dependent],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        assert active_by_key["710"].base_branch == "codex/issue-709-task-a"
+
 
 class TestApplyRestoreMissingActiveWorktrees:
     """act層: decideが算出した内容のみをrun_stateへ書き込む。"""

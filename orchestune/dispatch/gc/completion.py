@@ -50,6 +50,7 @@ from orchestune.outcome_record import (
     OutcomeRecord,
     parse_from_comments,
 )
+from orchestune.pr_link_notice import pr_matches_issue
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +85,7 @@ def _fetch_outcome_for_active(
             for pr in prs
             if (
                 (active.branch is not None and pr.head_ref == active.branch)
-                or active.issue_number in pr.closes_issue_numbers
+                or pr_matches_issue(pr, active.issue_number)
             )
             and not _is_stale_pr_for_active(pr, active)
         ]
@@ -722,7 +723,7 @@ def _local_pr_completion_status(
             (handle.branch_name is not None and pr.head_ref == handle.branch_name)
             or (
                 handle.issue_number is not None
-                and handle.issue_number in pr.closes_issue_numbers
+                and pr_matches_issue(pr, handle.issue_number)
             )
         )
         and not _is_stale_pr_for_active(pr, active)

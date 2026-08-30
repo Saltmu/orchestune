@@ -26,6 +26,7 @@ from orchestune.issue_parsing import (
     recovery_counters_from_body,
 )
 from orchestune.models import IssueRecord, PrRecord
+from orchestune.pr_link_notice import pr_matches_issue
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
@@ -110,9 +111,7 @@ def _restored_base_branch(
         subtask_id_to_issue_number,
     )
     for pr in open_prs:
-        if any(
-            dep_num in pr.closes_issue_numbers for dep_num in dependency_issue_numbers
-        ):
+        if any(pr_matches_issue(pr, dep_num) for dep_num in dependency_issue_numbers):
             return pr.head_ref
 
     return base_branch
@@ -141,7 +140,7 @@ def _resolve_recovery_pr_and_branch(
     open_prs: list[PrRecord],
 ) -> tuple[str, str | None, str | None]:
     for pr in open_prs:
-        if issue.number in pr.closes_issue_numbers:
+        if pr_matches_issue(pr, issue.number, subtask_id):
             return pr.head_ref, str(pr.number), f"PR#{pr.number}"
     return f"claude/issue-{issue.number}-{subtask_id}", None, None
 

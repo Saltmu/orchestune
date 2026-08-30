@@ -27,8 +27,17 @@ overwrite an existing task.
 
 ## Cleanup
 
-Keep the worktree until the PR and outcome record are complete. From the
-primary checkout, confirm the task worktree is clean and then remove it:
+### Tasks managed under Orchestune
+For tasks executed under Orchestune management, **do not manually remove the
+worktree** upon completing the PR and posting the outcome record. The
+Orchestune Dispatcher's GC phase will automatically inspect commits and outcome
+records, transition the task to completed, and remove the worktree. Manual
+removal before GC can cause the dispatcher to misidentify the task as crashed.
+
+### Standalone tasks outside Orchestune
+For standalone tasks outside Orchestune, keep the worktree until the PR and
+outcome record are complete. From the primary checkout, confirm the task
+worktree is clean and then remove it:
 
 ```bash
 git worktree remove worktree/<BRANCH_SLUG>
@@ -36,3 +45,4 @@ git worktree prune
 ```
 
 Do not use `--force`; resolve or preserve uncommitted work first.
+
