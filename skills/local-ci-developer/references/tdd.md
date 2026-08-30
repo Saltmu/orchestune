@@ -73,4 +73,4 @@ poetry run python scripts/ci_baseline.py check --ci-command "powershell -Executi
    ```bash
    poetry run python scripts/detect_bloat.py --warn-only
    ```
-   - If warnings for file size (code: 1000 lines, skill total: 500 lines) or function length (50 lines) are detected, **do not pause for user approval**; autonomously execute modular or prompt split refactoring to eliminate new or worsened bloat warnings before proceeding (if unresolved after 3 attempts, pause work and escalate).
+   - If warnings for file size (code: 1000 lines, skill total: 500 lines) or function length (50 lines) are detected, **do not pause for user approval**; autonomously execute modular or prompt split refactoring to eliminate new or worsened bloat warnings before proceeding (if unresolved after 3 attempts, pause work and escalate). After refactoring, re-run verification procedures (steps 1–3) to ensure no regressions were introduced.
