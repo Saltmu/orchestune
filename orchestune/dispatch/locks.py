@@ -11,6 +11,7 @@ from pathlib import Path
 
 from orchestune.dispatch.scoring import Task
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
 
 _HOTSPOT_PATTERNS = (
@@ -92,10 +93,10 @@ def scan_external_locks(
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
     for task in queued_tasks:
-        currently_locked = "status:external-lock" in task.status_labels
+        currently_locked = StatusLabel.EXTERNAL_LOCK in task.status_labels
         if (
-            "status:done" in task.status_labels
-            or "status:not-needed" in task.status_labels
+            StatusLabel.DONE in task.status_labels
+            or StatusLabel.NOT_NEEDED in task.status_labels
         ):
             if currently_locked:
                 to_unlock.append(task)

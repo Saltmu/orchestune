@@ -13,6 +13,7 @@ from orchestune.issue_parsing import (
     effective_parent_number,
     parse_task_from_issue,
 )
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, Task
 
 
@@ -52,7 +53,7 @@ def get_sorted_done_tasks(
     `depends_on`だけで決まり、類似度設定には左右されない。
     """
     forge = forge or GitHubForge()
-    done_issues = forge.list_issues_by_label("status:done", state="all")
+    done_issues = forge.list_issues_by_label(StatusLabel.DONE, state="all")
     if not done_issues:
         return [], []
     done_issues, all_issues = _load_integration_issues(
@@ -73,10 +74,10 @@ def _load_integration_issues(
     forge: Forge, done: list[IssueRecord], parent_number: int | None
 ) -> tuple[list[IssueRecord], list[IssueRecord]]:
     labels = (
-        "status:queued",
-        "status:in-progress",
-        "status:blocked",
-        "status:external-lock",
+        StatusLabel.QUEUED,
+        StatusLabel.IN_PROGRESS,
+        StatusLabel.BLOCKED,
+        StatusLabel.EXTERNAL_LOCK,
     )
     issues = [
         issue

@@ -35,6 +35,7 @@ from orchestune.dispatch.critical_path import (
 from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
+from orchestune.labels import StatusLabel
 from orchestune.models import Task
 
 # 以下3つは#286/#287(rewire-dispatch-imports/rewire-integrator-imports)で
@@ -554,9 +555,9 @@ def _ineligibility_reason(task: Task, active_issue_numbers: set[int]) -> str | N
     """スコアリング以前に候補から外れる理由。外れないなら`None`。"""
     if task.yaml_error:
         return REASON_YAML_ERROR
-    if "status:external-lock" in task.status_labels:
+    if StatusLabel.EXTERNAL_LOCK in task.status_labels:
         return REASON_EXTERNAL_LOCK
-    if "status:blocked-recompute" in task.status_labels:
+    if StatusLabel.BLOCKED_RECOMPUTE in task.status_labels:
         return REASON_BLOCKED_RECOMPUTE
     if task.issue_number in active_issue_numbers:
         return REASON_ALREADY_ACTIVE

@@ -88,6 +88,7 @@ from orchestune.dispatch.status_repair import (
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.dispatch.worktree import file_lock
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
 from orchestune.pr_link_notice import (
     notice_expected_bases,
     notify_open_pr_links,
@@ -217,7 +218,7 @@ class _DispatchConsistencyAdapter:
             sorted(
                 task.subtask_id
                 for task in self._tasks_by_issue.values()
-                if "status:in-progress" in task.status_labels and task.subtask_id
+                if StatusLabel.IN_PROGRESS in task.status_labels and task.subtask_id
             )
         )
 

@@ -14,6 +14,7 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue
 from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import find_children_by_parent
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 
 
@@ -59,8 +60,8 @@ class IssuesByStatus:
 # `status:blocked-human-review`——を1リクエストずつ問い合わせると、エスカレーション
 # 済みのタスクが増えるほど毎サイクルのAPI呼び出しが線形に増えてしまう。
 _LEDGER_BULK_LOOKUP_LABELS = (
-    "status:blocked-human-review",
-    "status:manual-merge-required",
+    StatusLabel.BLOCKED_HUMAN_REVIEW,
+    StatusLabel.MANUAL_MERGE_REQUIRED,
 )
 
 # #512/PR#520レビュー14巡目対応(Codex P2): 一括取得の取得件数と、1サイクルあたりの
@@ -182,17 +183,17 @@ def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
 
     for issue in issues:
         is_open = issue.state == "OPEN"
-        if is_open and "status:queued" in issue.labels:
+        if is_open and StatusLabel.QUEUED in issue.labels:
             queued.append(issue)
-        if is_open and "status:external-lock" in issue.labels:
+        if is_open and StatusLabel.EXTERNAL_LOCK in issue.labels:
             locked.append(issue)
-        if is_open and "status:in-progress" in issue.labels:
+        if is_open and StatusLabel.IN_PROGRESS in issue.labels:
             in_progress.append(issue)
-        if is_open and "status:blocked" in issue.labels:
+        if is_open and StatusLabel.BLOCKED in issue.labels:
             blocked.append(issue)
-        if "status:done" in issue.labels:
+        if StatusLabel.DONE in issue.labels:
             done.append(issue)
-        if "status:not-needed" in issue.labels:
+        if StatusLabel.NOT_NEEDED in issue.labels:
             not_needed.append(issue)
 
     return IssuesByStatus(
@@ -213,13 +214,13 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
         return _group_by_status(result.issues)
 
     return IssuesByStatus(
-        queued=config.resolved_forge.list_issues_by_label("status:queued"),
-        locked=config.resolved_forge.list_issues_by_label("status:external-lock"),
-        in_progress=config.resolved_forge.list_issues_by_label("status:in-progress"),
-        blocked=config.resolved_forge.list_issues_by_label("status:blocked"),
-        done=config.resolved_forge.list_issues_by_label("status:done", state="all"),
+        queued=config.resolved_forge.list_issues_by_label(StatusLabel.QUEUED),
+        locked=config.resolved_forge.list_issues_by_label(StatusLabel.EXTERNAL_LOCK),
+        in_progress=config.resolved_forge.list_issues_by_label(StatusLabel.IN_PROGRESS),
+        blocked=config.resolved_forge.list_issues_by_label(StatusLabel.BLOCKED),
+        done=config.resolved_forge.list_issues_by_label(StatusLabel.DONE, state="all"),
         not_needed=config.resolved_forge.list_issues_by_label(
-            "status:not-needed", state="all"
+            StatusLabel.NOT_NEEDED, state="all"
         ),
     )
 
@@ -245,7 +246,7 @@ def _build_task_mappings(
     done_subtask_ids = {
         task.subtask_id
         for task in tasks_by_issue.values()
-        if "status:done" in task.status_labels and task.subtask_id
+        if StatusLabel.DONE in task.status_labels and task.subtask_id
     }
     return tasks_by_issue, issue_number_by_subtask_id, done_subtask_ids
 

@@ -61,6 +61,7 @@ from orchestune.dispatch.state import (
     save_run_state,
 )
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
 
@@ -104,7 +105,7 @@ def _rule_not_needed(
     完了シグナルとして扱い、stale判定より先に評価する。
     """
     has_not_needed_label = (
-        active_task is not None and "status:not-needed" in active_task.status_labels
+        active_task is not None and StatusLabel.NOT_NEEDED in active_task.status_labels
     )
     has_not_needed_outcome = False
     if not has_not_needed_label:
@@ -182,7 +183,7 @@ def _escalate_held_dirty_worktree(
     status_labels = (
         active_task.status_labels
         if active_task is not None
-        else ("status:in-progress",)
+        else (StatusLabel.IN_PROGRESS,)
     )
     try:
         apply_human_review_escalation(

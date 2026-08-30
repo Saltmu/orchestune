@@ -46,6 +46,7 @@ from orchestune.infra.not_needed_review_state import (
     load_not_needed_review_state,
     save_not_needed_review_state,
 )
+from orchestune.labels import StatusLabel
 
 # #282: status:not-needed判定の独立検証結果ラベル。
 NOT_NEEDED_VERIFIED_LABEL = "not-needed-review:passed"
@@ -63,7 +64,7 @@ DEFAULT_NOT_NEEDED_REVIEW_TIMEOUT_SECONDS = 86400.0
 
 # #511: タイムアウトしたstatus:not-needed検証レビューをエスカレーションする際に
 # 除去すべき、対象Issueが本来まだ保持しているはずの旧ラベル。
-_NOT_NEEDED_STATUS_LABEL = "status:not-needed"
+_NOT_NEEDED_STATUS_LABEL = StatusLabel.NOT_NEEDED
 
 
 class RoutineFirer(Protocol):

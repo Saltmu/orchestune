@@ -27,6 +27,7 @@ from orchestune.issue_parsing import (
     launch_history_from_body,
     launch_history_in_window,
 )
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 
@@ -118,7 +119,7 @@ def _self_heal_run_state(
     if not (config.apply and not Path(config.run_state_path).exists()):
         return
     in_progress_issues = config.resolved_forge.list_issues_by_label(
-        "status:in-progress"
+        StatusLabel.IN_PROGRESS
     )
     if recover_run_state(run_state, in_progress_issues, config):
         save_run_state(
@@ -220,7 +221,7 @@ def _reconcile_recovery_counters(
     if not config.apply:
         return
     in_progress_issues = config.resolved_forge.list_issues_by_label(
-        "status:in-progress"
+        StatusLabel.IN_PROGRESS
     )
     if _reconcile_stale_recovery_counters(run_state, in_progress_issues):
         open_prs = config.resolved_forge.list_open_prs()
@@ -258,7 +259,7 @@ def _handle_blocked_recompute_recovery(
     """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
     recompute_resolved_promoted_events: list[dict] = []
     blocked_recompute_issues = [
-        issue for issue in issues.all() if "status:blocked-recompute" in issue.labels
+        issue for issue in issues.all() if StatusLabel.BLOCKED_RECOMPUTE in issue.labels
     ]
 
     if not blocked_recompute_issues:
@@ -277,7 +278,7 @@ def _handle_blocked_recompute_recovery(
         if task.subtask_id not in active_conflict_subtask_ids:
             if config.apply:
                 config.resolved_forge.remove_label(
-                    issue.number, "status:blocked-recompute"
+                    issue.number, StatusLabel.BLOCKED_RECOMPUTE
                 )
 
             done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
@@ -290,8 +291,8 @@ def _handle_blocked_recompute_recovery(
                     transition_status_label(
                         config.resolved_forge,
                         issue.number,
-                        "status:queued",
-                        ("status:blocked",),
+                        StatusLabel.QUEUED,
+                        (StatusLabel.BLOCKED,),
                     )
                 recompute_resolved_promoted_events.append(
                     {"issue_number": issue.number, "subtask_id": task.subtask_id}
@@ -405,8 +406,8 @@ def _apply_base_branch_red_requeue(
         transition_status_label(
             config.resolved_forge,
             decision.issue_number,
-            "status:queued",
-            ("status:blocked",),
+            StatusLabel.QUEUED,
+            (StatusLabel.BLOCKED,),
         )
         config.resolved_forge.add_comment(
             decision.issue_number,
@@ -442,7 +443,7 @@ def _apply_base_branch_red_escalate(
         return
     apply_human_review_escalation(
         decision.issue_number,
-        ("status:blocked",),
+        (StatusLabel.BLOCKED,),
         f"ベースブランチ由来のCI失敗（base-branch-red）が{decision.attempt}回連続で発生したため、"
         "`status:blocked-human-review`へエスカレーションしました。",
         forge=config.resolved_forge,

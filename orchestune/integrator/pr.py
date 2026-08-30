@@ -10,6 +10,7 @@ from orchestune.integrator.final_pr_body import (
     render_final_pr_body,
 )
 from orchestune.issue_parsing import find_children_by_parent
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Task
 
 # #295: GitHubコメントの肥大化を避けるため、末尾のみを埋め込む。
@@ -185,8 +186,8 @@ def handle_merge_failure(
         # - addは成功しremoveが失敗: status:queued/status:doneが
         #   一時的に両方付いた状態になるが、Issueが検索対象から
         #   消えることはなく、次cycleでremoveが再試行される。
-        forge.add_label(task.issue_number, "status:queued")
-        forge.remove_label(task.issue_number, "status:done")
+        forge.add_label(task.issue_number, StatusLabel.QUEUED)
+        forge.remove_label(task.issue_number, StatusLabel.DONE)
         comment_body = (
             f"仮マージCIでエラーが検出されたため、マージを取り消し差し戻しました。\n"
             f"理由: {reason}\n"

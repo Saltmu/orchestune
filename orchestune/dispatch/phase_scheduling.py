@@ -41,6 +41,7 @@ from orchestune.dispatch.scoring import (
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.state import save_run_state
+from orchestune.labels import StatusLabel
 
 
 @dataclass(frozen=True)
@@ -68,8 +69,9 @@ def _filter_queued_candidates(
         ctx.tasks_by_issue[issue.number]
         for issue in issues.queued
         if issue.number not in newly_locked
-        and "status:done" not in ctx.tasks_by_issue[issue.number].status_labels
-        and "status:in-progress" not in ctx.tasks_by_issue[issue.number].status_labels
+        and StatusLabel.DONE not in ctx.tasks_by_issue[issue.number].status_labels
+        and StatusLabel.IN_PROGRESS
+        not in ctx.tasks_by_issue[issue.number].status_labels
         and (
             (record := ctx.run_state.task_reclaim_counts.get(issue.number)) is None
             or record.early_death_retry_at <= now

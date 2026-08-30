@@ -13,6 +13,7 @@ from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parent_issue_number_from_body,
 )
+from orchestune.labels import StatusLabel
 from orchestune.symbol_verification import find_missing_symbols
 
 _PLACEHOLDERS = (
@@ -38,9 +39,9 @@ _PLACEHOLDER_PATTERN = re.compile(
 
 def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, ...]:
     labels = [
-        "status:blocked"
+        StatusLabel.BLOCKED
         if subtask.depends_on and not dependencies_done
-        else "status:queued",
+        else StatusLabel.QUEUED,
         f"priority:{subtask.priority}",
     ]
     if subtask.risk:

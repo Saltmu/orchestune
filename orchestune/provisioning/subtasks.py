@@ -14,6 +14,7 @@ from orchestune.issue_parsing import (
     effective_parent_number,
     find_children_by_parent,
 )
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.provisioning.rendering import (
@@ -93,7 +94,7 @@ def _provision_subtask(
         return (
             number,
             True,
-            "status:done" in forge.get_issue_labels(number),
+            StatusLabel.DONE in forge.get_issue_labels(number),
             has_parent_metadata,
         )
 
