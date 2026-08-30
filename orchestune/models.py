@@ -1,7 +1,7 @@
 """ドメインモデル。他のorchestuneモジュールに一切依存しないL0インフラ層に属する。
 
 L1アダプタ（`forge.py`）が`IssueRecord` / `PrRecord`を返すため、これらのDTOは
-アダプタより下に位置している必要がある（詳細は`docs/ja/architecture.md`第5節）。
+アダプタより下に位置している必要がある（詳細は`docs/ja/architecture.md`第4節）。
 """
 
 from __future__ import annotations

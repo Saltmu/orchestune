@@ -8,8 +8,8 @@
 > **ステータス: 完了（2026-07-29）**。Epic #280 配下の 17 subtask（#281〜#297）が
 > すべて `main` へマージ済みです。以降は本書を「なぜこの構造なのか」の記録として
 > 参照してください。**現在の層構造と不変条件の正典は
-> [`docs/ja/architecture.md` 第5節](ja/architecture.md#5-モジュール層構造とパッケージ境界)
-> （英語版は [`docs/en/architecture.md` §5](en/architecture.md#5-module-layers--package-boundary)）**
+> [`docs/ja/architecture.md` 第4節](ja/architecture.md#4-モジュール層構造とパッケージ境界)
+> （英語版は [`docs/en/architecture.md` §4](en/architecture.md#4-module-layers--package-boundary)）**
 > であり、`tests/test_architecture.py` がその記述とコードの一致を毎回検証します。
 
 ---
@@ -460,7 +460,7 @@ Issue は orchestune の流儀に従い、**footprint が互いに素になる�
 > 通常は `--parent-issue <N>` によるディスパッチャーと Integrator の
 > **二層ブランチモデル**（子タスクは `parent/issue-{N}` へ CI 通過後に自動マージ、
 > 人間のレビューゲートは `parent/issue-{N}` → `main` の最終 PR 1 回のみ）を想定します。
-> 詳細は [Architecture 第3節](en/architecture.md#3-integration--auto-rebase) を参照。
+> 詳細は [Architecture (Integration)](en/architecture/integration.md) を参照。
 >
 > 本 Epic では、ディスパッチャーがまだ安定稼働しておらず、対象がディスパッチャー
 > 自身のコードでもあるため、例外的に手作業・Issue ごとの直接マージで進めます。
