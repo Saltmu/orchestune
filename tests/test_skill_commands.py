@@ -773,3 +773,29 @@ def test_workflow_template_bloat_autonomous_refactoring():
         or "re-verify" in tdd_md_lower
         or "steps 1" in tdd_md_lower
     )
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
+    """Worker skills must specify asking reviewer selection in Step 1 alongside plan approval and bypassing approval when issue-driven."""
+    skill_dir = SKILLS_ROOT / skill_name
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    skill_text_lower = skill_md.lower()
+
+    # Step 1 documents asking reviewer selection alongside plan approval in interactive mode
+    assert (
+        "plan approval & reviewer selection" in skill_text_lower
+        or "plan approval and reviewer selection" in skill_text_lower
+    )
+    assert (
+        "alongside" in skill_text_lower
+        or "together" in skill_text_lower
+        or "ask user to select reviewer" in skill_text_lower
+    )
+
+    # Step 1 documents bypassing plan approval when implementing from an existing Issue or Auto-Dispatch
+    assert "bypass" in skill_text_lower or "skip" in skill_text_lower
+    assert "issue" in skill_text_lower
+
+    # Step 11 documents executing the review with reviewer selected in Step 1
+    assert "step 1" in skill_text_lower
