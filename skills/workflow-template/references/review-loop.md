@@ -9,7 +9,7 @@ run CI, commit, and push only from that worktree.
 
 ## 11. Automated LLM PR Review Loop (Review Cycle)
 
-After creating a PR, conduct automated LLM PR reviews for objective quality verification and iterate until all actionable findings are resolved.
+After creating a PR, conduct automated LLM PR reviews using the reviewer bot decided in Step 1 (or resolved by dispatch/context) for objective quality verification and iterate until all actionable findings are resolved.
 
 ### Handling Review Findings and Scope Management
 

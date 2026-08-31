@@ -9,7 +9,7 @@ run CI, commit, and push only from that worktree.
 
 ## 11. Automated LLM PR Review Loop (Review Cycle)
 
-Execute `scripts/wait_for_review.py` synchronously to request a review from a reviewer bot (Claude / Codex), wait for completion, and analyze feedback. Double-posting is prevented by the script's internal wait controls. The cumulative round count is tracked via `@<bot> review` comments and `Round X/5` notations, preserving count across session interruptions.
+Execute `scripts/wait_for_review.py` synchronously using the reviewer bot decided in Step 1 (or resolved by dispatch/context), wait for completion, and analyze feedback. Double-posting is prevented by the script's internal wait controls. The cumulative round count is tracked via `@<bot> review` comments and `Round X/5` notations, preserving count across session interruptions.
 
 ### Handling Review Findings and Scope Management
 

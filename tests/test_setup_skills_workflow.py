@@ -343,6 +343,9 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
         "<PREFLIGHT_CHECK_COMMAND>" in skill_md
         or "<preflight_check_command>" in skill_md.lower()
     )
+    # Plan approval & reviewer selection in Step 1
+    assert "plan approval & reviewer selection" in skill_md.lower()
+    assert "bypass" in skill_md.lower()
 
     # tdd.md bloat baseline
     assert "baseline" in tdd_md.lower()

@@ -20,12 +20,12 @@ This skill acts as a router orchestrating the standard development workflow: des
 
 ## Execution Modes
 
-| Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch) |
+| Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch / Existing Issue) |
 | :--- | :--- | :--- |
-| **Plan Approval (Step 1)** | Present to user and wait for approval | Proceed immediately to implementation after writing `implementation_plan.md` |
+| **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `implementation_plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch or select cross-model distinct from author |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
-| **Worktree (Step 2.5)** | Create and clean up a task worktree | Use the dispatcher-provisioned worktree; skip setup and cleanup |
-| **Reviewer Selection (Step 11)** | Ask user to select reviewer (Claude/Codex) | Automatically select a cross-model distinct from the author |
+| **Worktree (Step 2.5)** | Create and clean up a task worktree | Use dispatcher-provisioned worktree (or create task worktree if standalone issue); skip cleanup if dispatcher-managed |
+| **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Execute review using reviewer bot resolved in Step 1 |
 | **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
 
 ## Fast-Path for Minor Changes (Typo / Docs)
@@ -41,12 +41,12 @@ At session start, inspect and record the execution environment:
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
 | **0** | **Preflight & Requirement Check** | Verify environment and tools via `<PREFLIGHT_CHECK_COMMAND>`, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
-| **1** | **Design & Implementation Plan** | Write `implementation_plan.md` recording preflight results, selected backend, and design. | - |
+| **1** | **Design & Implementation Plan** | Write `implementation_plan.md` (preflight, backend, reviewer bot, design). Ask user for plan & reviewer approval (bypass approval for existing Issue / Auto-Dispatch). | - |
 | **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: use selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
 | **2.5** | **Worktree Preparation** | For a requested change or existing Issue fix, create `worktree/<BRANCH_SLUG>` and perform all remaining work there. | [references/worktree.md](references/worktree.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`<CI_ENTRYPOINT>`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
-| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop (`wait_for_review.py` or fallback). | [references/review-loop.md](references/review-loop.md) |
+| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop (`wait_for_review.py` or fallback) using selected reviewer bot. | [references/review-loop.md](references/review-loop.md) |
 | **12** | **Outcome Declaration** | Post an outcome record (`result: done`) to PR/Issue comments via selected backend and finish work. | - |
 
 ### Outcome Record Format
