@@ -9,8 +9,10 @@ from orchestune.consistency.invariants.status import (
     PRIMARY_STATUS_CONFLICT,
 )
 from orchestune.consistency.models import (
+    ConsistencyReport,
     ConsistencyScope,
     RepairCommand,
+    RepairResult,
     RepairStatus,
 )
 from orchestune.consistency.repairs.execution import (
@@ -22,7 +24,10 @@ from orchestune.consistency.supervisor import (
     ConsistencyCycleReport,
     ConsistencyMode,
     ConsistencyRepairOutcome,
+    ConsistencyRepairPass,
+    ConsistencyScanResult,
     RepairDisposition,
+    ScanKind,
 )
 from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
@@ -31,6 +36,7 @@ from orchestune.dispatch.config import (
 from orchestune.dispatch.cycle import (
     _DispatchRepairExecutor,
     _merge_consistency_reports,
+    _RepairCycleState,
     run_dispatch_cycle,
 )
 from tests.conftest import make_issue
@@ -92,6 +98,47 @@ def test_unbound_execution_command_fails_closed_without_phase_owned_skip(
         "repair remains owned by its existing execution phase" not in diagnostic
         for diagnostic in result.diagnostics
     )
+
+
+def test_cycle_claims_only_commands_attempted_by_a_builtin_boundary() -> None:
+    finding_code = "execution.local-process-dead"
+    reclaim = RepairCommand(
+        code=COMMAND_RECLAIM,
+        scope=ConsistencyScope.TASK,
+        subject_id="746",
+        idempotency_key="execution:746:reclaim",
+        parameters=(("finding_codes", (finding_code,)),),
+    )
+    unattempted_requeue = RepairCommand(
+        code=COMMAND_REQUEUE,
+        scope=ConsistencyScope.TASK,
+        subject_id="746",
+        idempotency_key="execution:746:requeue",
+        parameters=(("finding_codes", (finding_code,)),),
+    )
+    report = ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        scans=(
+            ConsistencyScanResult(
+                boundary="gc-reclaim",
+                kind=ScanKind.FULL,
+                report=ConsistencyReport(repository_id="owner/repo"),
+                repair_candidates=(reclaim, unattempted_requeue),
+            ),
+        ),
+        repair_passes=(
+            ConsistencyRepairPass(
+                number=1,
+                results=(RepairResult(command=reclaim, status=RepairStatus.SKIPPED),),
+            ),
+        ),
+    )
+    cycle_state = _RepairCycleState()
+
+    cycle_state.add_report(report)
+
+    assert cycle_state.claimed_repair_codes == {COMMAND_RECLAIM, finding_code}
+    assert COMMAND_REQUEUE not in cycle_state.claimed_repair_codes
 
 
 def test_no_apply_off_mode_reports_default_status_repair_as_deferred(

@@ -342,7 +342,7 @@ class _RepairCycleState:
     reports: list[ConsistencyCycleReport] = field(default_factory=list)
 
     def add_report(self, report: ConsistencyCycleReport) -> None:
-        self.claimed_repair_codes.update(_report_repair_codes(report))
+        self.claimed_repair_codes.update(_attempted_repair_codes(report))
         has_repair_scope = any(
             scan.report.findings or scan.repair_candidates for scan in report.scans
         )
@@ -372,20 +372,13 @@ def _command_finding_code(command: RepairCommand) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _report_repair_codes(report: ConsistencyCycleReport) -> set[str]:
-    commands = (command for scan in report.scans for command in scan.repair_candidates)
-    codes = {
-        code
-        for command in commands
-        for code in (command.code, *_command_finding_codes(command))
-    }
-    codes.update(
+def _attempted_repair_codes(report: ConsistencyCycleReport) -> set[str]:
+    return {
         code
         for repair_pass in report.repair_passes
         for result in repair_pass.results
         for code in (result.command.code, *_command_finding_codes(result.command))
-    )
-    return codes
+    }
 
 
 def _status_repair_commands(
