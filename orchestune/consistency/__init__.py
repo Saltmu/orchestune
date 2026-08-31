@@ -35,6 +35,7 @@ from orchestune.consistency.supervisor import (
     ConsistencyRepairPass,
     ConsistencyScanResult,
     ConsistencySupervisor,
+    FunctionRepairPlanner,
     RepairDisposition,
 )
 
@@ -54,6 +55,7 @@ __all__ = [
     "Evidence",
     "FactValue",
     "FindingSeverity",
+    "FunctionRepairPlanner",
     "IntentStatus",
     "Invariant",
     "Observation",

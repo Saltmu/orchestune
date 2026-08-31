@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -22,15 +22,12 @@ from orchestune.consistency.desired import (
     TaskLifecycle,
     derive_desired_repository_state,
 )
-from orchestune.consistency.engine import ConsistencyEngine
 from orchestune.consistency.invariants.execution import (
     EXECUTION_TIMED_OUT,
     HANDLELESS_EXECUTION_ORPHAN,
     LOCAL_PROCESS_DEAD,
-    execution_invariants,
 )
 from orchestune.consistency.models import (
-    ConsistencyReport,
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
@@ -48,7 +45,6 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
     COMMAND_RECLAIM,
     COMMAND_REQUEUE,
-    plan_execution_repairs,
 )
 from orchestune.consistency.repairs.status import (
     COMMAND_ADD_LABEL,
@@ -62,14 +58,6 @@ from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionRepairEvaluation:
-    """Immutable findings and typed commands for one observed snapshot."""
-
-    report: ConsistencyReport
-    commands: tuple[RepairCommand, ...]
 
 
 class RepairCommandDomain(StrEnum):
@@ -453,48 +441,9 @@ def derive_execution_desired_state(
     )
 
 
-def evaluate_execution_repair_plan(
-    run_state: RunState,
-    tasks_by_issue: Mapping[int, Task],
-    config: DispatcherConfig,
-    *,
-    open_prs: Sequence[PrRecord] = (),
-    branches_by_issue: Mapping[int, str] | None = None,
-    held_issue_numbers: Iterable[int] = (),
-    now: float | None = None,
-) -> ExecutionRepairEvaluation:
-    """Observe, evaluate, and plan execution repairs without applying them."""
-    observed_at = datetime.now(UTC) if now is None else datetime.fromtimestamp(now, UTC)
-    repository_id = _repository_id()
-    observed = collect_execution_observed_state(
-        run_state,
-        tasks_by_issue,
-        config,
-        open_prs,
-        branches_by_issue,
-        repository_id,
-        observed_at,
-    )
-    desired = derive_execution_desired_state(
-        tasks_by_issue,
-        config,
-        repository_id,
-        observed_at,
-    )
-    report = ConsistencyEngine(execution_invariants()).evaluate(observed, desired)
-    held_subjects = {str(issue_number) for issue_number in held_issue_numbers}
-    commands = tuple(
-        command
-        for command in plan_execution_repairs(report)
-        if command.subject_id not in held_subjects
-    )
-    return ExecutionRepairEvaluation(report=report, commands=commands)
-
-
 __all__ = [
     "REPAIR_COMMAND_BINDINGS",
     "DispatchRepairExecutorAdapter",
-    "ExecutionRepairEvaluation",
     "RepairCommandBinding",
     "RepairCommandDomain",
     "RepairCommandOperation",
@@ -503,6 +452,5 @@ __all__ = [
     "collect_execution_observed_state",
     "command_finding_codes",
     "derive_execution_desired_state",
-    "evaluate_execution_repair_plan",
     "revalidate_reclaim_preconditions",
 ]
