@@ -39,8 +39,7 @@ from orchestune.consistency.repairs.execution import (
     plan_execution_repairs,
 )
 from orchestune.dispatch.execution_profiles import (
-    ExecutionSelection,
-    resolve_execution_profile,
+    resolve_task_execution_selection,
 )
 from orchestune.dispatch.execution_repair import (
     collect_execution_observed_state,
@@ -409,31 +408,6 @@ def _resolve_recovery_pr_and_branch(
     return f"claude/issue-{issue.number}-{subtask_id}", None, None
 
 
-def _resolve_recovery_execution_selection(
-    task: Task, config: DispatcherConfig
-) -> ExecutionSelection:
-    sel = resolve_execution_profile(
-        task.execution_profile,
-        config.dispatch_target,
-        config.execution_profile_config,
-        model_tier=task.model_tier,
-    )
-    if config.model is not None or config.reasoning_effort is not None:
-        override_model = config.model if config.model is not None else sel.model
-        override_effort = (
-            config.reasoning_effort
-            if config.reasoning_effort is not None
-            else sel.reasoning_effort
-        )
-        return ExecutionSelection(
-            profile=sel.profile,
-            model=override_model,
-            reasoning_effort=override_effort,
-            reason=f"{sel.reason} (CLI override)",
-        )
-    return sel
-
-
 def _build_restored_active_worktree(
     issue: IssueRecord,
     subtask_id: str,
@@ -454,7 +428,7 @@ def _build_restored_active_worktree(
     )
 
     task = parse_task_from_issue(issue, issue_to_subtask_id)
-    execution_selection = _resolve_recovery_execution_selection(task, config)
+    execution_selection = resolve_task_execution_selection(task, config)
 
     return ActiveWorktree(
         issue_number=issue.number,

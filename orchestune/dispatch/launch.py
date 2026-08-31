@@ -12,7 +12,7 @@ from orchestune.dispatch.cost_model import build_cost_model
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
-    resolve_execution_profile,
+    resolve_task_execution_selection,
 )
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task, parse_task_from_issue
@@ -252,27 +252,7 @@ def _decide_task_launch_plan(
             base_branch_for_launch = base_branch
             base_branch_for_state = base_branch
 
-        execution_selection = resolve_execution_profile(
-            task.execution_profile,
-            config.dispatch_target,
-            config.execution_profile_config,
-            model_tier=task.model_tier,
-        )
-        if config.model is not None or config.reasoning_effort is not None:
-            override_model = (
-                config.model if config.model is not None else execution_selection.model
-            )
-            override_effort = (
-                config.reasoning_effort
-                if config.reasoning_effort is not None
-                else execution_selection.reasoning_effort
-            )
-            execution_selection = ExecutionSelection(
-                profile=execution_selection.profile,
-                model=override_model,
-                reasoning_effort=override_effort,
-                reason=f"{execution_selection.reason} (CLI override)",
-            )
+        execution_selection = resolve_task_execution_selection(task, config)
 
         plans.append(
             TaskLaunchPlan(

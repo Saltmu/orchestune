@@ -17,7 +17,7 @@ from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
-    resolve_execution_profile,
+    resolve_task_execution_selection,
 )
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
@@ -184,31 +184,6 @@ def _select_tasks_for_cycle(
     )
 
 
-def _build_task_execution_selection(
-    task: Task, config: DispatcherConfig
-) -> ExecutionSelection:
-    sel = resolve_execution_profile(
-        task.execution_profile,
-        config.dispatch_target,
-        config.execution_profile_config,
-        model_tier=task.model_tier,
-    )
-    if config.model is not None or config.reasoning_effort is not None:
-        override_model = config.model if config.model is not None else sel.model
-        override_effort = (
-            config.reasoning_effort
-            if config.reasoning_effort is not None
-            else sel.reasoning_effort
-        )
-        return ExecutionSelection(
-            profile=sel.profile,
-            model=override_model,
-            reasoning_effort=override_effort,
-            reason=f"{sel.reason} (CLI override)",
-        )
-    return sel
-
-
 def run_scheduling_phase(
     ctx: CycleContext,
     issues: IssuesByStatus,
@@ -248,7 +223,7 @@ def run_scheduling_phase(
     )
 
     execution_selections = {
-        task.issue_number: _build_task_execution_selection(task, config)
+        task.issue_number: resolve_task_execution_selection(task, config)
         for task in selected
     }
     return SchedulingPhaseResult(

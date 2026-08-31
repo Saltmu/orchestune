@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXECUTION_PROFILE = "balanced"
 VALID_MODEL_TIERS = frozenset({"weak", "middle", "strong"})
 
+# Built-in fallback mappings for standard tiers. Repositories are encouraged to
+# override these via the [model_tiers] table in orchestune.toml as models evolve.
 DEFAULT_MODEL_TIERS: dict[str, dict[str, str]] = {
     "strong": {
         "claude": "claude-3-7-sonnet",
@@ -480,3 +482,35 @@ def resolve_execution_profile(
         reasoning_effort=reasoning_effort,
         reason=reason,
     )
+
+
+def resolve_task_execution_selection(
+    task: Any,
+    config: Any,
+) -> ExecutionSelection:
+    """Deterministically resolve an ExecutionSelection for a task, applying DispatcherConfig overrides if present."""
+    sel = resolve_execution_profile(
+        getattr(task, "execution_profile", None),
+        getattr(config, "dispatch_target", None),
+        getattr(config, "execution_profile_config", None),
+        model_tier=getattr(task, "model_tier", None),
+    )
+    if (
+        getattr(config, "model", None) is not None
+        or getattr(config, "reasoning_effort", None) is not None
+    ):
+        override_model = (
+            config.model if getattr(config, "model", None) is not None else sel.model
+        )
+        override_effort = (
+            config.reasoning_effort
+            if getattr(config, "reasoning_effort", None) is not None
+            else sel.reasoning_effort
+        )
+        return ExecutionSelection(
+            profile=sel.profile,
+            model=override_model,
+            reasoning_effort=override_effort,
+            reason=f"{sel.reason} (CLI override)",
+        )
+    return sel

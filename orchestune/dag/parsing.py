@@ -179,18 +179,22 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     raw_p = str(raw.get("priority", "medium")).lower()
     priority = raw_p if raw_p in _VALID_PRIORITIES else "medium"
     overview = str(raw.get("overview", ""))
-    ac = _parse_sequence_field(
+    acceptance_criteria = _parse_sequence_field(
         raw.get("acceptance_criteria"), "acceptance_criteria", subtask_id
     )
-    pc = _parse_sequence_field(
+    proposed_changes = _parse_sequence_field(
         raw.get("proposed_changes"), "proposed_changes", subtask_id
     )
-    vp = _parse_sequence_field(
+    verification_plan = _parse_sequence_field(
         raw.get("verification_plan"), "verification_plan", subtask_id
     )
-    sc = str(raw["shared_contract"]) if raw.get("shared_contract") else None
-    writes_sc = bool(raw.get("writes_shared_contract", False))
-    profile = _parse_execution_profile(raw.get("execution_profile"), subtask_id)
+    shared_contract = (
+        str(raw["shared_contract"]) if raw.get("shared_contract") else None
+    )
+    writes_shared_contract = bool(raw.get("writes_shared_contract", False))
+    execution_profile = _parse_execution_profile(
+        raw.get("execution_profile"), subtask_id
+    )
     model_tier = _parse_model_tier(raw.get("model_tier"), subtask_id)
 
     _warn_on_degraded_fields(subtask_id, description, footprint)
@@ -207,12 +211,12 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         risk_reasons=risk_reasons,
         priority=priority,
         overview=overview,
-        acceptance_criteria=ac,
-        proposed_changes=pc,
-        verification_plan=vp,
-        shared_contract=sc,
-        writes_shared_contract=writes_sc,
-        execution_profile=profile,
+        acceptance_criteria=acceptance_criteria,
+        proposed_changes=proposed_changes,
+        verification_plan=verification_plan,
+        shared_contract=shared_contract,
+        writes_shared_contract=writes_shared_contract,
+        execution_profile=execution_profile,
         model_tier=model_tier,
     )
 

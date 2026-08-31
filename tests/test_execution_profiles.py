@@ -19,6 +19,7 @@ from orchestune.dispatch.execution_profiles import (
     extract_execution_profile_config,
     load_execution_profile_config,
     resolve_execution_profile,
+    resolve_task_execution_selection,
     validate_model_name,
     validate_profile_name,
     validate_reasoning_effort,
@@ -849,3 +850,69 @@ class TestResolveModelTier:
         assert sel.model == "claude-3-7-sonnet-20250219"
         assert sel.reasoning_effort == "medium"
         assert "unknown-tier" in caplog.text
+
+
+class TestResolveTaskExecutionSelection:
+    def test_resolve_task_execution_selection_with_model_tier(self) -> None:
+        from orchestune.models import Task
+
+        task = Task(
+            issue_number=1,
+            subtask_id="t1",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            model_tier="strong",
+        )
+        target = LocalProcessDispatchTarget(local_cmd="claude-cli")
+        config = DispatcherConfig(
+            max_concurrent=1,
+            max_launches_per_window=1,
+            window_seconds=60,
+            run_state_path=Path("/tmp/rs.json"),
+            events_log_path=Path("/tmp/ev.jsonl"),
+            worktree_root=Path("/tmp/wt"),
+            apply=False,
+            dispatch_target=target,
+        )
+        sel = resolve_task_execution_selection(task, config)
+        assert sel.model == "claude-3-7-sonnet"
+        assert "CLI override" not in sel.reason
+
+    def test_resolve_task_execution_selection_with_cli_overrides(self) -> None:
+        from orchestune.models import Task
+
+        task = Task(
+            issue_number=1,
+            subtask_id="t1",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            model_tier="weak",
+            execution_profile="deep",
+        )
+        target = LocalProcessDispatchTarget(local_cmd="claude-cli")
+        config = DispatcherConfig(
+            max_concurrent=1,
+            max_launches_per_window=1,
+            window_seconds=60,
+            run_state_path=Path("/tmp/rs.json"),
+            events_log_path=Path("/tmp/ev.jsonl"),
+            worktree_root=Path("/tmp/wt"),
+            apply=False,
+            dispatch_target=target,
+            model="custom-cli-model",
+            reasoning_effort="high",
+        )
+        sel = resolve_task_execution_selection(task, config)
+        assert sel.model == "custom-cli-model"
+        assert sel.reasoning_effort == "high"
+        assert "CLI override" in sel.reason
