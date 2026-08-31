@@ -62,10 +62,15 @@ from orchestune.consistency.repairs.status import plan_status_repairs
 from orchestune.consistency.supervisor import (
     ConsistencyCycleReport,
     ConsistencyMode,
+    ConsistencyRepairOutcome,
     ConsistencyRepairPass,
     ConsistencySupervisor,
+    RepairDisposition,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config import (
+    DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
+    DispatcherConfig,
+)
 from orchestune.dispatch.cycle_context import (
     _build_cycle_context,
     _build_task_mappings,
@@ -321,15 +326,7 @@ class _DispatchRepairExecutor:
                 completed_subtask_ids=self.completed_subtask_ids,
                 config=self.config,
             )
-        if self.execution_handlers:
-            return DispatchRepairExecutorAdapter(self.execution_handlers).execute(
-                command
-            )
-        return RepairResult(
-            command=command,
-            status=RepairStatus.SKIPPED,
-            diagnostics=("repair remains owned by its existing execution phase",),
-        )
+        return DispatchRepairExecutorAdapter(self.execution_handlers).execute(command)
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,9 +337,17 @@ class _ConsistencyRuntime:
 
 
 @dataclass(slots=True)
-class _StatusRepairCycleState:
-    claimed_finding_codes: set[str] = field(default_factory=set)
+class _RepairCycleState:
+    claimed_repair_codes: set[str] = field(default_factory=set)
     reports: list[ConsistencyCycleReport] = field(default_factory=list)
+
+    def add_report(self, report: ConsistencyCycleReport) -> None:
+        self.claimed_repair_codes.update(_report_repair_codes(report))
+        has_repair_scope = any(
+            scan.report.findings or scan.repair_candidates for scan in report.scans
+        )
+        if report.repair_passes or has_repair_scope:
+            self.reports.append(report)
 
 
 def _status_repair_supervisor() -> ConsistencySupervisor:
@@ -353,9 +358,34 @@ def _status_repair_supervisor() -> ConsistencySupervisor:
     )
 
 
+def _command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
+    parameters = dict(command.parameters)
+    multiple = parameters.get("finding_codes")
+    if isinstance(multiple, tuple):
+        return tuple(value for value in multiple if isinstance(value, str))
+    single = parameters.get("finding_code")
+    return (single,) if isinstance(single, str) else ()
+
+
 def _command_finding_code(command: RepairCommand) -> str | None:
     value = dict(command.parameters).get("finding_code")
     return value if isinstance(value, str) else None
+
+
+def _report_repair_codes(report: ConsistencyCycleReport) -> set[str]:
+    commands = (command for scan in report.scans for command in scan.repair_candidates)
+    codes = {
+        code
+        for command in commands
+        for code in (command.code, *_command_finding_codes(command))
+    }
+    codes.update(
+        code
+        for repair_pass in report.repair_passes
+        for result in repair_pass.results
+        for code in (result.command.code, *_command_finding_codes(result.command))
+    )
+    return codes
 
 
 def _status_repair_commands(
@@ -427,19 +457,22 @@ def _status_boundary_report(
     initial_scan = supervisor.full_scan(
         boundary, observer=cached_adapter, deriver=cached_adapter
     )
-    if config.apply:
-        supervisor.repair_until_stable(
-            initial_scan,
-            observer=fresh_adapter,
-            deriver=fresh_adapter,
-            executor=_DispatchRepairExecutor(
-                config=config,
-                adapter=fresh_adapter,
-                completed_subtask_ids=frozenset(completed_subtask_ids),
-            ),
-            allowlist=(finding_code,),
-            max_passes=1,
-        )
+    supervisor.repair_until_stable(
+        initial_scan,
+        observer=fresh_adapter,
+        deriver=fresh_adapter,
+        executor=_DispatchRepairExecutor(
+            config=config,
+            adapter=fresh_adapter,
+            completed_subtask_ids=frozenset(completed_subtask_ids),
+        ),
+        allowlist=(
+            (finding_code,)
+            if config.apply and finding_code in DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST
+            else ()
+        ),
+        max_passes=1,
+    )
     return initial_scan, supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
 
 
@@ -452,10 +485,9 @@ def _run_status_repair_boundary(
     ctx,
     completed_subtask_ids,
     config: DispatcherConfig,
-    cycle_state: _StatusRepairCycleState,
+    cycle_state: _RepairCycleState,
 ) -> list[dict]:
     """Run one status finding family through Supervisor and typed executor."""
-    cycle_state.claimed_finding_codes.add(finding_code)
     cached_adapter, fresh_adapter = _status_boundary_adapters(
         issues=issues,
         run_state=run_state,
@@ -471,8 +503,7 @@ def _run_status_repair_boundary(
         completed_subtask_ids=completed_subtask_ids,
         config=config,
     )
-    if boundary_report.repair_passes:
-        cycle_state.reports.append(boundary_report)
+    cycle_state.add_report(boundary_report)
     commands = _status_repair_commands(
         boundary_report,
         initial_scan,
@@ -499,11 +530,29 @@ def _merge_consistency_reports(
         ConsistencyRepairPass(number=index, results=repair_pass.results)
         for index, repair_pass in enumerate(raw_passes, start=1)
     )
-    outcomes = {
-        (outcome.scope.value, outcome.subject_id or "", outcome.finding_code): outcome
-        for report in (main, *boundaries)
-        for outcome in report.repair_outcomes
-    }
+    outcomes: dict[tuple[str, str, str], ConsistencyRepairOutcome] = {}
+    for consistency_report in (*boundaries, main):
+        for outcome in consistency_report.repair_outcomes:
+            key = (outcome.scope.value, outcome.subject_id or "", outcome.finding_code)
+            previous = outcomes.get(key)
+            if previous is None:
+                outcomes[key] = outcome
+                continue
+            disposition = (
+                RepairDisposition.FAILED
+                if RepairDisposition.FAILED
+                in {previous.disposition, outcome.disposition}
+                else outcome.disposition
+            )
+            outcomes[key] = ConsistencyRepairOutcome(
+                finding_code=outcome.finding_code,
+                scope=outcome.scope,
+                subject_id=outcome.subject_id,
+                disposition=disposition,
+                diagnostics=tuple(
+                    dict.fromkeys((*previous.diagnostics, *outcome.diagnostics))
+                ),
+            )
     return ConsistencyCycleReport(
         mode=main.mode,
         scans=scans,
@@ -644,11 +693,11 @@ def _finish_consistency_runtime(
     ctx,
     now: float,
     config: DispatcherConfig,
-    status_cycle: _StatusRepairCycleState,
+    repair_cycle: _RepairCycleState,
 ) -> None:
     if runtime is None:
         report.consistency = _merge_consistency_reports(
-            ConsistencyCycleReport(mode=config.consistency_mode), status_cycle.reports
+            ConsistencyCycleReport(mode=config.consistency_mode), repair_cycle.reports
         )
         return
     runtime.supervisor.targeted_scan(
@@ -662,7 +711,7 @@ def _finish_consistency_runtime(
     )
     if config.consistency_mode is ConsistencyMode.REPAIR:
         final_allowlist = (
-            config.consistency_repair_allowlist - status_cycle.claimed_finding_codes
+            config.consistency_repair_allowlist - repair_cycle.claimed_repair_codes
             if config.apply
             else frozenset()
         )
@@ -679,7 +728,7 @@ def _finish_consistency_runtime(
             max_passes=config.consistency_max_repair_passes,
         )
     main_report = runtime.supervisor.cycle_report(mode=config.consistency_mode)
-    report.consistency = _merge_consistency_reports(main_report, status_cycle.reports)
+    report.consistency = _merge_consistency_reports(main_report, repair_cycle.reports)
 
 
 def _run_recovery_bookkeeping_boundary(
@@ -704,7 +753,7 @@ def _run_recovery_bookkeeping_boundary(
         ),
     }
     allowlist = (
-        {COMMAND_REQUEUE, COMMAND_BOOKKEEPING}
+        DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST & {COMMAND_REQUEUE, COMMAND_BOOKKEEPING}
         if config.apply
         else {LAUNCH_HISTORY_STALE}
     )
@@ -784,7 +833,7 @@ def _run_pre_scheduling_reconciliation(
     completed_in_cycle,
     completed,
     config,
-    status_cycle,
+    repair_cycle,
 ):
     promotion_events = _run_status_repair_boundary(
         "status-blocked-promotion",
@@ -794,7 +843,7 @@ def _run_pre_scheduling_reconciliation(
         ctx=ctx,
         completed_subtask_ids=completed,
         config=config,
-        cycle_state=status_cycle,
+        cycle_state=repair_cycle,
     )
     promotion_events.extend(
         run_post_gc_reconciliation(issues, run_state, ctx, completed_in_cycle, config)
@@ -810,7 +859,7 @@ def _run_pre_scheduling_reconciliation(
         ctx=ctx,
         completed_subtask_ids=completed,
         config=config,
-        cycle_state=status_cycle,
+        cycle_state=repair_cycle,
     )
     return promotion_events, lock_result
 
@@ -840,7 +889,7 @@ def _pipeline_report(
     )
 
 
-def _run_gc_reclaim_phase(ctx, config, completion_events, status_cycle):
+def _run_gc_reclaim_phase(ctx, config, completion_events, repair_cycle):
     gc_result = run_gc_phase(
         ctx.run_state,
         ctx.tasks_by_issue,
@@ -848,8 +897,7 @@ def _run_gc_reclaim_phase(ctx, config, completion_events, status_cycle):
         completion_events,
         open_prs=ctx.prs,
     )
-    if gc_result.consistency.repair_passes:
-        status_cycle.reports.append(gc_result.consistency)
+    repair_cycle.add_report(gc_result.consistency)
     return gc_result.completion_events
 
 
@@ -859,7 +907,7 @@ def _execute_cycle_pipeline(
     run_state,
     config: DispatcherConfig,
     now: float,
-    status_cycle: _StatusRepairCycleState,
+    repair_cycle: _RepairCycleState,
 ) -> CycleReport:
     (
         completion_events,
@@ -870,7 +918,7 @@ def _execute_cycle_pipeline(
     _notify_pr_links(ctx, config)
 
     completion_events = _run_gc_reclaim_phase(
-        ctx, config, completion_events, status_cycle
+        ctx, config, completion_events, repair_cycle
     )
     completed = _completed_subtask_ids(ctx, completed_subtask_ids)
     promotion_events, lock_result = _run_pre_scheduling_reconciliation(
@@ -880,7 +928,7 @@ def _execute_cycle_pipeline(
         completed_in_cycle=completed_subtask_ids,
         completed=completed,
         config=config,
-        status_cycle=status_cycle,
+        repair_cycle=repair_cycle,
     )
     scheduling = run_scheduling_phase(
         ctx,
@@ -915,14 +963,13 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             )
         ctx = _build_cycle_context(issues, run_state, config)
         consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
-        status_cycle = _StatusRepairCycleState(
-            reports=[recovery_report] if recovery_report.repair_passes else []
-        )
+        repair_cycle = _RepairCycleState()
+        repair_cycle.add_report(recovery_report)
         report = _execute_cycle_pipeline(
-            ctx, issues, run_state, config, now, status_cycle
+            ctx, issues, run_state, config, now, repair_cycle
         )
         _finish_consistency_runtime(
-            consistency_runtime, report, ctx, now, config, status_cycle
+            consistency_runtime, report, ctx, now, config, repair_cycle
         )
 
         if config.apply:

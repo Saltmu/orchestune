@@ -351,9 +351,12 @@ def _outcome_disposition(
     finding: ConsistencyFinding,
     final_keys: frozenset[tuple[str, str, str]],
     results: tuple[RepairResult, ...],
+    observation_unknown: bool,
 ) -> RepairDisposition:
     if any(result.status is RepairStatus.FAILED for result in results):
         return RepairDisposition.FAILED
+    if observation_unknown:
+        return RepairDisposition.OBSERVATION_UNKNOWN
     if _finding_key(finding) not in final_keys:
         return RepairDisposition.RESOLVED
     if any(result.status is RepairStatus.APPLIED for result in results):
@@ -361,6 +364,27 @@ def _outcome_disposition(
     if "observation-unknown" in finding.code or finding.code.startswith("supervisor."):
         return RepairDisposition.OBSERVATION_UNKNOWN
     return RepairDisposition.DEFERRED
+
+
+def _authoritative_observation_failures(
+    final_scan: ConsistencyScanResult,
+) -> tuple[ConsistencyUnknownFact, ...]:
+    return tuple(
+        fact
+        for fact in final_scan.unknown_facts
+        if fact.source == "consistency-supervisor"
+    )
+
+
+def _outcome_diagnostics(
+    results: Iterable[RepairResult],
+    observation_failures: Iterable[ConsistencyUnknownFact],
+) -> tuple[str, ...]:
+    return tuple(
+        diagnostic for result in results for diagnostic in result.diagnostics
+    ) + tuple(
+        diagnostic for fact in observation_failures for diagnostic in fact.diagnostics
+    )
 
 
 def _repair_outcomes(
@@ -372,18 +396,20 @@ def _repair_outcomes(
     final_keys = frozenset(
         _finding_key(finding) for finding in final_scan.report.findings
     )
+    observation_failures = _authoritative_observation_failures(final_scan)
     outcomes = [
         ConsistencyRepairOutcome(
             finding_code=finding.code,
             scope=finding.scope,
             subject_id=finding.subject_id,
             disposition=_outcome_disposition(
-                finding, final_keys, tuple(results_by_finding.get(key, ()))
+                finding,
+                final_keys,
+                tuple(results_by_finding.get(key, ())),
+                bool(observation_failures),
             ),
-            diagnostics=tuple(
-                diagnostic
-                for result in results_by_finding.get(key, ())
-                for diagnostic in result.diagnostics
+            diagnostics=_outcome_diagnostics(
+                results_by_finding.get(key, ()), observation_failures
             ),
         )
         for key, finding in sorted(indexed.items())

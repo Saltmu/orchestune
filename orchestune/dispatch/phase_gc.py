@@ -27,7 +27,10 @@ from orchestune.consistency.supervisor import (
     ConsistencyMode,
     ConsistencySupervisor,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config import (
+    DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
+    DispatcherConfig,
+)
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     collect_execution_observed_state,
@@ -217,7 +220,7 @@ def run_gc_phase(
         observer=adapter,
         deriver=adapter,
         executor=executor,
-        allowlist={COMMAND_RECLAIM},
+        allowlist=DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST & {COMMAND_RECLAIM},
         max_passes=1,
     )
     return GcPhaseResult(

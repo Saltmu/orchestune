@@ -440,6 +440,35 @@ def test_repair_mode_defers_non_allowlisted_and_reports_executor_failure() -> No
     assert deferred.repair_outcomes[0].disposition is RepairDisposition.DEFERRED
 
 
+def test_repair_outcome_is_unknown_when_authoritative_reobservation_fails() -> None:
+    invariant = _FindingInvariant("task.status", ConsistencyScope.TASK, "706")
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((invariant,)),
+        repair_planners=(_Planner(),),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(_snapshot("queued")), deriver=_StaticDeriver()
+    )
+
+    supervisor.repair_until_stable(
+        start,
+        observer=_FailingObserver(),
+        deriver=_StaticDeriver(),
+        executor=_RecordingExecutor(),
+        allowlist=("repair.status",),
+        max_passes=1,
+    )
+
+    outcome = next(
+        item
+        for item in supervisor.cycle_report(mode=ConsistencyMode.REPAIR).repair_outcomes
+        if item.finding_code == "task.status.finding"
+    )
+    assert outcome.disposition is RepairDisposition.OBSERVATION_UNKNOWN
+    assert outcome.diagnostics == ("OSError: forge unavailable",)
+
+
 def test_repair_mode_stops_at_configured_pass_bound() -> None:
     supervisor = ConsistencySupervisor(
         repository_id="owner/repo",
