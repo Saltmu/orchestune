@@ -19,6 +19,40 @@ from orchestune.dag.models import ConfigError, load_orchestune_config
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXECUTION_PROFILE = "balanced"
+VALID_MODEL_TIERS = frozenset({"weak", "middle", "strong"})
+
+DEFAULT_MODEL_TIERS: dict[str, dict[str, str]] = {
+    "strong": {
+        "claude": "claude-3-7-sonnet",
+        "claude-cli": "claude-3-7-sonnet",
+        "codex": "o3-mini",
+        "codex-cli": "o3-mini",
+        "agy": "gemini-2.5-pro",
+        "agy-cli": "gemini-2.5-pro",
+        "cloud-routine": "claude-3-7-sonnet",
+        "codex-cloud": "o3-mini",
+    },
+    "middle": {
+        "claude": "claude-3-5-sonnet",
+        "claude-cli": "claude-3-5-sonnet",
+        "codex": "gpt-4o",
+        "codex-cli": "gpt-4o",
+        "agy": "gemini-2.5-flash",
+        "agy-cli": "gemini-2.5-flash",
+        "cloud-routine": "claude-3-5-sonnet",
+        "codex-cloud": "gpt-4o",
+    },
+    "weak": {
+        "claude": "claude-3-5-haiku",
+        "claude-cli": "claude-3-5-haiku",
+        "codex": "gpt-4o-mini",
+        "codex-cli": "gpt-4o-mini",
+        "agy": "gemini-2.5-flash-lite",
+        "agy-cli": "gemini-2.5-flash-lite",
+        "cloud-routine": "claude-3-5-haiku",
+        "codex-cloud": "gpt-4o-mini",
+    },
+}
 
 # Profile name: alphanumeric, hyphen, underscore, 1..64 chars, cannot start with hyphen
 _PROFILE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$")
@@ -44,6 +78,19 @@ def validate_profile_name(name: str) -> str:
             "must match pattern ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,63}$ and not start with '-'"
         )
     return name
+
+
+def validate_model_tier(tier: str) -> str:
+    """Validate that a model tier name is one of the supported tiers."""
+    if (
+        not isinstance(tier, str)
+        or isinstance(tier, bool)
+        or tier.strip().lower() not in VALID_MODEL_TIERS
+    ):
+        raise ConfigError(
+            f"invalid model tier {tier!r}: must be one of {sorted(VALID_MODEL_TIERS)}"
+        )
+    return tier.strip().lower()
 
 
 def validate_model_name(model: str) -> str:
@@ -91,10 +138,11 @@ TargetProfileConfig = TargetExecutionConfig
 
 @dataclass(frozen=True)
 class ExecutionProfileConfig:
-    """Repository-level configuration of execution profiles."""
+    """Repository-level configuration of execution profiles and model tiers."""
 
     default_execution_profile: str = DEFAULT_EXECUTION_PROFILE
     profiles: dict[str, dict[str, TargetExecutionConfig]] = field(default_factory=dict)
+    model_tiers: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @property
     def default_profile(self) -> str:
@@ -175,6 +223,30 @@ def _parse_profile_targets(
     return parsed_targets
 
 
+def _parse_model_tiers(raw_model_tiers: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(raw_model_tiers, dict):
+        raise ConfigError("'model_tiers' (or 'model-tiers') must be a table (dict)")
+    parsed: dict[str, dict[str, str]] = {}
+    for tier_name, targets_map in raw_model_tiers.items():
+        validated_tier = validate_model_tier(tier_name)
+        if not isinstance(targets_map, dict):
+            raise ConfigError(
+                f"tier {tier_name!r} under 'model_tiers' must be a table (dict)"
+            )
+        parsed_targets: dict[str, str] = {}
+        for target_name, model_val in targets_map.items():
+            validated_target = validate_target_name(target_name)
+            normalized_target = validated_target.replace("_", "-")
+            if not isinstance(model_val, str) or isinstance(model_val, bool):
+                raise ConfigError(
+                    f"model in tier {tier_name!r}, target {target_name!r} must be a string"
+                )
+            validated_model = validate_model_name(model_val)
+            parsed_targets[normalized_target] = validated_model
+        parsed[validated_tier] = parsed_targets
+    return parsed
+
+
 def extract_execution_profile_config(
     config_data: dict[str, Any],
 ) -> ExecutionProfileConfig:
@@ -189,10 +261,17 @@ def extract_execution_profile_config(
     else:
         default_profile = DEFAULT_EXECUTION_PROFILE
 
+    raw_model_tiers = _get_aliased_value(config_data, "model_tiers")
+    parsed_model_tiers: dict[str, dict[str, str]] = {}
+    if raw_model_tiers is not None:
+        parsed_model_tiers = _parse_model_tiers(raw_model_tiers)
+
     raw_profiles = _get_aliased_value(config_data, "execution_profiles")
     if raw_profiles is None:
         return ExecutionProfileConfig(
-            default_execution_profile=default_profile, profiles={}
+            default_execution_profile=default_profile,
+            profiles={},
+            model_tiers=parsed_model_tiers,
         )
 
     if not isinstance(raw_profiles, dict):
@@ -215,6 +294,7 @@ def extract_execution_profile_config(
     return ExecutionProfileConfig(
         default_execution_profile=default_profile,
         profiles=parsed_profiles,
+        model_tiers=parsed_model_tiers,
     )
 
 
@@ -314,13 +394,58 @@ def _select_profile_and_reason(
     )
 
 
+def _resolve_tier_model(
+    model_tier: str | None,
+    target_name: str,
+    profile_config: ExecutionProfileConfig,
+    current_reason: str,
+) -> tuple[str | None, str]:
+    if model_tier is None:
+        return None, current_reason
+    clean_tier = (
+        model_tier.strip().lower()
+        if isinstance(model_tier, str) and not isinstance(model_tier, bool)
+        else ""
+    )
+    if clean_tier not in VALID_MODEL_TIERS:
+        logger.warning(
+            "Unknown model_tier %r specified; falling back to profile model settings",
+            model_tier,
+        )
+        return None, current_reason
+
+    configured_tier = profile_config.model_tiers.get(clean_tier, {})
+    for candidate in _target_lookup_candidates(target_name):
+        if candidate in configured_tier:
+            tier_model = configured_tier[candidate]
+            return (
+                tier_model,
+                f"model_tier '{clean_tier}' resolved to model '{tier_model}' for target '{target_name}'; {current_reason}",
+            )
+
+    builtin_tier = DEFAULT_MODEL_TIERS.get(clean_tier, {})
+    for candidate in _target_lookup_candidates(target_name):
+        if candidate in builtin_tier:
+            tier_model = builtin_tier[candidate]
+            return (
+                tier_model,
+                f"model_tier '{clean_tier}' resolved to model '{tier_model}' for target '{target_name}'; {current_reason}",
+            )
+
+    return None, current_reason
+
+
 def resolve_execution_profile(
     profile: str | None,
     target: str | Any,
     config: ExecutionProfileConfig | Any | None = None,
+    *,
+    model_tier: str | None = None,
 ) -> ExecutionSelection:
-    """Deterministically resolve an execution profile and target into model/reasoning settings.
+    """Deterministically resolve an execution profile, model tier, and target into model/reasoning settings.
 
+    If `model_tier` is specified, maps the tier (weak/middle/strong) to a concrete model name
+    from `model_tiers` config (or built-in defaults), overriding the model configured in the profile.
     If `profile` is unspecified or empty, uses `default_execution_profile`.
     If `profile` is not defined in `config`, falls back to `default_execution_profile`
     with a warning log.
@@ -342,6 +467,12 @@ def resolve_execution_profile(
     reasoning_effort = (
         matched_target_config.reasoning_effort if matched_target_config else None
     )
+
+    tier_model, reason = _resolve_tier_model(
+        model_tier, target_name, profile_config, reason
+    )
+    if tier_model is not None:
+        model = tier_model
 
     return ExecutionSelection(
         profile=selected_profile,

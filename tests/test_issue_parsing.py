@@ -551,3 +551,89 @@ class TestExecutionProfileFromBody:
         task = parse_task_from_issue(issue)
         assert task.execution_profile is None
         assert task.yaml_error is False
+
+
+class TestModelTierFromBody:
+    """Footprint YAMLからのmodel_tier抽出とバリデーション。"""
+
+    @pytest.mark.parametrize("tier", ["weak", "middle", "strong"])
+    def test_parses_valid_model_tier(self, tier: str):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        issue = IssueRecord(
+            number=1,
+            title="[FEAT] task-a: test",
+            body=(
+                "```yaml\n"
+                "subtask_id: task-a\n"
+                "footprint: [src/foo.py]\n"
+                "symbols: [Foo]\n"
+                "depends_on: []\n"
+                f"model_tier: {tier}\n"
+                "```\n"
+            ),
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        task = parse_task_from_issue(issue)
+        assert task.model_tier == tier
+
+    def test_model_tier_defaults_to_none_when_absent_or_null(self):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        issue_absent = IssueRecord(
+            number=1,
+            title="[FEAT] task-a: test",
+            body="```yaml\nsubtask_id: task-a\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert parse_task_from_issue(issue_absent).model_tier is None
+
+        issue_null = IssueRecord(
+            number=2,
+            title="[FEAT] task-b: test",
+            body="```yaml\nsubtask_id: task-b\nmodel_tier: null\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert parse_task_from_issue(issue_null).model_tier is None
+
+    @pytest.mark.parametrize(
+        "invalid_tier",
+        [
+            "ultra",
+            "low",
+            "high",
+            "Strong",
+            "weak-tier",
+            "",
+            123,
+            True,
+            ["list"],
+            {"dict": "val"},
+        ],
+    )
+    def test_invalid_model_tier_falls_back_to_none_safely(self, invalid_tier):
+        import yaml
+
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        data = {
+            "subtask_id": "task-a",
+            "model_tier": invalid_tier,
+        }
+        body = f"```yaml\n{yaml.dump(data)}```\n"
+        issue = IssueRecord(
+            number=1,
+            title="[FEAT] task-a: test",
+            body=body,
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        task = parse_task_from_issue(issue)
+        assert task.model_tier is None
+        assert task.yaml_error is False

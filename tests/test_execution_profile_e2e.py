@@ -107,6 +107,7 @@ shared_contract: {{shared_contract}}
 writes_shared_contract: {{writes_shared_contract}}
 parent_issue_number: {{parent_issue_number}}
 execution_profile: {{execution_profile}}
+model_tier: {{model_tier}}
 ```
 """
 
@@ -643,3 +644,107 @@ Testing full lifecycle of execution profiles.
         assert sel_codex.profile == "deep-reasoning"
         assert sel_codex.model == "o3-mini"
         assert sel_codex.reasoning_effort == "high"
+
+    def test_model_tier_and_cli_overrides_end_to_end(
+        self, tmp_path: Path, in_memory_forge: FakeForge
+    ) -> None:
+        in_memory_forge.set_actor_permission("bot", "write")
+        in_memory_forge.set_actor_permission("", "write")
+
+        num = in_memory_forge.create_issue(
+            title="[FEAT] task-tier: Test model tier resolution",
+            body="""\
+## Footprint
+```yaml
+subtask_id: task-tier
+footprint:
+  - src/tier.py
+symbols: []
+depends_on: []
+shared_contract: null
+writes_shared_contract: false
+parent_issue_number: null
+execution_profile: null
+model_tier: strong
+```
+""",
+            labels=["status:queued", "priority:medium"],
+        )
+        in_memory_forge.set_label_actor(num, "status:queued", "bot")
+
+        profile_config_dict = {
+            "model_tiers": {
+                "strong": {
+                    "claude-cli": "claude-3-7-sonnet",
+                }
+            }
+        }
+        profile_config = extract_execution_profile_config(profile_config_dict)
+
+        target = RecordingDispatchTarget(target_name="claude-cli")
+
+        config = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=5,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            dispatch_target=target,
+            forge=in_memory_forge,
+            execution_profile_config=profile_config,
+        )
+
+        with (
+            patch("orchestune.dispatch.worktree._create_worktree"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+            ),
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert len(report.selected) == 1
+        assert len(target.launched_tasks) == 1
+        _task, _branch, _wt, selection = target.launched_tasks[0]
+        assert selection is not None
+        assert selection.model == "claude-3-7-sonnet"
+
+        # Now test with CLI overrides
+        target.launched_tasks.clear()
+        config_override = DispatcherConfig(
+            max_concurrent=2,
+            max_launches_per_window=5,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            dispatch_target=target,
+            forge=in_memory_forge,
+            execution_profile_config=profile_config,
+            model="custom-cli-model",
+            reasoning_effort="high",
+        )
+
+        # Reset issue state to queued
+        in_memory_forge.remove_label(num, "status:in-progress")
+        in_memory_forge.add_label(num, "status:queued")
+        in_memory_forge.set_label_actor(num, "status:queued", "bot")
+
+        with (
+            patch("orchestune.dispatch.worktree._create_worktree"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+            ),
+        ):
+            report_override = run_dispatch_cycle(config_override)
+
+        assert len(report_override.selected) == 1
+        assert len(target.launched_tasks) == 1
+        _t2, _b2, _w2, sel2 = target.launched_tasks[0]
+        assert sel2 is not None
+        assert sel2.model == "custom-cli-model"
+        assert sel2.reasoning_effort == "high"

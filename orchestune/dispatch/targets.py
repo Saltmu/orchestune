@@ -412,7 +412,9 @@ def _format_local_cmd(
     if "{reasoning_effort}" not in local_cmd and reasoning_effort:
         if cli_name == "codex":
             cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
-        elif cli_name in ("claude", "agy"):
+        elif cli_name == "claude":
+            cmd.extend(["--effort", reasoning_effort])
+        elif cli_name == "agy":
             logger.warning(
                 "Target %r does not support reasoning_effort %r; skipping setting",
                 f"{cli_name}-cli",

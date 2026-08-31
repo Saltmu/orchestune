@@ -270,6 +270,9 @@ class DagCycleError(ValueError):
     """Raised when a dependency graph contains an unresolvable cycle."""
 
 
+VALID_MODEL_TIERS = frozenset({"weak", "middle", "strong"})
+
+
 @dataclass(frozen=True)
 class SubTask:
     id: str
@@ -288,10 +291,20 @@ class SubTask:
     writes_shared_contract: bool = False
     issue_number: int | None = None
     execution_profile: str | None = None
+    model_tier: str | None = None
 
     def __post_init__(self) -> None:
         normalized = tuple(normalize_footprint_path(p) for p in self.footprint)
         object.__setattr__(self, "footprint", normalized)
+        if self.model_tier is not None:
+            if (
+                not isinstance(self.model_tier, str)
+                or isinstance(self.model_tier, bool)
+                or self.model_tier not in VALID_MODEL_TIERS
+            ):
+                raise ValueError(
+                    f"Invalid model_tier: {self.model_tier!r} (must be one of {sorted(VALID_MODEL_TIERS)})"
+                )
 
     def touch_set(
         self, extra_ignored_patterns: Iterable[re.Pattern[str]] = ()
@@ -424,6 +437,7 @@ class DagResult:
                     "shared_contract": subtask.shared_contract,
                     "writes_shared_contract": subtask.writes_shared_contract,
                     "execution_profile": subtask.execution_profile,
+                    "model_tier": subtask.model_tier,
                 }
                 for subtask_id, subtask in self.subtasks.items()
             },

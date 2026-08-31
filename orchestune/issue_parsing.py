@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -586,6 +586,7 @@ def _resolve_depends_on(
 
 
 _EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
+_VALID_MODEL_TIERS = frozenset({"weak", "middle", "strong"})
 
 
 def _validated_execution_profile(value: object) -> str | None:
@@ -596,8 +597,17 @@ def _validated_execution_profile(value: object) -> str | None:
     return None
 
 
-def _extract_footprint_metadata(
-    issue: IssueRecord,
+def _validated_model_tier(value: object) -> str | None:
+    if not isinstance(value, str) or isinstance(value, bool):
+        return None
+    tier = value.strip()
+    if tier in _VALID_MODEL_TIERS:
+        return tier
+    return None
+
+
+def _parse_yaml_footprint_dict(
+    data: dict[str, Any],
 ) -> tuple[
     str,
     tuple[str, ...],
@@ -605,30 +615,66 @@ def _extract_footprint_metadata(
     str | None,
     bool,
     str | None,
+    str | None,
+]:
+    subtask_id = str(data.get("subtask_id", ""))
+    footprint = tuple(str(f) for f in (data.get("footprint") or []))
+    symbols = tuple(str(s) for s in (data.get("symbols") or []))
+    shared_contract = (
+        str(data["shared_contract"]) if data.get("shared_contract") else None
+    )
+    writes_sc = data.get("writes_shared_contract") is True
+    profile = _validated_execution_profile(data.get("execution_profile"))
+    model_tier = _validated_model_tier(data.get("model_tier"))
+    return (
+        subtask_id,
+        footprint,
+        symbols,
+        shared_contract,
+        writes_sc,
+        profile,
+        model_tier,
+    )
+
+
+_FootprintMetadataTuple = tuple[
+    str,
+    tuple[str, ...],
+    tuple[str, ...],
+    str | None,
+    bool,
+    str | None,
+    str | None,
     bool,
     re.Match[str] | None,
-]:
+]
+
+
+def _extract_footprint_metadata(
+    issue: IssueRecord,
+) -> _FootprintMetadataTuple:
     subtask_id = ""
     footprint: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
     shared_contract: str | None = None
     writes_shared_contract = False
     execution_profile: str | None = None
+    model_tier: str | None = None
     yaml_error = False
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if match:
         try:
             data = yaml.safe_load(match.group(1))
             if isinstance(data, dict):
-                subtask_id = str(data.get("subtask_id", ""))
-                footprint = tuple(str(f) for f in (data.get("footprint") or []))
-                symbols = tuple(str(s) for s in (data.get("symbols") or []))
-                if data.get("shared_contract"):
-                    shared_contract = str(data["shared_contract"])
-                writes_shared_contract = data.get("writes_shared_contract") is True
-                execution_profile = _validated_execution_profile(
-                    data.get("execution_profile")
-                )
+                (
+                    subtask_id,
+                    footprint,
+                    symbols,
+                    shared_contract,
+                    writes_shared_contract,
+                    execution_profile,
+                    model_tier,
+                ) = _parse_yaml_footprint_dict(data)
         except yaml.YAMLError as e:
             print(
                 f"Warning: Failed to parse YAML from issue #{issue.number}: {e}",
@@ -642,6 +688,7 @@ def _extract_footprint_metadata(
         shared_contract,
         writes_shared_contract,
         execution_profile,
+        model_tier,
         yaml_error,
         match,
     )
@@ -693,6 +740,7 @@ def parse_task_from_issue(
         shared_contract,
         writes_shared_contract,
         execution_profile,
+        model_tier,
         yaml_error,
         match,
     ) = _extract_footprint_metadata(issue)
@@ -720,4 +768,5 @@ def parse_task_from_issue(
         shared_contract=shared_contract,
         writes_shared_contract=writes_shared_contract,
         execution_profile=execution_profile,
+        model_tier=model_tier,
     )

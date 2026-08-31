@@ -256,7 +256,23 @@ def _decide_task_launch_plan(
             task.execution_profile,
             config.dispatch_target,
             config.execution_profile_config,
+            model_tier=task.model_tier,
         )
+        if config.model is not None or config.reasoning_effort is not None:
+            override_model = (
+                config.model if config.model is not None else execution_selection.model
+            )
+            override_effort = (
+                config.reasoning_effort
+                if config.reasoning_effort is not None
+                else execution_selection.reasoning_effort
+            )
+            execution_selection = ExecutionSelection(
+                profile=execution_selection.profile,
+                model=override_model,
+                reasoning_effort=override_effort,
+                reason=f"{execution_selection.reason} (CLI override)",
+            )
 
         plans.append(
             TaskLaunchPlan(

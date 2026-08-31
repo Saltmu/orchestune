@@ -81,6 +81,7 @@ subtasks:
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
 * **`execution_profile`** (文字列または`null`, 任意, 既定値 `null`): サブタスクを実行するエージェントの抽象実行プロファイル名（例: `fast-code`、`deep-reasoning`）。英小文字・数字・ハイフン・アンダースコアで構成され、32文字以内である必要があります。
+* **`model_tier`** (文字列または`null`, 任意, 既定値 `null`): サブタスクに割り当てるモデル能力ランク（`weak` / `middle` / `strong`）。各ターゲット（`claude-cli`, `codex-cli`, `agy-cli` 等）ごとの具象モデル名へのマッピングはリポジトリの `orchestune.toml` の `[model_tiers]` セクション、またはビルトインの既定値に基づいて自動解決されます。`execution_profile` 内で具象モデル名が設定されていても、`model_tier` が指定された場合はこの能力ランク由来のモデル名が優先されます。`reasoning_effort`（推論強度）はプロファイル側の設定が維持されます。`weak` / `middle` / `strong` 以外の値を指定した場合はエラーになります。
 * **`issue_number`** (整数または`null`, 任意, 既定値 `null`): このサブタスクのIssue番号。**手動で設定しないでください** — `orchestune provision`がこのサブタスクのIssue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。設定済みの場合、`orchestune provision`はそのサブタスクのIssueを再作成せず再利用します。
 
 ### 計画ファイルのライフサイクルと親Issueへの永続化（方針 (b)）
@@ -239,6 +240,8 @@ orchestune-dispatch
 | `--max-early-death-retries <int>` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションする。 |
 | `--early-death-backoff-seconds <int>` | `60` | 起動直後の異常終了を再キューイングする際の基準待機秒数。再試行ごとに待機時間を2倍にする。 |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
+| `--model <name>` | - | 実行時に使用する具象モデル名をオーバーライドします（例: `claude-3-7-sonnet`, `o3-mini`, `gemini-2.5-pro`）。未指定時はプロファイル／能力ランクの設定に従います。 |
+| `--reasoning-effort <effort>` / `--effort <effort>` | - | 実行時の推論強度をオーバーライドします（例: `low`, `medium`, `high`）。未指定時はプロファイルの設定に従います。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
 default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。

@@ -584,3 +584,52 @@ class TestMainDispatchTargetAutoDetection:
             )
 
         assert mock_build.call_args.args[0].reviewer_bot == "codex"
+
+    def test_cli_model_and_effort_overrides_forwarded_to_dispatcher_config(
+        self, tmp_path
+    ):
+        with patch(
+            "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            return_value=self._empty_report(),
+        ) as mock_cycle:
+            main(
+                [
+                    "--no-apply",
+                    "--dispatch-target",
+                    "local",
+                    "--model",
+                    "claude-3-7-sonnet",
+                    "--effort",
+                    "high",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ]
+            )
+
+        config = mock_cycle.call_args.args[0]
+        assert config.model == "claude-3-7-sonnet"
+        assert config.reasoning_effort == "high"
+
+    def test_cli_reasoning_effort_alias_forwarded_to_dispatcher_config(self, tmp_path):
+        with patch(
+            "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            return_value=self._empty_report(),
+        ) as mock_cycle:
+            main(
+                [
+                    "--no-apply",
+                    "--dispatch-target",
+                    "local",
+                    "--reasoning-effort",
+                    "low",
+                    "--run-state-path",
+                    str(tmp_path / "rs.json"),
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ]
+            )
+
+        config = mock_cycle.call_args.args[0]
+        assert config.reasoning_effort == "low"

@@ -184,6 +184,31 @@ def _select_tasks_for_cycle(
     )
 
 
+def _build_task_execution_selection(
+    task: Task, config: DispatcherConfig
+) -> ExecutionSelection:
+    sel = resolve_execution_profile(
+        task.execution_profile,
+        config.dispatch_target,
+        config.execution_profile_config,
+        model_tier=task.model_tier,
+    )
+    if config.model is not None or config.reasoning_effort is not None:
+        override_model = config.model if config.model is not None else sel.model
+        override_effort = (
+            config.reasoning_effort
+            if config.reasoning_effort is not None
+            else sel.reasoning_effort
+        )
+        return ExecutionSelection(
+            profile=sel.profile,
+            model=override_model,
+            reasoning_effort=override_effort,
+            reason=f"{sel.reason} (CLI override)",
+        )
+    return sel
+
+
 def run_scheduling_phase(
     ctx: CycleContext,
     issues: IssuesByStatus,
@@ -221,12 +246,9 @@ def run_scheduling_phase(
     selected = _finalize_launch(
         scheduling.selected, task_to_base_branch, candidate_tasks, ctx, now, config
     )
+
     execution_selections = {
-        task.issue_number: resolve_execution_profile(
-            task.execution_profile,
-            config.dispatch_target,
-            config.execution_profile_config,
-        )
+        task.issue_number: _build_task_execution_selection(task, config)
         for task in selected
     }
     return SchedulingPhaseResult(
