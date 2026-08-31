@@ -66,6 +66,7 @@ from orchestune.consistency.supervisor import (
     ConsistencyRepairPass,
     ConsistencySupervisor,
     RepairDisposition,
+    repair_command_finding_codes,
 )
 from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
@@ -358,15 +359,6 @@ def _status_repair_supervisor() -> ConsistencySupervisor:
     )
 
 
-def _command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
-    parameters = dict(command.parameters)
-    multiple = parameters.get("finding_codes")
-    if isinstance(multiple, tuple):
-        return tuple(value for value in multiple if isinstance(value, str))
-    single = parameters.get("finding_code")
-    return (single,) if isinstance(single, str) else ()
-
-
 def _command_finding_code(command: RepairCommand) -> str | None:
     value = dict(command.parameters).get("finding_code")
     return value if isinstance(value, str) else None
@@ -377,7 +369,10 @@ def _attempted_repair_codes(report: ConsistencyCycleReport) -> set[str]:
         code
         for repair_pass in report.repair_passes
         for result in repair_pass.results
-        for code in (result.command.code, *_command_finding_codes(result.command))
+        for code in (
+            result.command.code,
+            *repair_command_finding_codes(result.command),
+        )
     }
 
 

@@ -285,7 +285,8 @@ def _finding_key(finding: ConsistencyFinding) -> tuple[str, str, str]:
     return (finding.scope.value, finding.subject_id or "", finding.code)
 
 
-def _command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
+def repair_command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
+    """Return the finding codes attributed to one typed repair command."""
     parameters = dict(command.parameters)
     single = parameters.get("finding_code")
     multiple = parameters.get("finding_codes")
@@ -297,7 +298,7 @@ def _command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
 
 
 def _command_is_allowed(command: RepairCommand, allowlist: frozenset[str]) -> bool:
-    finding_codes = _command_finding_codes(command)
+    finding_codes = repair_command_finding_codes(command)
     return command.code in allowlist or (
         bool(finding_codes) and set(finding_codes).issubset(allowlist)
     )
@@ -306,7 +307,7 @@ def _command_is_allowed(command: RepairCommand, allowlist: frozenset[str]) -> bo
 def _matching_findings(
     command: RepairCommand, findings: Iterable[ConsistencyFinding]
 ) -> tuple[ConsistencyFinding, ...]:
-    codes = frozenset(_command_finding_codes(command))
+    codes = frozenset(repair_command_finding_codes(command))
     if not codes:
         return ()
     return tuple(
@@ -761,4 +762,5 @@ __all__ = [
     "ScanKind",
     "consistency_cycle_to_dict",
     "diff_snapshots",
+    "repair_command_finding_codes",
 ]
