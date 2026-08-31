@@ -239,6 +239,10 @@ class TestRecoveredActiveTask:
         mock_list = fake_forge.list_issues_by_label
         fake_forge.list_open_prs.reset_mock(side_effect=True)
         fake_forge.list_open_prs.return_value = []
+        fake_forge.get_issue_state.reset_mock(side_effect=True)
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.reset_mock(side_effect=True)
+        fake_forge.get_issue_labels.return_value = ("status:queued",)
         fake_forge.add_label.reset_mock(side_effect=True)
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
@@ -506,6 +510,8 @@ class TestStaleActiveEntryReconciliation:
         # で正しいため、ここでラベル操作をしてはいけない）。
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
+        fake_forge.get_issue_state.assert_called_with(1)
+        fake_forge.get_issue_labels.assert_called_with(1)
 
         assert any(
             event.get("action") == "stale_active_entry_discarded"

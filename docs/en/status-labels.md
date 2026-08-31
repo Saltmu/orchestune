@@ -31,7 +31,7 @@ stateDiagram-v2
     [*] --> queued: Issue creation\n(no deps / already resolved)
     [*] --> blocked: Issue creation\n(unresolved deps)
 
-    blocked --> queued: Dependency resolved\n(_promote_blocked_tasks)
+    blocked --> queued: Dependency resolved\n(ConsistencySupervisor\n→ execute_status_repair_command)
     blocked --> blocked_recompute: Conflict Graph recompute from footprint deviation\n(notify_recompute)
 
     queued --> in_progress: Launch succeeded\n(_apply_task_launches)
@@ -43,7 +43,7 @@ stateDiagram-v2
     in_progress --> blocked_human_review: Missing outcome or no new commits\n(_finalize_completed_worktree)
     in_progress --> blocked_human_review: Upstream PR got CHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: Automatic rebase failed\n(_apply_auto_rebase)
-    in_progress --> queued: Zombie/timeout reclaimed by GC\n(_collect_zombies_and_timeouts)
+    in_progress --> queued: Zombie/timeout reclaimed by GC\n(run_gc_phase\n→ execution.reclaim)
     in_progress --> blocked_human_review: GC reclaim limit exceeded\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: outcome(not-needed) or status:not-needed detected\n(closed, or pending review)
     in_progress --> blocked: base branch red detected (outcome.reason=base-branch-red)\n(_finalize_completed_worktree, ci:base-branch-red added)
@@ -71,8 +71,10 @@ independently of the lifecycle above (see "External lock" below).
   (`depends_on`); `status:queued` if there are none or all are already resolved.
 
 ### 2. `status:blocked` → `status:queued` (promotion on dependency resolution)
-- Source: `_promote_blocked_tasks` in `orchestune/dispatch/cycle.py`
-  (`_decide_blocked_promotions` / `_apply_blocked_promotions`)
+- Source: the repository-wide `ConsistencySupervisor` boundary in
+  `orchestune/dispatch/cycle.py`; it plans a typed `status.transition-label`
+  command and applies it through `execute_status_repair_command` in
+  `orchestune/dispatch/status_repair.py`.
 - Condition: every entry in `depends_on` is resolved, i.e. `status:done` or
   `status:not-needed` (subtasks completed earlier in the same cycle are also
   counted via `completed_subtask_ids`).
@@ -124,7 +126,9 @@ independently of the lifecycle above (see "External lock" below).
   run after rebasing failed.
 
 ### 9. `status:in-progress` → `status:queued` (GC reclaim)
-- Source: `_collect_zombies_and_timeouts` in `orchestune/dispatch/gc/__init__.py`
+- Source: `run_gc_phase` in `orchestune/dispatch/phase_gc.py`; it plans a typed
+  `execution.reclaim` command and applies it through
+  `execute_reclaim_repair_command` in `orchestune/dispatch/gc/zombies.py`.
 - Condition: the process disappeared while uncommitted changes remain
   (zombie), or the task timed out. Uncommitted work is stashed as a WIP
   commit before requeuing.

@@ -14,11 +14,12 @@ Three rules shape the findings below.
 2. **Uncertainty is not divergence.** A fact that is unknown, stale, ambiguous,
    or absent replaces every other finding for its subject with
    `STATUS_OBSERVATION_UNKNOWN`, which no planner may repair.
-3. **A declared transition is not a defect.** A live `TransitionIntent` naming
-   this task's status label either justifies the intermediate state outright
-   (in-progress before its execution is recorded) or keeps the finding visible
-   while removing its repairability, so a half-applied multi-step transition is
-   never "corrected" mid-flight.
+3. **A declared transition is resumed, not overwritten.** A live
+   `TransitionIntent` naming this task's status label either justifies the
+   intermediate state outright (in-progress before its execution is recorded)
+   or keeps the finding repairable through the same typed command.  The
+   executor matches that command to the Intent and re-checks live preconditions
+   before resuming a half-applied transition.
 """
 
 from __future__ import annotations
@@ -497,10 +498,10 @@ def _task_finding(
 def _guard(
     view: _TaskView, repairability: Repairability
 ) -> tuple[Repairability, tuple[str, ...]]:
-    """Keep a divergence visible while a declared transition is still in flight."""
+    """Keep a divergence and its repair path visible during a live transition."""
     if not view.in_transition:
         return repairability, ()
-    return Repairability.NONE, (
+    return repairability, (
         f"a live transition intent covers this status: {', '.join(view.intent_ids)}",
     )
 

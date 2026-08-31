@@ -152,7 +152,7 @@ def test_plan_status_repairs_emits_only_deterministic_commands(
     )
 
 
-def test_a_live_intent_reports_the_divergence_without_planning_a_repair() -> None:
+def test_a_live_intent_replans_the_same_typed_repair_for_safe_resume() -> None:
     labels = ("status:done", "status:queued")
     intents = (_status_intent(705),)
     report = _evaluate(
@@ -161,9 +161,10 @@ def test_a_live_intent_reports_the_divergence_without_planning_a_repair() -> Non
     )
 
     finding = _only(report, PRIMARY_STATUS_CONFLICT)
-    assert finding.repairability is Repairability.NONE
+    assert finding.repairability is Repairability.AUTOMATIC
     assert any("intent-705" in detail for detail in finding.observed.details)
-    assert plan_status_repairs(report) == ()
+    (command,) = plan_status_repairs(report)
+    assert command.code == COMMAND_REMOVE_LABEL
 
 
 def test_add_command_names_the_label_and_guards_the_transition() -> None:

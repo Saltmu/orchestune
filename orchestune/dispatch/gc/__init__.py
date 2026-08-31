@@ -13,14 +13,8 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.consistency.invariants.execution import RUN_STATE_STALE
-from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
-from orchestune.dispatch.execution_repair import (
-    command_finding_codes,
-    evaluate_execution_repair_plan,
-)
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     _active_dispatch_handle,
@@ -130,6 +124,22 @@ def _rule_not_needed(
         completed_subtask_id=completed_subtask_id,
         terminal=True,
     )
+
+
+def _rule_stale_entry_hold(
+    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+) -> ActiveWorktreeRuleOutcome | None:
+    """Leave cached stale entries untouched until Supervisor-owned GC runs.
+
+    The early reconciliation chain still has to stop completion/rebase rules
+    from acting on an entry whose Issue is no longer in progress.  This rule is
+    deliberately non-mutating: the typed ``execution.reclaim`` handler owns
+    live Forge revalidation and every cleanup side effect later in the cycle.
+    """
+    del ctx, key, active
+    if active_task is None or StatusLabel.IN_PROGRESS in active_task.status_labels:
+        return None
+    return ActiveWorktreeRuleOutcome(terminal=True)
 
 
 def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
@@ -311,44 +321,6 @@ def _apply_stale_active_entry_discard(
     if record is not None and record.pending:
         record.pending = False
     return True
-
-
-def _rule_stale_entry(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
-) -> ActiveWorktreeRuleOutcome | None:
-    evaluation = ctx.execution_repair_evaluation
-    if evaluation is None:
-        evaluation = evaluate_execution_repair_plan(
-            ctx.run_state,
-            ctx.tasks_by_issue,
-            ctx.config,
-            open_prs=ctx.prs,
-        )
-        ctx.execution_repair_evaluation = evaluation
-    planned = any(
-        command.code == COMMAND_RECLAIM
-        and command.subject_id == str(active.issue_number)
-        and RUN_STATE_STALE in command_finding_codes(command)
-        for command in evaluation.commands
-    )
-    if not planned or active_task is None:
-        return None
-    reason = (
-        "issue label is no longer status:in-progress "
-        f"(labels={sorted(active_task.status_labels)})"
-    )
-    stale_event = {
-        "issue_number": active.issue_number,
-        "subtask_id": active_task.subtask_id,
-        "action": "stale_active_entry_discarded",
-        "reason": reason,
-    }
-    discarded = _apply_stale_active_entry_discard(
-        ctx.run_state, key, active, reason, ctx.config
-    )
-    if not discarded:
-        return None
-    return ActiveWorktreeRuleOutcome(completion_event=stale_event, terminal=True)
 
 
 def _create_abandonment_callbacks(

@@ -8,7 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
-from orchestune.consistency.invariants.status import PRIMARY_STATUS_CONFLICT
+from orchestune.consistency.invariants.status import (
+    PRIMARY_STATUS_CONFLICT,
+    QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
+)
 from orchestune.consistency.models import IntentStatus, RepairStatus
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
@@ -618,3 +621,93 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
     journal = IntentJournal(status_intent_journal_path(config))
     assert len(journal.load()) == 1
     assert journal.load()[0].status is IntentStatus.VERIFIED
+
+
+def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
+    tmp_path, fake_forge
+):
+    labels = {
+        758: ["status:queued"],
+        759: ["status:queued"],
+    }
+    add_attempts = 0
+
+    def current_issue(issue_number):
+        return make_issue(
+            issue_number,
+            labels=tuple(labels[issue_number]),
+            subtask_id="dependency" if issue_number == 758 else "main-merge",
+            depends_on=() if issue_number == 758 else ("dependency",),
+            parent=None,
+        )
+
+    def list_issues(label, *args, **kwargs):
+        return [
+            current_issue(issue_number)
+            for issue_number in labels
+            if label in labels[issue_number]
+        ]
+
+    def fail_first_add(issue_number, label):
+        nonlocal add_attempts
+        if issue_number == 759 and label == "status:blocked":
+            add_attempts += 1
+            if add_attempts == 1:
+                raise RuntimeError("transient Forge failure")
+        if label not in labels[issue_number]:
+            labels[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        labels[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = list_issues
+    fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
+        labels[issue_number]
+    )
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.return_value = "write"
+    fake_forge.add_label.side_effect = fail_first_add
+    fake_forge.remove_label.side_effect = remove_label
+    config = DispatcherConfig(
+        apply=True,
+        consistency_mode=ConsistencyMode.REPAIR,
+        consistency_repair_allowlist=frozenset({QUEUED_WITH_UNRESOLVED_DEPENDENCIES}),
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
+    )
+
+    with (
+        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle._sync_external_locks",
+            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+        ),
+    ):
+        first = run_dispatch_cycle(config)
+        second = run_dispatch_cycle(config)
+
+    first_result = next(
+        result
+        for repair_pass in first.consistency.repair_passes
+        for result in repair_pass.results
+        if dict(result.command.parameters).get("finding_code")
+        == QUEUED_WITH_UNRESOLVED_DEPENDENCIES
+    )
+    second_result = next(
+        result
+        for repair_pass in second.consistency.repair_passes
+        for result in repair_pass.results
+        if dict(result.command.parameters).get("finding_code")
+        == QUEUED_WITH_UNRESOLVED_DEPENDENCIES
+    )
+    assert first_result.status is RepairStatus.FAILED
+    assert second_result.status is RepairStatus.APPLIED
+    assert add_attempts == 2
+    assert labels[759] == ["status:blocked"]
+    (intent,) = IntentJournal(status_intent_journal_path(config)).load()
+    assert intent.status is IntentStatus.VERIFIED

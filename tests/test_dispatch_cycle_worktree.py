@@ -467,10 +467,6 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
                 return_value={"action": "not_needed"},
             ),
-            patch(
-                "orchestune.dispatch.gc.evaluate_execution_repair_plan",
-                side_effect=AssertionError("Should not plan stale active repair"),
-            ),
         ):
             (
                 completion_events,

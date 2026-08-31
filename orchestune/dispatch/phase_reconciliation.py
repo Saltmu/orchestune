@@ -15,7 +15,7 @@ from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.gc import (
     _rule_completed,
     _rule_not_needed,
-    _rule_stale_entry,
+    _rule_stale_entry_hold,
 )
 from orchestune.dispatch.rebase import (
     _rule_auto_rebase,
@@ -54,15 +54,16 @@ def _dispatch_not_needed_review(
 # ここでは、それらをどの優先順位で評価するか(early/mainの2つのRuleChain)の
 # 組み立てのみを行う。
 #
-# - status:not-needed / staleな帳簿エントリの検知は、他のどの判定よりも
-#   先に評価する必要があるため「早期チェーン」として分離している
+# - status:not-neededの検知と、Supervisor-owned GCへ委譲するstale entryの
+#   非破壊holdは、他のどの判定よりも先に評価する必要があるため「早期チェーン」
+#   として分離している
 #   (該当すればそのactive worktreeへの以後の判定はすべてスキップする)。
 # - 完了検知・CHANGES_REQUESTEDエスカレーション・自動リベース・footprint逸脱
 #   検知は「主チェーン」として、この優先順位で評価する。
 _EARLY_ACTIVE_WORKTREE_RULES = RuleChain(
     rules=[
         _rule_not_needed,
-        _rule_stale_entry,
+        _rule_stale_entry_hold,
     ]
 )
 

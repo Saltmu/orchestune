@@ -1,4 +1,4 @@
-"""Supervisor-owned maintenance GC for zombie and timed-out executions."""
+"""Supervisor-owned maintenance GC for stale, zombie, and timed-out executions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from orchestune.consistency.engine import ConsistencyEngine
-from orchestune.consistency.invariants.execution import execution_invariants
+from orchestune.consistency.invariants.execution import (
+    RUN_STATE_STALE,
+    execution_invariants,
+)
 from orchestune.consistency.models import (
     ConsistencyReport,
     DesiredRepositoryState,
@@ -35,8 +38,10 @@ from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
     collect_execution_observed_state,
+    command_finding_codes,
     derive_execution_desired_state,
 )
+from orchestune.dispatch.gc import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.completion import is_completion_hold_event
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
@@ -45,7 +50,8 @@ from orchestune.dispatch.gc.zombies import (
     execute_reclaim_repair_command,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
 
 
@@ -181,6 +187,85 @@ def _reclaim_handler(
     return execute
 
 
+def _stale_active_entry(
+    command: RepairCommand,
+    run_state: RunState,
+) -> tuple[str, ActiveWorktree] | None:
+    if (
+        command.code != COMMAND_RECLAIM
+        or command.subject_id is None
+        or RUN_STATE_STALE not in command_finding_codes(command)
+    ):
+        return None
+    return next(
+        (
+            (key, active)
+            for key, active in run_state.active_worktrees.items()
+            if str(active.issue_number) == command.subject_id
+        ),
+        None,
+    )
+
+
+def _stale_discard_event(active: ActiveWorktree, task: Task, reason: str) -> dict:
+    return {
+        "issue_number": active.issue_number,
+        "subtask_id": task.subtask_id,
+        "action": "stale_active_entry_discarded",
+        "reason": reason,
+    }
+
+
+def _execute_stale_reclaim(
+    command: RepairCommand,
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    events: list[dict],
+) -> RepairResult | None:
+    resolved = _stale_active_entry(command, run_state)
+    if resolved is None:
+        return None
+    key, active = resolved
+    task = tasks_by_issue.get(active.issue_number)
+    if task is None:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("stale cleanup subject is not an observed task",),
+        )
+
+    issue_state = config.resolved_forge.get_issue_state(active.issue_number)
+    live_labels = tuple(config.resolved_forge.get_issue_labels(active.issue_number))
+    if issue_state.upper() == "OPEN" and StatusLabel.IN_PROGRESS in live_labels:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=(
+                "stale cleanup precondition no longer holds: "
+                "status:in-progress is live",
+            ),
+        )
+
+    reason = (
+        f"issue label is no longer status:in-progress (labels={sorted(live_labels)})"
+    )
+    discarded = _apply_stale_active_entry_discard(
+        run_state, key, active, reason, config
+    )
+    if not discarded:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("stale cleanup deferred by existing safety boundary",),
+        )
+    events.append(_stale_discard_event(active, task, reason))
+    return RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED if config.apply else RepairStatus.SKIPPED,
+    )
+
+
 def build_gc_reclaim_handler(
     run_state: RunState,
     tasks_by_issue: dict[int, Task],
@@ -198,6 +283,11 @@ def build_gc_reclaim_handler(
     events = completion_events if event_sink is None else event_sink
 
     def execute(command: RepairCommand) -> RepairResult:
+        stale_result = _execute_stale_reclaim(
+            command, run_state, tasks_by_issue, config, events
+        )
+        if stale_result is not None:
+            return stale_result
         planned = _planned_reclaims(
             (command,), run_state, tasks_by_issue, config, observed_now
         )
