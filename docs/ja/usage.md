@@ -232,7 +232,6 @@ orchestune-dispatch
 | `--window-seconds <int>` | `3600` | バースト制限およびトークン消費上限を適用する時間窓の秒数（デフォルトは1時間）。 |
 | `--max-tokens-per-window <int>` | - | 指定した時間窓（`--window-seconds`）内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止する。未指定時は無制限。 |
 | `--max-tokens-per-task <int>` | - | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送り `status:blocked-human-review` へエスカレーションする。未指定時は無制限。 |
-| `--scheduling-mode {critical-path,legacy}` | `critical-path` | 起動タスクの選出アルゴリズム。`critical-path`（既定）はPrecedence DAGのbottom level（critical-path rank）と後続解放数を価値へ、完了履歴から推定したトークン量と手戻りリスクをコストへ組み込んで選出する。`legacy`は#660以前のスコアリング（base priority×待ち時間bonus＋partial progress bonus）へ切り戻す互換モードで、段階導入や切り分けに使う。設定ファイルでは`scheduling-mode`キーで指定できる。 |
 | `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のruntime Conflict Graph再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
 | `--task-timeout-seconds <int>` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行する。無人運転時は正の値を設定することを推奨。 |
 | `--max-task-reclaims <int>` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移し、以降は再投入されない。`0`は「1回目の回収で即エスカレーション」を意味する（無制限にする設定値は存在しない）。 |

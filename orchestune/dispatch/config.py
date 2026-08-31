@@ -23,7 +23,6 @@ from orchestune.consistency.repairs.execution import (
 from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
-from orchestune.dispatch.scoring import SCHEDULING_MODE_CRITICAL_PATH
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
 
@@ -95,10 +94,6 @@ class DispatcherConfig:
     # 一貫して適用し、orchestune-dagで意図的に消したエッジが既定閾値の
     # 再計算で復活してしまわないようにする。
     dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
-    # #660: 選出アルゴリズム。'critical-path'（既定）はPrecedence DAGの
-    # bottom levelと後続解放数、推定トークン量・手戻りリスクを考慮する。
-    # 'legacy'は#660以前のスコアリングそのままで、段階導入・切り戻し用。
-    scheduling_mode: str = SCHEDULING_MODE_CRITICAL_PATH
     # #668: リポジトリ定義の実行プロファイル設定（モデル・推論強度解決用）
     execution_profile_config: ExecutionProfileConfig | None = None
     # #706/#709/#746: modeは追加のrepository-wide loopを段階化する。
