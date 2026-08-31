@@ -1,14 +1,10 @@
 """ディスパッチ優先度の算出・選出ロジック。
 
-#660以降、選出は2つのモードを持つ。
+Precedence DAGのbottom levelと後続解放数を価値へ、
+完了履歴から推定したトークン量と手戻りリスクをコストへ組み込み、resource制約
+（同時実行数・起動レート・トークンウィンドウ・競合）の下で貪欲に選ぶ。
 
-- `critical-path`（既定）: Precedence DAGのbottom levelと後続解放数を価値へ、
-  完了履歴から推定したトークン量と手戻りリスクをコストへ組み込み、resource制約
-  （同時実行数・起動レート・トークンウィンドウ・競合）の下で貪欲に選ぶ。
-- `legacy`: #660以前の`compute_priority_score`（base priority×待ち時間bonus＋
-  partial progress bonus）そのまま。段階導入・切り戻し用の互換モード。
-
-いずれのモードでも、選出は`(candidate_tasks, run_state, now, 設定)`だけの純粋関数
+選出は`(candidate_tasks, run_state, now, 設定)`だけの純粋関数
 であり、同じ入力からは常に同じ結果を返す。
 """
 
@@ -47,25 +43,19 @@ __all__ = [
     "parse_task_from_issue",
     "quota_available",
     "remaining_token_budget",
-    "compute_priority_score",
     "select_next_tasks",
     "select_tasks_with_decisions",
     "decision_to_dict",
     "ScoreComponents",
     "SchedulingDecision",
     "SchedulingResult",
-    "SCHEDULING_MODES",
     "SCHEDULING_MODE_CRITICAL_PATH",
-    "SCHEDULING_MODE_LEGACY",
     "reconcile_decisions_with_launches",
 ]
 
-TIME_BONUS_WEIGHT = 0.5
 PROGRESS_BONUS = 1.0
 
 SCHEDULING_MODE_CRITICAL_PATH = "critical-path"
-SCHEDULING_MODE_LEGACY = "legacy"
-SCHEDULING_MODES = (SCHEDULING_MODE_CRITICAL_PATH, SCHEDULING_MODE_LEGACY)
 
 # critical-pathモードの重み。critical path由来のbonusとcost由来のpenaltyは
 # いずれも正規化済みの[0, 1]に重みを掛けたものなので、「critical path上にある」
@@ -318,45 +308,6 @@ def _wait_seconds(task: Task, run_state: RunState, now: float) -> float:
     return max(0.0, now - created.timestamp())
 
 
-def _legacy_components(
-    task: Task, all_candidate_tasks: list[Task], run_state: RunState, now: float
-) -> ScoreComponents:
-    """#660以前のスコアを、そのまま内訳へ分解して返す。
-
-    PR#665レビュー指摘(Codex P2): `legacy`モードで合算値を丸ごと
-    `base_priority`へ入れると、cycle JSON／`events.jsonl`の内訳が実態と食い違う
-    （例: partial progress付きのmediumが「base 2.0 + progress 1.0」ではなく
-    「base 3.0」と報告される）。元の式は
-    `base * (1 + time_bonus) + progress`なので、待ち時間bonusの寄与
-    `base * time_bonus`をaging成分として取り出せば、合計を変えずに分解できる。
-    """
-    base_priority = BASE_PRIORITY.get(task.priority, BASE_PRIORITY["medium"])
-    waits = [_wait_seconds(t, run_state, now) for t in all_candidate_tasks]
-    avg_wait = sum(waits) / len(waits) if waits else 0.0
-
-    time_bonus = 0.0
-    if avg_wait > 0:
-        wait = _wait_seconds(task, run_state, now)
-        time_bonus = max(0.0, (wait / avg_wait) - 1.0) * TIME_BONUS_WEIGHT
-
-    return ScoreComponents(
-        base_priority=base_priority,
-        aging=base_priority * time_bonus,
-        progress=PROGRESS_BONUS if task.progress_partial else 0.0,
-    )
-
-
-def compute_priority_score(
-    task: Task, all_candidate_tasks: list[Task], run_state: RunState, now: float
-) -> float:
-    """#660以前のスコアリング（`legacy`モードおよび互換切り戻し用）。
-
-    内訳（`_legacy_components`）の合計として求めることで、レポートへ出す成分と
-    実際に順位付けへ使う値が定義上一致する。
-    """
-    return _legacy_components(task, all_candidate_tasks, run_state, now).total
-
-
 @dataclass(frozen=True)
 class _ScoringInputs:
     """1サイクル分の候補集合に対して一度だけ求めれば足りる共通項。"""
@@ -486,65 +437,14 @@ def _critical_path_decision(
     )
 
 
-def _legacy_decision(
-    task: Task,
-    eligible: list[Task],
-    run_state: RunState,
-    now: float,
-    inputs: _ScoringInputs,
-) -> SchedulingDecision:
-    components = _legacy_components(task, eligible, run_state, now)
-    estimate = inputs.estimates.get(task.subtask_id) or inputs.cost_model.estimate(task)
-    return SchedulingDecision(
-        issue_number=task.issue_number,
-        subtask_id=task.subtask_id,
-        mode=SCHEDULING_MODE_LEGACY,
-        score=components.total,
-        components=components,
-        bottom_level=inputs.ranks.bottom_level_of(task.subtask_id),
-        unlocked_count=inputs.ranks.unlocked_count(task.subtask_id),
-        downstream_count=inputs.ranks.downstream_count(task.subtask_id),
-        estimated_tokens=estimate.tokens,
-        estimated_duration_seconds=estimate.duration_seconds,
-        estimate_source=estimate.source,
-        exact_bottom_level=inputs.ranks.exact_bottom_level,
-        exact_downstream=inputs.ranks.exact_downstream,
-    )
-
-
-def _normalized_mode(scheduling_mode: str) -> str:
-    """設定値をスコアリングモードへ正規化する。
-
-    `legacy`以外は`critical-path`として扱う。設定ファイル・CLIの両方が
-    `SCHEDULING_MODES`で値を検証済みのため、ここで未知の値のために追加の
-    エラー経路を作らない。
-    """
-    if scheduling_mode == SCHEDULING_MODE_LEGACY:
-        return SCHEDULING_MODE_LEGACY
-    return SCHEDULING_MODE_CRITICAL_PATH
-
-
 def _rank_candidates(
     eligible: list[Task],
     run_state: RunState,
     now: float,
-    scheduling_mode: str,
     inputs: _ScoringInputs,
 ) -> list[tuple[Task, SchedulingDecision]]:
-    """候補をスコア降順（同点はissue番号昇順）に並べる。
-
-    `scheduling_mode`が`legacy`以外の値のときはcritical-pathモデルを使う。
-    設定ファイル・CLIの両方が`SCHEDULING_MODES`で値を検証済みのため、ここで
-    未知の値のために追加のエラー経路を作らない。
-    """
-    if _normalized_mode(scheduling_mode) == SCHEDULING_MODE_LEGACY:
-        decisions = [
-            _legacy_decision(t, eligible, run_state, now, inputs) for t in eligible
-        ]
-    else:
-        decisions = [
-            _critical_path_decision(t, run_state, now, inputs) for t in eligible
-        ]
+    """候補をスコア降順（同点はissue番号昇順）に並べる。"""
+    decisions = [_critical_path_decision(t, run_state, now, inputs) for t in eligible]
     return sorted(
         zip(eligible, decisions, strict=True),
         key=lambda pair: (-pair[1].score, pair[1].issue_number),
@@ -588,14 +488,14 @@ def _partition_candidates(
 
 
 def _excluded_decision(
-    task: Task, reason: str, scheduling_mode: str, inputs: _ScoringInputs
+    task: Task, reason: str, inputs: _ScoringInputs
 ) -> SchedulingDecision:
     """スコア対象外でも、診断に使うrankとcostは実値を保持する。"""
     estimate = inputs.estimates.get(task.subtask_id) or inputs.cost_model.estimate(task)
     return SchedulingDecision(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id,
-        mode=_normalized_mode(scheduling_mode),
+        mode=SCHEDULING_MODE_CRITICAL_PATH,
         score=0.0,
         components=ScoreComponents(),
         bottom_level=inputs.ranks.bottom_level_of(task.subtask_id),
@@ -633,12 +533,7 @@ def _apply_resource_constraints(
         ):
             decisions.append(replace(decision, reason=REASON_CONFLICT))
             continue
-        # legacyは#660以前と同じ選出を維持し、バッチ内の推定token gateを使わない。
-        cost = (
-            None
-            if decision.mode == SCHEDULING_MODE_LEGACY
-            else decision.estimated_tokens
-        )
+        cost = decision.estimated_tokens
         # 先頭1件はトークン予算で弾かない。単体で残予算を超える見積りのタスク
         # しか無いときにキューが永久に進まなくなる（終端の無い経路になる）ため。
         # ただし実行中の起動が既にある場合（`exempt_first`が偽）はその完了が
@@ -667,7 +562,6 @@ def _prepare_ranked_candidates(
     run_state: RunState,
     now: float,
     window_seconds: int,
-    scheduling_mode: str,
     known_tasks: Iterable[Task] | None,
 ) -> tuple[list[tuple[Task, SchedulingDecision]], _ScoringInputs, CostModel]:
     cost_model = build_cost_model(run_state)
@@ -680,7 +574,7 @@ def _prepare_ranked_candidates(
         known_tasks,
         cost_model,
     )
-    ranked = _rank_candidates(eligible, run_state, now, scheduling_mode, inputs)
+    ranked = _rank_candidates(eligible, run_state, now, inputs)
     return ranked, inputs, cost_model
 
 
@@ -701,12 +595,10 @@ def _slot_exhausted_reason(
 def _append_excluded_decisions(
     result: SchedulingResult,
     excluded: list[tuple[Task, str]],
-    scheduling_mode: str,
     inputs: _ScoringInputs,
 ) -> SchedulingResult:
     decisions = result.decisions + [
-        _excluded_decision(task, reason, scheduling_mode, inputs)
-        for task, reason in excluded
+        _excluded_decision(task, reason, inputs) for task, reason in excluded
     ]
     return SchedulingResult(selected=result.selected, decisions=decisions)
 
@@ -721,7 +613,6 @@ def select_tasks_with_decisions(
     max_tokens_per_window: int | None = None,
     conflict_graph: ConflictGraph | None = None,
     active_subtask_ids: set[str] | None = None,
-    scheduling_mode: str = SCHEDULING_MODE_CRITICAL_PATH,
     known_tasks: Iterable[Task] | None = None,
 ) -> SchedulingResult:
     """起動するタスクを選び、全候補分の選定理由付き内訳を併せて返す。
@@ -744,7 +635,6 @@ def select_tasks_with_decisions(
         run_state,
         now,
         window_seconds,
-        scheduling_mode,
         known_tasks,
     )
     result = _apply_resource_constraints(
@@ -760,7 +650,7 @@ def select_tasks_with_decisions(
         ),
     )
     # スコアリング対象外の候補は、ランク付き判定の後ろにissue番号順で並べる。
-    return _append_excluded_decisions(result, excluded, scheduling_mode, inputs)
+    return _append_excluded_decisions(result, excluded, inputs)
 
 
 def select_next_tasks(
@@ -773,7 +663,6 @@ def select_next_tasks(
     max_tokens_per_window: int | None = None,
     conflict_graph: ConflictGraph | None = None,
     active_subtask_ids: set[str] | None = None,
-    scheduling_mode: str = SCHEDULING_MODE_CRITICAL_PATH,
     known_tasks: Iterable[Task] | None = None,
 ) -> list[Task]:
     """選出されたタスクだけを返す薄いラッパー（選定理由が不要な呼び出し向け）。"""
@@ -787,6 +676,5 @@ def select_next_tasks(
         max_tokens_per_window=max_tokens_per_window,
         conflict_graph=conflict_graph,
         active_subtask_ids=active_subtask_ids,
-        scheduling_mode=scheduling_mode,
         known_tasks=known_tasks,
     ).selected

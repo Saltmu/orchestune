@@ -128,27 +128,10 @@ class TestDispatcherConfigLoading:
         assert config_arg.max_concurrent == 5
         assert config_arg.run_state_path == Path("custom_state.json")
 
-    def test_scheduling_mode_is_configurable_from_the_config_file(self, tmp_path):
-        """#660: 段階導入のため、選出アルゴリズムを設定ファイルからも指定できる。"""
+    def test_scheduling_mode_in_the_config_file_is_rejected_as_unknown(self, tmp_path):
+        """#752: scheduling-mode は削除されたため設定ファイルにあると未知キーとして拒否される。"""
         (tmp_path / "orchestune.toml").write_text(
-            "scheduling-mode = 'legacy'\nevents-log-path = 'custom_events.jsonl'\n",
-            encoding="utf-8",
-        )
-
-        with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
-            patch(
-                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
-                return_value=self._empty_report(),
-            ) as mock_run,
-        ):
-            main(["--no-apply"], cwd=tmp_path)
-
-        assert mock_run.call_args.args[0].scheduling_mode == "legacy"
-
-    def test_unknown_scheduling_mode_in_the_config_file_is_rejected(self, tmp_path):
-        (tmp_path / "orchestune.toml").write_text(
-            "scheduling-mode = 'fastest'\nevents-log-path = 'custom_events.jsonl'\n",
+            "scheduling-mode = 'critical-path'\nevents-log-path = 'custom_events.jsonl'\n",
             encoding="utf-8",
         )
 

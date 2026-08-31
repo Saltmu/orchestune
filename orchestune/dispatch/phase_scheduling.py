@@ -177,7 +177,6 @@ def _select_tasks_for_cycle(
             if (task := ctx.tasks_by_issue.get(active.issue_number)) is not None
             and task.subtask_id
         },
-        scheduling_mode=config.scheduling_mode,
         # Precedence DAGの母集団はサイクルが見ている全タスク。候補集合だけで
         # 組むと、まだ依存待ちで候補に入っていない後続が数えられず、共有契約
         # タスクのcritical-path rankが過小評価される。
