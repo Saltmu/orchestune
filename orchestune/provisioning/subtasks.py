@@ -18,10 +18,10 @@ from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.provisioning.rendering import (
-    _build_subtask_issue_body,
-    _derive_labels,
-    _issue_title,
     _subtask_id_from_body,
+    build_subtask_issue_body,
+    derive_subtask_labels,
+    subtask_issue_title,
 )
 
 
@@ -100,9 +100,9 @@ def _provision_subtask(
 
     all_deps_done = all(dependencies_done.get(dep, False) for dep in subtask.depends_on)
     number = forge.create_issue(
-        _issue_title(subtask),
-        _build_subtask_issue_body(subtask, template, repo_root, parent_issue_number),
-        labels=_derive_labels(subtask, dependencies_done=all_deps_done),
+        subtask_issue_title(subtask),
+        build_subtask_issue_body(subtask, template, repo_root, parent_issue_number),
+        labels=derive_subtask_labels(subtask, dependencies_done=all_deps_done),
     )
     # Persist before relationship writes: a failed link must be retryable by
     # this stable issue number rather than creating an orphaned duplicate.

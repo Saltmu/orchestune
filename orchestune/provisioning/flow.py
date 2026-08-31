@@ -25,10 +25,10 @@ from orchestune.provisioning.plan import (
     sync_parent_decomposition_plan,
 )
 from orchestune.provisioning.rendering import (
-    _build_subtask_issue_body,
-    _derive_labels,
-    _issue_title,
     _validate_template_identity_marker,
+    build_subtask_issue_body,
+    derive_subtask_labels,
+    subtask_issue_title,
 )
 from orchestune.provisioning.subtasks import (
     _index_sub_issues_by_subtask_id,
@@ -81,11 +81,11 @@ def _preview_only(
     previews = tuple(
         IssuePreview(
             subtask_id,
-            _issue_title(by_id[subtask_id]),
-            _build_subtask_issue_body(
+            subtask_issue_title(by_id[subtask_id]),
+            build_subtask_issue_body(
                 by_id[subtask_id], template, repo_root, parent_issue_number
             ),
-            _derive_labels(by_id[subtask_id], dependencies_done=False),
+            derive_subtask_labels(by_id[subtask_id], dependencies_done=False),
             by_id[subtask_id].issue_number is not None,
         )
         for subtask_id in dag_order

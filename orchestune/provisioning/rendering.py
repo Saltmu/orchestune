@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import yaml
@@ -14,6 +14,11 @@ from orchestune.issue_parsing import (
     parent_issue_number_from_body,
 )
 from orchestune.labels import StatusLabel
+from orchestune.replan.managed_body import (
+    GENERATED_SUBTASK_END,
+    GENERATED_SUBTASK_START,
+    with_runtime_metadata,
+)
 from orchestune.symbol_verification import find_missing_symbols
 
 _PLACEHOLDERS = (
@@ -38,7 +43,9 @@ _PLACEHOLDER_PATTERN = re.compile(
 )
 
 
-def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, ...]:
+def derive_subtask_labels(
+    subtask: SubTask, *, dependencies_done: bool
+) -> tuple[str, ...]:
     labels = [
         StatusLabel.BLOCKED
         if subtask.depends_on and not dependencies_done
@@ -50,7 +57,7 @@ def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, .
     return tuple(labels)
 
 
-def _issue_title(subtask: SubTask) -> str:
+def subtask_issue_title(subtask: SubTask) -> str:
     return f"[FEAT] {subtask.id}: {subtask.description}"
 
 
@@ -118,24 +125,60 @@ def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
     if not missing:
         return body
     symbols = "\n".join(f"- `{symbol}`" for symbol in missing)
-    return (
-        body
-        + "\n\n---\n\n⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
+    warning = (
+        "\n\n---\n\n⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
         "見つかりませんでした。このsubtaskで新規追加する予定であれば問題ありません"
         "が、リファクタによる改名・移動で古い名称が残っている可能性もあるため、"
         f"着手前にコードを確認してください。\n{symbols}"
     )
+    if GENERATED_SUBTASK_END in body:
+        end = body.index(GENERATED_SUBTASK_END)
+        return f"{body[:end].rstrip()}{warning}\n{body[end:]}"
+    return body + warning
 
 
-def _build_subtask_issue_body(
+def _wrap_generated_body(body: str) -> str:
+    starts = body.count(GENERATED_SUBTASK_START)
+    ends = body.count(GENERATED_SUBTASK_END)
+    if starts == 0 and ends == 0:
+        return (
+            f"{GENERATED_SUBTASK_START}\n{body.rstrip()}\n{GENERATED_SUBTASK_END}"
+            "\n\n## Human Notes\n"
+        )
+    if (
+        starts != 1
+        or ends != 1
+        or body.index(GENERATED_SUBTASK_START) > body.index(GENERATED_SUBTASK_END)
+    ):
+        raise ValueError("SubIssue template has malformed generated-subtask markers")
+    suffix = body.split(GENERATED_SUBTASK_END, 1)[1]
+    if "## Human Notes" not in suffix:
+        body = f"{body.rstrip()}\n\n## Human Notes\n"
+    return body
+
+
+def build_subtask_issue_body(
     subtask: SubTask,
     template: str,
     repo_root: Path,
     parent_issue_number: int | None = None,
+    *,
+    runtime_metadata: Mapping[str, object] | None = None,
 ) -> str:
-    return _append_symbol_warning(
-        _render_issue_body(subtask, template, parent_issue_number), subtask, repo_root
+    rendered = _wrap_generated_body(
+        _append_symbol_warning(
+            _render_issue_body(subtask, template, parent_issue_number),
+            subtask,
+            repo_root,
+        )
     )
+    return with_runtime_metadata(rendered, runtime_metadata)
+
+
+# Compatibility aliases for callers that used the pre-#694 private helpers.
+_derive_labels = derive_subtask_labels
+_issue_title = subtask_issue_title
+_build_subtask_issue_body = build_subtask_issue_body
 
 
 def _subtask_id_from_body(body: str) -> str | None:
@@ -276,3 +319,10 @@ def _validate_template_identity_marker(
         _make_probe(probe_id, probe_deps, None, None), template
     )
     _validate_template_profile_and_tier_markers(rendered, rendered_none, template_path)
+
+
+__all__ = [
+    "build_subtask_issue_body",
+    "derive_subtask_labels",
+    "subtask_issue_title",
+]

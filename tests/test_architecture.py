@@ -114,6 +114,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "provisioning.plan",
             "provisioning.rendering",
             "provisioning.subtasks",
+            "replan.managed_body",
+            "replan.plan",
             "status_snapshot",
             "symbol_verification",
         }
@@ -139,6 +141,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "outcome_record",
             "plan_writer",
             "provisioning",
+            "replan",
+            "replan.models",
             "setup_skills",
             "validation",
             "version",
@@ -690,6 +694,48 @@ def test_no_module_imports_a_strictly_higher_layer() -> None:
         if dependency in layer and layer[dependency] > layer[module]
     ]
     assert sorted(violations) == []
+
+
+def test_replan_shared_contract_has_no_github_or_subprocess_dependencies() -> None:
+    contract_modules = {
+        "replan.models",
+        "replan.plan",
+        "replan.managed_body",
+    }
+    forbidden_roots = {
+        "subprocess",
+        "requests",
+        "httpx",
+        "urllib",
+        "orchestune.forge",
+    }
+    violations: list[str] = []
+    modules = _package_modules()
+    for module_name in contract_modules:
+        path = modules[f"{PACKAGE_NAME}.{module_name}"]
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        violations.extend(
+            f"{module_name} imports {imported}"
+            for imported in imports
+            if any(
+                imported == root or imported.startswith(f"{root}.")
+                for root in forbidden_roots
+            )
+        )
+        if '"status:' in source or "'status:" in source:
+            violations.append(f"{module_name} defines a raw status label")
+    assert violations == []
 
 
 def test_documented_subprocess_partition_matches_the_enforced_one() -> None:

@@ -1,3 +1,4 @@
+<!-- orchestune:generated-subtask:start -->
 # [FEAT] {{subtask_id}}: {{description}}
 
 ## 概要 (Overview)
@@ -24,3 +25,6 @@ parent_issue_number: {{parent_issue_number}}
 execution_profile: {{execution_profile}}
 model_tier: {{model_tier}}
 ```
+<!-- orchestune:generated-subtask:end -->
+
+## Human Notes
