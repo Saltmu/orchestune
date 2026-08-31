@@ -11,12 +11,15 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.execution_repair import evaluate_execution_repair_plan
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _reclaim_candidate_from_command,
 )
-from orchestune.dispatch.phase_gc import run_gc_phase
+from orchestune.dispatch.phase_gc import (
+    _gc_supervisor,
+    _GcReclaimAdapter,
+    run_gc_phase,
+)
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
@@ -66,14 +69,15 @@ def decide_gc_reclaims(
         for active in run_state.active_worktrees.values()
         if active.worktree_path in held_paths
     }
-    evaluation = evaluate_execution_repair_plan(
-        run_state,
-        tasks_by_issue,
-        config,
-        open_prs=open_prs or (),
-        held_issue_numbers=held_issues,
+    adapter = _GcReclaimAdapter(
+        run_state=run_state,
+        tasks_by_issue=tasks_by_issue,
+        config=config,
+        open_prs=tuple(open_prs or ()),
         now=now,
     )
+    scan = _gc_supervisor().full_scan("gc", observer=adapter, deriver=adapter)
+    held_subjects = {str(issue_number) for issue_number in held_issues}
     active_by_subject = {
         str(active.issue_number): (key, active)
         for key, active in run_state.active_worktrees.items()
@@ -87,7 +91,8 @@ def decide_gc_reclaims(
             config.max_task_reclaims,
             now,
         )
-        for command in evaluation.commands
+        for command in scan.repair_candidates
+        if command.subject_id not in held_subjects
     )
     return [reclaim for reclaim in planned if reclaim is not None]
 

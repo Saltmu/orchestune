@@ -14,7 +14,6 @@ from orchestune.consistency.invariants.execution import (
     execution_invariants,
 )
 from orchestune.consistency.models import (
-    ConsistencyReport,
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
@@ -29,6 +28,7 @@ from orchestune.consistency.supervisor import (
     ConsistencyCycleReport,
     ConsistencyMode,
     ConsistencySupervisor,
+    FunctionRepairPlanner,
 )
 from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
@@ -61,14 +61,6 @@ class GcPhaseResult:
 
     completion_events: list[dict]
     consistency: ConsistencyCycleReport
-
-
-@dataclass(frozen=True, slots=True)
-class _FunctionPlanner:
-    function: Callable[[ConsistencyReport], tuple[RepairCommand, ...]]
-
-    def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
-        return self.function(report)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +104,7 @@ def _gc_supervisor() -> ConsistencySupervisor:
     return ConsistencySupervisor(
         repository_id=_repository_id(),
         engine=ConsistencyEngine(execution_invariants()),
-        repair_planners=(_FunctionPlanner(plan_execution_repairs),),
+        repair_planners=(FunctionRepairPlanner(plan_execution_repairs),),
     )
 
 

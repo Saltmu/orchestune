@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,7 +32,6 @@ from orchestune.consistency.invariants.status import (
     status_invariants,
 )
 from orchestune.consistency.models import (
-    ConsistencyReport,
     ConsistencyScope,
     DesiredRepositoryState,
     ObservedRepositoryState,
@@ -66,6 +65,7 @@ from orchestune.consistency.supervisor import (
     ConsistencyRepairOutcome,
     ConsistencyRepairPass,
     ConsistencySupervisor,
+    FunctionRepairPlanner,
     RepairDisposition,
     repair_command_finding_codes,
 )
@@ -124,14 +124,6 @@ from orchestune.pr_link_notice import (
 )
 
 __all__ = ["CycleReport", "run_dispatch_cycle"]
-
-
-@dataclass(frozen=True, slots=True)
-class _FunctionPlanner:
-    function: Callable[[ConsistencyReport], tuple[RepairCommand, ...]]
-
-    def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
-        return self.function(report)
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,7 +349,7 @@ def _status_repair_supervisor() -> ConsistencySupervisor:
     return ConsistencySupervisor(
         repository_id=_repository_id(),
         engine=ConsistencyEngine(status_invariants()),
-        repair_planners=(_FunctionPlanner(plan_status_repairs),),
+        repair_planners=(FunctionRepairPlanner(plan_status_repairs),),
     )
 
 
@@ -560,8 +552,8 @@ def _start_consistency_runtime(
         repository_id=_repository_id(),
         engine=ConsistencyEngine((*status_invariants(), *execution_invariants())),
         repair_planners=(
-            _FunctionPlanner(plan_status_repairs),
-            _FunctionPlanner(plan_execution_repairs),
+            FunctionRepairPlanner(plan_status_repairs),
+            FunctionRepairPlanner(plan_execution_repairs),
         ),
     )
     runtime = _ConsistencyRuntime(
@@ -779,7 +771,7 @@ def _run_recovery_bookkeeping_boundary(
     supervisor = ConsistencySupervisor(
         repository_id=_repository_id(),
         engine=ConsistencyEngine(recovery_bookkeeping_invariants()),
-        repair_planners=(_FunctionPlanner(plan_recovery_bookkeeping_repairs),),
+        repair_planners=(FunctionRepairPlanner(plan_recovery_bookkeeping_repairs),),
     )
     initial_scan = supervisor.full_scan(
         "recovery-bookkeeping", observer=adapter, deriver=adapter

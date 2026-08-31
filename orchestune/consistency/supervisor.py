@@ -7,7 +7,7 @@ repair mode accepts one explicitly and keeps every mutation bounded.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -60,6 +60,16 @@ class DesiredStateDeriver(Protocol):
     """Pure adapter from the latest observation to desired state."""
 
     def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionRepairPlanner:
+    """Adapter wrapping a callable that plans repairs for a consistency report."""
+
+    function: Callable[[ConsistencyReport], tuple[RepairCommand, ...]]
+
+    def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
+        return self.function(report)
 
 
 @dataclass(frozen=True, slots=True)
@@ -767,6 +777,7 @@ __all__ = [
     "ConsistencySupervisor",
     "ConsistencyUnknownFact",
     "DesiredStateDeriver",
+    "FunctionRepairPlanner",
     "MAX_REPAIR_PASSES",
     "RepairDisposition",
     "ScanKind",

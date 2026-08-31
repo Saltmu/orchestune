@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from unittest.mock import patch
 
+import orchestune.dispatch.execution_repair as execution_repair
 from orchestune.consistency.invariants.execution import (
     EXECUTION_OBSERVATION_UNKNOWN,
     EXECUTION_TIMED_OUT,
@@ -11,6 +13,7 @@ from orchestune.consistency.invariants.execution import (
     RUN_STATE_STALE,
 )
 from orchestune.consistency.models import (
+    ConsistencyReport,
     ConsistencyScope,
     RepairCommand,
     RepairResult,
@@ -26,16 +29,19 @@ from orchestune.consistency.repairs.status import (
     COMMAND_REMOVE_LABEL,
     COMMAND_TRANSITION_LABEL,
 )
+from orchestune.consistency.supervisor import ConsistencySupervisor
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.execution_repair import (
     REPAIR_COMMAND_BINDINGS,
     DispatchRepairExecutorAdapter,
     RepairCommandDomain,
     RepairCommandOperation,
-    evaluate_execution_repair_plan,
 )
+from orchestune.dispatch.phase_gc import _gc_supervisor, _GcReclaimAdapter
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import (
     run_gc_reclaims as _collect_zombies_and_timeouts,
 )
@@ -103,15 +109,45 @@ def _config(tmp_path, fake_forge, **overrides) -> DispatcherConfig:
     return DispatcherConfig(**values)
 
 
-def _codes(evaluation) -> list[str]:
-    return [finding.code for finding in evaluation.report.findings]
+def _evaluate_execution_plan(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    *,
+    open_prs: Sequence[PrRecord] = (),
+    held_issue_numbers: Iterable[int] = (),
+    now: float | None = None,
+) -> tuple[ConsistencyReport, tuple[RepairCommand, ...]]:
+    adapter = _GcReclaimAdapter(
+        run_state=run_state,
+        tasks_by_issue=tasks_by_issue,
+        config=config,
+        open_prs=tuple(open_prs),
+        now=now,
+    )
+    scan = _gc_supervisor().full_scan("execution", observer=adapter, deriver=adapter)
+    held_subjects = {str(issue_number) for issue_number in held_issue_numbers}
+    commands = tuple(
+        command
+        for command in scan.repair_candidates
+        if command.subject_id not in held_subjects
+    )
+    return scan.report, commands
 
 
-def _command_codes(evaluation, issue_number: int) -> list[str]:
+def _codes(
+    evaluation: tuple[ConsistencyReport, tuple[RepairCommand, ...]],
+) -> list[str]:
+    report, _ = evaluation
+    return [finding.code for finding in report.findings]
+
+
+def _command_codes(
+    evaluation: tuple[ConsistencyReport, tuple[RepairCommand, ...]], issue_number: int
+) -> list[str]:
+    _, commands = evaluation
     return [
-        command.code
-        for command in evaluation.commands
-        if command.subject_id == str(issue_number)
+        command.code for command in commands if command.subject_id == str(issue_number)
     ]
 
 
@@ -239,7 +275,7 @@ def test_dead_local_is_reclaimed_but_cloud_pid_none_is_not(tmp_path, fake_forge)
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
     ):
-        evaluation = evaluate_execution_repair_plan(
+        evaluation = _evaluate_execution_plan(
             run_state,
             {707: _task(707), 708: _task(708)},
             config,
@@ -261,7 +297,7 @@ def test_handleless_local_is_deferred_but_cloud_pid_none_is_not(tmp_path, fake_f
     )
 
     with patch.object(fake_forge, "branch_exists", return_value=True):
-        evaluation = evaluate_execution_repair_plan(
+        evaluation = _evaluate_execution_plan(
             RunState(active_worktrees={"707": local, "708": cloud}),
             {707: _task(707), 708: _task(708)},
             config,
@@ -283,7 +319,7 @@ def test_elapsed_timeout_is_a_kernel_finding_and_typed_plan(tmp_path, fake_forge
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
     ):
-        evaluation = evaluate_execution_repair_plan(
+        evaluation = _evaluate_execution_plan(
             RunState(active_worktrees={"707": active}),
             {707: _task(707)},
             config,
@@ -310,7 +346,7 @@ def test_provider_unknown_blocks_same_cycle_timeout_reclaim(tmp_path, fake_forge
     )
 
     with patch.object(fake_forge, "branch_exists", return_value=True):
-        evaluation = evaluate_execution_repair_plan(
+        evaluation = _evaluate_execution_plan(
             RunState(active_worktrees={"707": active}),
             {707: _task(707)},
             config,
@@ -338,7 +374,7 @@ def test_missing_and_stale_run_state_use_bookkeeping_commands(tmp_path, fake_for
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
     ):
-        evaluation = evaluate_execution_repair_plan(
+        evaluation = _evaluate_execution_plan(
             run_state,
             tasks,
             config,
@@ -362,7 +398,7 @@ def test_completion_hold_filters_destructive_commands(tmp_path, fake_forge):
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
     ):
-        evaluation = evaluate_execution_repair_plan(
+        evaluation = _evaluate_execution_plan(
             RunState(active_worktrees={"707": active}),
             {707: _task(707)},
             config,
@@ -426,3 +462,37 @@ def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forg
         (708,),
     ]
     assert [event["issue_number"] for event in events] == [707]
+
+
+def test_legacy_execution_repair_entrypoints_are_removed():
+    assert not hasattr(execution_repair, "ExecutionRepairEvaluation")
+    assert not hasattr(execution_repair, "evaluate_execution_repair_plan")
+
+
+def test_dispatch_cycle_uses_supervisor_for_execution_consistency(tmp_path, fake_forge):
+    dead = _active(tmp_path, 707, pid=707, started_at=None)
+    run_state = RunState(active_worktrees={"707": dead})
+    config = _config(tmp_path, fake_forge, apply=False)
+    save_run_state(run_state, config.run_state_path)
+
+    with (
+        patch(
+            "orchestune.dispatch.execution_repair.is_process_alive",
+            return_value=False,
+        ),
+        patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+        patch.object(
+            ConsistencySupervisor,
+            "full_scan",
+            autospec=True,
+            side_effect=ConsistencySupervisor.full_scan,
+        ) as mock_full_scan,
+    ):
+        report = run_dispatch_cycle(config)
+
+    boundaries = [
+        call.args[1] if len(call.args) > 1 else call.kwargs.get("boundary")
+        for call in mock_full_scan.call_args_list
+    ]
+    assert "gc-reclaim" in boundaries
+    assert report is not None
