@@ -146,7 +146,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 * **ステートレス実行モデル**: GitHub Actions等の揮発性CI環境前提で、ディスク上のローカル状態消失時もGitHub上のIssue/PR状態からシームレスに再構築。
 * **GitHub as Single Source of Truth**: `status:*` ラベルおよびPRブランチからの状態再構築と、ゾンビ／タイムアウト回収（`task_reclaim_counts`、#512）の終端保護。
-* **リポジトリ整合性control loop**: Observer, DesiredState, Invariant, Planner, Executorによる多段階（off/shadow/repair）の整合性監視・自動修復。
+* **リポジトリ整合性control loop**: `ConsistencySupervisor`が修復判断、実行順序、有界な再試行、authoritativeな再観測、結果集約を単一所有し、typed ExecutorがForge、Git、process、worktree、`run_state.json`への変更をlive preconditionの背後へ閉じ込めます。off/shadow/repair設定が段階化するのは追加のrepository-wide loopだけであり、既存の安全なstatus、recovery、GC自己修復境界はdefaultで有効なままです。詳細は[ステートレスCIと自己修復](architecture/state-recovery.md#3-リポジトリ整合性control-loop)を参照してください。
 
 ### 3.3 統合（Integration）と自動リベース
 詳細: [統合パイプライン・二層モデル・自動リベース (integration.md)](architecture/integration.md)

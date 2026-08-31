@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,22 +10,10 @@ from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute
-from orchestune.dispatch.recovery import (
-    _reconcile_stale_recovery_counters,
-    recover_run_state,
-)
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState, save_run_state
-from orchestune.dispatch.status_repair import (
-    StatusRepairPhase,
-    reconcile_status_repairs,
-)
+from orchestune.dispatch.state import RunState
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
-from orchestune.issue_parsing import (
-    launch_history_from_body,
-    launch_history_in_window,
-)
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
@@ -74,179 +61,6 @@ def _collect_active_conflict_subtask_ids(
             for subtask_id in subtasks_for_recompute:
                 active_conflict_subtask_ids.add(subtask_id)
     return active_conflict_subtask_ids
-
-
-def _promote_blocked_tasks(
-    done_issues: list[IssueRecord],
-    completed_subtask_ids: set[str],
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-) -> list[dict]:
-    """カーネルのstatus finding/typed planを既存の昇格境界で適用する。"""
-    done_issue_numbers = {issue.number for issue in done_issues}
-    done_subtask_ids = {
-        task.subtask_id
-        for issue_number, task in tasks_by_issue.items()
-        if issue_number in done_issue_numbers and task.subtask_id
-    }
-    repaired = reconcile_status_repairs(
-        tasks_by_issue,
-        completed_subtask_ids=done_subtask_ids | completed_subtask_ids,
-        config=config,
-        phase=StatusRepairPhase.BLOCKED_PROMOTION,
-    )
-    return [
-        {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
-        for task in repaired
-    ]
-
-
-def _self_heal_run_state(
-    run_state: RunState,
-    config: DispatcherConfig,
-) -> None:
-    """自己修復（ステート復元・不整合修復）。
-
-    run_state.json が存在しない場合、かつ apply=True の場合のみ復元処理を実行する。
-
-    #156: `run_state.json`は複数の親Issue（big rock）にまたがって共有されうる
-    ため、`parent_issue_number`指定時のfast pathでスコープが絞られた
-    `IssuesByStatus`は使わず、常にリポジトリ全体のstatus:in-progress Issueを
-    読み直す。範囲を絞ってしまうと、他の親Issue配下のactive worktreeが
-    復元されないまま`run_state.json`が新規保存され、以後永遠に復元機会を
-    失うおそれがある。
-    """
-    if not (config.apply and not Path(config.run_state_path).exists()):
-        return
-    in_progress_issues = config.resolved_forge.list_issues_by_label(
-        StatusLabel.IN_PROGRESS
-    )
-    if recover_run_state(run_state, in_progress_issues, config):
-        save_run_state(
-            run_state,
-            config.run_state_path,
-            launch_window_seconds=config.window_seconds,
-        )
-
-
-def _restore_launch_history(
-    run_state: RunState,
-    config: DispatcherConfig,
-    now: float,
-) -> bool:
-    """#514: 親Issue本文へ永続化されたlaunch_historyを多重集合として復元する。"""
-    if config.parent_issue_number is None:
-        return False
-    issue = config.resolved_forge.get_issue(config.parent_issue_number)
-    if issue is None:
-        return False
-    persisted = launch_history_from_body(issue.body)
-    if not persisted:
-        return False
-    in_window = launch_history_in_window(persisted, now, config.window_seconds)
-    local_counts = Counter(run_state.launch_history)
-    persisted_counts = Counter(in_window)
-    merged_counts = Counter(
-        {
-            timestamp: max(local_counts[timestamp], persisted_counts[timestamp])
-            for timestamp in set(local_counts) | set(persisted_counts)
-        }
-    )
-    merged = sorted(merged_counts.elements())
-    if merged == sorted(run_state.launch_history):
-        return False
-    run_state.launch_history = merged
-    return True
-
-
-def _self_heal_launch_history(
-    run_state: RunState,
-    config: DispatcherConfig,
-    now: float,
-) -> None:
-    """#514: 親Issue本文から`launch_history`を復元し、変更があれば永続化する。
-
-    PR #516の3巡目レビューで学んだ通り、`_self_heal_run_state`は
-    `run_state.json`欠落時にしか動作しないため、そこへ相乗りさせると
-    「ファイルは存在するが`launch_history`だけ古い」ケースへ到達できない。
-    ファイル有無を問わず毎サイクル呼び出す。
-
-    保存時に`open_prs`を渡す理由は`_reconcile_recovery_counters`と同じ
-    （渡さないと`prune_run_state`がopen PR紐付きの完了履歴保護を適用せず、
-    30日超の`last_completed`を無条件に刈り込んでしまう）。
-    """
-    if not _restore_launch_history(run_state, config, now):
-        return
-    # #519レビュー7巡目(P2): 復元はメモリ上で`--no-apply`でも行うが（dry-runは
-    # 「適用したら何が起きるか」のpreviewなので、永続履歴を無視して
-    # 「起動する」と表示してはならない）、run_stateへの書き戻しはapply時のみ。
-    if not config.apply:
-        return
-    open_prs = config.resolved_forge.list_open_prs()
-    save_run_state(
-        run_state,
-        config.run_state_path,
-        launch_window_seconds=config.window_seconds,
-        open_prs=open_prs,
-    )
-
-
-def _reconcile_recovery_counters(
-    run_state: RunState,
-    config: DispatcherConfig,
-) -> None:
-    """#516再3巡目・再4巡目レビュー指摘: `_reconcile_stale_recovery_counters`
-    （`dispatch_recovery.py`）は`recover_run_state`経由でのみ呼ばれていたが、
-    `recover_run_state`は`_self_heal_run_state`が`run_state.json`欠落時にしか
-    呼ばない。そのときの`run_state.active_worktrees`は常に空（新規ロード）
-    のため、「既存だがstaleなエントリ」の再照合は生産コードから一度も
-    到達し得なかった——`_persist_recovery_counters`が本文への書き込みに
-    成功した直後、サイクル終端の`save_run_state`前にプロセスが停止すると、
-    既存の（ファイルが存在する）`run_state.json`が古い値のまま残り続ける。
-    ファイル有無に関わらず毎サイクル呼び出す。
-
-    `_self_heal_run_state`の`#156`コメントと同じ理由により、
-    `parent_issue_number`指定時にスコープが絞られたIssue一覧は使わず、
-    常にリポジトリ全体のstatus:in-progress Issueを独自に読み直す:
-    `run_state.active_worktrees`は複数の親Issue（big rock）にまたがって
-    共有されうるため、スコープを絞った一覧を渡すと他の親Issue配下の
-    active worktreeが再照合対象から漏れる。
-
-    保存が必要になった場合のみ`open_prs`を取得して`save_run_state`へ渡す:
-    `open_prs`無しで保存すると、`prune_run_state`は30日超の
-    `completed_worktrees`保護（open PRの重複判定に使う`last_completed`）を
-    一切適用せず無条件に刈り込んでしまい、これが通常のサイクル終端保存
-    より先に実行され、かつ直後にプロセスが停止すると永続化されてしまう。
-    """
-    if not config.apply:
-        return
-    in_progress_issues = config.resolved_forge.list_issues_by_label(
-        StatusLabel.IN_PROGRESS
-    )
-    if _reconcile_stale_recovery_counters(run_state, in_progress_issues):
-        open_prs = config.resolved_forge.list_open_prs()
-        save_run_state(
-            run_state,
-            config.run_state_path,
-            launch_window_seconds=config.window_seconds,
-            open_prs=open_prs,
-        )
-
-
-def _reconcile_dual_status_tasks(
-    tasks_by_issue: dict[int, Task], config: DispatcherConfig
-) -> list[dict]:
-    """カーネルのconflict finding/typed planで中断したrollbackを完了する。"""
-    repaired = reconcile_status_repairs(
-        tasks_by_issue,
-        completed_subtask_ids=(),
-        config=config,
-        phase=StatusRepairPhase.DUAL_STATUS,
-    )
-    return [
-        {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
-        for task in repaired
-    ]
 
 
 def _handle_blocked_recompute_recovery(

@@ -14,10 +14,6 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.reconciliation import (
-    _reconcile_dual_status_tasks,
-    _self_heal_run_state,
-)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -102,114 +98,6 @@ def _stub_label_actor_permission_by_default(fake_forge):
     yield
 
 
-class TestDualStatusReconciliation:
-    def test_apply_removes_status_done_for_dual_status_tasks(
-        self, tmp_path, fake_forge
-    ):
-        dual_status_task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            status_labels=("status:done", "status:queued"),
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-
-        fake_forge.remove_label.reset_mock(side_effect=True)
-        mock_remove = fake_forge.remove_label
-        fake_forge.get_issue_labels.side_effect = (
-            ("status:done", "status:queued"),
-            ("status:queued",),
-        )
-        events = _reconcile_dual_status_tasks({1: dual_status_task}, config)
-
-        mock_remove.assert_called_once_with(1, "status:done")
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
-
-    def test_dry_run_does_not_call_github(self, tmp_path, fake_forge):
-        dual_status_task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            status_labels=("status:done", "status:queued"),
-        )
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=False,
-        )
-
-        fake_forge.remove_label.reset_mock(side_effect=True)
-        mock_remove = fake_forge.remove_label
-        _reconcile_dual_status_tasks({1: dual_status_task}, config)
-
-        mock_remove.assert_not_called()
-
-
-class TestSelfHealRunState:
-    """#156: run_state.jsonは複数の親Issue（big rock）にまたがって共有されうる
-    ため、parent_issue_number指定時のfast pathでスコープが絞られていても、
-    自己修復は常にリポジトリ全体のstatus:in-progress Issueを読み直す。"""
-
-    def test_noop_when_run_state_file_exists(self, tmp_path, fake_forge):
-        run_state_path = tmp_path / "run_state.json"
-        run_state_path.write_text("{}")
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=run_state_path,
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-        run_state = RunState(active_worktrees={})
-        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
-        fake_forge.list_issues_by_label.side_effect = AssertionError(
-            "Should not fetch when file exists"
-        )
-        _self_heal_run_state(run_state, config)
-
-    def test_noop_when_not_apply(self, tmp_path, fake_forge):
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=False,
-        )
-        run_state = RunState(active_worktrees={})
-        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
-        fake_forge.list_issues_by_label.side_effect = AssertionError(
-            "Should not fetch when apply=False"
-        )
-        _self_heal_run_state(run_state, config)
-
-    def test_fetches_repo_wide_in_progress_issues_regardless_of_parent_scope(
-        self, tmp_path, fake_forge
-    ):
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-            parent_issue_number=100,
-        )
-        run_state = RunState(active_worktrees={})
-        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
-        fake_forge.list_issues_by_label.return_value = []
-        mock_list = fake_forge.list_issues_by_label
-        with (
-            patch(
-                "orchestune.dispatch.reconciliation.recover_run_state",
-                return_value=False,
-            ) as mock_recover,
-        ):
-            _self_heal_run_state(run_state, config)
-
-        mock_list.assert_called_once_with("status:in-progress")
-        mock_recover.assert_called_once_with(run_state, [], config)
-
-
 class TestDispatchCycleRecomputeExclusionAndRecovery:
     def test_same_cycle_recompute_exclusion(self, tmp_path, fake_forge):
         """同一サイクルで逸脱が発生した際、競合先タスクが candidate_tasks から除外されること"""
@@ -288,7 +176,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=([], deviation_events, False, set()),
             ),
             patch(
-                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.cycle._run_status_repair_boundary",
                 return_value=[],
             ),
             patch("orchestune.dispatch.cycle._sync_external_locks"),

@@ -1,4 +1,4 @@
-"""dispatch_gcのstale active entry判定・破棄処理・ルール本体のテスト。
+"""dispatch_gcのstale active entry破棄処理とSupervisor境界のテスト。
 
 test_dispatch_gc.py (1418行) からstale entryルール関連(#479)を分割。
 gitプリミティブは test_dispatch_gc_git_primitives.py、完了ルールは
@@ -8,13 +8,13 @@ test_dispatch_gc_integration.py を参照。
 
 from unittest.mock import patch
 
+from orchestune.consistency.models import RepairStatus
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.execution_repair import evaluate_execution_repair_plan
 from orchestune.dispatch.gc import (
     _apply_stale_active_entry_discard,
     _rule_not_needed,
-    _rule_stale_entry,
 )
+from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.state import RunState
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
@@ -144,62 +144,131 @@ class TestApplyStaleActiveEntryDiscard:
         assert run_state.active_worktrees == {"280": active}
 
 
-class TestRuleStaleEntry:
-    def test_reuses_one_repository_evaluation_for_all_active_entries(self):
-        first = _active()
-        second = _active(issue_number=281, branch="claude/issue-281-task-b")
-        first_task = _task(status_labels=("status:blocked",))
-        second_task = _task(
-            issue_number=281,
-            subtask_id="task-b",
-            status_labels=("status:blocked",),
-        )
-        run_state = RunState(active_worktrees={"280": first, "281": second})
-        ctx = _ctx(
-            run_state=run_state,
-            tasks_by_issue={280: first_task, 281: second_task},
+class TestSupervisorOwnedStaleEntry:
+    def test_stale_entry_is_applied_by_the_typed_gc_repair(self, tmp_path, fake_forge):
+        worktree = tmp_path / "active-worktree"
+        worktree.mkdir()
+        active = _active(worktree_path=str(worktree), pid=12345)
+        task = _task(status_labels=("status:blocked",))
+        run_state = RunState(active_worktrees={"280": active})
+        fake_forge.branch_exists.return_value = True
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.return_value = ("status:blocked",)
+        config = DispatcherConfig(
+            apply=True,
+            run_state_path=tmp_path / "state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         )
 
         with (
-            patch(
-                "orchestune.dispatch.gc.evaluate_execution_repair_plan",
-                wraps=evaluate_execution_repair_plan,
-            ) as evaluate,
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
                 return_value=True,
             ),
+            patch("orchestune.dispatch.gc.backup_wip_commit", return_value=None),
+            patch("orchestune.dispatch.gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.os.kill") as kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as remove,
         ):
-            first_outcome = _rule_stale_entry(ctx, "280", first, first_task)
-            second_outcome = _rule_stale_entry(ctx, "281", second, second_task)
+            outcome = run_gc_phase(
+                run_state, {280: task}, config, [], open_prs=[], now=1_000.0
+            )
 
-        assert first_outcome is not None
-        assert second_outcome is not None
-        assert evaluate.call_count == 1
+        results = outcome.consistency.repair_passes[0].results
+        assert [(result.command.code, result.status) for result in results] == [
+            ("execution.reclaim", RepairStatus.APPLIED)
+        ]
+        assert [event["action"] for event in outcome.completion_events] == [
+            "stale_active_entry_discarded"
+        ]
+        assert run_state.active_worktrees == {}
+        kill.assert_called_once_with(12345, 9)
+        remove.assert_called_once_with(str(worktree))
 
-    def test_backup_failure_defers_terminal_outcome_to_next_cycle(
-        self, tmp_path, fake_forge
-    ):
-        # #382 Reproducer: WIPバックアップ失敗時は、破棄処理をスキップして
-        # このサイクルではNoneを返し（terminalな完了イベントを発行しない）、
-        # run_stateのエントリも温存して次サイクルでの再試行に委ねる。
-        active = _active(worktree_path=str(tmp_path), pid=12345)
-        task = _task(status_labels=("status:blocked",))
+    def test_live_in_progress_label_cancels_stale_cleanup(self, tmp_path, fake_forge):
+        active = _active(worktree_path=str(tmp_path / "active"), pid=12345)
+        cached_task = _task(status_labels=("status:blocked",))
         run_state = RunState(active_worktrees={"280": active})
-        ctx = _ctx(run_state=run_state, forge=fake_forge)
-        ctx.config.apply = True
+        fake_forge.branch_exists.return_value = True
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
+        config = DispatcherConfig(
+            apply=True,
+            run_state_path=tmp_path / "state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
 
         with (
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit",
-                return_value="fatal: unable to write new index file",
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=True,
             ),
-            patch("orchestune.dispatch.gc.is_process_alive", return_value=True),
+            patch("orchestune.dispatch.gc.os.kill") as kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as remove,
         ):
-            outcome = _rule_stale_entry(ctx, "280", active, task)
+            outcome = run_gc_phase(
+                run_state,
+                {280: cached_task},
+                config,
+                [],
+                open_prs=[],
+                now=1_000.0,
+            )
 
-        assert outcome is None
+        (result,) = outcome.consistency.repair_passes[0].results
+        assert result.status is RepairStatus.SKIPPED
+        assert result.diagnostics == (
+            "stale cleanup precondition no longer holds: status:in-progress is live",
+        )
         assert run_state.active_worktrees == {"280": active}
+        assert outcome.completion_events == []
+        fake_forge.get_issue_labels.assert_called_with(280)
+        kill.assert_not_called()
+        remove.assert_not_called()
+
+    def test_forge_error_defers_stale_cleanup(self, tmp_path, fake_forge):
+        active = _active(worktree_path=str(tmp_path / "active"), pid=12345)
+        cached_task = _task(status_labels=("status:blocked",))
+        run_state = RunState(active_worktrees={"280": active})
+        fake_forge.branch_exists.return_value = True
+        fake_forge.get_issue_state.side_effect = RuntimeError("Forge unavailable")
+        config = DispatcherConfig(
+            apply=True,
+            run_state_path=tmp_path / "state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=True,
+            ),
+            patch("orchestune.dispatch.gc.os.kill") as kill,
+            patch("orchestune.dispatch.gc.remove_worktree") as remove,
+        ):
+            outcome = run_gc_phase(
+                run_state,
+                {280: cached_task},
+                config,
+                [],
+                open_prs=[],
+                now=1_000.0,
+            )
+
+        (result,) = outcome.consistency.repair_passes[0].results
+        assert result.status is RepairStatus.FAILED
+        assert result.diagnostics == ("RuntimeError: Forge unavailable",)
+        assert run_state.active_worktrees == {"280": active}
+        assert outcome.completion_events == []
+        fake_forge.get_issue_labels.assert_not_called()
+        kill.assert_not_called()
+        remove.assert_not_called()
 
 
 class TestRuleNotNeededOutcomeStaleness:

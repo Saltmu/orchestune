@@ -12,7 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.execution_repair import ExecutionRepairEvaluation
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
@@ -40,7 +39,6 @@ class CycleContext:
     pr_by_branch: dict[str, PrRecord]
     config: DispatcherConfig
     not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
-    execution_repair_evaluation: ExecutionRepairEvaluation | None = None
 
 
 @dataclass

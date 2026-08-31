@@ -220,8 +220,8 @@ orchestune-dispatch
 | `--max-concurrent <int>` | `2` | 同時に実行（起動）できるサブタスクエージェントの最大数。 |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は実行環境（`GITHUB_ACTIONS`環境変数）から自動選択される。`auto`はPATH上のローカルCLIを検出する。ローカル CLI、Claude Code Cloud Routine、または `ORCHESTUNE_CODEX_CLOUD_ENV`（もしくは `--codex-cloud-env`）で指定した Codex Cloud environment を明示選択できる。`codex-cloud` はタスクブランチを `origin` へ push してから Codex Cloud に投入し、実タスク状態追跡および対象ブランチの PR / outcome record を組み合わせて完了を判定する。`local`を明示指定した場合のみ、後方互換のダミー起動（no-op、テスト・dry-run用途）になる。 |
 | `--reviewer-bot {auto,claude,codex}` | `auto` | 実装後に依頼するレビュアー。`auto`はdispatch targetの解決後に評価され、Claude系にはCodex、Codex系と`agy`にはClaudeを選ぶ。明示値はこの対応表より優先される。汎用`local`からは推定できないため警告を出す。 |
-| `--consistency-mode {off,shadow,repair}` | `off` | リポジトリ整合性control loop。`off`は既存動作を維持し、`shadow`は変更せずreportだけを行い、`repair`は明示的にallowlistされたcodeだけを実行できる。 |
-| `--consistency-repair-code <code>` | - | `repair` modeで許可するfinding codeまたはcommand code。複数指定する場合は繰り返す。空のallowlistはreport-onlyとなる。 |
+| `--consistency-mode {off,shadow,repair}` | `off` | 追加のrepository-wide整合性loop。`off`は既存動作を維持し、`shadow`は新たな変更を加えずreportを追加し、`repair`はuser allowlistへ明示したcodeを実行できる。組み込みの安全なself-healingは全modeで有効なまま。 |
+| `--consistency-repair-code <code>` | - | 追加の`repair` loopで許可するfinding codeまたはcommand code。複数指定する場合は繰り返す。空のuser allowlistはreport-onlyであり、組み込みの安全な修復は無効にしない。 |
 | `--consistency-max-repair-passes <1..5>` | `1` | dispatch cycleあたりのguarded repair／再観測pass上限。同じidempotency keyを同一cycleで二度実行しない。 |
 | `--codex-cloud-env <id>` | - | `--dispatch-target codex-cloud` で利用する Codex Cloud environment ID。未指定時は `ORCHESTUNE_CODEX_CLOUD_ENV` 環境変数を使用。 |
 | `--local-cmd <template>` | - | ローカルターゲットへディスパッチするコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, `{reviewer_bot}`。汎用`local`で省略した場合はダミー起動になる。ローカルCLIプリセットで指定するとプリセット全体を置き換え、Orchestuneはテンプレート内にある`{reviewer_bot}`だけを置換し、任意のカスタムコマンドへレビュー指示を追記しない。 |
@@ -242,7 +242,11 @@ orchestune-dispatch
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
-`repair` modeでは、`--json`出力または`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
+default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
+
+既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`--consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、`--no-apply`は外部または永続的な修復副作用を許可しません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
+
+`--json`出力または`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。dry-runまたはlive precondition不成立によるcommand単位のskipped resultはfindingの最終dispositionで表され、旧phase所有の修復経路へfallbackすることはありません。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
 
 ### 設定ファイルによるオプションの省略
 

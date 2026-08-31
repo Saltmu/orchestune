@@ -2,24 +2,268 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
-from orchestune.consistency.invariants.status import PRIMARY_STATUS_CONFLICT
+from orchestune.consistency.invariants.status import (
+    BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+    PRIMARY_STATUS_CONFLICT,
+    QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
+)
+from orchestune.consistency.models import IntentStatus, RepairStatus
+from orchestune.consistency.repairs.execution import (
+    COMMAND_BOOKKEEPING,
+    COMMAND_RECLAIM,
+    COMMAND_REQUEUE,
+)
 from orchestune.consistency.supervisor import (
     ConsistencyMode,
     RepairDisposition,
     consistency_cycle_to_dict,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle import (
+    _run_recovery_bookkeeping_boundary,
+    run_dispatch_cycle,
+)
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.dispatch.status_repair import status_intent_journal_path
-from tests.conftest import make_issue, make_task
+from tests.conftest import make_issue, make_pr, make_task
+
+
+def _repair_command_codes(report) -> list[str]:
+    return [
+        result.command.code
+        for repair_pass in report.repair_passes
+        for result in repair_pass.results
+    ]
+
+
+def test_recovery_boundary_restores_missing_run_state_and_reobserves(
+    tmp_path, in_memory_forge
+) -> None:
+    worktree_root = tmp_path / "worktrees"
+    restored_worktree = worktree_root / "claude-issue-744-recovery-cutover"
+    restored_worktree.mkdir(parents=True)
+    issue = make_issue(
+        744,
+        labels=("status:in-progress",),
+        subtask_id="recovery-cutover",
+        parent=None,
+    )
+    in_memory_forge.seed_issue(issue)
+    in_memory_forge.seed_pr(
+        make_pr(
+            755,
+            head_ref="claude/issue-744-recovery-cutover",
+            closes_issue_numbers=(744,),
+        )
+    )
+    run_state = RunState()
+    config = DispatcherConfig(
+        apply=True,
+        max_concurrent=0,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=worktree_root,
+        forge=in_memory_forge,
+    )
+
+    report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
+
+    assert _repair_command_codes(report) == [COMMAND_REQUEUE, COMMAND_BOOKKEEPING]
+    assert report.repair_passes[0].results[0].status is RepairStatus.SKIPPED
+    assert report.repair_passes[0].results[1].status is RepairStatus.APPLIED
+    assert [scan.boundary for scan in report.scans] == [
+        "recovery-bookkeeping",
+        "repair-1",
+    ]
+    assert run_state.active_worktrees["744"].worktree_path == str(restored_worktree)
+    assert (
+        load_run_state(config.run_state_path).active_worktrees["744"]
+        == (run_state.active_worktrees["744"])
+    )
+
+
+def test_recovery_boundary_requeues_missing_execution_without_restorable_resource(
+    tmp_path, in_memory_forge
+) -> None:
+    issue = make_issue(
+        744,
+        labels=("status:in-progress",),
+        subtask_id="recovery-cutover",
+        parent=None,
+    )
+    in_memory_forge.seed_issue(issue)
+    run_state = RunState()
+    config = DispatcherConfig(
+        apply=True,
+        max_concurrent=0,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    first = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
+    second = _run_recovery_bookkeeping_boundary(run_state, config, now=1_001.0)
+
+    assert _repair_command_codes(first) == [COMMAND_REQUEUE, COMMAND_BOOKKEEPING]
+    assert first.repair_passes[0].results[0].status is RepairStatus.APPLIED
+    assert first.repair_passes[0].results[1].status is RepairStatus.SKIPPED
+    assert in_memory_forge.get_issue_labels(744) == ("status:queued",)
+    assert run_state.active_worktrees == {}
+    assert second.repair_passes == ()
+
+
+def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
+    tmp_path, in_memory_forge
+) -> None:
+    now = datetime.now(UTC).timestamp()
+    parent = make_issue(
+        741,
+        body=(
+            "<!-- orchestune:launch-history -->\n"
+            f"```yaml\nlaunch_history:\n- {now - 60}\n- {now - 60}\n```\n"
+        ),
+        labels=(),
+        parent=None,
+    )
+    child = make_issue(
+        744,
+        body=(
+            "```yaml\nsubtask_id: recovery-cutover\nrecompute_count: 3\n"
+            "forced_serial: true\n```\n"
+        ),
+        labels=("status:in-progress", "status:force-serial"),
+        parent={"number": 741},
+    )
+    in_memory_forge.seed_issue(parent)
+    in_memory_forge.seed_issue(child)
+    active = ActiveWorktree(
+        issue_number=744,
+        branch="codex/issue-744-recovery-cutover",
+        worktree_path=str(tmp_path / "worktrees" / "issue-744"),
+        pid=744,
+        started_at=now - 120,
+        declared_footprint=(),
+        recompute_count=1,
+        forced_serial=False,
+    )
+    run_state = RunState(
+        active_worktrees={"744": active},
+        launch_history=[now - 60],
+    )
+    config = DispatcherConfig(
+        apply=True,
+        parent_issue_number=741,
+        window_seconds=3_600,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    with patch(
+        "orchestune.dispatch.execution_repair.is_process_alive", return_value=True
+    ):
+        first = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+        restarted = load_run_state(config.run_state_path)
+        second = _run_recovery_bookkeeping_boundary(restarted, config, now=now + 1)
+
+    assert _repair_command_codes(first) == [COMMAND_BOOKKEEPING, COMMAND_BOOKKEEPING]
+    assert restarted.active_worktrees["744"].recompute_count == 3
+    assert restarted.active_worktrees["744"].forced_serial is True
+    assert restarted.launch_history == [now - 60, now - 60]
+    assert second.repair_passes == ()
+
+
+def test_recovery_counters_use_repository_wide_in_progress_snapshot(
+    tmp_path, in_memory_forge
+) -> None:
+    """A parent-scoped cycle must still repair the repository-shared run state."""
+    issue = make_issue(
+        745,
+        body=(
+            "```yaml\nsubtask_id: recovery-other-parent\nrecompute_count: 4\n"
+            "forced_serial: true\n```\n"
+        ),
+        labels=("status:in-progress", "status:force-serial"),
+        parent={"number": 999},
+    )
+    in_memory_forge.seed_issue(issue)
+    active = ActiveWorktree(
+        issue_number=745,
+        branch="codex/issue-745-recovery-other-parent",
+        worktree_path=str(tmp_path / "worktrees" / "issue-745"),
+        pid=745,
+        started_at=900.0,
+        declared_footprint=(),
+        recompute_count=1,
+        forced_serial=False,
+    )
+    run_state = RunState(active_worktrees={"745": active})
+    config = DispatcherConfig(
+        apply=True,
+        parent_issue_number=741,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    with patch(
+        "orchestune.dispatch.execution_repair.is_process_alive", return_value=True
+    ):
+        report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
+
+    assert _repair_command_codes(report) == [COMMAND_BOOKKEEPING]
+    assert run_state.active_worktrees["745"].recompute_count == 4
+    assert run_state.active_worktrees["745"].forced_serial is True
+    persisted = load_run_state(config.run_state_path).active_worktrees["745"]
+    assert persisted.recompute_count == 4
+    assert persisted.forced_serial is True
+
+
+def test_recovery_launch_history_updates_preview_without_persisting(
+    tmp_path, in_memory_forge
+) -> None:
+    now = datetime.now(UTC).timestamp()
+    in_memory_forge.seed_issue(
+        make_issue(
+            741,
+            body=(
+                "<!-- orchestune:launch-history -->\n"
+                f"```yaml\nlaunch_history:\n- {now - 60}\n```\n"
+            ),
+            labels=(),
+            parent=None,
+        )
+    )
+    run_state = RunState()
+    config = DispatcherConfig(
+        apply=False,
+        parent_issue_number=741,
+        window_seconds=3_600,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+
+    assert _repair_command_codes(report) == [COMMAND_BOOKKEEPING]
+    assert report.repair_passes[0].results[0].status is RepairStatus.APPLIED
+    assert run_state.launch_history == [now - 60]
+    assert not config.run_state_path.exists()
 
 
 def _pipeline_report() -> CycleReport:
@@ -32,6 +276,48 @@ def _pipeline_report() -> CycleReport:
         promotion_events=[],
         applied=True,
     )
+
+
+def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> None:
+    active = ActiveWorktree(
+        issue_number=745,
+        branch="codex/issue-745-gc-reclaim",
+        worktree_path=str(tmp_path / "missing-worktree"),
+        pid=745,
+        started_at=None,
+        declared_footprint=(),
+    )
+    run_state = RunState(active_worktrees={"745": active})
+    task = make_task(
+        745,
+        subtask_id="gc-reclaim",
+        status_labels=("status:in-progress",),
+    )
+    config = DispatcherConfig(
+        apply=True,
+        zombie_gc=True,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
+    )
+
+    with patch(
+        "orchestune.dispatch.execution_repair.is_process_alive",
+        side_effect=(False, False),
+    ):
+        outcome = run_gc_phase(run_state, {745: task}, config, [], open_prs=[])
+
+    results = tuple(
+        result
+        for repair_pass in outcome.consistency.repair_passes
+        for result in repair_pass.results
+    )
+    assert [(result.command.code, result.status) for result in results] == [
+        (COMMAND_RECLAIM, RepairStatus.APPLIED)
+    ]
+    assert [event["action"] for event in outcome.completion_events] == ["gc_reclaimed"]
+    assert run_state.active_worktrees == {}
 
 
 def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
@@ -246,3 +532,281 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         )
         == 1
     )
+
+
+def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
+    tmp_path, fake_forge
+):
+    labels = {
+        742: ["status:done"],
+        743: ["status:blocked"],
+    }
+    remove_attempts = 0
+
+    def current_issue(issue_number):
+        return make_issue(
+            issue_number,
+            labels=tuple(labels[issue_number]),
+            subtask_id="adapter-foundation"
+            if issue_number == 742
+            else "status-cutover",
+            depends_on=() if issue_number == 742 else ("adapter-foundation",),
+        )
+
+    def list_issues(label, *args, **kwargs):
+        return [
+            current_issue(issue_number)
+            for issue_number in labels
+            if label in labels[issue_number]
+        ]
+
+    def add_label(issue_number, label):
+        if label not in labels[issue_number]:
+            labels[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        nonlocal remove_attempts
+        if issue_number == 743 and label == "status:blocked":
+            remove_attempts += 1
+        if remove_attempts == 1 and label == "status:blocked":
+            raise RuntimeError("partial Forge failure")
+        labels[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = list_issues
+    fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
+        labels[issue_number]
+    )
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.return_value = "write"
+    fake_forge.add_label.side_effect = add_label
+    fake_forge.remove_label.side_effect = remove_label
+    config = DispatcherConfig(
+        apply=True,
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+    )
+
+    with (
+        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle._sync_external_locks",
+            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+        ),
+    ):
+        first = run_dispatch_cycle(config)
+        second = run_dispatch_cycle(config)
+
+    assert first.consistency.mode is ConsistencyMode.OFF
+    assert second.consistency.mode is ConsistencyMode.OFF
+    assert first.consistency.repair_passes[-1].results[0].status is RepairStatus.FAILED
+    assert (
+        second.consistency.repair_passes[-1].results[0].status is RepairStatus.APPLIED
+    )
+    persisted = [
+        json.loads(line)["consistency"]
+        for line in config.events_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [item["mode"] for item in persisted] == ["off", "off"]
+    assert [
+        item["repair_passes"][-1]["results"][0]["status"] for item in persisted
+    ] == [
+        "failed",
+        "applied",
+    ]
+    assert remove_attempts == 2
+    assert labels[743] == ["status:queued"]
+    journal = IntentJournal(status_intent_journal_path(config))
+    assert len(journal.load()) == 1
+    assert journal.load()[0].status is IntentStatus.VERIFIED
+
+
+def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
+    tmp_path, fake_forge
+):
+    labels = {
+        758: ["status:queued"],
+        759: ["status:queued"],
+    }
+    add_attempts = 0
+
+    def current_issue(issue_number):
+        return make_issue(
+            issue_number,
+            labels=tuple(labels[issue_number]),
+            subtask_id="dependency" if issue_number == 758 else "main-merge",
+            depends_on=() if issue_number == 758 else ("dependency",),
+            parent=None,
+        )
+
+    def list_issues(label, *args, **kwargs):
+        return [
+            current_issue(issue_number)
+            for issue_number in labels
+            if label in labels[issue_number]
+        ]
+
+    def fail_first_add(issue_number, label):
+        nonlocal add_attempts
+        if issue_number == 759 and label == "status:blocked":
+            add_attempts += 1
+            if add_attempts == 1:
+                raise RuntimeError("transient Forge failure")
+        if label not in labels[issue_number]:
+            labels[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        labels[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = list_issues
+    fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
+        labels[issue_number]
+    )
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.return_value = "write"
+    fake_forge.add_label.side_effect = fail_first_add
+    fake_forge.remove_label.side_effect = remove_label
+    config = DispatcherConfig(
+        apply=True,
+        consistency_mode=ConsistencyMode.REPAIR,
+        consistency_repair_allowlist=frozenset({QUEUED_WITH_UNRESOLVED_DEPENDENCIES}),
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
+    )
+
+    with (
+        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle._sync_external_locks",
+            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+        ),
+    ):
+        first = run_dispatch_cycle(config)
+        second = run_dispatch_cycle(config)
+
+    first_result = next(
+        result
+        for repair_pass in first.consistency.repair_passes
+        for result in repair_pass.results
+        if dict(result.command.parameters).get("finding_code")
+        == QUEUED_WITH_UNRESOLVED_DEPENDENCIES
+    )
+    second_result = next(
+        result
+        for repair_pass in second.consistency.repair_passes
+        for result in repair_pass.results
+        if dict(result.command.parameters).get("finding_code")
+        == QUEUED_WITH_UNRESOLVED_DEPENDENCIES
+    )
+    assert first_result.status is RepairStatus.FAILED
+    assert second_result.status is RepairStatus.APPLIED
+    assert add_attempts == 2
+    assert labels[759] == ["status:blocked"]
+    (intent,) = IntentJournal(status_intent_journal_path(config)).load()
+    assert intent.status is IntentStatus.VERIFIED
+
+
+def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
+    tmp_path, fake_forge
+):
+    labels = {
+        758: ["status:queued"],
+        759: ["status:queued"],
+    }
+    fail_verification_read = True
+
+    def current_issue(issue_number):
+        return make_issue(
+            issue_number,
+            labels=tuple(labels[issue_number]),
+            subtask_id="dependency" if issue_number == 758 else "main-merge",
+            depends_on=() if issue_number == 758 else ("dependency",),
+            parent=None,
+        )
+
+    def list_issues(label, *args, **kwargs):
+        return [
+            current_issue(issue_number)
+            for issue_number in labels
+            if label in labels[issue_number]
+        ]
+
+    def get_issue_labels(issue_number):
+        nonlocal fail_verification_read
+        current = tuple(labels[issue_number])
+        if issue_number == 759 and current == ("status:blocked",):
+            if fail_verification_read:
+                fail_verification_read = False
+                raise RuntimeError("verification read failed")
+        return current
+
+    def add_label(issue_number, label):
+        if label not in labels[issue_number]:
+            labels[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        labels[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = list_issues
+    fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue_labels.side_effect = get_issue_labels
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.return_value = "write"
+    fake_forge.add_label.side_effect = add_label
+    fake_forge.remove_label.side_effect = remove_label
+    config = DispatcherConfig(
+        apply=True,
+        consistency_mode=ConsistencyMode.REPAIR,
+        consistency_repair_allowlist=frozenset({QUEUED_WITH_UNRESOLVED_DEPENDENCIES}),
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
+    )
+
+    with (
+        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle._sync_external_locks",
+            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+        ),
+    ):
+        first = run_dispatch_cycle(config)
+        first_result = next(
+            result
+            for repair_pass in first.consistency.repair_passes
+            for result in repair_pass.results
+            if dict(result.command.parameters).get("finding_code")
+            == QUEUED_WITH_UNRESOLVED_DEPENDENCIES
+        )
+        assert first_result.status is RepairStatus.FAILED
+        assert first_result.diagnostics == ("RuntimeError: verification read failed",)
+        assert labels[759] == ["status:blocked"]
+        (applied_intent,) = IntentJournal(status_intent_journal_path(config)).load()
+        assert applied_intent.status is IntentStatus.APPLIED
+
+        labels[758] = ["status:done"]
+        second = run_dispatch_cycle(config)
+
+    second_result = next(
+        result
+        for repair_pass in second.consistency.repair_passes
+        for result in repair_pass.results
+        if dict(result.command.parameters).get("finding_code")
+        == BLOCKED_WITH_RESOLVED_DEPENDENCIES
+    )
+    assert second_result.status is RepairStatus.APPLIED
+    assert labels[759] == ["status:queued"]
+    intents = IntentJournal(status_intent_journal_path(config)).load()
+    assert len(intents) == 2
+    assert all(intent.status is IntentStatus.VERIFIED for intent in intents)

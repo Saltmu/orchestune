@@ -29,7 +29,7 @@ class TestRunState:
         assert state.launch_history == []
         assert state.completed_worktrees == []
         # 破損ファイルは元の場所から退避され、パスは"未存在"扱いになる
-        # (自己修復パス`_self_heal_run_state`がGitHubから復元できるように)。
+        # (typed recovery bookkeepingがForgeの正本から復元できるように)。
         assert not path.exists()
         assert list(tmp_path.glob("run_state.json.corrupt.*"))
 

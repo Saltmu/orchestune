@@ -136,13 +136,20 @@ def _add_consistency_arguments(parser: argparse.ArgumentParser) -> None:
         "--consistency-mode",
         choices=[mode.value for mode in ConsistencyMode],
         default=ConsistencyMode.OFF.value,
-        help="#706/#709: offは無効、shadowはread-only、repairはallowlist対象のみ修復する。",
+        help=(
+            "#706/#709/#746: 追加のrepository-wide loopを段階化する。"
+            "offは追加scanなし、shadowは追加repairなし、repairは追加allowlist対象のみ修復。"
+            "既定の安全なstatus/recovery/GC自己修復は全modeで維持される。"
+        ),
     )
     parser.add_argument(
         "--consistency-repair-code",
         action="append",
         default=[],
-        help="#709: repair modeで許可するfinding codeまたはcommand code（繰り返し指定可）。",
+        help=(
+            "#709/#746: repair modeの追加loopで許可するfinding codeまたはcommand code"
+            "（繰り返し指定可）。既定の安全な自己修復allowlistは変更しない。"
+        ),
     )
     parser.add_argument(
         "--consistency-max-repair-passes",

@@ -144,7 +144,7 @@ Details: [Stateless CI & Self-Healing State Recovery (state-recovery.md)](archit
 
 * **Stateless Execution Model**: Designed for ephemeral CI environments (such as GitHub Actions) where state is reconstructed directly from GitHub issue labels and PR branches.
 * **GitHub as Single Source of Truth**: Rebuilding active and queued states from GitHub `status:*` labels and protecting zombie/timeout recovery with terminal caps (`task_reclaim_counts`, #512).
-* **Repository Consistency Control Loop**: Multi-staged (off/shadow/repair) reconciliation kernel with Observers, DesiredState derivation, Invariants, Planners, and Executors.
+* **Repository Consistency Control Loop**: `ConsistencySupervisor` is the single owner of repair decisions, ordering, bounded retries, authoritative re-observation, and aggregated outcomes. Typed executors keep Forge, Git, process, worktree, and `run_state.json` mutations behind live preconditions. The off/shadow/repair setting stages only the additional repository-wide loop; the established safe status, recovery, and GC self-healing boundaries remain enabled by default. See [Stateless CI & Self-Healing State Recovery](architecture/state-recovery.md#3-repository-consistency-control-loop).
 
 ### 3.3 Integration Pipeline, Two-Tier Branch Model & Auto-Rebase
 Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration.md)](architecture/integration.md)

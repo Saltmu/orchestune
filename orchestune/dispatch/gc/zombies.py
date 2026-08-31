@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -15,13 +14,14 @@ from orchestune.consistency.invariants.execution import (
     LOCAL_PROCESS_DEAD,
     RUN_STATE_STALE,
 )
-from orchestune.consistency.models import RepairCommand
+from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_repair import (
+    ReclaimPrecondition,
     command_finding_codes,
-    evaluate_execution_repair_plan,
+    revalidate_reclaim_preconditions,
 )
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
@@ -146,54 +146,6 @@ def _reclaim_candidate_from_command(
     )
 
 
-def _decide_zombie_or_timeout_reclaims(
-    run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-    held_worktree_paths: set[str] | None,
-    now: float,
-    open_prs: Sequence[PrRecord] | None = None,
-) -> list[ZombieOrTimeoutReclaim]:
-    """Build reclaim candidates exclusively from kernel repair commands."""
-    zombie_enabled = getattr(config, "zombie_gc", True)
-    timeout_limit = getattr(config, "task_timeout_seconds", 0)
-    max_task_reclaims = config.max_task_reclaims
-    held_worktree_paths = held_worktree_paths or set()
-
-    if not zombie_enabled and timeout_limit <= 0:
-        return []
-
-    active_by_subject = {
-        str(active.issue_number): (key, active)
-        for key, active in run_state.active_worktrees.items()
-    }
-    held_issue_numbers = {
-        active.issue_number
-        for active in run_state.active_worktrees.values()
-        if active.worktree_path in held_worktree_paths
-    }
-    evaluation = evaluate_execution_repair_plan(
-        run_state,
-        tasks_by_issue,
-        config,
-        open_prs=open_prs or (),
-        held_issue_numbers=held_issue_numbers,
-        now=now,
-    )
-    candidates = (
-        _reclaim_candidate_from_command(
-            command,
-            active_by_subject,
-            tasks_by_issue,
-            run_state,
-            max_task_reclaims,
-            now,
-        )
-        for command in evaluation.commands
-    )
-    return [candidate for candidate in candidates if candidate is not None]
-
-
 def _record_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
@@ -206,8 +158,8 @@ def _record_reclaim(
     ラベル遷移より**先**にディスクへ書く。サイクル終端の`save_run_state`任せに
     すると、`status:queued`の露出後・保存前に落ちた場合（後続のforge呼び出しの
     例外を含む）、`run_state.json`には古い回数と古いactiveエントリだけが残る。
-    次サイクルでは`_rule_stale_entry`がそのactiveエントリを破棄して再起動を許す
-    ため、回収が1回も数えられないまま再投入が繰り返され、断続的な障害下では
+    次サイクルではSupervisorのstale reclaimがそのactiveエントリを破棄して
+    再起動を許すため、回収が1回も数えられないまま再投入が繰り返され、断続的な障害下では
     上限を超えて起動し続けてしまう。
 
     永続化に失敗した場合は`False`を返し、呼び出し側は今回の回収自体を見送る
@@ -259,6 +211,18 @@ def _reclaim_event(reclaim: ZombieOrTimeoutReclaim, action: str, counted: bool) 
             reclaim.reclaim_count if counted else reclaim.reclaim_count - 1
         ),
     }
+
+
+def _preview_reclaim_event(reclaim: ZombieOrTimeoutReclaim) -> dict:
+    already_escalated = any(
+        label in reclaim.status_labels for label in TERMINAL_ESCALATION_LABELS
+    )
+    escalating = not already_escalated and reclaim.escalate
+    return _reclaim_event(
+        reclaim,
+        "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
+        not already_escalated,
+    )
 
 
 def _escalate_backup_failure(
@@ -568,11 +532,7 @@ def _apply_zombie_or_timeout_reclaim(
     counted = not already_escalated
     escalating = counted and reclaim.escalate
     if not config.apply:
-        return _reclaim_event(
-            reclaim,
-            "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
-            counted,
-        )
+        return _preview_reclaim_event(reclaim)
 
     if counted and not _record_reclaim(run_state, reclaim, config, open_prs):
         return None
@@ -598,72 +558,83 @@ def _apply_zombie_or_timeout_reclaim(
     )
 
 
-def _collect_zombies_and_timeouts(
+def _refresh_reclaim(
     run_state: RunState,
-    tasks_by_issue: dict[int, Task],
+    reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
-    held_worktree_paths: set[str] | None = None,
-    open_prs: Sequence[PrRecord] | None = None,
-) -> list[dict]:
-    """Plan, re-observe, and apply zombie/timeout repairs at the GC boundary."""
-    reclaims = _decide_zombie_or_timeout_reclaims(
-        run_state,
-        tasks_by_issue,
-        config,
-        held_worktree_paths,
-        time.time(),
-        open_prs,
-    )
-    events: list[dict] = []
-    for reclaim in reclaims:
-        refreshed = _reobserve_reclaim(
-            run_state,
-            tasks_by_issue,
-            config,
-            reclaim,
-            held_worktree_paths,
-            open_prs,
-        )
-        if refreshed is None:
-            continue
-        event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
-        if event is not None:
-            events.append(event)
-    return events
-
-
-def _reobserve_reclaim(
-    run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    config: DispatcherConfig,
-    previous: ZombieOrTimeoutReclaim,
-    held_worktree_paths: set[str] | None,
-    open_prs: Sequence[PrRecord] | None,
-) -> ZombieOrTimeoutReclaim | None:
-    """Require the same typed reclaim to survive a targeted fresh observation."""
-    active = run_state.active_worktrees.get(previous.key)
-    if active is None or active.issue_number != previous.active.issue_number:
-        return None
-    targeted_state = RunState(
-        active_worktrees={previous.key: active},
-        task_reclaim_counts=run_state.task_reclaim_counts,
-    )
-    task = tasks_by_issue.get(active.issue_number)
-    targeted_tasks = {} if task is None else {active.issue_number: task}
-    candidates = _decide_zombie_or_timeout_reclaims(
-        targeted_state,
-        targeted_tasks,
-        config,
-        held_worktree_paths,
-        time.time(),
-        open_prs,
-    )
-    return next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate.key == previous.key
-            and set(candidate.finding_codes) & set(previous.finding_codes)
+    precondition: ReclaimPrecondition,
+) -> ZombieOrTimeoutReclaim:
+    reclaim_count = _resolve_reclaim_count(run_state, precondition.active.issue_number)
+    return ZombieOrTimeoutReclaim(
+        key=reclaim.key,
+        active=precondition.active,
+        subtask_id=reclaim.subtask_id,
+        reason=(
+            "timeout exceeded" if precondition.timed_out else "process disappeared"
         ),
-        None,
+        is_timeout=precondition.timed_out,
+        process_alive=precondition.process_alive,
+        status_labels=reclaim.status_labels,
+        reclaim_count=reclaim_count,
+        escalate=exceeds_limit(reclaim_count, config.max_task_reclaims),
+        now=precondition.observed_at,
+        finding_codes=reclaim.finding_codes,
+    )
+
+
+def _skipped_reclaim(command: RepairCommand, diagnostic: str) -> RepairResult:
+    return RepairResult(
+        command=command,
+        status=RepairStatus.SKIPPED,
+        diagnostics=(diagnostic,),
+    )
+
+
+def execute_reclaim_repair_command(
+    command: RepairCommand,
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None = None,
+    *,
+    held_worktree_paths: frozenset[str] = frozenset(),
+    now: float | None = None,
+    event_sink: Callable[[dict], None] | None = None,
+) -> RepairResult:
+    """Revalidate and apply one typed reclaim through the safe lifecycle."""
+    if command.code != COMMAND_RECLAIM:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.FAILED,
+            diagnostics=(f"unsupported GC repair command: {command.code}",),
+        )
+    if not config.apply:
+        return RepairResult(command=command, status=RepairStatus.SKIPPED)
+    precondition = revalidate_reclaim_preconditions(
+        command,
+        run_state,
+        key=reclaim.key,
+        expected_active=reclaim.active,
+        expected_finding_codes=reclaim.finding_codes,
+        config=config,
+        held_worktree_paths=held_worktree_paths,
+        now=now,
+    )
+    if precondition is None:
+        return _skipped_reclaim(
+            command,
+            f"reclaim precondition no longer holds for subject {command.subject_id}",
+        )
+    refreshed = _refresh_reclaim(run_state, reclaim, config, precondition)
+    event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
+    if event is not None and event_sink is not None:
+        event_sink(event)
+    return RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED if event is not None else RepairStatus.SKIPPED,
+        diagnostics=(
+            ()
+            if event is not None
+            else ("reclaim deferred by existing safety boundary",)
+        ),
     )

@@ -225,8 +225,9 @@ def plan_status_repairs(report: ConsistencyReport) -> tuple[RepairCommand, ...]:
     Planning applies nothing.  Equivalent reports produce equal commands, an
     unreachable Forge empties the whole plan, and a task whose own observation
     is uncertain is skipped while its peers are still planned for.  Findings
-    that are manual, informational, covered by a live transition intent, or
-    owned by another policy are deliberately ignored.
+    that are manual, informational, or owned by another policy are deliberately
+    ignored. A live transition Intent keeps the same typed command eligible so
+    the executor can match and safely resume it.
 
     The report must say it ran `REPOSITORY_POLICY_INVARIANT`.  A missing Forge
     finding is not an attestation that the Forge answered — an engine built

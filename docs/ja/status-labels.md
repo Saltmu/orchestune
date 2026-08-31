@@ -29,7 +29,7 @@ stateDiagram-v2
     [*] --> queued: Issue起票時\n(依存なし/解決済み)
     [*] --> blocked: Issue起票時\n(未解決の依存あり)
 
-    blocked --> queued: 依存解決\n(_promote_blocked_tasks)
+    blocked --> queued: 依存解決\n(ConsistencySupervisor\n→ execute_status_repair_command)
     blocked --> blocked_recompute: footprint逸脱によるConflict Graph再計算\n(notify_recompute)
 
     queued --> in_progress: 起動成功\n(_apply_task_launches)
@@ -41,7 +41,7 @@ stateDiagram-v2
     in_progress --> blocked_human_review: outcome不在または新規コミット無しの完了\n(_finalize_completed_worktree)
     in_progress --> blocked_human_review: 依存元PRがCHANGES_REQUESTED\n(_apply_changes_requested_escalation)
     in_progress --> manual_merge_required: 自動リベース失敗\n(_apply_auto_rebase)
-    in_progress --> queued: ゾンビ/タイムアウト検知によるGC\n(_collect_zombies_and_timeouts)
+    in_progress --> queued: ゾンビ/タイムアウト検知によるGC\n(run_gc_phase\n→ execution.reclaim)
     in_progress --> blocked_human_review: GC回収回数が上限超過\n(_apply_zombie_or_timeout_reclaim)
     in_progress --> not_needed: outcome(not-needed)またはstatus:not-needed検知\n(クローズ or 検証レビュー)
     in_progress --> blocked: base branch red検知 (outcome.reason=base-branch-red)\n(_finalize_completed_worktree、ci:base-branch-red付与)
@@ -75,8 +75,9 @@ stateDiagram-v2
   （セクション「3. 起動」参照）はこの検証の対象外。
 
 ### 2. `status:blocked` → `status:queued`（依存解決による昇格）
-- 発生元: `orchestune/dispatch/cycle.py`の`_promote_blocked_tasks`
-  （`_decide_blocked_promotions`/`_apply_blocked_promotions`）
+- 発生元: `orchestune/dispatch/cycle.py`のリポジトリ全体を対象とする
+  `ConsistencySupervisor`境界。型付き`status.transition-label`コマンドを計画し、
+  `orchestune/dispatch/status_repair.py`の`execute_status_repair_command`を通じて適用する。
 - 条件: `depends_on`の全てが`status:done`または`status:not-needed`の
   Issueで解決済みになった場合（このサイクルで新規に完了したタスクも
   `completed_subtask_ids`として加味される）。
@@ -126,7 +127,9 @@ stateDiagram-v2
   リベース後のローカルCI失敗が発生した場合。
 
 ### 9. `status:in-progress` → `status:queued`（GC回収）
-- 発生元: `orchestune/dispatch/gc/__init__.py`の`_collect_zombies_and_timeouts`
+- 発生元: `orchestune/dispatch/phase_gc.py`の`run_gc_phase`。型付き
+  `execution.reclaim`コマンドを計画し、`orchestune/dispatch/gc/zombies.py`の
+  `execute_reclaim_repair_command`を通じて適用する。
 - 条件: プロセス消失かつ未コミット変更あり（ゾンビ）、またはタイムアウト
   超過の場合。未コミット変更はWIPコミットとして退避した上で再キューイングする。
 - 回数上限（[#512](https://github.com/Saltmu/orchestune/issues/512)）: 同一タスクを

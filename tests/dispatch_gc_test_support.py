@@ -7,15 +7,89 @@ test_dispatch_gc.py (1418行) を、ルール別・クリーンアップ別
 """
 
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.execution_repair import evaluate_execution_repair_plan
+from orchestune.dispatch.gc.zombies import (
+    ZombieOrTimeoutReclaim,
+    _reclaim_candidate_from_command,
+)
+from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.models import PrRecord
 from tests.conftest import make_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
+
+def run_gc_reclaims(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    held_worktree_paths: set[str] | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
+) -> list[dict]:
+    hold_events = [
+        {
+            "action": "completion_skipped_dirty_worktree",
+            "worktree_path": path,
+        }
+        for path in sorted(held_worktree_paths or ())
+    ]
+    outcome = run_gc_phase(
+        run_state,
+        tasks_by_issue,
+        config,
+        hold_events,
+        open_prs=open_prs,
+    )
+    return outcome.completion_events[len(hold_events) :]
+
+
+def decide_gc_reclaims(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    held_worktree_paths: set[str] | None,
+    now: float,
+    open_prs: Sequence[PrRecord] | None = None,
+) -> list[ZombieOrTimeoutReclaim]:
+    if not config.zombie_gc and config.task_timeout_seconds <= 0:
+        return []
+    held_paths = held_worktree_paths or set()
+    held_issues = {
+        active.issue_number
+        for active in run_state.active_worktrees.values()
+        if active.worktree_path in held_paths
+    }
+    evaluation = evaluate_execution_repair_plan(
+        run_state,
+        tasks_by_issue,
+        config,
+        open_prs=open_prs or (),
+        held_issue_numbers=held_issues,
+        now=now,
+    )
+    active_by_subject = {
+        str(active.issue_number): (key, active)
+        for key, active in run_state.active_worktrees.items()
+    }
+    planned = (
+        _reclaim_candidate_from_command(
+            command,
+            active_by_subject,
+            tasks_by_issue,
+            run_state,
+            config.max_task_reclaims,
+            now,
+        )
+        for command in evaluation.commands
+    )
+    return [reclaim for reclaim in planned if reclaim is not None]
 
 
 def _ctx(*, forge=None, **overrides):

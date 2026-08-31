@@ -8,10 +8,13 @@ Recovery and GC remain the only side-effect boundaries that execute the plan.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 from orchestune.consistency.desired import (
     DesiredTaskInput,
@@ -20,12 +23,19 @@ from orchestune.consistency.desired import (
     derive_desired_repository_state,
 )
 from orchestune.consistency.engine import ConsistencyEngine
-from orchestune.consistency.invariants.execution import execution_invariants
+from orchestune.consistency.invariants.execution import (
+    EXECUTION_TIMED_OUT,
+    HANDLELESS_EXECUTION_ORPHAN,
+    LOCAL_PROCESS_DEAD,
+    execution_invariants,
+)
 from orchestune.consistency.models import (
     ConsistencyReport,
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
+    RepairResult,
+    RepairStatus,
 )
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
@@ -34,10 +44,20 @@ from orchestune.consistency.observation import (
     ForgeSnapshot,
     ObservationCollector,
 )
-from orchestune.consistency.repairs.execution import plan_execution_repairs
+from orchestune.consistency.repairs.execution import (
+    COMMAND_BOOKKEEPING,
+    COMMAND_RECLAIM,
+    COMMAND_REQUEUE,
+    plan_execution_repairs,
+)
+from orchestune.consistency.repairs.status import (
+    COMMAND_ADD_LABEL,
+    COMMAND_REMOVE_LABEL,
+    COMMAND_TRANSITION_LABEL,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
@@ -50,6 +70,111 @@ class ExecutionRepairEvaluation:
 
     report: ConsistencyReport
     commands: tuple[RepairCommand, ...]
+
+
+class RepairCommandDomain(StrEnum):
+    """Side-effect boundary that owns one typed repair command."""
+
+    STATUS = "status"
+    EXECUTION = "execution"
+    RECOVERY = "recovery"
+    GC = "gc"
+
+
+class RepairCommandOperation(StrEnum):
+    """Existing low-level operation reused by one typed command."""
+
+    FORGE_ADD_LABEL = "forge.add-label"
+    FORGE_REMOVE_LABEL = "forge.remove-label"
+    FORGE_TRANSITION_LABEL = "forge.transition-label"
+    GC_RECLAIM_LIFECYCLE = "gc.reclaim-lifecycle"
+    GC_REQUEUE_NOTIFICATION = "gc.requeue-notification"
+    RECOVERY_BOOKKEEPING = "recovery.update-bookkeeping"
+
+
+@dataclass(frozen=True, slots=True)
+class RepairCommandBinding:
+    """Stable ownership metadata for one automatic repair command."""
+
+    domain: RepairCommandDomain
+    operation: RepairCommandOperation
+
+
+REPAIR_COMMAND_BINDINGS: Mapping[str, RepairCommandBinding] = MappingProxyType(
+    {
+        COMMAND_ADD_LABEL: RepairCommandBinding(
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_ADD_LABEL,
+        ),
+        COMMAND_REMOVE_LABEL: RepairCommandBinding(
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_REMOVE_LABEL,
+        ),
+        COMMAND_TRANSITION_LABEL: RepairCommandBinding(
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_TRANSITION_LABEL,
+        ),
+        COMMAND_RECLAIM: RepairCommandBinding(
+            RepairCommandDomain.GC,
+            RepairCommandOperation.GC_RECLAIM_LIFECYCLE,
+        ),
+        COMMAND_REQUEUE: RepairCommandBinding(
+            RepairCommandDomain.EXECUTION,
+            RepairCommandOperation.GC_REQUEUE_NOTIFICATION,
+        ),
+        COMMAND_BOOKKEEPING: RepairCommandBinding(
+            RepairCommandDomain.RECOVERY,
+            RepairCommandOperation.RECOVERY_BOOKKEEPING,
+        ),
+    }
+)
+
+type RepairCommandHandler = Callable[[RepairCommand], RepairResult]
+
+
+def _failed_result(command: RepairCommand, diagnostic: str) -> RepairResult:
+    return RepairResult(
+        command=command,
+        status=RepairStatus.FAILED,
+        diagnostics=(diagnostic,),
+    )
+
+
+def _describe_exception(exc: Exception) -> str:
+    detail = str(exc).strip()
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchRepairExecutorAdapter:
+    """Route typed commands to bound domain handlers and fail closed."""
+
+    handlers: Mapping[str, RepairCommandHandler]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "handlers", MappingProxyType(dict(self.handlers)))
+
+    def execute(self, command: RepairCommand) -> RepairResult:
+        binding = REPAIR_COMMAND_BINDINGS.get(command.code)
+        if binding is None:
+            return _failed_result(
+                command, f"unsupported repair command: {command.code}"
+            )
+        handler = self.handlers.get(command.code)
+        if handler is None:
+            return _failed_result(
+                command,
+                f"unbound {binding.domain.value} repair command: {command.code}",
+            )
+        try:
+            result = handler(command)
+        except Exception as exc:  # noqa: BLE001 - report through RepairResult
+            return _failed_result(command, _describe_exception(exc))
+        if result.command != command:
+            return _failed_result(
+                command, "repair handler returned a result for another command"
+            )
+        return result
 
 
 class _WorktreeProbe:
@@ -172,7 +297,113 @@ def command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
     return tuple(code for code in values if isinstance(code, str))
 
 
-def _collect_observed_state(
+@dataclass(frozen=True, slots=True)
+class ReclaimPrecondition:
+    """Fresh execution facts retained for the low-level reclaim lifecycle."""
+
+    active: ActiveWorktree
+    observed_at: float
+    process_alive: bool
+    timed_out: bool
+
+
+def _external_execution_is_running(
+    active: ActiveWorktree, config: DispatcherConfig
+) -> bool:
+    if active.external_id is None:
+        return True
+    if config.dispatch_target is None:
+        return False
+    try:
+        status = config.dispatch_target.completion_status(
+            DispatchHandle(external_id=active.external_id),
+            forge=config.resolved_forge,
+        )
+    except Exception:
+        return False
+    return status == "running"
+
+
+def _timed_out(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+    observed_at: float,
+) -> bool:
+    return bool(
+        EXECUTION_TIMED_OUT in finding_codes
+        and active.started_at is not None
+        and config.task_timeout_seconds > 0
+        and observed_at - active.started_at > config.task_timeout_seconds
+        and _external_execution_is_running(active, config)
+    )
+
+
+def _dead_local_process(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+    process_alive: bool,
+) -> bool:
+    return bool(
+        LOCAL_PROCESS_DEAD in finding_codes
+        and active.external_id is None
+        and active.pid is not None
+        and not process_alive
+        and config.zombie_gc
+    )
+
+
+def _handleless_orphan(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+) -> bool:
+    return bool(
+        HANDLELESS_EXECUTION_ORPHAN in finding_codes
+        and active.pid is None
+        and active.external_id is None
+        and active.started_at is None
+        and not os.path.exists(active.worktree_path)
+        and config.zombie_gc
+    )
+
+
+def revalidate_reclaim_preconditions(
+    command: RepairCommand,
+    run_state: RunState,
+    *,
+    key: str,
+    expected_active: ActiveWorktree,
+    expected_finding_codes: tuple[str, ...],
+    config: DispatcherConfig,
+    held_worktree_paths: frozenset[str],
+    now: float | None = None,
+) -> ReclaimPrecondition | None:
+    """Return fresh known facts only while the typed command is still safe."""
+    active = run_state.active_worktrees.get(key)
+    finding_codes = frozenset(command_finding_codes(command))
+    if (
+        active is None
+        or command.subject_id != str(expected_active.issue_number)
+        or active != expected_active
+        or not finding_codes.intersection(expected_finding_codes)
+        or active.worktree_path in held_worktree_paths
+    ):
+        return None
+    observed_at = time.time() if now is None else now
+    process_alive = bool(active.pid is not None and is_process_alive(active.pid))
+    timed_out = _timed_out(active, finding_codes, config, observed_at)
+    if not (
+        timed_out
+        or _dead_local_process(active, finding_codes, config, process_alive)
+        or _handleless_orphan(active, finding_codes, config)
+    ):
+        return None
+    return ReclaimPrecondition(active, observed_at, process_alive, timed_out)
+
+
+def collect_execution_observed_state(
     run_state: RunState,
     tasks_by_issue: Mapping[int, Task],
     config: DispatcherConfig,
@@ -203,7 +434,7 @@ def _collect_observed_state(
     )
 
 
-def _derive_desired_state(
+def derive_execution_desired_state(
     tasks_by_issue: Mapping[int, Task],
     config: DispatcherConfig,
     repository_id: str,
@@ -235,7 +466,7 @@ def evaluate_execution_repair_plan(
     """Observe, evaluate, and plan execution repairs without applying them."""
     observed_at = datetime.now(UTC) if now is None else datetime.fromtimestamp(now, UTC)
     repository_id = _repository_id()
-    observed = _collect_observed_state(
+    observed = collect_execution_observed_state(
         run_state,
         tasks_by_issue,
         config,
@@ -244,7 +475,7 @@ def evaluate_execution_repair_plan(
         repository_id,
         observed_at,
     )
-    desired = _derive_desired_state(
+    desired = derive_execution_desired_state(
         tasks_by_issue,
         config,
         repository_id,
@@ -261,7 +492,17 @@ def evaluate_execution_repair_plan(
 
 
 __all__ = [
+    "REPAIR_COMMAND_BINDINGS",
+    "DispatchRepairExecutorAdapter",
     "ExecutionRepairEvaluation",
+    "RepairCommandBinding",
+    "RepairCommandDomain",
+    "RepairCommandOperation",
+    "RepairCommandHandler",
+    "ReclaimPrecondition",
+    "collect_execution_observed_state",
     "command_finding_codes",
+    "derive_execution_desired_state",
     "evaluate_execution_repair_plan",
+    "revalidate_reclaim_preconditions",
 ]

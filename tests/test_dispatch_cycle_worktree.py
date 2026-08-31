@@ -260,7 +260,6 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch.cycle._fetch_issues",
                 return_value=_group_by_status([]),
             ),
-            patch("orchestune.dispatch.cycle.run_self_heal_phase"),
             patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
             patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             _patch_gc_process_alive(return_value=False),
@@ -271,7 +270,7 @@ class TestProcessActiveWorktrees:
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch(
-                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.cycle._run_status_repair_boundary",
                 return_value=[],
             ),
             patch(
@@ -332,7 +331,6 @@ class TestProcessActiveWorktrees:
                 "orchestune.dispatch.cycle._fetch_issues",
                 return_value=_group_by_status([]),
             ),
-            patch("orchestune.dispatch.cycle.run_self_heal_phase"),
             patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
             patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
             _patch_gc_process_alive(return_value=False),
@@ -345,7 +343,7 @@ class TestProcessActiveWorktrees:
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.phase_reconciliation._promote_blocked_tasks",
+                "orchestune.dispatch.cycle._run_status_repair_boundary",
                 return_value=[],
             ),
             patch(
@@ -468,10 +466,6 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
                 return_value={"action": "not_needed"},
-            ),
-            patch(
-                "orchestune.dispatch.gc.evaluate_execution_repair_plan",
-                side_effect=AssertionError("Should not plan stale active repair"),
             ),
         ):
             (

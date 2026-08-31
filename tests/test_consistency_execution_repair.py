@@ -10,16 +10,35 @@ from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
     RUN_STATE_STALE,
 )
+from orchestune.consistency.models import (
+    ConsistencyScope,
+    RepairCommand,
+    RepairResult,
+    RepairStatus,
+)
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
     COMMAND_RECLAIM,
     COMMAND_REQUEUE,
 )
+from orchestune.consistency.repairs.status import (
+    COMMAND_ADD_LABEL,
+    COMMAND_REMOVE_LABEL,
+    COMMAND_TRANSITION_LABEL,
+)
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.execution_repair import evaluate_execution_repair_plan
-from orchestune.dispatch.gc.zombies import _collect_zombies_and_timeouts
+from orchestune.dispatch.execution_repair import (
+    REPAIR_COMMAND_BINDINGS,
+    DispatchRepairExecutorAdapter,
+    RepairCommandDomain,
+    RepairCommandOperation,
+    evaluate_execution_repair_plan,
+)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from tests.dispatch_gc_test_support import (
+    run_gc_reclaims as _collect_zombies_and_timeouts,
+)
 
 
 def _task(issue_number: int, *labels: str) -> Task:
@@ -94,6 +113,113 @@ def _command_codes(evaluation, issue_number: int) -> list[str]:
         for command in evaluation.commands
         if command.subject_id == str(issue_number)
     ]
+
+
+def _repair_command(code: str, *, suffix: str = "") -> RepairCommand:
+    return RepairCommand(
+        code=code,
+        scope=ConsistencyScope.TASK,
+        subject_id="742",
+        idempotency_key=f"test:{code}{suffix}",
+    )
+
+
+def test_every_automatic_command_has_one_explicit_adapter_domain() -> None:
+    assert {
+        code: (binding.domain, binding.operation)
+        for code, binding in REPAIR_COMMAND_BINDINGS.items()
+    } == {
+        COMMAND_ADD_LABEL: (
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_ADD_LABEL,
+        ),
+        COMMAND_REMOVE_LABEL: (
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_REMOVE_LABEL,
+        ),
+        COMMAND_TRANSITION_LABEL: (
+            RepairCommandDomain.STATUS,
+            RepairCommandOperation.FORGE_TRANSITION_LABEL,
+        ),
+        COMMAND_RECLAIM: (
+            RepairCommandDomain.GC,
+            RepairCommandOperation.GC_RECLAIM_LIFECYCLE,
+        ),
+        COMMAND_REQUEUE: (
+            RepairCommandDomain.EXECUTION,
+            RepairCommandOperation.GC_REQUEUE_NOTIFICATION,
+        ),
+        COMMAND_BOOKKEEPING: (
+            RepairCommandDomain.RECOVERY,
+            RepairCommandOperation.RECOVERY_BOOKKEEPING,
+        ),
+    }
+
+
+def test_dispatch_adapter_routes_an_exact_registered_command() -> None:
+    command = _repair_command(COMMAND_RECLAIM)
+    seen: list[RepairCommand] = []
+
+    def apply(selected: RepairCommand) -> RepairResult:
+        seen.append(selected)
+        return RepairResult(command=selected, status=RepairStatus.APPLIED)
+
+    executor = DispatchRepairExecutorAdapter({COMMAND_RECLAIM: apply})
+
+    assert executor.execute(command) == RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED,
+    )
+    assert seen == [command]
+
+
+def test_dispatch_adapter_fails_closed_for_unknown_or_unbound_commands() -> None:
+    executor = DispatchRepairExecutorAdapter({})
+    unknown = _repair_command("execution.unrecognized")
+    unbound = _repair_command(COMMAND_BOOKKEEPING)
+
+    unknown_result = executor.execute(unknown)
+    unbound_result = executor.execute(unbound)
+
+    assert unknown_result.status is RepairStatus.FAILED
+    assert unknown_result.diagnostics == (
+        "unsupported repair command: execution.unrecognized",
+    )
+    assert unbound_result.status is RepairStatus.FAILED
+    assert unbound_result.diagnostics == (
+        "unbound recovery repair command: execution.update-bookkeeping",
+    )
+
+
+def test_dispatch_adapter_normalizes_handler_failure_and_wrong_result() -> None:
+    failed_command = _repair_command(COMMAND_REQUEUE)
+    mismatched_command = _repair_command(COMMAND_RECLAIM)
+
+    def fail(_command: RepairCommand) -> RepairResult:
+        raise RuntimeError("provider unavailable")
+
+    def mismatch(_command: RepairCommand) -> RepairResult:
+        return RepairResult(
+            command=_repair_command(COMMAND_RECLAIM, suffix=":other"),
+            status=RepairStatus.APPLIED,
+        )
+
+    executor = DispatchRepairExecutorAdapter(
+        {
+            COMMAND_REQUEUE: fail,
+            COMMAND_RECLAIM: mismatch,
+        }
+    )
+
+    failed = executor.execute(failed_command)
+    mismatched = executor.execute(mismatched_command)
+
+    assert failed.status is RepairStatus.FAILED
+    assert failed.diagnostics == ("RuntimeError: provider unavailable",)
+    assert mismatched.status is RepairStatus.FAILED
+    assert mismatched.diagnostics == (
+        "repair handler returned a result for another command",
+    )
 
 
 def test_dead_local_is_reclaimed_but_cloud_pid_none_is_not(tmp_path, fake_forge):
@@ -256,10 +382,10 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
-            side_effect=(False, True),
+            side_effect=(False, True, True),
         ) as process_probe,
         patch.object(fake_forge, "branch_exists", return_value=True),
-        patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
+        patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
     ):
         events = _collect_zombies_and_timeouts(
             run_state,
@@ -267,14 +393,14 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
             config,
         )
 
-    assert process_probe.call_count == 2
+    assert process_probe.call_count == 3
     assert events == []
     assert run_state.active_worktrees == {"707": active}
     fake_forge.remove_label.assert_not_called()
     fake_forge.add_label.assert_not_called()
 
 
-def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
+def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forge):
     dead = _active(tmp_path, 707, pid=707, started_at=None)
     alive = _active(tmp_path, 708, pid=708, started_at=None)
     run_state = RunState(active_worktrees={"707": dead, "708": alive})
@@ -285,7 +411,7 @@ def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
             "orchestune.dispatch.execution_repair.is_process_alive",
             side_effect=lambda pid: pid == 708,
         ) as process_probe,
-        patch("orchestune.dispatch.gc.zombies.time.time", return_value=2_000.0),
+        patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
     ):
         events = _collect_zombies_and_timeouts(
             run_state,
@@ -297,5 +423,6 @@ def test_gc_reobserves_only_the_reclaim_candidate(tmp_path, fake_forge):
         (707,),
         (708,),
         (707,),
+        (708,),
     ]
     assert [event["issue_number"] for event in events] == [707]
