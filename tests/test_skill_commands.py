@@ -780,22 +780,61 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     """Worker skills must specify asking reviewer selection in Step 1 alongside plan approval and bypassing approval when issue-driven."""
     skill_dir = SKILLS_ROOT / skill_name
     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
-    skill_text_lower = skill_md.lower()
+    lines = skill_md.splitlines()
 
-    # Step 1 documents asking reviewer selection alongside plan approval in interactive mode
-    assert (
-        "plan approval & reviewer selection" in skill_text_lower
-        or "plan approval and reviewer selection" in skill_text_lower
+    # Locate the Execution Modes table rows
+    plan_approval_row = next(
+        (
+            line
+            for line in lines
+            if "plan approval & reviewer selection" in line.lower()
+        ),
+        None,
     )
     assert (
-        "alongside" in skill_text_lower
-        or "together" in skill_text_lower
-        or "ask user to select reviewer" in skill_text_lower
+        plan_approval_row is not None
+    ), f"{skill_name} must contain 'Plan Approval & Reviewer Selection (Step 1)' row in Execution Modes"
+    plan_approval_row_lower = plan_approval_row.lower()
+    # Verify Interactive Mode column in Step 1 row
+    assert (
+        "alongside plan approval" in plan_approval_row_lower
+        and "select reviewer bot" in plan_approval_row_lower
+    ), f"{skill_name} Step 1 row must specify asking for reviewer selection alongside plan approval"
+    # Verify Non-Interactive Mode column in Step 1 row
+    assert (
+        "bypass user approval" in plan_approval_row_lower
+        and "existing issue" in plan_approval_row_lower
+    ), f"{skill_name} Step 1 row must specify bypassing approval when invoked with existing issue"
+
+    # Verify Review Execution (Step 11) row in Execution Modes
+    review_exec_row = next(
+        (line for line in lines if "review execution (step 11)" in line.lower()),
+        None,
     )
+    assert (
+        review_exec_row is not None
+    ), f"{skill_name} must contain 'Review Execution (Step 11)' row in Execution Modes"
+    review_exec_row_lower = review_exec_row.lower()
+    assert (
+        "selected in step 1" in review_exec_row_lower
+        and "resolved in step 1" in review_exec_row_lower
+    ), f"{skill_name} Step 11 row must direct using reviewer bot selected/resolved in Step 1"
 
-    # Step 1 documents bypassing plan approval when implementing from an existing Issue or Auto-Dispatch
-    assert "bypass" in skill_text_lower or "skip" in skill_text_lower
-    assert "issue" in skill_text_lower
+    # Verify Development Steps table Step 1 and Step 11 rows
+    step1_dev_row = next(
+        (line for line in lines if re.search(r"\|\s*\*\*1\*\*\s*\|", line)),
+        None,
+    )
+    assert (
+        step1_dev_row is not None
+    ), f"{skill_name} must contain Step 1 in Development Steps table"
+    assert "reviewer bot" in step1_dev_row.lower() and "bypass" in step1_dev_row.lower()
 
-    # Step 11 documents executing the review with reviewer selected in Step 1
-    assert "step 1" in skill_text_lower
+    step11_dev_row = next(
+        (line for line in lines if re.search(r"\|\s*\*\*11\*\*\s*\|", line)),
+        None,
+    )
+    assert (
+        step11_dev_row is not None
+    ), f"{skill_name} must contain Step 11 in Development Steps table"
+    assert "selected reviewer bot" in step11_dev_row.lower()

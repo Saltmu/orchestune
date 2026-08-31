@@ -19,10 +19,10 @@ This skill acts as a router orchestrating the standard development workflow: des
 
 | Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch / Existing Issue) |
 | :--- | :--- | :--- |
-| **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `implementation_plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch or default cross-model |
+| **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `implementation_plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch (Claude targets → Codex; Codex and `agy` targets → Claude, or explicit `reviewer-bot` setting) |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
 | **Worktree (Step 2.5)** | Create and clean up a task worktree | Use dispatcher-provisioned worktree (or create task worktree if standalone issue); skip cleanup if dispatcher-managed |
-| **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Use the reviewer resolved by dispatch/Step 1: Claude targets → Codex; Codex and `agy` targets → Claude. An explicit `reviewer-bot` setting overrides this mapping. |
+| **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Execute review using reviewer bot resolved in Step 1 |
 | **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
 
 ## Fast-Path for Minor Changes (Typo / Docs)
