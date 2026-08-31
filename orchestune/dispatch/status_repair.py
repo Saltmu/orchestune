@@ -258,6 +258,36 @@ def _status_is_verified(
     return primary_status_labels(labels) == (expected_label,)
 
 
+def reconcile_status_repair_intents(
+    config: DispatcherConfig, *, now: datetime | None = None
+) -> tuple[TransitionIntent, ...]:
+    """Settle pending status Intents whose expected live state already exists."""
+    if not config.apply:
+        return ()
+    observed_at = datetime.now(UTC) if now is None else now
+    journal = IntentJournal(status_intent_journal_path(config))
+    try:
+        pending = journal.pending(now=observed_at)
+    except Exception:  # noqa: BLE001 - leave unreadable journal for a later cycle
+        return ()
+
+    verified: list[TransitionIntent] = []
+    for intent in pending:
+        expected = _intent_expected_label(intent)
+        try:
+            issue_number = int(intent.subject_id or "")
+            if expected is None or not _status_is_verified(
+                issue_number, expected, config
+            ):
+                continue
+            if intent.status is IntentStatus.PLANNED:
+                journal.mark_applied(intent.intent_id)
+            verified.append(journal.mark_verified(intent.intent_id))
+        except Exception:  # noqa: BLE001 - retry live verification next cycle
+            continue
+    return tuple(verified)
+
+
 def _execute(
     command: RepairCommand,
     task: Task,
@@ -417,6 +447,7 @@ def execute_status_repair_command(
 
 __all__ = [
     "execute_status_repair_command",
+    "reconcile_status_repair_intents",
     "status_intent_journal_path",
     "task_lifecycle",
 ]

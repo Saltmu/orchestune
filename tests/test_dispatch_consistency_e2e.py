@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import (
+    BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     PRIMARY_STATUS_CONFLICT,
     QUEUED_WITH_UNRESOLVED_DEPENDENCIES,
 )
@@ -711,3 +712,101 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
     assert labels[759] == ["status:blocked"]
     (intent,) = IntentJournal(status_intent_journal_path(config)).load()
     assert intent.status is IntentStatus.VERIFIED
+
+
+def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
+    tmp_path, fake_forge
+):
+    labels = {
+        758: ["status:queued"],
+        759: ["status:queued"],
+    }
+    fail_verification_read = True
+
+    def current_issue(issue_number):
+        return make_issue(
+            issue_number,
+            labels=tuple(labels[issue_number]),
+            subtask_id="dependency" if issue_number == 758 else "main-merge",
+            depends_on=() if issue_number == 758 else ("dependency",),
+            parent=None,
+        )
+
+    def list_issues(label, *args, **kwargs):
+        return [
+            current_issue(issue_number)
+            for issue_number in labels
+            if label in labels[issue_number]
+        ]
+
+    def get_issue_labels(issue_number):
+        nonlocal fail_verification_read
+        current = tuple(labels[issue_number])
+        if issue_number == 759 and current == ("status:blocked",):
+            if fail_verification_read:
+                fail_verification_read = False
+                raise RuntimeError("verification read failed")
+        return current
+
+    def add_label(issue_number, label):
+        if label not in labels[issue_number]:
+            labels[issue_number].append(label)
+
+    def remove_label(issue_number, label):
+        labels[issue_number].remove(label)
+
+    fake_forge.list_issues_by_label.side_effect = list_issues
+    fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue_labels.side_effect = get_issue_labels
+    fake_forge.get_label_actor.return_value = "trusted-actor"
+    fake_forge.get_actor_permission.return_value = "write"
+    fake_forge.add_label.side_effect = add_label
+    fake_forge.remove_label.side_effect = remove_label
+    config = DispatcherConfig(
+        apply=True,
+        consistency_mode=ConsistencyMode.REPAIR,
+        consistency_repair_allowlist=frozenset({QUEUED_WITH_UNRESOLVED_DEPENDENCIES}),
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
+    )
+
+    with (
+        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle._sync_external_locks",
+            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+        ),
+    ):
+        first = run_dispatch_cycle(config)
+        first_result = next(
+            result
+            for repair_pass in first.consistency.repair_passes
+            for result in repair_pass.results
+            if dict(result.command.parameters).get("finding_code")
+            == QUEUED_WITH_UNRESOLVED_DEPENDENCIES
+        )
+        assert first_result.status is RepairStatus.FAILED
+        assert first_result.diagnostics == ("RuntimeError: verification read failed",)
+        assert labels[759] == ["status:blocked"]
+        (applied_intent,) = IntentJournal(status_intent_journal_path(config)).load()
+        assert applied_intent.status is IntentStatus.APPLIED
+
+        labels[758] = ["status:done"]
+        second = run_dispatch_cycle(config)
+
+    second_result = next(
+        result
+        for repair_pass in second.consistency.repair_passes
+        for result in repair_pass.results
+        if dict(result.command.parameters).get("finding_code")
+        == BLOCKED_WITH_RESOLVED_DEPENDENCIES
+    )
+    assert second_result.status is RepairStatus.APPLIED
+    assert labels[759] == ["status:queued"]
+    intents = IntentJournal(status_intent_journal_path(config)).load()
+    assert len(intents) == 2
+    assert all(intent.status is IntentStatus.VERIFIED for intent in intents)

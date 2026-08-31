@@ -110,6 +110,7 @@ from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command,
+    reconcile_status_repair_intents,
     status_intent_journal_path,
     task_lifecycle,
 )
@@ -995,6 +996,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         run_state = load_run_state(config.run_state_path)
         now = time.time()
         issues = _prepare_cycle_issues(run_state, config, now)
+        reconcile_status_repair_intents(config, now=datetime.fromtimestamp(now, UTC))
         recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
         if _recovery_requeued(recovery_report):
             issues = _fetch_issues(config).filtered_by_parent(
