@@ -37,6 +37,7 @@ class Task:
     shared_contract: str | None = None
     writes_shared_contract: bool = False
     execution_profile: str | None = None
+    model_tier: str | None = None
 
 
 def normalize_newlines(text: str) -> str:

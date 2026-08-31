@@ -96,6 +96,9 @@ class DispatcherConfig:
     dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
     # #668: リポジトリ定義の実行プロファイル設定（モデル・推論強度解決用）
     execution_profile_config: ExecutionProfileConfig | None = None
+    # #755: CLI実行時モデル・推論強度オーバーライド
+    model: str | None = None
+    reasoning_effort: str | None = None
     # #706/#709/#746: modeは追加のrepository-wide loopを段階化する。
     # Supervisor配下へ移行済みの安全なstatus/recovery/GC自己修復は、後方互換の
     # default動作としてこのmodeおよび追加allowlistとは独立して維持する。

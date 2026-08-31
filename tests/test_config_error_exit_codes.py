@@ -43,6 +43,7 @@ _TEMPLATE = (
     "depends_on: {{depends_on}}\n"
     "parent_issue_number: {{parent_issue_number}}\n"
     "execution_profile: {{execution_profile}}\n"
+    "model_tier: {{model_tier}}\n"
     "```\n"
 )
 

@@ -151,15 +151,33 @@ def _parse_execution_profile(raw_profile: object, subtask_id: str) -> str | None
     return raw_profile
 
 
+_VALID_MODEL_TIERS = frozenset(("weak", "middle", "strong"))
+
+
+def _parse_model_tier(raw_tier: object, subtask_id: str) -> str | None:
+    if raw_tier is None:
+        return None
+    if not isinstance(raw_tier, str) or isinstance(raw_tier, bool):
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'model_tier' は文字列である必要があります: {raw_tier!r}"
+        )
+    tier = raw_tier.strip()
+    if tier not in _VALID_MODEL_TIERS:
+        raise ValueError(
+            f"サブタスク '{subtask_id}' の 'model_tier' が不正です: {raw_tier!r} "
+            f"(許容値: {', '.join(sorted(_VALID_MODEL_TIERS))})"
+        )
+    return tier
+
+
 def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     subtask_id = _parse_subtask_id(raw)
     footprint = _parse_footprint(raw.get("footprint"), subtask_id)
     symbols = _parse_sequence_field(raw.get("symbols"), "symbols", subtask_id)
     depends_on = _parse_sequence_field(raw.get("depends_on"), "depends_on", subtask_id)
     description = str(raw.get("description", ""))
-    priority = str(raw.get("priority", "medium")).lower()
-    if priority not in _VALID_PRIORITIES:
-        priority = "medium"
+    raw_p = str(raw.get("priority", "medium")).lower()
+    priority = raw_p if raw_p in _VALID_PRIORITIES else "medium"
     overview = str(raw.get("overview", ""))
     acceptance_criteria = _parse_sequence_field(
         raw.get("acceptance_criteria"), "acceptance_criteria", subtask_id
@@ -177,14 +195,11 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
     execution_profile = _parse_execution_profile(
         raw.get("execution_profile"), subtask_id
     )
+    model_tier = _parse_model_tier(raw.get("model_tier"), subtask_id)
 
     _warn_on_degraded_fields(subtask_id, description, footprint)
-
     risk, risk_reasons = detect_risk_from_values(
-        footprint,
-        symbols,
-        description,
-        explicit=bool(raw.get("risk", False)),
+        footprint, symbols, description, explicit=bool(raw.get("risk", False))
     )
     return SubTask(
         id=subtask_id,
@@ -202,6 +217,7 @@ def _parse_subtask(raw: dict[str, Any]) -> SubTask:
         shared_contract=shared_contract,
         writes_shared_contract=writes_shared_contract,
         execution_profile=execution_profile,
+        model_tier=model_tier,
     )
 
 

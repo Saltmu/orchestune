@@ -182,6 +182,44 @@ class TestRenderIssueBodySubtaskIdSafety:
         data = yaml.safe_load(match.group(1))
         assert data["execution_profile"] is None
 
+    def test_model_tier_metadata_round_trips_in_real_template(
+        self, template_path: Path
+    ):
+        subtask = SubTask(
+            id="task-tier",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            model_tier="strong",
+        )
+
+        body = _render_issue_body(subtask, template_path.read_text(encoding="utf-8"))
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["model_tier"] == "strong"
+
+    def test_model_tier_renders_null_when_none(self, template_path: Path):
+        subtask = SubTask(
+            id="task-tier-none",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            model_tier=None,
+        )
+
+        body = _render_issue_body(subtask, template_path.read_text(encoding="utf-8"))
+        match = FOOTPRINT_BLOCK_PATTERN.search(body)
+        assert match
+        data = yaml.safe_load(match.group(1))
+        assert data["model_tier"] is None
+
     def test_a_fields_own_value_is_not_reprocessed_as_a_template_token(self):
         """#323 review (P2): substituting one field at a time (as opposed to
         a single pass over the original template) means an earlier field's
@@ -224,6 +262,7 @@ class TestValidateTemplateIdentityMarker:
             "subtask_id: {{subtask_id_yaml}}\n"
             "parent_issue_number: {{parent_issue_number}}\n"
             "execution_profile: {{execution_profile}}\n"
+            "model_tier: {{model_tier}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="depends_on"):
@@ -238,6 +277,7 @@ class TestValidateTemplateIdentityMarker:
             "subtask_id: {{subtask_id_yaml}}\n"
             "depends_on: {{depends_on}}\n"
             "execution_profile: {{execution_profile}}\n"
+            "model_tier: {{model_tier}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="parent_issue_number"):
@@ -250,6 +290,7 @@ class TestValidateTemplateIdentityMarker:
             "parent_issue_number: {{parent_issue_number}}\n"
             "depends_on: {{depends_on}}\n"
             "execution_profile: {{execution_profile}}\n"
+            "model_tier: {{model_tier}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="subtask_id"):
@@ -264,6 +305,7 @@ class TestValidateTemplateIdentityMarker:
             "subtask_id: {{subtask_id_yaml}}\n"
             "depends_on: {{depends_on}}\n"
             "parent_issue_number: {{parent_issue_number}}\n"
+            "model_tier: {{model_tier}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="execution_profile"):
@@ -279,9 +321,37 @@ class TestValidateTemplateIdentityMarker:
             "depends_on: {{depends_on}}\n"
             "parent_issue_number: {{parent_issue_number}}\n"
             'execution_profile: "{{execution_profile}}"\n'
+            "model_tier: {{model_tier}}\n"
             "```\n"
         )
         with pytest.raises(ValueError, match="execution_profile"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_missing_model_tier_placeholder(self, tmp_path: Path):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            "execution_profile: {{execution_profile}}\n"
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="model_tier"):
+            _validate_template_identity_marker(template, tmp_path / "t.md")
+
+    def test_rejects_template_with_quoted_model_tier_placeholder(self, tmp_path: Path):
+        template = (
+            "# [FEAT] {{subtask_id}}\n\n"
+            "```yaml\n"
+            "subtask_id: {{subtask_id_yaml}}\n"
+            "depends_on: {{depends_on}}\n"
+            "parent_issue_number: {{parent_issue_number}}\n"
+            "execution_profile: {{execution_profile}}\n"
+            'model_tier: "{{model_tier}}"\n'
+            "```\n"
+        )
+        with pytest.raises(ValueError, match="model_tier"):
             _validate_template_identity_marker(template, tmp_path / "t.md")
 
 

@@ -240,6 +240,21 @@ def _add_dispatch_target_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_model_override_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="#755: 実行時に使用する具象モデル名をオーバーライドします（例: claude-3-7-sonnet, o3-mini）。",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        "--effort",
+        dest="reasoning_effort",
+        default=None,
+        help="#755: 実行時の推論強度をオーバーライドします（例: low, medium, high）。",
+    )
+
+
 def _add_safety_and_budget_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--allow-unsafe-agent-execution",
@@ -277,6 +292,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     _add_consistency_arguments(parser)
     _add_storage_arguments(parser)
     _add_dispatch_target_arguments(parser)
+    _add_model_override_arguments(parser)
     _add_safety_and_budget_arguments(parser)
     return parser
 
@@ -328,6 +344,8 @@ _EXECUTION_PROFILE_CONFIG_KEYS = frozenset(
         "execution-profiles",
         "default_execution_profile",
         "default-execution-profile",
+        "model_tiers",
+        "model-tiers",
     }
 )
 _NON_DISPATCHER_CONFIG_KEYS = DAG_TOOL_CONFIG_KEYS | _EXECUTION_PROFILE_CONFIG_KEYS
@@ -543,6 +561,8 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         early_death_backoff_seconds=args.early_death_backoff_seconds,
         zombie_gc=args.zombie_gc,
         execution_profile_config=inputs.execution_profile_config,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
         max_tokens_per_window=args.max_tokens_per_window,
         max_tokens_per_task=args.max_tokens_per_task,
         not_needed_review_state_path=args.not_needed_review_state_path,

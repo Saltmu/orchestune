@@ -245,7 +245,7 @@ class TestLocalProcessDispatchTarget:
         assert "--output-format" in cmd
         assert "stream-json" in cmd
 
-    def test_launch_with_execution_selection_claude_cli_adds_model_and_skips_effort(
+    def test_launch_with_execution_selection_claude_cli_adds_model_and_effort(
         self, tmp_path, caplog
     ):
         import logging
@@ -278,7 +278,9 @@ class TestLocalProcessDispatchTarget:
         assert "--model" in cmd
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "claude-3-7-sonnet-20250219"
-        assert "does not support reasoning_effort" in caplog.text
+        assert "--effort" in cmd
+        effort_idx = cmd.index("--effort")
+        assert cmd[effort_idx + 1] == "high"
 
     def test_launch_with_execution_selection_agy_cli_adds_model_and_skips_effort(
         self, tmp_path, caplog
@@ -1005,3 +1007,41 @@ class TestResolveDefaultDispatchTargetName:
             )
             == "cloud-routine"
         )
+
+
+class TestFormatLocalCmdEffort:
+    def test_claude_cli_appends_effort_flag(self, tmp_path):
+        from orchestune.dispatch.targets import _format_local_cmd
+
+        task = _task()
+        cmd = _format_local_cmd(
+            "claude -p 'test'",
+            task,
+            "claude/issue-1-task-a",
+            tmp_path / "wt-1",
+            model="claude-3-7-sonnet",
+            reasoning_effort="high",
+            profile_name="deep",
+        )
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "claude-3-7-sonnet"
+        assert "--effort" in cmd
+        assert cmd[cmd.index("--effort") + 1] == "high"
+
+    def test_codex_cli_appends_model_reasoning_effort_config(self, tmp_path):
+        from orchestune.dispatch.targets import _format_local_cmd
+
+        task = _task()
+        cmd = _format_local_cmd(
+            "codex exec --issue {issue_number}",
+            task,
+            "codex/issue-1-task-a",
+            tmp_path / "wt-1",
+            model="o3-mini",
+            reasoning_effort="high",
+            profile_name="deep",
+        )
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "o3-mini"
+        assert "-c" in cmd
+        assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"

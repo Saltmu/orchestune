@@ -397,6 +397,78 @@ class TestSubtaskFieldContract:
         with pytest.raises(ValueError, match="execution_profile"):
             parse_decomposition_plan(path)
 
+    def test_parses_model_tier(self, tmp_path):
+        plan = """\
+        ---
+        subtasks:
+          - id: task-a
+            model_tier: strong
+          - id: task-b
+            model_tier: middle
+          - id: task-c
+            model_tier: weak
+          - id: task-d
+        ---
+        """
+        path = _write_plan(tmp_path, plan)
+        subtasks = parse_decomposition_plan(path)
+
+        assert subtasks[0].model_tier == "strong"
+        assert subtasks[1].model_tier == "middle"
+        assert subtasks[2].model_tier == "weak"
+        assert subtasks[3].model_tier is None
+
+        from orchestune.dag.models import DagResult
+
+        res = DagResult(
+            subtasks={
+                subtasks[0].id: subtasks[0],
+                subtasks[1].id: subtasks[1],
+                subtasks[2].id: subtasks[2],
+                subtasks[3].id: subtasks[3],
+            },
+            edges=[],
+            topological_order=["task-a", "task-b", "task-c", "task-d"],
+            parallel_leaves=["task-a", "task-b", "task-c", "task-d"],
+            risky_subtask_ids=[],
+        )
+        d = res.to_dict()
+        assert d["subtasks"]["task-a"]["model_tier"] == "strong"
+        assert d["subtasks"]["task-b"]["model_tier"] == "middle"
+        assert d["subtasks"]["task-c"]["model_tier"] == "weak"
+        assert d["subtasks"]["task-d"]["model_tier"] is None
+
+    @pytest.mark.parametrize(
+        "invalid_tier",
+        [
+            "ultra",
+            "low",
+            "high",
+            "Strong",
+            "weak-tier",
+            "",
+            123,
+            True,
+            [],
+            {},
+        ],
+    )
+    def test_invalid_model_tier_raises_value_error(self, tmp_path, invalid_tier):
+        plan = {
+            "subtasks": [
+                {
+                    "id": "task-a",
+                    "model_tier": invalid_tier,
+                }
+            ]
+        }
+        import yaml
+
+        plan_yaml = f"---\n{yaml.dump(plan)}---\n"
+        path = _write_plan(tmp_path, plan_yaml)
+        with pytest.raises(ValueError, match="model_tier"):
+            parse_decomposition_plan(path)
+
     @pytest.mark.parametrize(
         ("field_name", "scalar_value"),
         [

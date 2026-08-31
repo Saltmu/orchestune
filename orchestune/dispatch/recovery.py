@@ -38,7 +38,9 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
-from orchestune.dispatch.execution_profiles import resolve_execution_profile
+from orchestune.dispatch.execution_profiles import (
+    resolve_task_execution_selection,
+)
 from orchestune.dispatch.execution_repair import (
     collect_execution_observed_state,
     command_finding_codes,
@@ -426,11 +428,7 @@ def _build_restored_active_worktree(
     )
 
     task = parse_task_from_issue(issue, issue_to_subtask_id)
-    execution_selection = resolve_execution_profile(
-        task.execution_profile,
-        config.dispatch_target,
-        config.execution_profile_config,
-    )
+    execution_selection = resolve_task_execution_selection(task, config)
 
     return ActiveWorktree(
         issue_number=issue.number,

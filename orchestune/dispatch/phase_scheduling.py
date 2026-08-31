@@ -17,7 +17,7 @@ from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
-    resolve_execution_profile,
+    resolve_task_execution_selection,
 )
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
@@ -221,12 +221,9 @@ def run_scheduling_phase(
     selected = _finalize_launch(
         scheduling.selected, task_to_base_branch, candidate_tasks, ctx, now, config
     )
+
     execution_selections = {
-        task.issue_number: resolve_execution_profile(
-            task.execution_profile,
-            config.dispatch_target,
-            config.execution_profile_config,
-        )
+        task.issue_number: resolve_task_execution_selection(task, config)
         for task in selected
     }
     return SchedulingPhaseResult(
