@@ -33,6 +33,7 @@ from orchestune.dispatch.config import (
 )
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
+    RepairCommandHandler,
     collect_execution_observed_state,
     derive_execution_desired_state,
 )
@@ -180,6 +181,39 @@ def _reclaim_handler(
     return execute
 
 
+def build_gc_reclaim_handler(
+    run_state: RunState,
+    tasks_by_issue: dict[int, Task],
+    config: DispatcherConfig,
+    completion_events: list[dict],
+    open_prs: Sequence[PrRecord] | None = None,
+    *,
+    event_sink: list[dict] | None = None,
+    now: float | None = None,
+) -> RepairCommandHandler:
+    """Bind the shared typed reclaim command to the guarded GC lifecycle."""
+    observed_now = time.time() if now is None else now
+    prs = tuple(open_prs or ())
+    held_paths = _held_worktree_paths(completion_events)
+    events = completion_events if event_sink is None else event_sink
+
+    def execute(command: RepairCommand) -> RepairResult:
+        planned = _planned_reclaims(
+            (command,), run_state, tasks_by_issue, config, observed_now
+        )
+        return _reclaim_handler(
+            planned,
+            run_state,
+            config,
+            prs,
+            held_paths,
+            events,
+            observed_now,
+        )(command)
+
+    return execute
+
+
 def run_gc_phase(
     run_state: RunState,
     tasks_by_issue: dict[int, Task],
@@ -195,23 +229,16 @@ def run_gc_phase(
     supervisor = _gc_supervisor()
     initial_scan = supervisor.full_scan("gc-reclaim", observer=adapter, deriver=adapter)
     events: list[dict] = []
-    planned = _planned_reclaims(
-        initial_scan.repair_candidates,
-        run_state,
-        tasks_by_issue,
-        config,
-        observed_now,
-    )
     executor = DispatchRepairExecutorAdapter(
         {
-            COMMAND_RECLAIM: _reclaim_handler(
-                planned,
+            COMMAND_RECLAIM: build_gc_reclaim_handler(
                 run_state,
+                tasks_by_issue,
                 config,
+                completion_events,
                 prs,
-                _held_worktree_paths(completion_events),
-                events,
-                observed_now,
+                event_sink=events,
+                now=observed_now,
             )
         }
     )
@@ -229,4 +256,4 @@ def run_gc_phase(
     )
 
 
-__all__ = ["GcPhaseResult", "run_gc_phase"]
+__all__ = ["GcPhaseResult", "build_gc_reclaim_handler", "run_gc_phase"]

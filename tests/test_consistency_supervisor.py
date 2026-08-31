@@ -42,11 +42,12 @@ def _observation(
     certainty: ObservationCertainty = ObservationCertainty.KNOWN,
     observed_at: datetime = NOW,
     diagnostics: tuple[str, ...] = (),
+    source: str = "test",
 ) -> Observation:
     return Observation(
         name=name,
         certainty=certainty,
-        source="test",
+        source=source,
         observed_at=observed_at,
         value=value,
         diagnostics=diagnostics,
@@ -196,6 +197,52 @@ class _FindingPlanner:
             )
             for finding in report.findings
         )
+
+
+@dataclass
+class _ObservedStatusInvariant:
+    code: str = "task.observed-status"
+    scope: ConsistencyScope = ConsistencyScope.TASK
+
+    def evaluate(self, observed, desired) -> tuple[ConsistencyFinding, ...]:
+        return tuple(
+            ConsistencyFinding(
+                code=f"{self.code}.finding",
+                scope=self.scope,
+                subject_id=scoped.subject_id,
+                severity=FindingSeverity.WARNING,
+                expected=Evidence(summary="healthy"),
+                observed=Evidence(summary="queued"),
+                repairability=Repairability.AUTOMATIC,
+            )
+            for scoped in observed.observations
+            for fact in scoped.facts
+            if scoped.scope is ConsistencyScope.TASK
+            and fact.name == "status"
+            and fact.certainty is ObservationCertainty.KNOWN
+            and fact.value == "queued"
+        )
+
+
+def _task_status_snapshot(
+    first: Observation, second: Observation
+) -> ObservedRepositoryState:
+    return ObservedRepositoryState(
+        repository_id="owner/repo",
+        observed_at=NOW,
+        observations=(
+            ScopedObservations(
+                scope=ConsistencyScope.TASK,
+                subject_id="706",
+                facts=(first,),
+            ),
+            ScopedObservations(
+                scope=ConsistencyScope.TASK,
+                subject_id="707",
+                facts=(second,),
+            ),
+        ),
+    )
 
 
 def test_full_scans_are_deterministic_and_diff_ignores_collection_time() -> None:
@@ -467,6 +514,52 @@ def test_repair_outcome_is_unknown_when_authoritative_reobservation_fails() -> N
     )
     assert outcome.disposition is RepairDisposition.OBSERVATION_UNKNOWN
     assert outcome.diagnostics == ("OSError: forge unavailable",)
+
+
+def test_reobservation_unknown_is_scoped_to_the_affected_finding() -> None:
+    initial = _task_status_snapshot(
+        _observation("status", "queued"),
+        _observation("status", "queued"),
+    )
+    repaired = _task_status_snapshot(
+        _observation("status", "healthy"),
+        _observation(
+            "status",
+            None,
+            certainty=ObservationCertainty.UNKNOWN,
+            diagnostics=("task 707 unavailable",),
+            source="consistency-supervisor",
+        ),
+    )
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine((_ObservedStatusInvariant(),)),
+        repair_planners=(_FindingPlanner(),),
+    )
+    start = supervisor.full_scan(
+        "end", observer=_SequenceObserver(initial), deriver=_StaticDeriver()
+    )
+
+    supervisor.repair_until_stable(
+        start,
+        observer=_SequenceObserver(repaired),
+        deriver=_StaticDeriver(),
+        executor=_RecordingExecutor(),
+        allowlist=("repair.changing",),
+        max_passes=1,
+    )
+
+    outcomes = {
+        outcome.subject_id: outcome
+        for outcome in supervisor.cycle_report(
+            mode=ConsistencyMode.REPAIR
+        ).repair_outcomes
+        if outcome.finding_code == "task.observed-status.finding"
+    }
+    assert outcomes["706"].disposition is RepairDisposition.RESOLVED
+    assert outcomes["706"].diagnostics == ()
+    assert outcomes["707"].disposition is RepairDisposition.OBSERVATION_UNKNOWN
+    assert outcomes["707"].diagnostics == ("task 707 unavailable",)
 
 
 def test_repair_mode_stops_at_configured_pass_bound() -> None:

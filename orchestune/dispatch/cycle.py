@@ -55,6 +55,7 @@ from orchestune.consistency.observation import (
 )
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
+    COMMAND_RECLAIM,
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
@@ -87,7 +88,7 @@ from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
 )
-from orchestune.dispatch.phase_gc import run_gc_phase
+from orchestune.dispatch.phase_gc import build_gc_reclaim_handler, run_gc_phase
 from orchestune.dispatch.phase_rebase import (
     _sync_external_locks,
     ensure_parent_branch_ready,
@@ -711,12 +712,62 @@ def _finish_consistency_runtime(
                 config=config,
                 adapter=runtime.fresh_adapter,
                 completed_subtask_ids=frozenset(ctx.done_subtask_ids),
+                execution_handlers=_final_execution_repair_handlers(
+                    runtime,
+                    report,
+                    ctx,
+                    config,
+                    now=now,
+                ),
             ),
             allowlist=final_allowlist,
             max_passes=config.consistency_max_repair_passes,
         )
     main_report = runtime.supervisor.cycle_report(mode=config.consistency_mode)
     report.consistency = _merge_consistency_reports(main_report, repair_cycle.reports)
+
+
+def _execute_final_recovery_command(
+    command: RepairCommand,
+    run_state,
+    config: DispatcherConfig,
+    *,
+    now: float,
+) -> RepairResult:
+    adapter = RecoveryBookkeepingAdapter(_repository_id(), run_state, config, now=now)
+    adapter.observe()
+    if command.code == COMMAND_REQUEUE:
+        return execute_recovery_requeue_command(
+            command, run_state, adapter.snapshot, config
+        )
+    return execute_bookkeeping_repair_command(
+        command, run_state, adapter.snapshot, config
+    )
+
+
+def _final_execution_repair_handlers(
+    runtime: _ConsistencyRuntime,
+    report: CycleReport,
+    ctx,
+    config: DispatcherConfig,
+    *,
+    now: float,
+) -> Mapping[str, RepairCommandHandler]:
+    def recovery(command: RepairCommand) -> RepairResult:
+        return _execute_final_recovery_command(command, ctx.run_state, config, now=now)
+
+    return {
+        COMMAND_RECLAIM: build_gc_reclaim_handler(
+            ctx.run_state,
+            runtime.fresh_adapter.tasks_by_issue,
+            config,
+            report.completion_events,
+            ctx.prs,
+            now=now,
+        ),
+        COMMAND_REQUEUE: recovery,
+        COMMAND_BOOKKEEPING: recovery,
+    }
 
 
 def _run_recovery_bookkeeping_boundary(

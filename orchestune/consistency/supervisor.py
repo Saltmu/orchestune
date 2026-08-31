@@ -367,13 +367,23 @@ def _outcome_disposition(
     return RepairDisposition.DEFERRED
 
 
+def _unknown_fact_impacts_finding(
+    fact: ConsistencyUnknownFact, finding: ConsistencyFinding
+) -> bool:
+    if fact.scope is ConsistencyScope.REPOSITORY:
+        return True
+    return fact.scope is finding.scope and fact.subject_id == finding.subject_id
+
+
 def _authoritative_observation_failures(
     final_scan: ConsistencyScanResult,
+    finding: ConsistencyFinding,
 ) -> tuple[ConsistencyUnknownFact, ...]:
     return tuple(
         fact
         for fact in final_scan.unknown_facts
         if fact.source == "consistency-supervisor"
+        and _unknown_fact_impacts_finding(fact, finding)
     )
 
 
@@ -397,24 +407,24 @@ def _repair_outcomes(
     final_keys = frozenset(
         _finding_key(finding) for finding in final_scan.report.findings
     )
-    observation_failures = _authoritative_observation_failures(final_scan)
-    outcomes = [
-        ConsistencyRepairOutcome(
-            finding_code=finding.code,
-            scope=finding.scope,
-            subject_id=finding.subject_id,
-            disposition=_outcome_disposition(
-                finding,
-                final_keys,
-                tuple(results_by_finding.get(key, ())),
-                bool(observation_failures),
-            ),
-            diagnostics=_outcome_diagnostics(
-                results_by_finding.get(key, ()), observation_failures
-            ),
+    outcomes = []
+    for key, finding in sorted(indexed.items()):
+        observation_failures = _authoritative_observation_failures(final_scan, finding)
+        results = tuple(results_by_finding.get(key, ()))
+        outcomes.append(
+            ConsistencyRepairOutcome(
+                finding_code=finding.code,
+                scope=finding.scope,
+                subject_id=finding.subject_id,
+                disposition=_outcome_disposition(
+                    finding,
+                    final_keys,
+                    results,
+                    bool(observation_failures),
+                ),
+                diagnostics=_outcome_diagnostics(results, observation_failures),
+            )
         )
-        for key, finding in sorted(indexed.items())
-    ]
     outcomes.extend(
         ConsistencyRepairOutcome(
             finding_code=f"observation.{fact.name}",

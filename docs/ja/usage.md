@@ -242,7 +242,7 @@ orchestune-dispatch
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
-default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。
+default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
 
 既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`--consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、`--no-apply`は外部または永続的な修復副作用を許可しません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
 

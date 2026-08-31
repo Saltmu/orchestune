@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -139,6 +139,50 @@ def test_cycle_claims_only_commands_attempted_by_a_builtin_boundary() -> None:
 
     assert cycle_state.claimed_repair_codes == {COMMAND_RECLAIM, finding_code}
     assert COMMAND_REQUEUE not in cycle_state.claimed_repair_codes
+
+
+def test_user_allowlisted_execution_requeue_uses_a_bound_handler(
+    tmp_path, in_memory_forge
+) -> None:
+    issue = make_issue(
+        746,
+        labels=("status:in-progress",),
+        subtask_id="supervisor-rollout",
+        parent=None,
+    )
+    in_memory_forge.seed_issue(issue)
+    config = DispatcherConfig(
+        apply=True,
+        consistency_mode=ConsistencyMode.REPAIR,
+        consistency_repair_allowlist=frozenset({COMMAND_REQUEUE}),
+        max_concurrent=0,
+        run_state_path=tmp_path / "state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+        forge=in_memory_forge,
+    )
+
+    # Isolate the optional repository-wide loop from the built-in startup
+    # boundary so this test proves that the former has its own real handler.
+    with patch(
+        "orchestune.dispatch.cycle._run_recovery_bookkeeping_boundary",
+        return_value=ConsistencyCycleReport(mode=ConsistencyMode.REPAIR),
+    ):
+        report = run_dispatch_cycle(config)
+
+    requeues = [
+        result
+        for repair_pass in report.consistency.repair_passes
+        for result in repair_pass.results
+        if result.command.code == COMMAND_REQUEUE
+    ]
+    assert [result.status for result in requeues] == [RepairStatus.APPLIED]
+    assert in_memory_forge.get_issue_labels(746) == ("status:queued",)
+    assert all(
+        "unbound execution repair command" not in diagnostic
+        for result in requeues
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_no_apply_off_mode_reports_default_status_repair_as_deferred(
