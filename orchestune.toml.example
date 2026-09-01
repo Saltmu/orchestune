@@ -1,201 +1,169 @@
-# ==============================================================================
-# Orchestune Configuration File Example (orchestune.toml)
-# ==============================================================================
-# この設定ファイルはプロジェクトルートに `orchestune.toml` として配置することで
-# Orchestune の各CLIツール（`orchestune dag` / `provision` / `dispatch`）に適用されます。
-# または `pyproject.toml` の `[tool.orchestune]` セクションに同等の設定を記述することも可能です。
+# Orchestune configuration template
 #
-# すべての設定項目は省略可能で、省略した場合は以下のコメントに記載された既定値（デフォルト値）
-# が自動的に適用されます。
-# ==============================================================================
+# Copy this file to `orchestune.toml` in the project root and edit only the
+# repository-specific values you need. `orchestune.toml` is intentionally
+# ignored by Git; this public example is the source-controlled template.
+#
+# Non-model settings below use Orchestune's runtime defaults. Settings whose
+# default is environment-dependent or unset are shown as commented examples.
+# Model tiers and execution profiles are recommendations, not runtime defaults.
 
-# ------------------------------------------------------------------------------
-# 1. CI & 自動統合（Integration）設定
-# ------------------------------------------------------------------------------
-# Integratorが統合ブランチ上で実行するローカルCIのエントリーポイントコマンド。
-# 既定値: "./scripts/local-ci.sh"（Orchestune自身のリポジトリ固有のパス）
-# ※導入先リポジトリのCIコマンド（例: "make ci", "npm run ci", "poetry run pytest"）に合わせて
-# 必ず変更してください。
-ci-command = "./scripts/local-ci.sh"
-
-# ------------------------------------------------------------------------------
-# 2. ディスパッチ & 並列実行設定
-# ------------------------------------------------------------------------------
-# 同時に並列実行できるサブタスクエージェントの最大数。
-# 既定値: 2 (0以上の整数)
+# -----------------------------------------------------------------------------
+# Dispatcher defaults
+# -----------------------------------------------------------------------------
+apply = true
 max-concurrent = 2
+max-launches-per-window = 1
+window-seconds = 3600
+deviation-buffer-lines = 5
+max-recompute-retries = 2
+task-timeout-seconds = 0
+max-task-reclaims = 3
+early-death-window-seconds = 120
+max-early-death-retries = 2
+early-death-backoff-seconds = 60
+zombie-gc = true
 
-# エージェントのディスパッチ先。
-# 選択肢: "auto" / "claude-cli" / "agy-cli" / "codex-cli" / "cloud-routine" / "codex-cloud" / "local"
-# 既定値: 自動選択（GitHub Actions等のCI環境では "cloud-routine"、ローカル環境では "auto"）
-# - "auto": PATH上のローカルCLIを自動検出（claude優先、次点agy、codex）
-# - "claude-cli" / "agy-cli" / "codex-cli": 指定したローカルCLIを起動
-# - "cloud-routine": Claude Code Cloud Routineへディスパッチ
-# - "codex-cloud": Codex Cloud CLIへディスパッチ
-# - "local": ダミー起動（テスト・ドライラン用途）
-dispatch-target = "auto"
+# Default: unset. Set this only when processing one specific parent Issue.
+# parent-issue = 697
 
-# 実装完了後に自動でレビューを依頼するボット。
-# 選択肢: "auto" / "claude" / "codex"
-# 既定値: "auto"
-# ※"auto" は解決されたディスパッチ先に対してベンダークロスレビューを自動選択します
-# （Claude系エージェントにはcodex、Codex系およびagyエージェントにはclaude）。
+# Default: automatically selected (`cloud-routine` in GitHub Actions, `auto`
+# locally). Uncomment only to pin a target.
+# dispatch-target = "auto"
+
 reviewer-bot = "auto"
 
-# ------------------------------------------------------------------------------
-# 3. DAG解析 & フットプリント競合検知設定
-# ------------------------------------------------------------------------------
-# フットプリントのファイルパス類似度競合計算から除外する追加の正規表現リスト。
-# 組み込みで除外されるファイル（pyproject.toml, poetry.lock, logging.py, logger.py,
-# config.py, settings.py）に加えて無視されます。
-# ※TOMLのリテラル文字列（シングルクォート '...'）を使うと、正規表現のバックスラッシュを
-# そのまま記述できるため推奨されます。
-# 既定値: []
-dag_ignore_patterns = [
-  '(^|/)package\.json$',
-  '(^|/)package-lock\.json$',
-  '(^|/)yarn\.lock$',
-  '(^|/)pnpm-lock\.yaml$',
-  '(^|/)dist/',
-  '(^|/)build/',
-]
+# Default: unset. These are target-specific connection/command overrides.
+# Never commit credentials; prefer ORCHESTUNE_ROUTINE_ID,
+# ORCHESTUNE_ROUTINE_TOKEN, and ORCHESTUNE_CODEX_CLOUD_ENV.
+# local-cmd = "codex exec ..."
+# routine-id = "your-routine-id"
+# routine-token = "your-secret-token"
+# codex-cloud-env = "your-environment-id"
 
-# フットプリントおよびシンボルの類似度に基づく競合判定の閾値（0.0 〜 1.0）。
-# 既定値: 0.2
+# Runtime-wide model overrides are unset by default. Prefer the profiles below.
+# model = "gpt-5.6-terra"
+# reasoning-effort = "medium"
+
+# Unsafe execution is opt-in and disabled by default.
+allow-unsafe-agent-execution = false
+
+# Token limits are unset by default.
+# max-tokens-per-window = 1000000
+# max-tokens-per-task = 200000
+
+# Integrator fallback: "./scripts/local-ci.sh". Set the command used by the
+# repository receiving this template (for example, "make ci" or "npm run ci").
+# ci-command = "./scripts/local-ci.sh"
+
+# -----------------------------------------------------------------------------
+# Consistency supervisor defaults
+# -----------------------------------------------------------------------------
+consistency-mode = "off"
+consistency-repair-code = []
+consistency-max-repair-passes = 1
+
+# -----------------------------------------------------------------------------
+# Storage defaults
+# -----------------------------------------------------------------------------
+run-state-path = "run_state.json"
+worktree-root = "worktrees"
+log-dir = "logs"
+events-log-path = "events.jsonl"
+not-needed-review-state-path = "not_needed_review_state.json"
+not-needed-review-timeout-seconds = 86400
+
+# -----------------------------------------------------------------------------
+# DAG defaults
+# -----------------------------------------------------------------------------
+# Add repository-specific regular expressions only when generated or shared
+# files should be excluded from footprint similarity checks.
+dag_ignore_patterns = []
 dag_similarity_threshold = 0.2
 
-# ------------------------------------------------------------------------------
-# 4. クオータ・レートリミット & タイムアウト制御
-# ------------------------------------------------------------------------------
-# 1タスクあたりのタイムアウト秒数。
-# 既定値: 0（タイムアウトによる回収は行わず、ゾンビプロセス検知のみ実行）
-# ※無人自動運転時は適切な秒数（例: 1800 や 3600）を設定することを推奨します。
-task-timeout-seconds = 0
-
-# バースト制限: window-seconds 内で起動できる最大エージェント数。
-# 既定値: 1
-max-launches-per-window = 1
-
-# バースト制限およびトークン消費上限を適用する時間窓の秒数。
-# 既定値: 3600（1時間）
-window-seconds = 3600
-
-# ゾンビ検知やタイムアウト時に同一タスクをキュー（status:queued）へ差し戻せる回数の上限。
-# この回数を超過したタスクは status:blocked-human-review へエスカレーションされます。
-# 既定値: 3
-max-task-reclaims = 3
-
-# 起動直後の異常終了（コミット作成前の終了）検知ウィンドウ（秒）。
-# 既定値: 120
-early-death-window-seconds = 120
-
-# 起動直後異常終了の自動再試行上限回数。
-# 既定値: 2
-max-early-death-retries = 2
-
-# 起動直後異常終了再試行時の基準バックオフ待機秒数（再試行ごとに2倍に増加）。
-# 既定値: 60
-early-death-backoff-seconds = 60
-
-# ------------------------------------------------------------------------------
-# 5. ファイル & ディレクトリパス設定
-# ------------------------------------------------------------------------------
-# 並列エージェント用のGit worktreeを作成するルートディレクトリ。
-# 既定値: "worktrees"
-worktree-root = "worktrees"
-
-# エージェント実行ログの出力先ディレクトリ。
-# 既定値: "logs"
-log-dir = "logs"
-
-# ディスパッチサイクル間で引き継ぐ実行状態ログファイルの保存先。
-# 既定値: "run_state.json"
-run-state-path = "run_state.json"
-
-# KPI集計・メトリクス用の構造化イベントログ（JSON Lines）の保存先。
-# 既定値: "events.jsonl"
-events-log-path = "events.jsonl"
-
-# ------------------------------------------------------------------------------
-# 6. モデルティア & 実行プロファイル設定 (2026年8月時点のLLMモデル設定例)
-# ------------------------------------------------------------------------------
-# サブタスクごとにモデルや推論強度（reasoning_effort）を抽象名で切り替えるための設定です。
-# 分解計画（decomposition_plan.md）の `execution_profile` で指定された名前に応じて解決されます。
-
-# プロファイル未指定のサブタスクに適用されるデフォルトプロファイル名。
-# 既定値: "balanced"
+# -----------------------------------------------------------------------------
+# Recommended model tiers and use-case profiles
+# -----------------------------------------------------------------------------
+# Profile guidance:
+# - balanced: ordinary SubIssue implementation (default recommendation)
+# - fast-code: small, explicit, routine changes
+# - deep-reasoning: architecture, uncertain requirements, or difficult refactors
+#
+# `model_tier` on a SubIssue overrides the profile's model while retaining the
+# profile's reasoning effort. Claude CLI aliases follow Claude Code's currently
+# recommended model versions; Cloud Routine uses explicit API model IDs.
 default_execution_profile = "balanced"
 
-# --- 抽象モデルティア (model_tiers) の上書き設定 ---
-# standard tiers (strong / middle / weak) をターゲット別にマッピングします。
 [model_tiers.strong]
-claude-cli = "claude-3-7-sonnet-20250219"
-codex-cli = "o3-mini"
+claude-cli = "opus"
+codex-cli = "gpt-5.6-sol"
 agy-cli = "gemini-2.5-pro"
-cloud-routine = "claude-3-7-sonnet-20250219"
-codex-cloud = "o3-mini"
+cloud-routine = "claude-opus-5"
+codex-cloud = "gpt-5.6-sol"
 
 [model_tiers.middle]
-claude-cli = "claude-3-5-sonnet-20241022"
-codex-cli = "gpt-4o"
+claude-cli = "sonnet"
+codex-cli = "gpt-5.6-terra"
 agy-cli = "gemini-2.5-flash"
-cloud-routine = "claude-3-5-sonnet-20241022"
-codex-cloud = "gpt-4o"
+cloud-routine = "claude-sonnet-5"
+codex-cloud = "gpt-5.6-terra"
 
 [model_tiers.weak]
-claude-cli = "claude-3-5-haiku-20241022"
-codex-cli = "gpt-4o-mini"
+claude-cli = "haiku"
+codex-cli = "gpt-5.6-luna"
 agy-cli = "gemini-2.5-flash-lite"
-cloud-routine = "claude-3-5-haiku-20241022"
-codex-cloud = "gpt-4o-mini"
+cloud-routine = "claude-haiku-4-5-20251001"
+codex-cloud = "gpt-5.6-luna"
 
-# --- 実行プロファイル (execution_profiles) の定義 ---
-# [balanced] コストと速度のバランスを重視した標準プロファイル（デフォルト）
 [execution_profiles.balanced.claude-cli]
-model = "claude-3-5-haiku-20241022"
+model = "sonnet"
+reasoning_effort = "medium"
 
 [execution_profiles.balanced.codex-cli]
-model = "gpt-4o-mini"
-reasoning_effort = "low"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
 [execution_profiles.balanced.agy-cli]
 model = "gemini-2.5-flash"
 
 [execution_profiles.balanced.cloud-routine]
-model = "claude-3-5-haiku-20241022"
+model = "claude-sonnet-5"
 
 [execution_profiles.balanced.codex-cloud]
-model = "gpt-4o-mini"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
-# [deep-reasoning] 複雑なアーキテクチャ設計や難解なリファクタリング向け
+[execution_profiles.fast-code.claude-cli]
+model = "haiku"
+
+[execution_profiles.fast-code.codex-cli]
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
+[execution_profiles.fast-code.agy-cli]
+model = "gemini-2.5-flash-lite"
+
+[execution_profiles.fast-code.cloud-routine]
+model = "claude-haiku-4-5-20251001"
+
+[execution_profiles.fast-code.codex-cloud]
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
 [execution_profiles.deep-reasoning.claude-cli]
-model = "claude-3-7-sonnet-20250219"
+model = "opus"
+reasoning_effort = "high"
 
 [execution_profiles.deep-reasoning.codex-cli]
-model = "o3-mini"
+model = "gpt-5.6-sol"
 reasoning_effort = "high"
 
 [execution_profiles.deep-reasoning.agy-cli]
 model = "gemini-2.5-pro"
 
 [execution_profiles.deep-reasoning.cloud-routine]
-model = "claude-3-7-sonnet-20250219"
+model = "claude-opus-5"
 
 [execution_profiles.deep-reasoning.codex-cloud]
-model = "o3-mini"
-
-# [fast-code] 高速なコーディング・定型的な機能追加向け
-[execution_profiles.fast-code.claude-cli]
-model = "claude-3-5-sonnet-20241022"
-
-[execution_profiles.fast-code.codex-cli]
-model = "gpt-4o"
-
-[execution_profiles.fast-code.agy-cli]
-model = "gemini-2.5-flash"
-
-[execution_profiles.fast-code.cloud-routine]
-model = "claude-3-5-sonnet-20241022"
-
-[execution_profiles.fast-code.codex-cloud]
-model = "gpt-4o"
+model = "gpt-5.6-sol"
+reasoning_effort = "high"
