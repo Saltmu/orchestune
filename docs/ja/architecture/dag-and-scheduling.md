@@ -70,7 +70,7 @@ aging項は「候補集合内の最小待ち時間との差が、起動ウィン
 
 ## 4. Execution Profiles: 抽象プロファイルとモデル選定
 
-サブタスクの実行特性（「高精度な推論が必要」「定型的な高速コード生成」「標準的なバランス」）と、実行環境・利用可能なLLMモデル（Claude 3.7 Sonnet, GPT-4o, o3-miniなど）を疎結合に保つため、Orchestuneは**Execution Profiles**による抽象化機構を採用しています（#663 / #668 / #669 / #670）。
+サブタスクの実行特性（「高精度な推論が必要」「定型的な高速コード生成」「標準的なバランス」）と、実行環境・利用可能なLLMモデル（Claude Opus/Sonnet/Haiku、GPT-5.6 Sol/Terra/Lunaなど）を疎結合に保つため、Orchestuneは**Execution Profiles**による抽象化機構を採用しています（#663 / #668 / #669 / #670）。
 
 ```mermaid
 graph LR
@@ -79,7 +79,7 @@ graph LR
     end
 
     subgraph Config ["リポジトリ設定 (orchestune.toml)"]
-        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'claude-3-7-sonnet'<br/>codex-cli: model = 'o3-mini', reasoning_effort = 'high'<br/>cloud-routine: model = 'claude-3-7-sonnet'"]
+        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'opus', reasoning_effort = 'high'<br/>codex-cli: model = 'gpt-5.6-sol', reasoning_effort = 'high'<br/>cloud-routine: model = 'claude-opus-5'"]
     end
 
     subgraph Resolver ["L2: resolve_execution_profile (決定論的解決)"]
@@ -99,7 +99,7 @@ graph LR
 ```
 
 * **設計思想（関心の分離とポータビリティ）**:
-  `decomposition_plan.md` や GitHub IssueのFootprint YAMLには、特定ベンダーのモデル文字列（例: `claude-3-7-sonnet-20250219`）やCLIオプションを直接記述せず、`execution_profile: "deep-reasoning"` や `execution_profile: "fast-code"` といった抽象プロファイル名を指定します。これにより、開発者がローカル環境で `claude-cli` を使う場合でも、CI上で `cloud-routine` や `codex-cloud` へディスパッチする場合でも、Issueの再起票や計画ファイルの書き換えを行うことなく、リポジトリ設定に応じた最適なモデルへ決定論的にマッピングされます。
+  `decomposition_plan.md` や GitHub IssueのFootprint YAMLには、特定ベンダーのモデル文字列（例: `claude-opus-5`）やCLIオプションを直接記述せず、`execution_profile: "deep-reasoning"` や `execution_profile: "fast-code"` といった抽象プロファイル名を指定します。これにより、開発者がローカル環境で `claude-cli` を使う場合でも、CI上で `cloud-routine` や `codex-cloud` へディスパッチする場合でも、Issueの再起票や計画ファイルの書き換えを行うことなく、リポジトリ設定に応じた最適なモデルへ決定論的にマッピングされます。
 * **ターゲット能力マッピング（Target Capability Mapping）**:
   `orchestune/dispatch/execution_profiles.py` の `resolve_execution_profile` は純粋関数として決定論的に動作し、リポジトリの `[tool.orchestune.execution_profiles]`（または `[execution_profiles]`）定義に従って、対象ターゲットの能力に応じた具体的なモデル・推論強度を解決します。
   * `claude-cli` / `agy-cli`: `--model <model>` をコマンドに付与。推論強度（`reasoning_effort`）はCLI仕様上非対応のため、警告ログを出力した上で安全にスキップします。
