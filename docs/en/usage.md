@@ -240,7 +240,7 @@ orchestune-dispatch
 | `--max-early-death-retries <int>` | `2` | Maximum automatic requeues for transient startup failures. The next no-commit exit escalates to `status:blocked-human-review`. |
 | `--early-death-backoff-seconds <int>` | `60` | Base delay for an early-death requeue. Each retry doubles the previous delay. |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | Maximum number of seconds a pending `status:not-needed` independent review (Cloud Routine target only) is kept without either outcome label appearing. An entry past the limit escalates to `status:blocked-human-review`; there is no value that makes it unlimited. |
-| `--model <name>` | - | Override the concrete model name to use at runtime (e.g. `claude-3-7-sonnet`, `o3-mini`, `gemini-2.5-pro`). When omitted, follows profile/tier settings. |
+| `--model <name>` | - | Override the concrete model name to use at runtime (e.g. `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`). When omitted, follows profile/tier settings. |
 | `--reasoning-effort <effort>` / `--effort <effort>` | - | Override the reasoning effort at runtime (e.g. `low`, `medium`, `high`). When omitted, follows profile settings. |
 | `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
 
@@ -252,7 +252,9 @@ Inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repai
 
 ### Configuration File for Omitting Options
 
-You can place a configuration file in your project root directory to omit specifying options on the command line (a fully-commented template `orchestune.toml.example` is available in the repository root).
+You can place a configuration file in your project root directory to omit specifying options on the command line. Copy the template with `cp orchestune.toml.example orchestune.toml`. Keep the real file as untracked local configuration and publish shared changes through `orchestune.toml.example`.
+
+The template keeps active non-model settings aligned with implementation defaults. Models are recommendations grouped into three use-case profiles: `balanced` for ordinary SubIssue work, `fast-code` for small and explicit changes, and `deep-reasoning` for complex design or investigation.
 
 The dispatcher searches for configuration files in the following order and loads the first one found:
 1. `orchestune.toml` in the project root.
@@ -271,27 +273,30 @@ run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
 [execution_profiles.balanced.claude-cli]
-model = "claude-3-5-haiku-20241022"
+model = "sonnet"
+reasoning_effort = "medium"
 
 [execution_profiles.balanced.codex-cli]
-model = "gpt-4o-mini"
-reasoning_effort = "low"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
 [execution_profiles.deep-reasoning.claude-cli]
-model = "claude-3-7-sonnet-20250219"
+model = "opus"
+reasoning_effort = "high"
 
 [execution_profiles.deep-reasoning.codex-cli]
-model = "o3-mini"
+model = "gpt-5.6-sol"
 reasoning_effort = "high"
 
 [execution_profiles.deep-reasoning.cloud-routine]
-model = "claude-3-7-sonnet-20250219"
+model = "claude-opus-5"
 
 [execution_profiles.fast-code.claude-cli]
-model = "claude-3-5-sonnet-20241022"
+model = "haiku"
 
 [execution_profiles.fast-code.codex-cli]
-model = "gpt-4o"
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
 ```
 
 #### Example Config (`pyproject.toml`)
@@ -308,17 +313,19 @@ run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
 [tool.orchestune.execution_profiles.balanced.claude-cli]
-model = "claude-3-5-haiku-20241022"
+model = "sonnet"
+reasoning_effort = "medium"
 
 [tool.orchestune.execution_profiles.balanced.codex-cli]
-model = "gpt-4o-mini"
-reasoning_effort = "low"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
 [tool.orchestune.execution_profiles.deep-reasoning.claude-cli]
-model = "claude-3-7-sonnet-20250219"
+model = "opus"
+reasoning_effort = "high"
 
 [tool.orchestune.execution_profiles.deep-reasoning.codex-cli]
-model = "o3-mini"
+model = "gpt-5.6-sol"
 reasoning_effort = "high"
 ```
 

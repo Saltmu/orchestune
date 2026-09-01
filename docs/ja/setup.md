@@ -15,6 +15,12 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
    Integratorが統合ブランチ上で実行するCIコマンドの既定値は `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値）です。導入先リポジトリのCIエントリーポイントが異なる場合（例: `make ci`、`npm run ci`）は、`orchestune dispatch --ci-command "..."` または `orchestune.toml`/`pyproject.toml` の `[tool.orchestune]` セクションで `ci_command` を明示的に設定してください。
 
+`orchestune.toml.example` をコピーして、プロジェクト固有の `orchestune.toml` を作成します。実ファイルはローカル設定や認証先を含み得るためGit管理外とし、共有する変更は設定例へ反映してください（別リポジトリへ導入する場合も `.gitignore` に追加してください）。
+
+```bash
+cp orchestune.toml.example orchestune.toml
+```
+
 ```toml
 # orchestune.toml の例（リポジトリルートの orchestune.toml.example も参照）
 ci-command = "make ci"

@@ -527,6 +527,89 @@ class TestOrchestuneTomlExample:
             assert "middle" in profile_config.model_tiers
             assert "weak" in profile_config.model_tiers
 
+    def test_non_model_settings_keep_runtime_defaults(self):
+        from orchestune.dag.models import (
+            extract_dag_ignore_patterns,
+            extract_dag_similarity_threshold,
+        )
+        from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+
+        data = tomllib.loads(
+            (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
+        )
+        parser = _build_arg_parser()
+        runtime_defaults = vars(parser.parse_args([]))
+
+        for key, configured_value in _config_defaults(parser, data).items():
+            assert configured_value == runtime_defaults[key], (
+                f"非モデル設定 {key!r} は推奨値ではなく実行時デフォルトを使用してください: "
+                f"example={configured_value!r} / default={runtime_defaults[key]!r}"
+            )
+
+        assert extract_dag_ignore_patterns(data) == []
+        assert extract_dag_similarity_threshold(data) == DEFAULT_SIMILARITY_THRESHOLD
+
+    def test_every_dispatcher_setting_is_present_or_commented(self):
+        raw_toml = (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
+        parser = _build_arg_parser()
+
+        missing = []
+        for action in parser._actions:
+            if action.dest == "help":
+                continue
+            key = action.dest.replace("_", "-")
+            if re.search(rf"(?m)^#?\s*{re.escape(key)}\s*=", raw_toml) is None:
+                missing.append(key)
+
+        assert not missing, f"設定例に未記載のdispatcher設定があります: {missing}"
+
+    @pytest.mark.parametrize(
+        ("profile", "tier", "target", "expected_model", "expected_effort"),
+        [
+            ("balanced", "middle", "codex-cli", "gpt-5.6-terra", "medium"),
+            ("fast-code", "weak", "codex-cli", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "strong", "codex-cli", "gpt-5.6-sol", "high"),
+            ("balanced", "middle", "codex-cloud", "gpt-5.6-terra", "medium"),
+            ("fast-code", "weak", "codex-cloud", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "strong", "codex-cloud", "gpt-5.6-sol", "high"),
+            ("balanced", "middle", "claude-cli", "sonnet", "medium"),
+            ("fast-code", "weak", "claude-cli", "haiku", None),
+            ("deep-reasoning", "strong", "claude-cli", "opus", "high"),
+            ("balanced", "middle", "cloud-routine", "claude-sonnet-5", None),
+            (
+                "fast-code",
+                "weak",
+                "cloud-routine",
+                "claude-haiku-4-5-20251001",
+                None,
+            ),
+            ("deep-reasoning", "strong", "cloud-routine", "claude-opus-5", None),
+        ],
+    )
+    def test_recommended_profiles_resolve_for_supported_targets(
+        self, profile, tier, target, expected_model, expected_effort
+    ):
+        from orchestune.dispatch.execution_profiles import (
+            extract_execution_profile_config,
+            resolve_execution_profile,
+        )
+
+        data = tomllib.loads(
+            (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
+        )
+        config = extract_execution_profile_config(data)
+        selection = resolve_execution_profile(profile, target, config, model_tier=tier)
+
+        assert selection.model == expected_model
+        assert selection.reasoning_effort == expected_effort
+
+    def test_private_orchestune_toml_is_ignored(self):
+        ignore_rules = (
+            (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        )
+        assert "orchestune.toml" in ignore_rules
+
     @pytest.mark.parametrize(
         "doc_rel_path",
         [
