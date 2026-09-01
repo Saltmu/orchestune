@@ -102,7 +102,8 @@ graph LR
   `decomposition_plan.md` や GitHub IssueのFootprint YAMLには、特定ベンダーのモデル文字列（例: `claude-opus-5`）やCLIオプションを直接記述せず、`execution_profile: "deep-reasoning"` や `execution_profile: "fast-code"` といった抽象プロファイル名を指定します。これにより、開発者がローカル環境で `claude-cli` を使う場合でも、CI上で `cloud-routine` や `codex-cloud` へディスパッチする場合でも、Issueの再起票や計画ファイルの書き換えを行うことなく、リポジトリ設定に応じた最適なモデルへ決定論的にマッピングされます。
 * **ターゲット能力マッピング（Target Capability Mapping）**:
   `orchestune/dispatch/execution_profiles.py` の `resolve_execution_profile` は純粋関数として決定論的に動作し、リポジトリの `[tool.orchestune.execution_profiles]`（または `[execution_profiles]`）定義に従って、対象ターゲットの能力に応じた具体的なモデル・推論強度を解決します。
-  * `claude-cli` / `agy-cli`: `--model <model>` をコマンドに付与。推論強度（`reasoning_effort`）はCLI仕様上非対応のため、警告ログを出力した上で安全にスキップします。
+  * `claude-cli`: `--model <model>` と `--effort <effort>` をコマンドに付与します。
+  * `agy-cli`: `--model <model>` をコマンドに付与。推論強度（`reasoning_effort`）が指定された場合は、警告ログを出力した上で非対応の設定を安全にスキップします。
   * `codex-cli`: `--model <model>` および `-c model_reasoning_effort=<effort>` を付与。
   * `cloud-routine`: APIリクエストペイロードの `model` フィールドに設定。
   * `codex-cloud`: Codex Cloudセッションのパラメータに設定。
