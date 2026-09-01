@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import yaml
 
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.models import normalize_newlines
+
+_FOOTPRINT_BLOCK_PATTERN = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 
 GENERATED_SUBTASK_START = "<!-- orchestune:generated-subtask:start -->"
 GENERATED_SUBTASK_END = "<!-- orchestune:generated-subtask:end -->"
@@ -58,7 +60,7 @@ def _managed_region(body: str, *, allow_missing: bool) -> _ManagedRegion | None:
 
 
 def _footprint_parts(body: str) -> tuple[str, dict[str, object], str]:
-    matches = list(FOOTPRINT_BLOCK_PATTERN.finditer(body))
+    matches = list(_FOOTPRINT_BLOCK_PATTERN.finditer(body))
     if len(matches) != 1:
         raise ManagedBodyConflict(
             "managed body must contain exactly one Footprint YAML"

@@ -711,6 +711,7 @@ def test_replan_shared_contract_has_no_github_or_subprocess_dependencies() -> No
     }
     violations: list[str] = []
     modules = _package_modules()
+    import_graph = _import_graph()
     for module_name in contract_modules:
         path = modules[f"{PACKAGE_NAME}.{module_name}"]
         source = path.read_text(encoding="utf-8")
@@ -735,6 +736,21 @@ def test_replan_shared_contract_has_no_github_or_subprocess_dependencies() -> No
         )
         if '"status:' in source or "'status:" in source:
             violations.append(f"{module_name} defines a raw status label")
+        reachable: set[str] = set()
+        pending = [module_name]
+        while pending:
+            current = pending.pop()
+            for dependency in import_graph.get(current, ()):
+                if dependency not in reachable:
+                    reachable.add(dependency)
+                    pending.append(dependency)
+        violations.extend(
+            f"{module_name} transitively imports {dependency}"
+            for dependency in reachable
+            if dependency == "forge"
+            or dependency.startswith("forge.")
+            or dependency == "infra.git_cli"
+        )
     assert violations == []
 
 
