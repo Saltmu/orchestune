@@ -478,3 +478,67 @@ class TestDocsExecutionProfilesConsistency:
             tomllib.loads(en_blocks[1])["tool"]["orchestune"]
         )
         assert ja_cfg2 == en_cfg2
+
+
+class TestOrchestuneTomlExample:
+    """orchestune.toml.example が存在し、構文・設定値・ドキュメント参照が正しいことを検証する。"""
+
+    def test_orchestune_toml_example_exists_and_valid_config(self):
+        from orchestune.dag.models import (
+            extract_dag_ignore_patterns,
+            extract_dag_similarity_threshold,
+        )
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.execution_profiles import (
+            extract_execution_profile_config,
+        )
+
+        example_path = REPO_ROOT / "orchestune.toml.example"
+        assert (
+            example_path.is_file()
+        ), "orchestune.toml.example がリポジトリルートに存在しません"
+
+        raw_toml = example_path.read_text(encoding="utf-8")
+        data = tomllib.loads(raw_toml)
+        assert isinstance(data, dict)
+
+        # Dispatcherの引数パーサーと設定値バリデーションに通ることを確認
+        parser = _build_arg_parser()
+        defaults = _config_defaults(parser, data)
+        assert isinstance(defaults, dict)
+
+        # DAG設定が正常に抽出できることを確認
+        patterns = extract_dag_ignore_patterns(data)
+        assert isinstance(patterns, list)
+        threshold = extract_dag_similarity_threshold(data)
+        assert isinstance(threshold, float)
+        assert 0.0 <= threshold <= 1.0
+
+        # ExecutionProfile設定が正常に抽出できることを確認
+        profile_config = extract_execution_profile_config(data)
+        assert profile_config.default_execution_profile in profile_config.profiles
+        assert "balanced" in profile_config.profiles
+        assert "deep-reasoning" in profile_config.profiles
+        assert "fast-code" in profile_config.profiles
+
+        # model_tiers が正常に抽出できることを確認
+        if profile_config.model_tiers:
+            assert "strong" in profile_config.model_tiers
+            assert "middle" in profile_config.model_tiers
+            assert "weak" in profile_config.model_tiers
+
+    @pytest.mark.parametrize(
+        "doc_rel_path",
+        [
+            "docs/ja/setup.md",
+            "docs/ja/usage.md",
+            "docs/en/setup.md",
+            "docs/en/usage.md",
+        ],
+    )
+    def test_docs_reference_orchestune_toml_example(self, doc_rel_path):
+        doc_path = REPO_ROOT / doc_rel_path
+        content = doc_path.read_text(encoding="utf-8")
+        assert (
+            "orchestune.toml.example" in content
+        ), f"{doc_rel_path} に orchestune.toml.example への言及がありません"

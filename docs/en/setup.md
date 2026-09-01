@@ -16,7 +16,7 @@ Orchestune is designed around the assumption that an agent implements according 
    The CI command the Integrator runs on the integration branch defaults to `./scripts/local-ci.sh`, which is specific to Orchestune's own repository. If your repository's CI entrypoint differs (e.g. `make ci`, `npm run ci`), set `ci_command` explicitly via `orchestune dispatch --ci-command "..."` or the `[tool.orchestune]` section of `orchestune.toml` / `pyproject.toml`.
 
 ```toml
-# Example orchestune.toml
+# Example orchestune.toml (see also orchestune.toml.example in the repository root)
 ci-command = "make ci"
 ```
 

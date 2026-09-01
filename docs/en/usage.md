@@ -252,7 +252,7 @@ Inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repai
 
 ### Configuration File for Omitting Options
 
-You can place a configuration file in your project root directory to omit specifying options on the command line.
+You can place a configuration file in your project root directory to omit specifying options on the command line (a fully-commented template `orchestune.toml.example` is available in the repository root).
 
 The dispatcher searches for configuration files in the following order and loads the first one found:
 1. `orchestune.toml` in the project root.
