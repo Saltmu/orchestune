@@ -82,16 +82,18 @@ def _write_plan(
     path: Path,
     *,
     task_issue_number: int | None = 10,
-    parent_issue_number: int = 693,
+    parent_issue_number: int | None = 693,
     external: str = "",
     proposed_changes: str = "[First, Second]",
 ) -> Path:
     issue_number = "null" if task_issue_number is None else str(task_issue_number)
+    parent_number = "null" if parent_issue_number is None else str(parent_issue_number)
+    parent_source = "derived" if parent_issue_number is None else "adopted"
     path.write_text(
         f"""---
 title: Replan sample
-parent_issue_number: {parent_issue_number}
-parent_issue_source: adopted
+parent_issue_number: {parent_number}
+parent_issue_source: {parent_source}
 subtasks:
   - id: task-b
     description: Implement B
@@ -186,6 +188,24 @@ class TestPlanRevision:
 
 
 class TestExternalDependencies:
+    def test_allows_external_edge_before_a_derived_parent_is_created(
+        self, tmp_path: Path
+    ) -> None:
+        external = (
+            "external_dependencies:\n"
+            "  - blocked: {subtask_id: task-a}\n"
+            "    blocker: {issue_number: 500}\n"
+        )
+        plan = load_replan_plan(
+            _write_plan(
+                tmp_path / "plan.md",
+                parent_issue_number=None,
+                external=external,
+            )
+        )
+        assert plan.parent_issue_number is None
+        assert plan.external_dependencies[0].blocker.issue_number == 500
+
     @pytest.mark.parametrize(
         "endpoint",
         [

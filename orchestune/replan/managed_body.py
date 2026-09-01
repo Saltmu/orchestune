@@ -125,6 +125,32 @@ def _runtime_metadata(body: str) -> dict[str, object]:
     return metadata
 
 
+def _with_region_runtime(
+    region: _ManagedRegion, runtime_metadata: Mapping[str, object]
+) -> str:
+    block = (
+        _replace_footprint(region.block, runtime_metadata=runtime_metadata)
+        if runtime_metadata
+        else region.block
+    )
+    return f"{region.prefix}{block}{region.suffix}"
+
+
+def ensure_managed_body(body: str) -> str:
+    """Wrap generated content and validate an existing marker pair."""
+
+    normalized = normalize_newlines(body)
+    region = _managed_region(normalized, allow_missing=True)
+    if region is None:
+        return (
+            f"{GENERATED_SUBTASK_START}\n{normalized.rstrip()}\n"
+            f"{GENERATED_SUBTASK_END}\n\n## Human Notes\n"
+        )
+    if "## Human Notes" not in region.suffix:
+        return f"{normalized.rstrip()}\n\n## Human Notes\n"
+    return normalized
+
+
 def with_runtime_metadata(
     body: str, runtime_metadata: Mapping[str, object] | None
 ) -> str:
@@ -135,8 +161,7 @@ def with_runtime_metadata(
     region = _managed_region(body, allow_missing=True)
     if region is None:
         return _replace_footprint(body, runtime_metadata=runtime_metadata)
-    block = _replace_footprint(region.block, runtime_metadata=runtime_metadata)
-    return f"{region.prefix}{block}{region.suffix}"
+    return _with_region_runtime(region, runtime_metadata)
 
 
 def _legacy_matches(current: str, legacy: str) -> dict[str, object]:
@@ -176,7 +201,7 @@ def reconcile_managed_body(
         if legacy_body is None:
             raise ManagedBodyConflict("markerless legacy body has no known renderer")
         metadata = _legacy_matches(current, normalize_newlines(legacy_body))
-        return with_runtime_metadata(expected, metadata)
+        return _with_region_runtime(expected_region, metadata)
 
     metadata = _runtime_metadata(current_region.block)
     expected_block = with_runtime_metadata(expected_region.block, metadata)
@@ -190,6 +215,7 @@ __all__ = [
     "ManagedBodyConflict",
     "PLAN_OWNED_FOOTPRINT_KEYS",
     "RUNTIME_OWNED_FOOTPRINT_KEYS",
+    "ensure_managed_body",
     "reconcile_managed_body",
     "with_runtime_metadata",
 ]

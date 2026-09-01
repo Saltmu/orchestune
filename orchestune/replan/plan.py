@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -16,6 +14,7 @@ from orchestune.replan.models import (
     ExternalDependency,
     PlanRevision,
     ReplanPlan,
+    _stable_hash,
 )
 
 _ENDPOINT_KEYS = frozenset(("subtask_id", "issue_number"))
@@ -95,7 +94,10 @@ def _validate_external_dependencies(
                 raise ValueError(
                     f"external dependency references unknown subtask: {endpoint.subtask_id}"
                 )
-            if endpoint.issue_number == parent_issue_number:
+            if (
+                parent_issue_number is not None
+                and endpoint.issue_number == parent_issue_number
+            ):
                 raise ValueError(
                     "external dependency must not reference the parent Issue"
                 )
@@ -103,8 +105,6 @@ def _validate_external_dependencies(
                 raise ValueError(
                     "external dependency issue_number aliases an internal SubTask Issue"
                 )
-        if dependency.blocked.key == dependency.blocker.key:
-            raise ValueError("external dependency must not be a self dependency")
         if dependency.key in seen_edges:
             raise ValueError("external dependency edge is duplicated")
         seen_edges.add(dependency.key)
@@ -218,13 +218,7 @@ def compute_plan_revision(plan: ReplanPlan | str | Path) -> PlanRevision:
     """Return the SHA-256 revision of the parsed semantic model."""
 
     loaded = load_replan_plan(plan) if isinstance(plan, str | Path) else plan
-    canonical_json = json.dumps(
-        _canonical_plan(loaded),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    digest = hashlib.sha256(canonical_json).hexdigest()
+    digest = _stable_hash(_canonical_plan(loaded))
     return PlanRevision(f"replan-v1:sha256:{digest}")
 
 

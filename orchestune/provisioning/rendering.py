@@ -16,7 +16,7 @@ from orchestune.issue_parsing import (
 from orchestune.labels import StatusLabel
 from orchestune.replan.managed_body import (
     GENERATED_SUBTASK_END,
-    GENERATED_SUBTASK_START,
+    ensure_managed_body,
     with_runtime_metadata,
 )
 from orchestune.symbol_verification import find_missing_symbols
@@ -137,26 +137,6 @@ def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
     return body + warning
 
 
-def _wrap_generated_body(body: str) -> str:
-    starts = body.count(GENERATED_SUBTASK_START)
-    ends = body.count(GENERATED_SUBTASK_END)
-    if starts == 0 and ends == 0:
-        return (
-            f"{GENERATED_SUBTASK_START}\n{body.rstrip()}\n{GENERATED_SUBTASK_END}"
-            "\n\n## Human Notes\n"
-        )
-    if (
-        starts != 1
-        or ends != 1
-        or body.index(GENERATED_SUBTASK_START) > body.index(GENERATED_SUBTASK_END)
-    ):
-        raise ValueError("SubIssue template has malformed generated-subtask markers")
-    suffix = body.split(GENERATED_SUBTASK_END, 1)[1]
-    if "## Human Notes" not in suffix:
-        body = f"{body.rstrip()}\n\n## Human Notes\n"
-    return body
-
-
 def build_subtask_issue_body(
     subtask: SubTask,
     template: str,
@@ -165,7 +145,7 @@ def build_subtask_issue_body(
     *,
     runtime_metadata: Mapping[str, object] | None = None,
 ) -> str:
-    rendered = _wrap_generated_body(
+    rendered = ensure_managed_body(
         _append_symbol_warning(
             _render_issue_body(subtask, template, parent_issue_number),
             subtask,
@@ -177,7 +157,6 @@ def build_subtask_issue_body(
 
 # Compatibility aliases for callers that used the pre-#694 private helpers.
 _derive_labels = derive_subtask_labels
-_issue_title = subtask_issue_title
 _build_subtask_issue_body = build_subtask_issue_body
 
 
