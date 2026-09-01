@@ -2,83 +2,25 @@
 
 from __future__ import annotations
 
-import dataclasses
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
-from orchestune.dag.models import SubTask
-from orchestune.dag.parsing import (
-    extract_frontmatter_and_body,
-    parse_decomposition_plan,
-)
+from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.forge import IssueForge
 from orchestune.issue_parsing import (
     PARENT_MARKER,
     embed_decomposition_plan_in_parent_body,
     restore_plan_markdown_from_parent_body,
 )
-from orchestune.validation import validate_issue_number
+from orchestune.provisioning.plan_loading import PlanMetadata as PlanMetadata
+from orchestune.provisioning.plan_loading import load_plan
 
-VALID_PARENT_ISSUE_SOURCES = frozenset(("adopted", "derived"))
+_load_plan = load_plan
 
 # #664: GitHubのIssue本文の上限。これを超える本文はAPIに拒否されるため、
 # 送る前に自分で止めて理由を明示する（拒否をそのまま握り潰すと「provisionは
 # 成功したのに親Issueだけ古い」状態に気付けない）。
 GITHUB_ISSUE_BODY_LIMIT = 65536
-
-
-@dataclass(frozen=True)
-class PlanMetadata:
-    title: str
-    parent_issue_number: int | None
-    parent_issue_source: str | None = None
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        if self.parent_issue_source not in (None, *VALID_PARENT_ISSUE_SOURCES):
-            raise ValueError(
-                "decomposition_plan.md の 'parent_issue_source' は "
-                f"'adopted' または 'derived' である必要があります: {self.parent_issue_source!r}"
-            )
-        if self.parent_issue_source == "adopted" and self.parent_issue_number is None:
-            raise ValueError(
-                "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-                "'parent_issue_number' が設定されていません"
-            )
-
-
-def _load_plan(path: str | Path) -> tuple[list[SubTask], PlanMetadata]:
-    subtasks = parse_decomposition_plan(path)
-    raw, description = extract_frontmatter_and_body(
-        Path(path).read_text(encoding="utf-8")
-    )
-    issue_numbers = {
-        str(entry["id"]).strip(): validate_issue_number(entry["issue_number"])
-        for entry in raw.get("subtasks") or []
-        if isinstance(entry, dict) and entry.get("issue_number") not in (None, "")
-    }
-    enriched = [
-        dataclasses.replace(subtask, issue_number=issue_numbers.get(subtask.id))
-        for subtask in subtasks
-    ]
-    raw_parent = raw.get("parent_issue_number")
-    parent_issue_number = (
-        None
-        if raw_parent in (None, "")
-        else validate_issue_number(cast(int | str, raw_parent))
-    )
-    raw_parent_source = raw.get("parent_issue_source")
-    parent_issue_source = (
-        str(raw_parent_source).strip() if raw_parent_source not in (None, "") else None
-    )
-    return enriched, PlanMetadata(
-        title=str(raw.get("title") or "").strip(),
-        parent_issue_number=parent_issue_number,
-        parent_issue_source=parent_issue_source,
-        description=description,
-    )
 
 
 def _parent_body(

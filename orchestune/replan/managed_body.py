@@ -123,7 +123,13 @@ def _runtime_metadata(body: str) -> dict[str, object]:
     _, data, _ = _footprint_parts(body)
     _validate_known_footprint(data)
     metadata = {key: data[key] for key in RUNTIME_OWNED_FOOTPRINT_KEYS if key in data}
-    _validate_runtime_metadata(metadata)
+    try:
+        # Replanning is an explicit, approval-bound transaction. Unlike runtime
+        # recovery, it must not silently coerce corrupted persisted ownership
+        # state and then overwrite the Issue body.
+        _validate_runtime_metadata(metadata)
+    except ValueError as exc:
+        raise ManagedBodyConflict(str(exc)) from exc
     return metadata
 
 

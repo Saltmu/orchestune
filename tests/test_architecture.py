@@ -112,6 +112,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
+            "provisioning.plan_loading",
             "provisioning.rendering",
             "provisioning.subtasks",
             "replan.managed_body",

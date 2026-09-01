@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from orchestune.dag.models import SubTask
-from orchestune.dag.parsing import (
-    extract_frontmatter_and_body,
-    parse_decomposition_plan,
-)
+from orchestune.dag.parsing import extract_frontmatter_and_body
+from orchestune.provisioning.plan_loading import load_plan
 from orchestune.replan.models import (
     EndpointRef,
     ExternalDependency,
@@ -19,49 +16,9 @@ from orchestune.replan.models import (
     ReplanPlan,
     _stable_hash,
 )
-from orchestune.validation import validate_issue_number
 
 _ENDPOINT_KEYS = frozenset(("subtask_id", "issue_number"))
 _EDGE_KEYS = frozenset(("blocked", "blocker"))
-_PARENT_ISSUE_SOURCES = frozenset(("adopted", "derived"))
-
-
-def _load_semantic_plan(
-    path: Path,
-) -> tuple[tuple[SubTask, ...], dict[str, Any], str]:
-    text = path.read_text(encoding="utf-8")
-    raw, description = extract_frontmatter_and_body(text)
-    parsed_subtasks = parse_decomposition_plan(path)
-    issue_numbers = {
-        str(entry["id"]).strip(): validate_issue_number(
-            cast(int | str, entry["issue_number"])
-        )
-        for entry in raw.get("subtasks") or []
-        if isinstance(entry, dict) and entry.get("issue_number") not in (None, "")
-    }
-    subtasks = tuple(
-        dataclasses.replace(subtask, issue_number=issue_numbers.get(subtask.id))
-        for subtask in parsed_subtasks
-    )
-    return subtasks, raw, description
-
-
-def _parent_metadata(raw: Mapping[str, Any]) -> tuple[int | None, str | None]:
-    raw_parent = raw.get("parent_issue_number")
-    parent_number = (
-        None
-        if raw_parent in (None, "")
-        else validate_issue_number(cast(int | str, raw_parent))
-    )
-    raw_source = raw.get("parent_issue_source")
-    parent_source = str(raw_source).strip() if raw_source not in (None, "") else None
-    if parent_source not in (None, *_PARENT_ISSUE_SOURCES):
-        raise ValueError(
-            "decomposition_plan.md parent_issue_source must be adopted or derived"
-        )
-    if parent_source == "adopted" and parent_number is None:
-        raise ValueError("adopted decomposition plan requires parent_issue_number")
-    return parent_number, parent_source
 
 
 def _parse_endpoint(raw: object, *, field: str) -> EndpointRef:
@@ -188,22 +145,25 @@ def load_replan_plan(path: str | Path) -> ReplanPlan:
     """Load the existing plan grammar plus strict replan external edges."""
 
     plan_path = Path(path)
-    subtasks, raw, description = _load_semantic_plan(plan_path)
-    parent_issue_number, parent_issue_source = _parent_metadata(raw)
+    loaded_subtasks, metadata = load_plan(plan_path)
+    subtasks = tuple(loaded_subtasks)
+    raw, _ = extract_frontmatter_and_body(plan_path.read_text(encoding="utf-8"))
     dependencies = (
         _parse_external_dependencies(raw["external_dependencies"])
         if "external_dependencies" in raw
         else ()
     )
-    _validate_external_dependencies(dependencies, subtasks, parent_issue_number)
+    _validate_external_dependencies(
+        dependencies, subtasks, metadata.parent_issue_number
+    )
     _assert_acyclic(subtasks, dependencies)
     return ReplanPlan(
-        title=str(raw.get("title") or "").strip(),
-        parent_issue_number=parent_issue_number,
-        parent_issue_source=parent_issue_source,
+        title=metadata.title,
+        parent_issue_number=metadata.parent_issue_number,
+        parent_issue_source=metadata.parent_issue_source,
         subtasks=subtasks,
         external_dependencies=tuple(sorted(dependencies, key=lambda item: item.key)),
-        description=description,
+        description=metadata.description,
     )
 
 

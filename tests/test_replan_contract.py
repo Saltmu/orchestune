@@ -10,6 +10,7 @@ import pytest
 from orchestune.dag.models import SubTask
 from orchestune.issue_parsing import parent_issue_number_from_body
 from orchestune.labels import StatusLabel
+from orchestune.provisioning.plan_loading import load_plan
 from orchestune.provisioning.rendering import (
     build_subtask_issue_body,
     derive_subtask_labels,
@@ -133,6 +134,18 @@ subtasks:
 
 
 class TestPlanRevision:
+    def test_reuses_the_pure_provisioning_plan_loader(self, tmp_path: Path) -> None:
+        path = _write_plan(tmp_path / "plan.md")
+
+        shared_subtasks, shared_metadata = load_plan(path)
+        replan = load_replan_plan(path)
+
+        assert replan.subtasks == tuple(shared_subtasks)
+        assert replan.title == shared_metadata.title
+        assert replan.parent_issue_number == shared_metadata.parent_issue_number
+        assert replan.parent_issue_source == shared_metadata.parent_issue_source
+        assert replan.description == shared_metadata.description
+
     def test_is_semantic_deterministic_and_ignores_only_subtask_issue_number(
         self, tmp_path: Path
     ) -> None:
@@ -357,6 +370,21 @@ class TestManagedBody:
         )
         expected = build_subtask_issue_body(_subtask(), _template(), tmp_path, 693)
         with pytest.raises(ManagedBodyConflict, match="unknown"):
+            reconcile_managed_body(current, expected)
+
+    def test_invalid_runtime_metadata_fails_as_a_managed_body_conflict(
+        self, tmp_path: Path
+    ) -> None:
+        current = build_subtask_issue_body(
+            _subtask(),
+            _template(),
+            tmp_path,
+            693,
+            runtime_metadata={"recompute_count": 2},
+        ).replace("recompute_count: 2", "recompute_count: -1")
+        expected = build_subtask_issue_body(_subtask(), _template(), tmp_path, 693)
+
+        with pytest.raises(ManagedBodyConflict, match="recompute_count"):
             reconcile_managed_body(current, expected)
 
     def test_legacy_migrates_only_when_known_renderer_proves_equivalence(
