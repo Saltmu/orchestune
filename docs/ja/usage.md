@@ -242,6 +242,7 @@ orchestune-dispatch
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
 | `--model <name>` | - | 実行時に使用する具象モデル名をオーバーライドします（例: `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`）。未指定時はプロファイル／能力ランクの設定に従います。 |
 | `--reasoning-effort <effort>` / `--effort <effort>` | - | 実行時の推論強度をオーバーライドします（例: `low`, `medium`, `high`）。未指定時はプロファイルの設定に従います。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。未指定（デフォルト `False`）でローカルCLIターゲットを実行しようとした場合は、安全のため起動時に設定エラーとなり拒否されます（Fail-Closed）。設定ファイル（`orchestune.toml`等）では `allow-unsafe-agent-execution = true`（または `allow_unsafe_agent_execution = true`）として指定できます。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
 default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
@@ -265,6 +266,7 @@ default self-healing allowlistは`--consistency-repair-code`から意図的に�
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+allow-unsafe-agent-execution = false
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
@@ -305,6 +307,7 @@ reasoning_effort = "medium"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+allow-unsafe-agent-execution = false
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1

@@ -152,6 +152,12 @@ class TestDocsCliConsistency:
             k: v for k, v in en.items() if v is not None
         }
 
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_allow_unsafe_agent_execution_is_documented(self, lang):
+        documented = _documented_options(lang)
+        assert "--allow-unsafe-agent-execution" in documented
+        assert documented["--allow-unsafe-agent-execution"] == "False"
+
 
 class TestDocsProvisionCliConsistency:
     """#306: Usageに記載された`orchestune provision`のオプションと実装の乖離を検知する。"""
