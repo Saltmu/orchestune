@@ -99,6 +99,12 @@ class IntegrationContext:
     base_branch: str
     temp_branch: str
     merged_tasks: list[str] = field(default_factory=list)
+    # #777 Codexレビュー(Round3): `merged_tasks`に含まれるsubtask_idのうち、
+    # ①正規ブランチ名ではなく②のPR head_ref由来のブランチでマージされた
+    # ものの集合。削除・統合済み検証はこの集合に含まれるsubtask_idの正規名を
+    # 一切使わない（正規名がその後の別経緯で存在するようになっても、
+    # 未マージの別物を誤って削除・誤検証しないため）。
+    fallback_merged_subtask_ids: set[str] = field(default_factory=set)
     failed_tasks: list[str] = field(default_factory=list)
     blocked_tasks: list[str] = field(default_factory=list)
     failed_reasons: dict[str, str] = field(default_factory=dict)

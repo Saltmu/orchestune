@@ -435,9 +435,16 @@ class TestFetchTaskBranch:
 
 
 class TestResolveMergeBranch:
-    """#777: マージ対象ブランチの段階的解決（①正規名→②厳密単一PR一致→
-    fail-closed）。②由来の名前はdeleteに使われない（別のテストクラスで検証）
-    ため、ここではfetch対象の選択のみを検証する。"""
+    """#777: マージ対象ブランチの段階的解決（①正規名→[canonical不在の確認]→
+    ②厳密単一PR一致→fail-closed）。②由来の名前はdeleteに使われない（別の
+    テストクラスで検証）ため、ここではfetch対象の選択のみを検証する。
+
+    `merger.forge`は既定で実`GitHubForge`（`gh api`を実サブプロセス実行する）
+    なので、`branch_exists`/`is_current_branch_tip_merged_into`/`list_prs`は
+    ①のfetchを失敗させるすべてのテストで明示的にモックする。モックし忘れると
+    実際の`gh` CLI呼び出しにフォールバックし、テストの成否が環境（`gh`の
+    認証状態やリポジトリの実際のブランチ構成）に依存してしまう。
+    """
 
     def test_canonical_branch_fetch_succeeds_skips_pr_lookup(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
@@ -447,6 +454,7 @@ class TestResolveMergeBranch:
                 "orchestune.integrator.git_ops.fetch_remote_branch",
                 return_value="origin/claude/issue-1-t1",
             ) as fetch_mock,
+            patch.object(merger.forge, "branch_exists") as branch_exists_mock,
             patch.object(merger.forge, "list_prs") as list_prs_mock,
         ):
             branch, fetched, already_merged, reason = merger._resolve_merge_branch(
@@ -459,9 +467,10 @@ class TestResolveMergeBranch:
             "",
         )
         fetch_mock.assert_called_once_with(tmp_path, "claude/issue-1-t1")
+        branch_exists_mock.assert_not_called()
         list_prs_mock.assert_not_called()
 
-    def test_falls_back_to_unique_pr_branch_when_canonical_fetch_fails(
+    def test_falls_back_to_unique_pr_branch_when_canonical_confirmed_absent(
         self, tmp_path: Path
     ):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
@@ -486,6 +495,7 @@ class TestResolveMergeBranch:
             patch.object(
                 merger.forge, "is_current_branch_tip_merged_into", return_value=False
             ),
+            patch.object(merger.forge, "branch_exists", return_value=False),
             patch.object(merger.forge, "list_prs", return_value=[pr]) as list_prs_mock,
         ):
             branch, fetched, already_merged, reason = merger._resolve_merge_branch(
@@ -498,6 +508,73 @@ class TestResolveMergeBranch:
             "",
         )
         list_prs_mock.assert_called_once_with(state="open")
+
+    def test_does_not_fall_back_when_canonical_branch_still_exists(
+        self, tmp_path: Path
+    ):
+        """PR#780 Codexレビュー(Round3): fetch失敗の理由が一時的なもの
+        （ネットワーク・認証・local gitエラー等）であり、正規ブランチが
+        実際には存在する場合、②へフォールバックしてはならない。①の失敗を
+        そのまま返す。"""
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        task = _task(issue_number=20, subtask_id="t20")
+        pr = PrRecord(
+            number=90,
+            head_ref="codex/issue-20-t20",
+            changed_files=(),
+            is_cross_repository=False,
+        )
+
+        with (
+            patch(
+                "orchestune.integrator.git_ops.fetch_remote_branch",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["fetch"], stderr=b"transient network error"
+                ),
+            ),
+            patch.object(
+                merger.forge, "is_current_branch_tip_merged_into", return_value=False
+            ),
+            patch.object(merger.forge, "branch_exists", return_value=True),
+            patch.object(merger.forge, "list_prs", return_value=[pr]) as list_prs_mock,
+        ):
+            branch, fetched, already_merged, reason = merger._resolve_merge_branch(
+                task, "main"
+            )
+        assert branch == "claude/issue-20-t20"
+        assert fetched is False
+        assert "Failed to fetch branch" in reason
+        list_prs_mock.assert_not_called()
+
+    def test_does_not_fall_back_when_existence_cannot_be_confirmed(
+        self, tmp_path: Path
+    ):
+        """`branch_exists`自体がAPI障害で失敗した場合も、不在を確認できて
+        いないためfail-closedにする（②を試みない）。"""
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        task = _task(issue_number=21, subtask_id="t21")
+
+        with (
+            patch(
+                "orchestune.integrator.git_ops.fetch_remote_branch",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["fetch"], stderr=b"not found"
+                ),
+            ),
+            patch.object(
+                merger.forge, "is_current_branch_tip_merged_into", return_value=False
+            ),
+            patch.object(
+                merger.forge, "branch_exists", side_effect=RuntimeError("API down")
+            ),
+            patch.object(merger.forge, "list_prs") as list_prs_mock,
+        ):
+            branch, fetched, already_merged, reason = merger._resolve_merge_branch(
+                task, "main"
+            )
+        assert branch == "claude/issue-21-t21"
+        assert fetched is False
+        list_prs_mock.assert_not_called()
 
     def test_ambiguous_pr_matches_stay_fail_closed_on_canonical_failure(
         self, tmp_path: Path
@@ -531,6 +608,7 @@ class TestResolveMergeBranch:
             patch.object(
                 merger.forge, "is_current_branch_tip_merged_into", return_value=False
             ),
+            patch.object(merger.forge, "branch_exists", return_value=False),
             patch.object(merger.forge, "list_prs", return_value=prs),
         ):
             branch, fetched, already_merged, reason = merger._resolve_merge_branch(
@@ -555,6 +633,7 @@ class TestResolveMergeBranch:
             patch.object(
                 merger.forge, "is_current_branch_tip_merged_into", return_value=False
             ),
+            patch.object(merger.forge, "branch_exists", return_value=False),
             patch.object(merger.forge, "list_prs", return_value=[]),
         ):
             branch, fetched, already_merged, reason = merger._resolve_merge_branch(
@@ -579,6 +658,7 @@ class TestResolveMergeBranch:
             patch.object(
                 merger.forge, "is_current_branch_tip_merged_into", return_value=False
             ),
+            patch.object(merger.forge, "branch_exists", return_value=False),
             patch.object(
                 merger.forge, "list_prs", side_effect=RuntimeError("API down")
             ),
@@ -612,6 +692,7 @@ class TestResolveMergeBranch:
             patch.object(
                 merger.forge, "is_current_branch_tip_merged_into", return_value=False
             ),
+            patch.object(merger.forge, "branch_exists", return_value=False),
             patch.object(merger.forge, "list_prs", return_value=[fork_pr]),
         ):
             branch, fetched, already_merged, reason = merger._resolve_merge_branch(

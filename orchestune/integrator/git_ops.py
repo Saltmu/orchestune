@@ -383,13 +383,16 @@ class IntegrationMerger:
 
     def merge_and_test_tasks(
         self, sorted_done_tasks: list[Task], base_branch: str, apply: bool
-    ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]]:
+    ) -> tuple[
+        list[str], list[str], list[str], dict[str, str], dict[str, str], set[str]
+    ]:
         merged_tasks: list[str] = []
         failed_tasks: list[str] = []
         blocked_tasks: list[str] = []
         failed_reasons: dict[str, str] = {}
         blocked_reasons: dict[str, str] = {}
         unavailable_ids: set[str] = set()
+        fallback_merged_ids: set[str] = set()
         if apply:
             self.ensure_git_identity()
             self.ensure_full_history(base_branch)
@@ -403,6 +406,7 @@ class IntegrationMerger:
             failed_reasons,
             blocked_reasons,
             unavailable_ids,
+            fallback_merged_ids,
         )
         return (
             merged_tasks,
@@ -410,6 +414,7 @@ class IntegrationMerger:
             blocked_tasks,
             failed_reasons,
             blocked_reasons,
+            fallback_merged_ids,
         )
 
     def _merge_task_list(
@@ -423,6 +428,7 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         blocked_reasons: dict[str, str],
         unavailable: set[str],
+        fallback_merged: set[str],
     ) -> None:
         for task in tasks:
             self._merge_one_task(
@@ -435,6 +441,7 @@ class IntegrationMerger:
                 failed_reasons,
                 blocked_reasons,
                 unavailable,
+                fallback_merged,
             )
 
     def _merge_one_task(
@@ -448,6 +455,7 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         blocked_reasons: dict[str, str],
         unavailable: set[str],
+        fallback_merged: set[str],
     ) -> None:
         pre_merge_sha: str | None = None
         try:
@@ -462,7 +470,14 @@ class IntegrationMerger:
                 unavailable.add(task.subtask_id)
                 return
             pre_merge_sha = self._merge_task_if_needed(
-                task, base_branch, apply, merged, failed, failed_reasons, unavailable
+                task,
+                base_branch,
+                apply,
+                merged,
+                failed,
+                failed_reasons,
+                unavailable,
+                fallback_merged,
             )
         except Exception as error:
 
@@ -484,23 +499,44 @@ class IntegrationMerger:
                 self._open_prs_cache = []
         return self._open_prs_cache
 
+    def _canonical_branch_confirmed_absent(self, canonical_branch: str) -> bool:
+        """正規ブランチが確実に存在しないと判定できた場合のみ`True`を返す。
+
+        #777 Codexレビュー(Round3): `_fetch_task_branch`のfetch失敗は
+        「ブランチが存在しない」と「一時的なネットワーク/認証/local git
+        エラー」を区別しない。両者を区別せずに②へフォールバックすると、
+        正規ブランチが実在するのに一時的なfetch失敗だけで別ブランチを
+        mergeしてしまいうる。`branch_exists()`で不在を積極的に確認できた
+        場合のみフォールバックを許可し、確認自体が失敗した場合は
+        fail-closed（フォールバックしない）とする。
+        """
+        try:
+            return not self.forge.branch_exists(canonical_branch)
+        except Exception:
+            return False
+
     def _resolve_merge_branch(
         self, task: Task, base_branch: str
     ) -> tuple[str, bool, bool, str]:
         """マージ対象ブランチ名を解決する（#777: fail-closedな段階的解決）。
 
         ①Orchestuneが起動時に割り当てた正規ブランチ名への完全一致でのfetchを
-        まず試み、それが失敗した場合に限り②厳密一致する単一のPR head_ref
-        （`issue_number`と`subtask_id`の両方が一致し、かつマッチが一意な場合
-        のみ）へフォールバックする。②で複数の異なるブランチが一致する、また
-        は一致するブランチが無い場合は、①の失敗結果をそのまま返して
-        fail-closedにする（別のブランチを掴んでmergeしない）。
+        まず試み、それが失敗し、かつ正規ブランチの不在を積極的に確認できた
+        場合に限り②厳密一致する単一のPR head_ref（`issue_number`と
+        `subtask_id`の両方が一致し、かつマッチが一意な場合のみ）へ
+        フォールバックする。②で複数の異なるブランチが一致する、一致する
+        ブランチが無い、または正規ブランチの不在を確認できない場合は、
+        ①の失敗結果をそのまま返してfail-closedにする（別のブランチを
+        掴んでmergeしない）。
         """
         canonical_branch = build_task_branch_name(task.issue_number, task.subtask_id)
         fetched, already_merged, reason = self._fetch_task_branch(
             canonical_branch, base_branch
         )
         if fetched:
+            return canonical_branch, fetched, already_merged, reason
+
+        if not self._canonical_branch_confirmed_absent(canonical_branch):
             return canonical_branch, fetched, already_merged, reason
 
         fallback_branch = find_unique_matching_pr_branch(
@@ -520,6 +556,7 @@ class IntegrationMerger:
         failed: list[str],
         failed_reasons: dict[str, str],
         unavailable: set[str],
+        fallback_merged: set[str],
     ) -> str | None:
         if not apply:
             merged.append(task.subtask_id)
@@ -532,6 +569,13 @@ class IntegrationMerger:
                 task, reason, apply, failed, failed_reasons, unavailable
             )
             return None
+        canonical_branch = build_task_branch_name(task.issue_number, task.subtask_id)
+        if branch_name != canonical_branch:
+            # #777 Codexレビュー(Round3): ②由来のブランチでマージされた
+            # タスクは、以降の削除・統合済み検証で正規名を一切使わせない
+            # ようにマークする（正規名がその後の別経緯で存在するように
+            # なっても、未マージの別物を誤って削除/誤検証しないため）。
+            fallback_merged.add(task.subtask_id)
         if already_merged:
             merged.append(task.subtask_id)
             return None

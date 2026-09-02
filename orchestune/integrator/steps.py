@@ -255,14 +255,19 @@ class MergeAndTestStep(IntegrationComponent):
     @staticmethod
     def _record_merge_results(
         ctx: IntegrationContext,
-        results: tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]],
+        results: tuple[
+            list[str], list[str], list[str], dict[str, str], dict[str, str], set[str]
+        ],
     ) -> IntegrationReport:
-        merged, failed, blocked, failed_reasons, blocked_reasons = results
+        merged, failed, blocked, failed_reasons, blocked_reasons, fallback_merged = (
+            results
+        )
         ctx.merged_tasks.extend(merged)
         ctx.failed_tasks.extend(failed)
         ctx.blocked_tasks.extend(blocked)
         ctx.failed_reasons.update(failed_reasons)
         ctx.blocked_reasons.update(blocked_reasons)
+        ctx.fallback_merged_subtask_ids.update(fallback_merged)
         if not failed and merged:
             return {"status": IntegrationStatus.SUCCESS}
         return {
@@ -562,17 +567,22 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     @staticmethod
     def _merged_branch_names(ctx: IntegrationContext) -> list[str]:
         """#777: 削除対象は①正規ブランチ名（Orchestuneが割り当てた名前）のみに
-        限定する。②のPR head_ref由来の名前は対象に含めない — 実際のマージが
-        ②のフォールバックを使った場合、この正規名は存在しないため
-        `_delete_merged_branches`の`branch_exists()`チェックで自然に
-        no-opとなり、無関係なブランチを削除する経路は無い。"""
+        限定する。②のPR head_ref由来のブランチでマージされたタスク
+        （`ctx.fallback_merged_subtask_ids`）は対象から明示的に除外する。
+
+        Codexレビュー(Round3): 「正規名が存在しなければ削除は自然にno-opに
+        なる」という当初の想定は、統合ウィンドウ中に正規名のブランチが
+        （元のagentのpush遅延・リトライ等で）後から実在するようになりうる
+        競合を見落としていた。②でマージしたタスクについては、実在有無に
+        関わらず正規名を削除候補にすら含めない。
+        """
         tasks = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         names = [
             build_task_branch_name(tasks[task_id].issue_number, task_id)
             for task_id in ctx.merged_tasks
-            if task_id in tasks
+            if task_id in tasks and task_id not in ctx.fallback_merged_subtask_ids
         ]
         return names + ([ctx.temp_branch] if ctx.temp_branch else [])
 
@@ -592,15 +602,17 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         ことを確認できた場合のみ`True`を返す（1件でも未検証ならfail closed）。
 
         #777: ①正規ブランチ名のみで検証する（②のPR head_ref由来の名前は
-        使わない）。実際のマージが②を使っていた場合、正規名は存在せず検証は
-        失敗（`False`）するが、これは意図的な安全側の劣化であり、誤って
-        `True`を返すことは決して無い。
+        使わない）。`ctx.fallback_merged_subtask_ids`に含まれるタスク
+        （実際のマージが②を使ったもの）は、正規名での検証が本来の検証対象
+        と異なるため、確認不能として無条件にfail-closed（`False`）とする。
         """
         base_branch_name = ctx.base_branch.removeprefix("origin/")
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         for subtask_id in ctx.merged_tasks:
+            if subtask_id in ctx.fallback_merged_subtask_ids:
+                return False
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
                 return False
