@@ -14,6 +14,7 @@ from orchestune.issue_parsing import (
     parent_issue_number_from_body,
 )
 from orchestune.labels import StatusLabel
+from orchestune.replan.models import PlanGeneration
 from orchestune.symbol_verification import find_missing_symbols
 
 _PLACEHOLDERS = (
@@ -38,7 +39,9 @@ _PLACEHOLDER_PATTERN = re.compile(
 )
 
 
-def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, ...]:
+def derive_subtask_labels(
+    subtask: SubTask, *, dependencies_done: bool
+) -> tuple[str, ...]:
     labels = [
         StatusLabel.BLOCKED
         if subtask.depends_on and not dependencies_done
@@ -50,7 +53,7 @@ def _derive_labels(subtask: SubTask, *, dependencies_done: bool) -> tuple[str, .
     return tuple(labels)
 
 
-def _issue_title(subtask: SubTask) -> str:
+def subtask_issue_title(subtask: SubTask) -> str:
     return f"[FEAT] {subtask.id}: {subtask.description}"
 
 
@@ -127,15 +130,32 @@ def _append_symbol_warning(body: str, subtask: SubTask, repo_root: Path) -> str:
     )
 
 
-def _build_subtask_issue_body(
+def build_subtask_issue_body(
     subtask: SubTask,
     template: str,
     repo_root: Path,
     parent_issue_number: int | None = None,
+    *,
+    generation: PlanGeneration | None = None,
 ) -> str:
-    return _append_symbol_warning(
+    body = _append_symbol_warning(
         _render_issue_body(subtask, template, parent_issue_number), subtask, repo_root
     )
+    if generation is None:
+        return body
+    if generation.subtask_id != subtask.id:
+        raise ValueError(
+            "generation subtask_id must match the rendered SubTask: "
+            f"{generation.subtask_id!r} != {subtask.id!r}"
+        )
+    return f"{generation.marker}\n{body}"
+
+
+# Existing provisioning callers retain their private imports while replan
+# workflows use the supported public renderer contract.
+_derive_labels = derive_subtask_labels
+_issue_title = subtask_issue_title
+_build_subtask_issue_body = build_subtask_issue_body
 
 
 def _subtask_id_from_body(body: str) -> str | None:
@@ -276,3 +296,10 @@ def _validate_template_identity_marker(
         _make_probe(probe_id, probe_deps, None, None), template
     )
     _validate_template_profile_and_tier_markers(rendered, rendered_none, template_path)
+
+
+__all__ = [
+    "build_subtask_issue_body",
+    "derive_subtask_labels",
+    "subtask_issue_title",
+]
