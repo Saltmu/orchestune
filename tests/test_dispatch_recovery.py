@@ -268,6 +268,7 @@ class TestRestorationCandidateProjection:
             head_ref="agent/issue-101-task-a",
             changed_files=(),
             closes_issue_numbers=(101,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -431,6 +432,7 @@ class TestRestorationCandidateProjection:
             changed_files=("src/foo.py",),
             closes_issue_numbers=(),
             base_ref="parent/issue-700",
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -694,8 +696,13 @@ def _issue(number, created_at="2026-01-01T00:00:00+00:00"):
     )
 
 
-def _pr(head_ref, number=1):
-    return PrRecord(number=number, head_ref=head_ref, changed_files=())
+def _pr(head_ref, number=1, is_cross_repository=False):
+    return PrRecord(
+        number=number,
+        head_ref=head_ref,
+        changed_files=(),
+        is_cross_repository=is_cross_repository,
+    )
 
 
 class TestResolveRecoveryPrAndBranch:
@@ -776,5 +783,20 @@ class TestResolveRecoveryPrAndBranch:
         )
 
         assert branch == "claude/issue-505-task-e"
+        assert external_id is None
+        assert external_url is None
+
+    def test_fork_pr_is_excluded_from_strict_match_fallback(self):
+        """PR#780 Codexレビュー: forkのhead_refは信頼できないため②の対象から
+        除外し、fail-closedにする（無関係なupstreamブランチの誤fetch/merge、
+        または正当なforkの貢献の誤却下を防ぐ）。"""
+        issue = _issue(606)
+        fork_pr = _pr("codex/issue-606-task-f", number=11, is_cross_repository=True)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-f", [fork_pr]
+        )
+
+        assert branch == "claude/issue-606-task-f"
         assert external_id is None
         assert external_url is None

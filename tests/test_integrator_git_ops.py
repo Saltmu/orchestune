@@ -466,7 +466,12 @@ class TestResolveMergeBranch:
     ):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         task = _task(issue_number=2, subtask_id="t2")
-        pr = PrRecord(number=9, head_ref="codex/issue-2-t2", changed_files=())
+        pr = PrRecord(
+            number=9,
+            head_ref="codex/issue-2-t2",
+            changed_files=(),
+            is_cross_repository=False,
+        )
 
         def fetch_side_effect(_root, branch_name):
             if branch_name == "claude/issue-2-t2":
@@ -502,8 +507,18 @@ class TestResolveMergeBranch:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         task = _task(issue_number=3, subtask_id="t3")
         prs = [
-            PrRecord(number=1, head_ref="codex/issue-3-t3", changed_files=()),
-            PrRecord(number=2, head_ref="feat/issue-3-t3", changed_files=()),
+            PrRecord(
+                number=1,
+                head_ref="codex/issue-3-t3",
+                changed_files=(),
+                is_cross_repository=False,
+            ),
+            PrRecord(
+                number=2,
+                head_ref="feat/issue-3-t3",
+                changed_files=(),
+                is_cross_repository=False,
+            ),
         ]
 
         with (
@@ -572,6 +587,37 @@ class TestResolveMergeBranch:
                 task, "main"
             )
         assert branch == "claude/issue-5-t5"
+        assert fetched is False
+
+    def test_excludes_fork_pr_from_fallback(self, tmp_path: Path):
+        """PR#780 Codexレビュー: forkのhead_refをそのまま`origin`からfetchする
+        と、無関係なupstreamブランチを誤ってfetch/mergeする、または正当な
+        forkの貢献を誤って却下する経路になるため、②の候補から除外する。"""
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        task = _task(issue_number=6, subtask_id="t6")
+        fork_pr = PrRecord(
+            number=13,
+            head_ref="codex/issue-6-t6",
+            changed_files=(),
+            is_cross_repository=True,
+        )
+
+        with (
+            patch(
+                "orchestune.integrator.git_ops.fetch_remote_branch",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["fetch"], stderr=b"not found"
+                ),
+            ),
+            patch.object(
+                merger.forge, "is_current_branch_tip_merged_into", return_value=False
+            ),
+            patch.object(merger.forge, "list_prs", return_value=[fork_pr]),
+        ):
+            branch, fetched, already_merged, reason = merger._resolve_merge_branch(
+                task, "main"
+            )
+        assert branch == "claude/issue-6-t6"
         assert fetched is False
 
 

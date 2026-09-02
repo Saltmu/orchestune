@@ -14,8 +14,15 @@ from orchestune.branch_naming import (
 from orchestune.models import PrRecord
 
 
-def _pr(head_ref: str, number: int = 1) -> PrRecord:
-    return PrRecord(number=number, head_ref=head_ref, changed_files=())
+def _pr(
+    head_ref: str, number: int = 1, is_cross_repository: bool | None = False
+) -> PrRecord:
+    return PrRecord(
+        number=number,
+        head_ref=head_ref,
+        changed_files=(),
+        is_cross_repository=is_cross_repository,
+    )
 
 
 class TestBuildTaskBranchName:
@@ -125,3 +132,26 @@ class TestFindUniqueMatchingPrBranch:
     def test_ignores_prs_with_empty_head_ref(self) -> None:
         prs = [_pr("", number=1), _pr("codex/issue-5-a", number=2)]
         assert find_unique_matching_pr_branch(prs, 5, "a") == "codex/issue-5-a"
+
+    def test_excludes_fork_pr_even_if_otherwise_unique_match(self) -> None:
+        """PR#780 Codexレビュー: forkのhead_refは呼び出し側がoriginから
+        fetchするため信頼できない。マッチしても除外し、fail-closedにする。"""
+        prs = [_pr("codex/issue-5-a", number=1, is_cross_repository=True)]
+        assert find_unique_matching_pr_branch(prs, 5, "a") is None
+
+    def test_excludes_pr_with_unknown_cross_repository_status(self) -> None:
+        """`is_cross_repository`が`None`（未確認）の場合もforkと同様に除外する
+        （fail-closed: 既知のupstream PRであることを確認できた場合のみ含める）。"""
+        prs = [_pr("codex/issue-5-a", number=1, is_cross_repository=None)]
+        assert find_unique_matching_pr_branch(prs, 5, "a") is None
+
+    def test_fork_pr_does_not_create_false_ambiguity_for_genuine_upstream_match(
+        self,
+    ) -> None:
+        """forkの同名候補が存在しても、真のupstream PRが唯一の対象として
+        解決される（forkの存在自体が曖昧化を招いてfail-closedになってはならない）。"""
+        upstream_pr = _pr("codex/issue-5-a", number=1, is_cross_repository=False)
+        fork_pr = _pr("codex/issue-5-a", number=2, is_cross_repository=True)
+        assert find_unique_matching_pr_branch([upstream_pr, fork_pr], 5, "a") == (
+            "codex/issue-5-a"
+        )

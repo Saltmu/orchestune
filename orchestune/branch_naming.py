@@ -20,7 +20,7 @@ from typing import Protocol
 
 
 class _HasHeadRef(Protocol):
-    """PRのhead_refだけを要求する構造的部分型。
+    """PRのhead_ref・is_cross_repositoryだけを要求する構造的部分型。
 
     `orchestune.models.PrRecord`に依存せず、この規約モジュールを
     dependency-free（L0）に保つための最小限の型。読み取り専用の
@@ -31,6 +31,9 @@ class _HasHeadRef(Protocol):
 
     @property
     def head_ref(self) -> str: ...
+
+    @property
+    def is_cross_repository(self) -> bool | None: ...
 
 
 #: Default branch prefix, preserved for compatibility with every task branch
@@ -108,11 +111,20 @@ def find_unique_matching_pr_branch(
     両方を要求し、異なる複数のブランチ名がマッチした場合は`None`を返して
     呼び出し側にfail-closedさせる（曖昧な場合にtie-breakで1件へ絞らない）。
     同一ブランチ名を指す複数のPRレコード（closed→reopen等）は曖昧とみなさない。
+
+    forkからのPR（`is_cross_repository`が`True`または不明な`None`）は除外する
+    （Codexレビュー指摘、PR#780）: この関数が解決した名前は呼び出し側が
+    upstream（`origin`）からfetchするため、forkのhead_refをそのまま信頼すると
+    無関係なupstreamブランチを誤ってfetch/mergeする、またはforkの貢献を
+    誤って却下する経路になる。`is_cross_repository is False`（既知のupstream
+    PRであることが確認できた場合）のみ候補に含める。
     """
     matches = {
         pr.head_ref
         for pr in prs
-        if pr.head_ref and branch_matches_task(pr.head_ref, issue_number, subtask_id)
+        if pr.head_ref
+        and pr.is_cross_repository is False
+        and branch_matches_task(pr.head_ref, issue_number, subtask_id)
     }
     if len(matches) == 1:
         return next(iter(matches))

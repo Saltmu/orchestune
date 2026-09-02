@@ -106,11 +106,17 @@ def make_done_issue(number: int = 1, **overrides: Any) -> IssueRecord:
 
 
 def make_pr(number: int = 1, **overrides: Any) -> PrRecord:
-    """Create a PrRecord with a conventional issue branch by default."""
+    """Create a PrRecord with a conventional issue branch by default.
+
+    `is_cross_repository=False` by default: this helper represents a PR from
+    Orchestune's own upstream-repo convention, not a fork (#777's strict PR
+    matcher excludes forks/unknown identity from branch resolution).
+    """
     values: dict[str, Any] = {
         "number": number,
         "head_ref": f"claude/issue-{number}-task-{number}",
         "changed_files": (),
+        "is_cross_repository": False,
     }
     values.update(overrides)
     return PrRecord(**values)
