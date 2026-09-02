@@ -124,6 +124,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     0: frozenset(
         {
             "bounded_limit",
+            "branch_naming",
             "consistency.contracts",
             "consistency.models",
             "consistency.vocabulary",

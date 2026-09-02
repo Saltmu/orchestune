@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from orchestune.branch_naming import parse_task_branch_name
 from orchestune.dispatch.state import load_run_state
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.process_utils import is_process_alive
@@ -146,11 +147,12 @@ class StatusSnapshot:
 
 
 def _extract_subtask_id(branch: str, issue_number: int) -> str | None:
-    """ブランチ名 `claude/issue-{issue_number}-{subtask_id}` からsubtask_idを抽出する。"""
-    prefix = f"claude/issue-{issue_number}-"
-    if not branch.startswith(prefix):
+    """ブランチ名 `<prefix>/issue-{issue_number}-{subtask_id}` からsubtask_idを
+    抽出する（#777: prefixは特定ツール名に固定しない）。"""
+    parsed = parse_task_branch_name(branch)
+    if parsed is None or parsed.issue_number != issue_number:
         return None
-    return branch[len(prefix) :]
+    return parsed.subtask_id
 
 
 def _read_log_tail(log_path: Path, n_lines: int) -> list[str]:

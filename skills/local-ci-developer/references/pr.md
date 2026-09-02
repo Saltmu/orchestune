@@ -38,7 +38,7 @@ Submit the PR using the fixed backend selected during Step 0 Preflight:
 
 > [!IMPORTANT]
 > **Base Branch for Child Subtask and Stacked PRs (Precedence Order)**:
-> 1. **Stacked Subtask (Highest Precedence)**: If this task depends on another subtask whose PR has not yet merged into the parent/main branch, pass that dependency subtask's branch as `--base` (e.g. `gh pr create --base claude/issue-701-consistency-contract ...`). This takes precedence even if `parent_issue_number` is also set.
+> 1. **Stacked Subtask (Highest Precedence)**: If this task depends on another subtask whose PR has not yet merged into the parent/main branch, pass that dependency subtask's branch as `--base` (e.g. `gh pr create --base claude/issue-701-consistency-contract ...`). This takes precedence even if `parent_issue_number` is also set. The `claude/` prefix here is only an example — read the dependency's real branch name from its state/PR rather than assuming a prefix (see the naming convention note in [worktree.md](./worktree.md)).
 > 2. **Parent Issue Mode**: If the Issue is a child subtask under an Epic / parent issue (`parent_issue_number` present in Footprint YAML / prompt, or worktree branched from `parent/issue-{N}`) and has no unmerged subtask dependency, pass `--base parent/issue-{parent_issue_number}` (e.g., `gh pr create --base parent/issue-700 ...`) to prevent accidental direct merges into `main`.
 > 3. **Standalone Issue (Default Fallback)**: For independent tasks without parent or dependency branches, pass `--base main`.
 
