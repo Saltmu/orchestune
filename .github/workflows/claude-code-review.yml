@@ -8,10 +8,30 @@ on:
 
 jobs:
   claude-review:
-    # Runs only when someone comments "@claude review" on a pull request.
+    # Runs when someone comments "@claude review" on a pull request. Human
+    # actors are unrestricted. A bot actor is only accepted when it is
+    # exactly `claude[bot]` (matching the `allowed_bots` grant below) and the
+    # comment carries the Orchestune trigger marker that
+    # scripts/wait_for_review.py stamps on its own trigger comments — this
+    # keeps Claude Code on the Web's bot-authored `@claude review` requests
+    # working while (a) skipping the job entirely for any other bot actor
+    # instead of letting claude-code-action hard-fail, and (b) preventing the
+    # action's own track_progress / final / inline comments (which never
+    # carry the marker) from re-triggering a review. See issue #692.
     if: |
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '@claude') && contains(github.event.comment.body, 'review')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(github.event.comment.body, 'review'))
+      (
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) ||
+        github.event_name == 'pull_request_review_comment'
+      ) &&
+      contains(github.event.comment.body, '@claude') &&
+      contains(github.event.comment.body, 'review') &&
+      (
+        !endsWith(github.actor, '[bot]') ||
+        (
+          github.actor == 'claude[bot]' &&
+          contains(github.event.comment.body, '<!-- orchestune:review-trigger bot=claude -->')
+        )
+      )
 
     runs-on: ubuntu-latest
     permissions:
@@ -40,6 +60,12 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Minimal allow-list: only the official Claude GitHub App identity
+          # may trigger this action as a bot actor. Never widen to '*' or add
+          # other bots here without a real, verified posting path for them
+          # (see docs/security.md in anthropics/claude-code-action: allowed
+          # bots are not checked for repository write access).
+          allowed_bots: 'claude[bot]'
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ steps.pr.outputs.number }} --comment'

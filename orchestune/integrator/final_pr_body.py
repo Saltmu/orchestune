@@ -1,13 +1,11 @@
-"""#681: 最終統合PR（`parent/issue-N` → `main`）の本文生成。
+"""最終統合PR（`parent/issue-N` → `main`）の本文生成とlegacy本文の移行。
 
 `ensure_parent_final_pr`が用意するこのPRのマージが「最終マージ」であり、常に
 人間が行う。その本文には2つの役割がある:
 
-1. **親Issueの自動クローズとDevelopment連携**: `Closes #N`を書いておくと、
-   既定ブランチ(`main`)向けPRであるためGitHubがマージ時に親Issueを閉じ、
-   Issueサイドバーの「Development」欄にも親Issueが連携される。
-   `parent_completion`側のマージ検知クローズは残したまま二重化する
-   （どちらか一方が働けば親Issueは確実に閉じる）。
+1. **親Issueへの非closing参照**: 親Issue番号を相互参照できるようにするが、
+   GitHubのclosing keywordは書かない。親Issueのクローズは、子Issue状態と
+   現在の親branch tipの両方を検証する`parent_completion`だけが担う。
 2. **レビュー履歴のトレーサビリティ**: 最終レビュアー（人間）が各サブタスクの
    変更内容とAIコードレビューの結果を辿れるよう、子Issue・マージ済み
    サブタスクPR・レビュー結果の一覧をテーブルで示す。
@@ -25,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from orchestune.forge import Forge
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord, normalize_newlines
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 from orchestune.pr_link_notice import requires_link_notice, target_issue_numbers
 
@@ -36,6 +34,34 @@ _TABLE_HEADER = (
     "| 子Issue | タイトル | サブタスクPR | レビュー結果 |",
     "| --- | --- | --- | --- |",
 )
+
+
+def _parent_issue_reference(parent_issue_number: int) -> str:
+    """GitHub自動クローズを発生させない親Issueへの相互参照。"""
+    return f"Parent issue: #{parent_issue_number}"
+
+
+def migrate_generated_parent_closing_reference(
+    body: str, parent_issue_number: int
+) -> str | None:
+    """legacy最終PR先頭のOrchestune生成`Closes`行だけを置換する。
+
+    対象は、既存rendererが決定論的に生成した本文先頭の完全一致
+    `Closes #<親Issue>`に限定する。本文途中のclosing keywordや別Issue向けの
+    keywordには一切触れないため、人間または外部ツールが加えた記述を一般化して
+    書き換えない。置換後の本文だけを返し、対象でなければ`None`を返すことで、
+    呼び出し元が冪等に更新を省略できる。
+    """
+    normalized = normalize_newlines(body)
+    legacy_reference = f"Closes #{parent_issue_number}"
+    if normalized == legacy_reference:
+        return _parent_issue_reference(parent_issue_number)
+    if normalized.startswith(f"{legacy_reference}\n"):
+        return (
+            _parent_issue_reference(parent_issue_number)
+            + normalized[len(legacy_reference) :]
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -104,14 +130,14 @@ def render_final_pr_body(
     誤った情報になる。
     """
     lines = [
-        f"Closes #{parent_issue_number}",
+        _parent_issue_reference(parent_issue_number),
         "",
         f"親Issue #{parent_issue_number} 配下の全子Issueが完了したため、"
         "Orchestune Integratorが作成した最終統合PRです。",
         "",
         "このPRのマージが最終マージです。人間がレビューの上マージしてください。"
-        "マージ時にGitHubが親Issueを自動的にクローズし、Orchestuneも"
-        "マージを検知して同じクローズを冪等に試みます。",
+        "Orchestuneはマージを検知し、全子Issueの完了と現在の親ブランチtipの"
+        "mainへの反映を確認した後に親Issueをクローズします。",
     ]
     if summaries:
         lines += ["", "## 子Issue・サブタスクPR一覧", "", *_TABLE_HEADER]
@@ -313,5 +339,6 @@ __all__ = [
     "EMPTY_CELL",
     "ChildSummary",
     "collect_child_summaries",
+    "migrate_generated_parent_closing_reference",
     "render_final_pr_body",
 ]

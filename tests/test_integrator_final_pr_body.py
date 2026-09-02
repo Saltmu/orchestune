@@ -1,4 +1,4 @@
-"""#681: 最終統合PR本文（`Closes #` + 子Issue/サブタスクPR一覧）の生成。"""
+"""最終統合PR本文（非closing親Issue参照 + 子Issue/サブタスクPR一覧）の生成。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pytest
 from orchestune.integrator.final_pr_body import (
     ChildSummary,
     collect_child_summaries,
+    migrate_generated_parent_closing_reference,
     render_final_pr_body,
 )
 from orchestune.models import IssueRecord, PrRecord
@@ -53,14 +54,28 @@ def _outcome_comment(
 
 
 class TestRenderFinalPrBody:
-    def test_body_opens_with_the_parent_closing_keyword(self):
-        """受け入れ基準: 最終PR本文に`Closes #`が含まれること。
-
-        GitHubのDevelopment連携・マージ時の自動クローズを働かせるため、
-        本文の先頭行に置く。"""
+    def test_body_opens_with_a_non_closing_parent_reference(self):
+        """親Issueは相互参照するが、最終PRのマージによるGitHub自動クローズを
+        発生させない。クローズは`process_parent_completion`の安全ガード後だけに
+        実行させる。"""
         body = render_final_pr_body(100, [])
 
-        assert body.splitlines()[0] == "Closes #100"
+        assert body.splitlines()[0] == "Parent issue: #100"
+        assert "Closes #100" not in body
+
+    def test_legacy_migration_replaces_only_the_generated_first_line(self):
+        legacy_body = "Closes #100\n\n説明です。\n\nCloses #101 は人間の追記です。\n"
+
+        migrated = migrate_generated_parent_closing_reference(legacy_body, 100)
+
+        assert migrated == (
+            "Parent issue: #100\n\n説明です。\n\nCloses #101 は人間の追記です。\n"
+        )
+
+    def test_legacy_migration_does_not_rewrite_a_human_closing_keyword(self):
+        human_body = "説明です。\n\nCloses #100 は人間の追記です。\n"
+
+        assert migrate_generated_parent_closing_reference(human_body, 100) is None
 
     def test_table_lists_child_issue_title_pr_and_review(self):
         body = render_final_pr_body(
@@ -102,7 +117,7 @@ class TestRenderFinalPrBody:
         """縮退時（子Issueを1件も解決できなかった場合）でもPR本文自体は成立させる。"""
         body = render_final_pr_body(100, [])
 
-        assert "Closes #100" in body
+        assert "Parent issue: #100" in body
         assert "| 子Issue |" not in body
 
     def test_issue_reference_in_a_child_title_is_escaped(self):

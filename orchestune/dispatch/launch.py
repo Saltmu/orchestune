@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from orchestune.branch_naming import branch_matches_task, build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import (
@@ -106,12 +107,18 @@ class DuplicateCandidateDecision:
 
 
 def _is_orchestune_issue_branch(head_ref: str, issue_number: int) -> bool:
-    """PR本文のCloses一致フォールバックをOrchestune由来らしいブランチに限定する。"""
-    return head_ref.startswith(f"claude/issue-{issue_number}-")
+    """PR本文のCloses一致フォールバックをOrchestune由来らしいブランチに限定する。
+
+    #777: 特定ツール名（`claude/`）に固定せず、`issue-{N}-{subtask_id}`の正規
+    形状に一致するかどうかで判定する。安全弁としての絞り込み自体は維持したまま
+    （無関係な`Closes #N`だけのPRは形状不一致で弾かれる）、プレフィックスのみ
+    エージェント中立化する。
+    """
+    return branch_matches_task(head_ref, issue_number)
 
 
 def _find_existing_pr_for_task(task: Task, ctx: CycleContext) -> PrRecord | None:
-    expected_branch = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+    expected_branch = build_task_branch_name(task.issue_number, task.subtask_id)
     existing_pr = ctx.pr_by_branch.get(expected_branch)
     if not existing_pr:
         for pr in ctx.prs:
@@ -239,7 +246,7 @@ def _decide_task_launch_plan(
     """選出されたタスクごとに、起動時のブランチ名・ベースブランチを決定する（副作用なし）。"""
     plans = []
     for task in selected:
-        branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
+        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
         base_branch = task_to_base_branch.get(task.issue_number)
         if base_branch is None:
             if config.parent_issue_number is not None:

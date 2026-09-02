@@ -240,8 +240,9 @@ orchestune-dispatch
 | `--max-early-death-retries <int>` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションする。 |
 | `--early-death-backoff-seconds <int>` | `60` | 起動直後の異常終了を再キューイングする際の基準待機秒数。再試行ごとに待機時間を2倍にする。 |
 | `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
-| `--model <name>` | - | 実行時に使用する具象モデル名をオーバーライドします（例: `claude-3-7-sonnet`, `o3-mini`, `gemini-2.5-pro`）。未指定時はプロファイル／能力ランクの設定に従います。 |
+| `--model <name>` | - | 実行時に使用する具象モデル名をオーバーライドします（例: `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`）。未指定時はプロファイル／能力ランクの設定に従います。 |
 | `--reasoning-effort <effort>` / `--effort <effort>` | - | 実行時の推論強度をオーバーライドします（例: `low`, `medium`, `high`）。未指定時はプロファイルの設定に従います。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。未指定（デフォルト `False`）でローカルCLIターゲットを実行しようとした場合は、安全のため起動時に設定エラーとなり拒否されます（Fail-Closed）。設定ファイル（`orchestune.toml`等）では `allow-unsafe-agent-execution = true`（または `allow_unsafe_agent_execution = true`）として指定できます。 |
 | `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
 
 default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
@@ -252,7 +253,9 @@ default self-healing allowlistは`--consistency-repair-code`から意図的に�
 
 ### 設定ファイルによるオプションの省略
 
-プロジェクトディレクトリに設定ファイルを配置することで、上記オプションの指定を省略し、デフォルト値として優先適用できます。
+プロジェクトディレクトリに設定ファイルを配置することで、上記オプションの指定を省略し、デフォルト値として優先適用できます。`cp orchestune.toml.example orchestune.toml` でテンプレートをコピーしてください。実ファイルはローカル設定としてGit管理外にし、共有する変更は `orchestune.toml.example` へ反映します。
+
+テンプレートでは、モデル以外の有効な設定値は実装上のデフォルトに揃えています。モデルは用途別の推奨値として、通常のSubIssue向け `balanced`、小さく明確な変更向け `fast-code`、複雑な設計・調査向け `deep-reasoning` の3プロファイルを定義しています。
 
 設定ファイルは以下の順序で探索され、最初に見つかったものがロードされます：
 1. プロジェクトルートの `orchestune.toml`
@@ -263,6 +266,7 @@ default self-healing allowlistは`--consistency-repair-code`から意図的に�
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
@@ -271,27 +275,30 @@ run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
 [execution_profiles.balanced.claude-cli]
-model = "claude-3-5-haiku-20241022"
+model = "sonnet"
+reasoning_effort = "medium"
 
 [execution_profiles.balanced.codex-cli]
-model = "gpt-4o-mini"
-reasoning_effort = "low"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
 [execution_profiles.deep-reasoning.claude-cli]
-model = "claude-3-7-sonnet-20250219"
+model = "opus"
+reasoning_effort = "high"
 
 [execution_profiles.deep-reasoning.codex-cli]
-model = "o3-mini"
+model = "gpt-5.6-sol"
 reasoning_effort = "high"
 
 [execution_profiles.deep-reasoning.cloud-routine]
-model = "claude-3-7-sonnet-20250219"
+model = "claude-opus-5"
 
 [execution_profiles.fast-code.claude-cli]
-model = "claude-3-5-sonnet-20241022"
+model = "haiku"
 
 [execution_profiles.fast-code.codex-cli]
-model = "gpt-4o"
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
 ```
 
 #### 設定ファイルの記述例 (`pyproject.toml`)
@@ -300,6 +307,7 @@ model = "gpt-4o"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
@@ -308,17 +316,19 @@ run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
 [tool.orchestune.execution_profiles.balanced.claude-cli]
-model = "claude-3-5-haiku-20241022"
+model = "sonnet"
+reasoning_effort = "medium"
 
 [tool.orchestune.execution_profiles.balanced.codex-cli]
-model = "gpt-4o-mini"
-reasoning_effort = "low"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
 [tool.orchestune.execution_profiles.deep-reasoning.claude-cli]
-model = "claude-3-7-sonnet-20250219"
+model = "opus"
+reasoning_effort = "high"
 
 [tool.orchestune.execution_profiles.deep-reasoning.codex-cli]
-model = "o3-mini"
+model = "gpt-5.6-sol"
 reasoning_effort = "high"
 ```
 

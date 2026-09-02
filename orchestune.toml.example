@@ -1,0 +1,169 @@
+# Orchestune configuration template
+#
+# Copy this file to `orchestune.toml` in the project root and edit only the
+# repository-specific values you need. `orchestune.toml` is intentionally
+# ignored by Git; this public example is the source-controlled template.
+#
+# Non-model settings below use Orchestune's runtime defaults. Settings whose
+# default is environment-dependent or unset are shown as commented examples.
+# Model tiers and execution profiles are recommendations, not runtime defaults.
+
+# -----------------------------------------------------------------------------
+# Dispatcher defaults
+# -----------------------------------------------------------------------------
+apply = true
+max-concurrent = 2
+max-launches-per-window = 1
+window-seconds = 3600
+deviation-buffer-lines = 5
+max-recompute-retries = 2
+task-timeout-seconds = 0
+max-task-reclaims = 3
+early-death-window-seconds = 120
+max-early-death-retries = 2
+early-death-backoff-seconds = 60
+zombie-gc = true
+
+# Default: unset. Set this only when processing one specific parent Issue.
+# parent-issue = 697
+
+# Default: automatically selected (`cloud-routine` in GitHub Actions, `auto`
+# locally). Uncomment only to pin a target.
+# dispatch-target = "auto"
+
+reviewer-bot = "auto"
+
+# Default: unset. These are target-specific connection/command overrides.
+# Never commit credentials; prefer ORCHESTUNE_ROUTINE_ID,
+# ORCHESTUNE_ROUTINE_TOKEN, and ORCHESTUNE_CODEX_CLOUD_ENV.
+# local-cmd = "codex exec ..."
+# routine-id = "your-routine-id"
+# routine-token = "your-secret-token"
+# codex-cloud-env = "your-environment-id"
+
+# Runtime-wide model overrides are unset by default. Prefer the profiles below.
+# model = "gpt-5.6-terra"
+# reasoning-effort = "medium"
+
+# Unsafe execution is opt-in and disabled by default.
+allow-unsafe-agent-execution = false
+
+# Token limits are unset by default.
+# max-tokens-per-window = 1000000
+# max-tokens-per-task = 200000
+
+# Integrator fallback: "./scripts/local-ci.sh". Set the command used by the
+# repository receiving this template (for example, "make ci" or "npm run ci").
+# ci-command = "./scripts/local-ci.sh"
+
+# -----------------------------------------------------------------------------
+# Consistency supervisor defaults
+# -----------------------------------------------------------------------------
+consistency-mode = "off"
+consistency-repair-code = []
+consistency-max-repair-passes = 1
+
+# -----------------------------------------------------------------------------
+# Storage defaults
+# -----------------------------------------------------------------------------
+run-state-path = "run_state.json"
+worktree-root = "worktrees"
+log-dir = "logs"
+events-log-path = "events.jsonl"
+not-needed-review-state-path = "not_needed_review_state.json"
+not-needed-review-timeout-seconds = 86400
+
+# -----------------------------------------------------------------------------
+# DAG defaults
+# -----------------------------------------------------------------------------
+# Add repository-specific regular expressions only when generated or shared
+# files should be excluded from footprint similarity checks.
+dag_ignore_patterns = []
+dag_similarity_threshold = 0.2
+
+# -----------------------------------------------------------------------------
+# Recommended model tiers and use-case profiles
+# -----------------------------------------------------------------------------
+# Profile guidance:
+# - balanced: ordinary SubIssue implementation (default recommendation)
+# - fast-code: small, explicit, routine changes
+# - deep-reasoning: architecture, uncertain requirements, or difficult refactors
+#
+# `model_tier` on a SubIssue overrides the profile's model while retaining the
+# profile's reasoning effort. Claude CLI aliases follow Claude Code's currently
+# recommended model versions; Cloud Routine uses explicit API model IDs.
+default_execution_profile = "balanced"
+
+[model_tiers.strong]
+claude-cli = "opus"
+codex-cli = "gpt-5.6-sol"
+agy-cli = "gemini-2.5-pro"
+cloud-routine = "claude-opus-5"
+codex-cloud = "gpt-5.6-sol"
+
+[model_tiers.middle]
+claude-cli = "sonnet"
+codex-cli = "gpt-5.6-terra"
+agy-cli = "gemini-2.5-flash"
+cloud-routine = "claude-sonnet-5"
+codex-cloud = "gpt-5.6-terra"
+
+[model_tiers.weak]
+claude-cli = "haiku"
+codex-cli = "gpt-5.6-luna"
+agy-cli = "gemini-2.5-flash-lite"
+cloud-routine = "claude-haiku-4-5-20251001"
+codex-cloud = "gpt-5.6-luna"
+
+[execution_profiles.balanced.claude-cli]
+model = "sonnet"
+reasoning_effort = "medium"
+
+[execution_profiles.balanced.codex-cli]
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
+
+[execution_profiles.balanced.agy-cli]
+model = "gemini-2.5-flash"
+
+[execution_profiles.balanced.cloud-routine]
+model = "claude-sonnet-5"
+
+[execution_profiles.balanced.codex-cloud]
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
+
+[execution_profiles.fast-code.claude-cli]
+model = "haiku"
+
+[execution_profiles.fast-code.codex-cli]
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
+[execution_profiles.fast-code.agy-cli]
+model = "gemini-2.5-flash-lite"
+
+[execution_profiles.fast-code.cloud-routine]
+model = "claude-haiku-4-5-20251001"
+
+[execution_profiles.fast-code.codex-cloud]
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
+
+[execution_profiles.deep-reasoning.claude-cli]
+model = "opus"
+reasoning_effort = "high"
+
+[execution_profiles.deep-reasoning.codex-cli]
+model = "gpt-5.6-sol"
+reasoning_effort = "high"
+
+[execution_profiles.deep-reasoning.agy-cli]
+model = "gemini-2.5-pro"
+
+[execution_profiles.deep-reasoning.cloud-routine]
+model = "claude-opus-5"
+
+[execution_profiles.deep-reasoning.codex-cloud]
+model = "gpt-5.6-sol"
+reasoning_effort = "high"

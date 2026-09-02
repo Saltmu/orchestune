@@ -956,6 +956,7 @@ class TestBuildDispatchTarget:
                 )
             )
             assert isinstance(target, LocalProcessDispatchTarget)
+            assert target.target_name == target_name
 
     def test_auto_with_detected_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
         with patch(

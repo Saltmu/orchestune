@@ -32,5 +32,6 @@ decomposition_plan.md
 # Local secrets (never commit)
 .env
 .env.*
+orchestune.toml
 walkthrough.md
 implementation_plan.md

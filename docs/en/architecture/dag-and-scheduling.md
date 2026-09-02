@@ -70,7 +70,7 @@ Every candidate — selected or not — contributes its score breakdown, bottom 
 
 ## 4. Execution Profiles & Model Resolution
 
-To decouple a subtask's execution characteristics (e.g., "requires deep reasoning," "routine fast code generation," "standard balanced") from concrete LLM vendor models and runtime target environments (Claude 3.7 Sonnet, GPT-4o, o3-mini, etc.), Orchestune adopts an abstract **Execution Profiles** mechanism (#663 / #668 / #669 / #670).
+To decouple a subtask's execution characteristics (e.g., "requires deep reasoning," "routine fast code generation," "standard balanced") from concrete LLM vendor models and runtime target environments (Claude Opus/Sonnet/Haiku, GPT-5.6 Sol/Terra/Luna, etc.), Orchestune adopts an abstract **Execution Profiles** mechanism (#663 / #668 / #669 / #670).
 
 ```mermaid
 graph LR
@@ -79,7 +79,7 @@ graph LR
     end
 
     subgraph Config ["Repository Configuration (orchestune.toml)"]
-        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'claude-3-7-sonnet'<br/>codex-cli: model = 'o3-mini', reasoning_effort = 'high'<br/>cloud-routine: model = 'claude-3-7-sonnet'"]
+        CFG["[execution_profiles.deep-reasoning]<br/>claude-cli: model = 'opus', reasoning_effort = 'high'<br/>codex-cli: model = 'gpt-5.6-sol', reasoning_effort = 'high'<br/>cloud-routine: model = 'claude-opus-5'"]
     end
 
     subgraph Resolver ["L2: resolve_execution_profile (Deterministic)"]
@@ -99,10 +99,11 @@ graph LR
 ```
 
 * **Design Philosophy (Separation of Concerns & Portability)**:
-  `decomposition_plan.md` and child issue Footprint YAML blocks specify abstract profile names such as `execution_profile: "deep-reasoning"` or `execution_profile: "fast-code"` rather than vendor-specific model strings (e.g., `claude-3-7-sonnet-20250219`) or target CLI flags. When running locally with `claude-cli` or `codex-cli`, or dispatching on CI via `cloud-routine` or `codex-cloud`, the abstract profile maps deterministically to target-appropriate models without rewriting issues or plan files.
+  `decomposition_plan.md` and child issue Footprint YAML blocks specify abstract profile names such as `execution_profile: "deep-reasoning"` or `execution_profile: "fast-code"` rather than vendor-specific model strings (e.g., `claude-opus-5`) or target CLI flags. When running locally with `claude-cli` or `codex-cli`, or dispatching on CI via `cloud-routine` or `codex-cloud`, the abstract profile maps deterministically to target-appropriate models without rewriting issues or plan files.
 * **Target Capability Mapping**:
   `orchestune/dispatch/execution_profiles.py`'s `resolve_execution_profile` is a pure deterministic function that resolves models and reasoning effort based on `[tool.orchestune.execution_profiles]` (or `[execution_profiles]`):
-  * `claude-cli` / `agy-cli`: Attaches `--model <model>` to CLI invocations. If `reasoning_effort` is configured, logs a warning and safely skips the unsupported setting.
+  * `claude-cli`: Attaches `--model <model>` and `--effort <effort>` to CLI invocations.
+  * `agy-cli`: Attaches `--model <model>`. If `reasoning_effort` is configured, logs a warning and safely skips the unsupported setting.
   * `codex-cli`: Attaches `--model <model>` and `-c model_reasoning_effort=<effort>`.
   * `cloud-routine`: Sets `model` in the API fire payload.
   * `codex-cloud`: Configures Codex Cloud task parameters.

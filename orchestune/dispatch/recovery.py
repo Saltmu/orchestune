@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
     execution_invariants,
@@ -405,7 +406,7 @@ def _resolve_recovery_pr_and_branch(
     for pr in open_prs:
         if pr_matches_issue(pr, issue.number, subtask_id):
             return pr.head_ref, str(pr.number), f"PR#{pr.number}"
-    return f"claude/issue-{issue.number}-{subtask_id}", None, None
+    return build_task_branch_name(issue.number, subtask_id), None, None
 
 
 def _build_restored_active_worktree(

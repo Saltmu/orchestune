@@ -152,6 +152,12 @@ class TestDocsCliConsistency:
             k: v for k, v in en.items() if v is not None
         }
 
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_allow_unsafe_agent_execution_is_documented(self, lang):
+        documented = _documented_options(lang)
+        assert "--allow-unsafe-agent-execution" in documented
+        assert documented["--allow-unsafe-agent-execution"] == "False"
+
 
 class TestDocsProvisionCliConsistency:
     """#306: Usageに記載された`orchestune provision`のオプションと実装の乖離を検知する。"""
@@ -478,3 +484,164 @@ class TestDocsExecutionProfilesConsistency:
             tomllib.loads(en_blocks[1])["tool"]["orchestune"]
         )
         assert ja_cfg2 == en_cfg2
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_toml_examples_include_allow_unsafe_for_local_cli(self, lang):
+        section = _section(lang, 4)
+        toml_blocks = self._TOML_FENCE_PATTERN.findall(section)
+        for block in toml_blocks[:2]:
+            data = tomllib.loads(block)
+            config_table = data.get("tool", {}).get("orchestune", data)
+            if config_table.get("dispatch-target") in {
+                "claude-cli",
+                "codex-cli",
+                "agy-cli",
+            }:
+                assert config_table.get("allow-unsafe-agent-execution") is True
+
+
+class TestOrchestuneTomlExample:
+    """orchestune.toml.example が存在し、構文・設定値・ドキュメント参照が正しいことを検証する。"""
+
+    def test_orchestune_toml_example_exists_and_valid_config(self):
+        from orchestune.dag.models import (
+            extract_dag_ignore_patterns,
+            extract_dag_similarity_threshold,
+        )
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.execution_profiles import (
+            extract_execution_profile_config,
+        )
+
+        example_path = REPO_ROOT / "orchestune.toml.example"
+        assert (
+            example_path.is_file()
+        ), "orchestune.toml.example がリポジトリルートに存在しません"
+
+        raw_toml = example_path.read_text(encoding="utf-8")
+        data = tomllib.loads(raw_toml)
+        assert isinstance(data, dict)
+
+        # Dispatcherの引数パーサーと設定値バリデーションに通ることを確認
+        parser = _build_arg_parser()
+        defaults = _config_defaults(parser, data)
+        assert isinstance(defaults, dict)
+
+        # DAG設定が正常に抽出できることを確認
+        patterns = extract_dag_ignore_patterns(data)
+        assert isinstance(patterns, list)
+        threshold = extract_dag_similarity_threshold(data)
+        assert isinstance(threshold, float)
+        assert 0.0 <= threshold <= 1.0
+
+        # ExecutionProfile設定が正常に抽出できることを確認
+        profile_config = extract_execution_profile_config(data)
+        assert profile_config.default_execution_profile in profile_config.profiles
+        assert "balanced" in profile_config.profiles
+        assert "deep-reasoning" in profile_config.profiles
+        assert "fast-code" in profile_config.profiles
+
+        # model_tiers が正常に抽出できることを確認
+        if profile_config.model_tiers:
+            assert "strong" in profile_config.model_tiers
+            assert "middle" in profile_config.model_tiers
+            assert "weak" in profile_config.model_tiers
+
+    def test_non_model_settings_keep_runtime_defaults(self):
+        from orchestune.dag.models import (
+            extract_dag_ignore_patterns,
+            extract_dag_similarity_threshold,
+        )
+        from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+
+        data = tomllib.loads(
+            (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
+        )
+        parser = _build_arg_parser()
+        runtime_defaults = vars(parser.parse_args([]))
+
+        for key, configured_value in _config_defaults(parser, data).items():
+            assert configured_value == runtime_defaults[key], (
+                f"非モデル設定 {key!r} は推奨値ではなく実行時デフォルトを使用してください: "
+                f"example={configured_value!r} / default={runtime_defaults[key]!r}"
+            )
+
+        assert extract_dag_ignore_patterns(data) == []
+        assert extract_dag_similarity_threshold(data) == DEFAULT_SIMILARITY_THRESHOLD
+
+    def test_every_dispatcher_setting_is_present_or_commented(self):
+        raw_toml = (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
+        parser = _build_arg_parser()
+
+        missing = []
+        for action in parser._actions:
+            if action.dest == "help":
+                continue
+            key = action.dest.replace("_", "-")
+            if re.search(rf"(?m)^#?\s*{re.escape(key)}\s*=", raw_toml) is None:
+                missing.append(key)
+
+        assert not missing, f"設定例に未記載のdispatcher設定があります: {missing}"
+
+    @pytest.mark.parametrize(
+        ("profile", "tier", "target", "expected_model", "expected_effort"),
+        [
+            ("balanced", "middle", "codex-cli", "gpt-5.6-terra", "medium"),
+            ("fast-code", "weak", "codex-cli", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "strong", "codex-cli", "gpt-5.6-sol", "high"),
+            ("balanced", "middle", "codex-cloud", "gpt-5.6-terra", "medium"),
+            ("fast-code", "weak", "codex-cloud", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "strong", "codex-cloud", "gpt-5.6-sol", "high"),
+            ("balanced", "middle", "claude-cli", "sonnet", "medium"),
+            ("fast-code", "weak", "claude-cli", "haiku", None),
+            ("deep-reasoning", "strong", "claude-cli", "opus", "high"),
+            ("balanced", "middle", "cloud-routine", "claude-sonnet-5", None),
+            (
+                "fast-code",
+                "weak",
+                "cloud-routine",
+                "claude-haiku-4-5-20251001",
+                None,
+            ),
+            ("deep-reasoning", "strong", "cloud-routine", "claude-opus-5", None),
+        ],
+    )
+    def test_recommended_profiles_resolve_for_supported_targets(
+        self, profile, tier, target, expected_model, expected_effort
+    ):
+        from orchestune.dispatch.execution_profiles import (
+            extract_execution_profile_config,
+            resolve_execution_profile,
+        )
+
+        data = tomllib.loads(
+            (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
+        )
+        config = extract_execution_profile_config(data)
+        selection = resolve_execution_profile(profile, target, config, model_tier=tier)
+
+        assert selection.model == expected_model
+        assert selection.reasoning_effort == expected_effort
+
+    def test_private_orchestune_toml_is_ignored(self):
+        ignore_rules = (
+            (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        )
+        assert "orchestune.toml" in ignore_rules
+
+    @pytest.mark.parametrize(
+        "doc_rel_path",
+        [
+            "docs/ja/setup.md",
+            "docs/ja/usage.md",
+            "docs/en/setup.md",
+            "docs/en/usage.md",
+        ],
+    )
+    def test_docs_reference_orchestune_toml_example(self, doc_rel_path):
+        doc_path = REPO_ROOT / doc_rel_path
+        content = doc_path.read_text(encoding="utf-8")
+        assert (
+            "orchestune.toml.example" in content
+        ), f"{doc_rel_path} に orchestune.toml.example への言及がありません"

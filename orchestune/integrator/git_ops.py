@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import fetch_remote_branch, run_git
@@ -482,7 +483,7 @@ class IntegrationMerger:
         if not apply:
             merged.append(task.subtask_id)
             return None
-        branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
+        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
         fetched, already_merged, reason = self._fetch_task_branch(
             branch_name, base_branch
         )
