@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 
 class _HasHeadRef(Protocol):
@@ -34,6 +34,9 @@ class _HasHeadRef(Protocol):
 
     @property
     def is_cross_repository(self) -> bool | None: ...
+
+
+_PrT = TypeVar("_PrT", bound=_HasHeadRef)
 
 
 #: Default branch prefix, preserved for compatibility with every task branch
@@ -128,4 +131,22 @@ def find_unique_matching_pr_branch(
     }
     if len(matches) == 1:
         return next(iter(matches))
+    return None
+
+
+def find_verified_pr(prs: Sequence[_PrT], head_ref: str) -> _PrT | None:
+    """`head_ref`に一致し、かつupstream（同一リポジトリ）由来と確認できた
+    PRのみを返す。
+
+    Codexレビュー指摘（PR#780 Round2/Round5）: `find_unique_matching_pr_branch`
+    でブランチ名自体はfork安全に解決できても、その名前を鍵に素朴な
+    `{pr.head_ref: pr}`辞書を引くと、forkが同じhead_ref文字列を名乗っている
+    場合に辞書の重複キー上書き順序次第でforkのPRレコードを拾ってしまう
+    （review_decision/is_ci_passing等がforkのものになる）。head_refが一致する
+    PRを`is_cross_repository is False`まで確認しながら都度探索することで、
+    この種の「名前は正しいがPRレコードが違う」誤りを防ぐ。
+    """
+    for pr in prs:
+        if pr.head_ref == head_ref and pr.is_cross_repository is False:
+            return pr
     return None

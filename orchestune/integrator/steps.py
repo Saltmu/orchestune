@@ -256,7 +256,12 @@ class MergeAndTestStep(IntegrationComponent):
     def _record_merge_results(
         ctx: IntegrationContext,
         results: tuple[
-            list[str], list[str], list[str], dict[str, str], dict[str, str], set[str]
+            list[str],
+            list[str],
+            list[str],
+            dict[str, str],
+            dict[str, str],
+            dict[str, str],
         ],
     ) -> IntegrationReport:
         merged, failed, blocked, failed_reasons, blocked_reasons, fallback_merged = (
@@ -601,22 +606,27 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         """`ctx.merged_tasks`の全ブランチが実際に`base_branch`へ含まれている
         ことを確認できた場合のみ`True`を返す（1件でも未検証ならfail closed）。
 
-        #777: ①正規ブランチ名のみで検証する（②のPR head_ref由来の名前は
-        使わない）。`ctx.fallback_merged_subtask_ids`に含まれるタスク
-        （実際のマージが②を使ったもの）は、正規名での検証が本来の検証対象
-        と異なるため、確認不能として無条件にfail-closed（`False`）とする。
+        #777: ①正規ブランチ名で検証する。`ctx.fallback_merged_subtask_ids`
+        に含まれるタスク（実際のマージが②を使ったもの）は、正規名ではなく
+        実際にマージした②のブランチ名で検証する（Codexレビュー Round5:
+        正規名限定のまま無条件にFalseを返すと、②で正しく統合済みのタスクが
+        毎サイクル未検証のまま扱われ、削除・issue closure等の後続処理が
+        永久に進まなくなる）。この検証は読み取り専用であり、②の名前を
+        削除（`_merged_branch_names`）に使うことはない。
         """
         base_branch_name = ctx.base_branch.removeprefix("origin/")
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         for subtask_id in ctx.merged_tasks:
-            if subtask_id in ctx.fallback_merged_subtask_ids:
-                return False
-            task = task_by_subtask_id.get(subtask_id)
-            if task is None:
-                return False
-            branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
+            fallback_branch_name = ctx.fallback_merged_subtask_ids.get(subtask_id)
+            if fallback_branch_name is not None:
+                branch_name = fallback_branch_name
+            else:
+                task = task_by_subtask_id.get(subtask_id)
+                if task is None:
+                    return False
+                branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
             try:
                 if not ctx.forge.is_current_branch_tip_merged_into(
                     branch_name, base_branch_name

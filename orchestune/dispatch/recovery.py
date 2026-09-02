@@ -15,6 +15,7 @@ import yaml
 from orchestune.branch_naming import (
     build_task_branch_name,
     find_unique_matching_pr_branch,
+    find_verified_pr,
 )
 from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
@@ -401,16 +402,6 @@ def _merged_launch_history(
     return tuple(sorted(merged_counts.elements()))
 
 
-def _find_verified_pr(prs: list[PrRecord], head_ref: str) -> PrRecord | None:
-    """`head_ref`に一致し、かつupstream（同一リポジトリ）由来と確認できた
-    PRのみを返す（#777 Codexレビュー: forkが同じhead_ref文字列を名乗る場合、
-    フィルタ無しの一致だけでは誤ってforkのPR番号を採用してしまう）。"""
-    for pr in prs:
-        if pr.head_ref == head_ref and pr.is_cross_repository is False:
-            return pr
-    return None
-
-
 def _resolve_recovery_pr_and_branch(
     issue: IssueRecord,
     subtask_id: str,
@@ -425,13 +416,13 @@ def _resolve_recovery_pr_and_branch(
     検証できたPRのみをPR紐付けの対象とする。
     """
     canonical_branch = build_task_branch_name(issue.number, subtask_id)
-    verified = _find_verified_pr(open_prs, canonical_branch)
+    verified = find_verified_pr(open_prs, canonical_branch)
     if verified is not None:
         return verified.head_ref, str(verified.number), f"PR#{verified.number}"
 
     fallback_branch = find_unique_matching_pr_branch(open_prs, issue.number, subtask_id)
     if fallback_branch is not None:
-        verified = _find_verified_pr(open_prs, fallback_branch)
+        verified = find_verified_pr(open_prs, fallback_branch)
         if verified is not None:
             return verified.head_ref, str(verified.number), f"PR#{verified.number}"
 

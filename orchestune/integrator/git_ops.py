@@ -384,7 +384,7 @@ class IntegrationMerger:
     def merge_and_test_tasks(
         self, sorted_done_tasks: list[Task], base_branch: str, apply: bool
     ) -> tuple[
-        list[str], list[str], list[str], dict[str, str], dict[str, str], set[str]
+        list[str], list[str], list[str], dict[str, str], dict[str, str], dict[str, str]
     ]:
         merged_tasks: list[str] = []
         failed_tasks: list[str] = []
@@ -392,7 +392,7 @@ class IntegrationMerger:
         failed_reasons: dict[str, str] = {}
         blocked_reasons: dict[str, str] = {}
         unavailable_ids: set[str] = set()
-        fallback_merged_ids: set[str] = set()
+        fallback_merged_ids: dict[str, str] = {}
         if apply:
             self.ensure_git_identity()
             self.ensure_full_history(base_branch)
@@ -428,7 +428,7 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         blocked_reasons: dict[str, str],
         unavailable: set[str],
-        fallback_merged: set[str],
+        fallback_merged: dict[str, str],
     ) -> None:
         for task in tasks:
             self._merge_one_task(
@@ -455,7 +455,7 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         blocked_reasons: dict[str, str],
         unavailable: set[str],
-        fallback_merged: set[str],
+        fallback_merged: dict[str, str],
     ) -> None:
         pre_merge_sha: str | None = None
         try:
@@ -556,7 +556,7 @@ class IntegrationMerger:
         failed: list[str],
         failed_reasons: dict[str, str],
         unavailable: set[str],
-        fallback_merged: set[str],
+        fallback_merged: dict[str, str],
     ) -> str | None:
         if not apply:
             merged.append(task.subtask_id)
@@ -571,11 +571,13 @@ class IntegrationMerger:
             return None
         canonical_branch = build_task_branch_name(task.issue_number, task.subtask_id)
         if branch_name != canonical_branch:
-            # #777 Codexレビュー(Round3): ②由来のブランチでマージされた
-            # タスクは、以降の削除・統合済み検証で正規名を一切使わせない
-            # ようにマークする（正規名がその後の別経緯で存在するように
-            # なっても、未マージの別物を誤って削除/誤検証しないため）。
-            fallback_merged.add(task.subtask_id)
+            # #777 Codexレビュー(Round3/Round5): ②由来のブランチでマージ
+            # されたタスクは、削除では正規名を一切使わせない（正規名が
+            # その後の別経緯で存在するようになっても、未マージの別物を
+            # 誤って削除しないため）。一方で統合済み検証は、この実際に
+            # マージしたブランチ名（正規名ではない）でなら安全に行える
+            # ため、削除除外用の印だけでなく実名も保持しておく。
+            fallback_merged[task.subtask_id] = branch_name
         if already_merged:
             merged.append(task.subtask_id)
             return None

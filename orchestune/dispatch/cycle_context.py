@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from orchestune.branch_naming import (
     build_task_branch_name,
     find_unique_matching_pr_branch,
+    find_verified_pr,
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.filters import _filter_by_parent
@@ -262,6 +263,13 @@ def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set,
     （例: `codex/issue-N-a`）がCI成功していても検出できず、依存元タスクが
     誤ってブロックされ続ける。recovery/integrationと同じ①canonical完全一致
     →②厳密単一PR一致（fork安全）の順で実際のPRブランチを解決する。
+
+    Codexレビュー(Round5): ブランチ名の解決には`find_unique_matching_pr_branch`
+    でfork安全性を確保していても、そのPRオブジェクトを`pr_by_branch`（素朴な
+    `{head_ref: pr}`辞書。同一head_refを持つPRが複数あると重複キー上書きで
+    どちらが残るか不定）から引くと、forkのPRレコードを拾ってしまいうる。
+    `find_verified_pr`で①②いずれの段階も`is_cross_repository is False`を
+    満たすPRレコードを都度検証して取得する。
     """
     pr_by_branch = {pr.head_ref: pr for pr in prs}
     ci_passed_pr_subtask_ids = set()
@@ -272,7 +280,7 @@ def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set,
         if not task.subtask_id:
             continue
         canonical_branch = build_task_branch_name(task.issue_number, task.subtask_id)
-        pr = pr_by_branch.get(canonical_branch)
+        pr = find_verified_pr(prs, canonical_branch)
         branch_name = canonical_branch
         if pr is None:
             fallback_branch = find_unique_matching_pr_branch(
@@ -280,7 +288,7 @@ def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set,
             )
             if fallback_branch is not None:
                 branch_name = fallback_branch
-                pr = pr_by_branch.get(fallback_branch)
+                pr = find_verified_pr(prs, fallback_branch)
 
         subtask_branch_map[task.subtask_id] = branch_name
 

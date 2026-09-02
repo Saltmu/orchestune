@@ -9,6 +9,7 @@ from orchestune.branch_naming import (
     branch_matches_task,
     build_task_branch_name,
     find_unique_matching_pr_branch,
+    find_verified_pr,
     parse_task_branch_name,
 )
 from orchestune.models import PrRecord
@@ -155,3 +156,36 @@ class TestFindUniqueMatchingPrBranch:
         assert find_unique_matching_pr_branch([upstream_pr, fork_pr], 5, "a") == (
             "codex/issue-5-a"
         )
+
+
+class TestFindVerifiedPr:
+    """#777 Codexレビュー(Round2/Round5): head_ref一致だけでなく
+    is_cross_repository is Falseまで確認したPRレコードのみを返す。"""
+
+    def test_returns_matching_verified_pr(self) -> None:
+        pr = _pr("codex/issue-5-a", number=9, is_cross_repository=False)
+        assert find_verified_pr([pr], "codex/issue-5-a") is pr
+
+    def test_returns_none_for_fork_sharing_the_same_head_ref(self) -> None:
+        fork_pr = _pr("codex/issue-5-a", number=9, is_cross_repository=True)
+        assert find_verified_pr([fork_pr], "codex/issue-5-a") is None
+
+    def test_returns_none_for_unknown_cross_repository_status(self) -> None:
+        pr = _pr("codex/issue-5-a", number=9, is_cross_repository=None)
+        assert find_verified_pr([pr], "codex/issue-5-a") is None
+
+    def test_selects_verified_pr_over_fork_sharing_the_same_head_ref(self) -> None:
+        """同じhead_refを名乗るforkが辞書上で先に/後に来ても、検証済みの
+        upstream PRレコードを正しく返す（重複キー上書き順序に依存しない）。"""
+        fork_pr = _pr("codex/issue-5-a", number=1, is_cross_repository=True)
+        upstream_pr = _pr("codex/issue-5-a", number=2, is_cross_repository=False)
+        assert find_verified_pr([fork_pr, upstream_pr], "codex/issue-5-a") is (
+            upstream_pr
+        )
+        assert find_verified_pr([upstream_pr, fork_pr], "codex/issue-5-a") is (
+            upstream_pr
+        )
+
+    def test_returns_none_when_no_pr_matches_the_head_ref(self) -> None:
+        pr = _pr("codex/issue-5-a", number=9, is_cross_repository=False)
+        assert find_verified_pr([pr], "feat/issue-5-a") is None
