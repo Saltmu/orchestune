@@ -6,7 +6,10 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
-from orchestune.branch_naming import build_task_branch_name
+from orchestune.branch_naming import (
+    build_task_branch_name,
+    find_unique_matching_pr_branch,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.dispatch.phase_reconciliation import _dispatch_not_needed_review
@@ -253,6 +256,13 @@ def _build_task_mappings(
 
 
 def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set, dict]:
+    """#777 Codexレビュー(Round4): `subtask_branch_map`は
+    `dispatch/rebase.py`の自動リベースで実際のrebase対象ブランチとして
+    使われるため、canonical名限定のままでは非デフォルトprefixの依存先PR
+    （例: `codex/issue-N-a`）がCI成功していても検出できず、依存元タスクが
+    誤ってブロックされ続ける。recovery/integrationと同じ①canonical完全一致
+    →②厳密単一PR一致（fork安全）の順で実際のPRブランチを解決する。
+    """
     pr_by_branch = {pr.head_ref: pr for pr in prs}
     ci_passed_pr_subtask_ids = set()
     changes_requested_subtask_ids = set()
@@ -261,10 +271,19 @@ def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set,
     for task in tasks_by_issue.values():
         if not task.subtask_id:
             continue
-        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
+        canonical_branch = build_task_branch_name(task.issue_number, task.subtask_id)
+        pr = pr_by_branch.get(canonical_branch)
+        branch_name = canonical_branch
+        if pr is None:
+            fallback_branch = find_unique_matching_pr_branch(
+                prs, task.issue_number, task.subtask_id
+            )
+            if fallback_branch is not None:
+                branch_name = fallback_branch
+                pr = pr_by_branch.get(fallback_branch)
+
         subtask_branch_map[task.subtask_id] = branch_name
 
-        pr = pr_by_branch.get(branch_name)
         if pr:
             if pr.review_decision == "CHANGES_REQUESTED":
                 changes_requested_subtask_ids.add(task.subtask_id)
