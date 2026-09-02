@@ -401,6 +401,16 @@ def _merged_launch_history(
     return tuple(sorted(merged_counts.elements()))
 
 
+def _find_verified_pr(prs: list[PrRecord], head_ref: str) -> PrRecord | None:
+    """`head_ref`に一致し、かつupstream（同一リポジトリ）由来と確認できた
+    PRのみを返す（#777 Codexレビュー: forkが同じhead_ref文字列を名乗る場合、
+    フィルタ無しの一致だけでは誤ってforkのPR番号を採用してしまう）。"""
+    for pr in prs:
+        if pr.head_ref == head_ref and pr.is_cross_repository is False:
+            return pr
+    return None
+
+
 def _resolve_recovery_pr_and_branch(
     issue: IssueRecord,
     subtask_id: str,
@@ -411,18 +421,19 @@ def _resolve_recovery_pr_and_branch(
     #777: ①割り当て済みの正規ブランチ名（Orchestuneが起動時に決定論的に
     組み立てた名前）への完全一致 → ②厳密一致するPRのhead_ref（単一マッチ時
     のみ）の順で解決する（従来はこの順序が逆で、緩い`pr_matches_issue`を
-    最初に使っていた）。
+    最初に使っていた）。いずれの段階も`is_cross_repository is False`で
+    検証できたPRのみをPR紐付けの対象とする。
     """
     canonical_branch = build_task_branch_name(issue.number, subtask_id)
-    for pr in open_prs:
-        if pr.head_ref == canonical_branch:
-            return pr.head_ref, str(pr.number), f"PR#{pr.number}"
+    verified = _find_verified_pr(open_prs, canonical_branch)
+    if verified is not None:
+        return verified.head_ref, str(verified.number), f"PR#{verified.number}"
 
     fallback_branch = find_unique_matching_pr_branch(open_prs, issue.number, subtask_id)
     if fallback_branch is not None:
-        for pr in open_prs:
-            if pr.head_ref == fallback_branch:
-                return pr.head_ref, str(pr.number), f"PR#{pr.number}"
+        verified = _find_verified_pr(open_prs, fallback_branch)
+        if verified is not None:
+            return verified.head_ref, str(verified.number), f"PR#{verified.number}"
 
     return canonical_branch, None, None
 

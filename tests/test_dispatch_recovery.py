@@ -800,3 +800,34 @@ class TestResolveRecoveryPrAndBranch:
         assert branch == "claude/issue-606-task-f"
         assert external_id is None
         assert external_url is None
+
+    def test_fork_pr_sharing_the_same_head_ref_is_not_attributed(self):
+        """PR#780 Codexレビュー(Round2): forkが正当なupstream PRと同じ
+        head_ref文字列を名乗っていても、branch名の解決だけでなくPR番号/URLの
+        紐付け先も検証済み（is_cross_repository is False）のPRからのみ
+        採用する（一致するhead_refを持つ最初のPRを無条件に採用しない）。"""
+        issue = _issue(707)
+        genuine_pr = _pr("codex/issue-707-task-g", number=20, is_cross_repository=False)
+        fork_pr = _pr("codex/issue-707-task-g", number=21, is_cross_repository=True)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-g", [fork_pr, genuine_pr]
+        )
+
+        assert branch == "codex/issue-707-task-g"
+        assert external_id == "20"
+        assert external_url == "PR#20"
+
+    def test_canonical_branch_owned_by_fork_is_not_attributed(self):
+        """①（正規ブランチ名）の完全一致であっても、forkのPRレコードには
+        紐付けない。"""
+        issue = _issue(808)
+        fork_pr = _pr("claude/issue-808-task-h", number=30, is_cross_repository=True)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-h", [fork_pr]
+        )
+
+        assert branch == "claude/issue-808-task-h"
+        assert external_id is None
+        assert external_url is None
