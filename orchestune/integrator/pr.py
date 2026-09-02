@@ -7,6 +7,7 @@ from orchestune.forge import Forge, GitHubForge
 from orchestune.integrator.final_pr_body import (
     ChildSummary,
     collect_child_summaries,
+    migrate_generated_parent_closing_reference,
     render_final_pr_body,
 )
 from orchestune.issue_parsing import find_children_by_parent
@@ -16,6 +17,18 @@ from orchestune.models import IssueRecord, PrRecord, Task
 # #295: GitHubコメントの肥大化を避けるため、末尾のみを埋め込む。
 # エラーメッセージ本体は通常出力の末尾に現れるため、これで十分な情報量を確保する。
 CI_OUTPUT_COMMENT_TAIL_CHARS = 4000
+
+
+class ParentFinalPrMigrationError(RuntimeError):
+    """legacy最終PRを安全化できないため親完了を待機として扱えない状態。"""
+
+    def __init__(self, pr_number: int, error: Exception) -> None:
+        self.pr_number = pr_number
+        self.error = error
+        super().__init__(
+            f"Failed to remove the generated parent closing reference from final "
+            f"PR #{pr_number}: {error}"
+        )
 
 
 def _is_reusable_integration_pr(pr: PrRecord, head: str, base: str) -> bool:
@@ -94,6 +107,54 @@ def _update_reused_integration_pr(
         )
 
 
+def _migrate_legacy_parent_final_pr(
+    forge: Forge, pr: PrRecord, parent_issue_number: int
+) -> bool:
+    """既存の最終PRを必要な場合だけ非closing参照へ安全化する。
+
+    一覧を再生成して本文全体を置換すると、古いPRに残る説明・テーブル・人間の
+    追記を失う。そのためlegacy rendererが先頭へ置いた行だけを置換する。更新失敗は
+    既存PRが引き続き親Issueを自動クローズしうるunsafe状態なので、通常の
+    `waiting_on_children`として黙って扱わず、専用例外で呼び出し元へ伝える。
+    """
+    migrated_body = migrate_generated_parent_closing_reference(
+        pr.body, parent_issue_number
+    )
+    if migrated_body is None:
+        return False
+    try:
+        forge.update_pull_request(pr.number, title=pr.title, body=migrated_body)
+    except Exception as error:
+        print(
+            f"Error: Failed to migrate legacy final PR #{pr.number}; it still "
+            f"contains an active parent closing reference: {error}",
+            file=sys.stderr,
+        )
+        raise ParentFinalPrMigrationError(pr.number, error) from error
+    return True
+
+
+def migrate_open_parent_final_pr(
+    parent_issue_number: int,
+    base_branch: str = "main",
+    forge: Forge | None = None,
+) -> int | None:
+    """既存のオープン最終PRを作成条件と無関係に安全化する。
+
+    子Issueが追加されてopenへ戻ったサイクルでも、legacy PRのclosing referenceを
+    残すと、次のdispatch cycleより先の人間マージで親Issueが閉じてしまう。
+    その競合を防ぐため、この関数はPRを新規作成せず、正規の既存PRを見つけた場合
+    だけ安全な参照へ移行する。
+    """
+    forge = forge or GitHubForge()
+    head = f"parent/issue-{parent_issue_number}"
+    existing = _find_reusable_integration_pr(forge, head, base_branch)
+    if existing is None:
+        return None
+    _migrate_legacy_parent_final_pr(forge, existing, parent_issue_number)
+    return existing.number
+
+
 def ensure_parent_final_pr(
     parent_issue_number: int,
     base_branch: str = "main",
@@ -106,7 +167,7 @@ def ensure_parent_final_pr(
     このPRのマージが「最終マージ」であり、常に人間が行う。マージ検知後の
     親Issueクローズは`parent_completion.process_parent_completion`が担う。
 
-    #681: 本文には`Closes #`と子Issue・サブタスクPR・レビュー結果の一覧を
+    本文には非closingの親Issue参照と子Issue・サブタスクPR・レビュー結果の一覧を
     埋め込む（`final_pr_body`）。`children`は呼び出し元が既に取得済みの子Issue
     で、`find_children_by_parent`の二重呼び出しを避けるために受け取る。
     """
@@ -119,6 +180,12 @@ def ensure_parent_final_pr(
 
         existing = _find_reusable_integration_pr(forge, head, base_branch)
         if existing is not None:
+            # #699: 旧rendererが作った`Closes #<親Issue>`を先に安全化する。
+            # 一覧収集の成否とは無関係に行い、本文全体の再生成で人間の追記を
+            # 失わせない。更新に失敗した場合はParentFinalPrMigrationErrorを
+            # process_parent_completionまで伝え、unsafe状態として報告する。
+            if _migrate_legacy_parent_final_pr(forge, existing, parent_issue_number):
+                return existing.number
             # #375と同じく再利用時も本文を最新化する。ただし一覧を1件も作れな
             # かった縮退サイクルでは書き換えない: 一時的なAPI障害で、投稿済み
             # の正しい一覧を失わせないため（fail closed）。
@@ -132,6 +199,8 @@ def ensure_parent_final_pr(
         return forge.create_pull_request(
             head=head, base=base_branch, title=title, body=body
         )
+    except ParentFinalPrMigrationError:
+        raise
     except Exception as e:
         print(f"Warning: Failed to ensure parent final PR: {e}", file=sys.stderr)
         return None

@@ -4,6 +4,7 @@ import subprocess
 from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.integrator.parent_completion import process_parent_completion
+from orchestune.integrator.pr import ParentFinalPrMigrationError
 from orchestune.models import IssueRecord
 
 
@@ -131,6 +132,42 @@ class TestProcessParentCompletion:
         assert res == {"status": "waiting_on_children", "open_children": [102]}
 
     @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
+    @patch("orchestune.integrator.parent_completion.migrate_open_parent_final_pr")
+    def test_migrates_legacy_final_pr_before_waiting_on_new_open_child(
+        self, mock_migrate_legacy_pr, mock_ensure_pr, fake_forge: MagicMock
+    ):
+        """最終PR作成後に子Issueが追加された場合も、待機へ戻る前にlegacyの
+        closing referenceを除去する。これにより次cycle前のマージ競合を残さない。"""
+        fake_forge.list_sub_issues.return_value = [
+            _issue(101, "CLOSED"),
+            _issue(102, "OPEN"),
+        ]
+        mock_migrate_legacy_pr.return_value = 321
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        mock_migrate_legacy_pr.assert_called_once_with(100, forge=fake_forge)
+        mock_ensure_pr.assert_not_called()
+        assert res == {"status": "waiting_on_children", "open_children": [102]}
+
+    @patch("orchestune.integrator.parent_completion.migrate_open_parent_final_pr")
+    def test_reports_unsafe_legacy_pr_before_waiting_on_open_child(
+        self, mock_migrate_legacy_pr, fake_forge: MagicMock
+    ):
+        fake_forge.list_sub_issues.return_value = [_issue(101, "OPEN")]
+        mock_migrate_legacy_pr.side_effect = ParentFinalPrMigrationError(
+            321, RuntimeError("transient API failure")
+        )
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert res == {
+            "status": "unsafe_final_pr",
+            "pr_number": 321,
+            "reason": "transient API failure",
+        }
+
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
     def test_waits_when_parent_has_no_children_yet(
         self, mock_ensure_pr, fake_forge: MagicMock
     ):
@@ -141,6 +178,26 @@ class TestProcessParentCompletion:
 
         mock_ensure_pr.assert_not_called()
         assert res == {"status": "waiting_on_children", "open_children": []}
+
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
+    def test_reports_an_unsafe_legacy_final_pr_when_migration_fails(
+        self, mock_ensure_pr, fake_forge: MagicMock
+    ):
+        """legacyのclosing referenceを外せない状態は、通常の待機として隠さず
+        unsafeなPR番号と失敗理由をdispatch結果へ返す。"""
+        fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+        fake_forge.get_merged_pr_timestamp.return_value = None
+        mock_ensure_pr.side_effect = ParentFinalPrMigrationError(
+            321, RuntimeError("transient API failure")
+        )
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert res == {
+            "status": "unsafe_final_pr",
+            "pr_number": 321,
+            "reason": "transient API failure",
+        }
 
     def test_does_not_close_when_open_child_exists_despite_historical_merged_pr(
         self, fake_forge: MagicMock

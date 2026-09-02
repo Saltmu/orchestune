@@ -19,7 +19,11 @@ import subprocess
 import sys
 
 from orchestune.forge import Forge, GitHubForge
-from orchestune.integrator.pr import ensure_parent_final_pr
+from orchestune.integrator.pr import (
+    ParentFinalPrMigrationError,
+    ensure_parent_final_pr,
+    migrate_open_parent_final_pr,
+)
 from orchestune.issue_parsing import find_children_by_parent
 
 
@@ -104,6 +108,33 @@ def _is_current_parent_branch_merged(
         return False
 
 
+def _unsafe_parent_final_pr_result(
+    parent_issue_number: int, error: ParentFinalPrMigrationError
+) -> dict:
+    """移行不能なlegacy最終PRを、待機状態へ隠さず結果として可視化する。"""
+    print(
+        f"Error: Parent issue #{parent_issue_number} remains unsafe until final "
+        f"PR #{error.pr_number} is migrated: {error.error}",
+        file=sys.stderr,
+    )
+    return {
+        "status": "unsafe_final_pr",
+        "pr_number": error.pr_number,
+        "reason": str(error.error),
+    }
+
+
+def _migrate_legacy_final_pr_before_completion(
+    parent_issue_number: int, forge: Forge
+) -> dict | None:
+    """子Issue状態の判定より前に既存最終PRだけを安全化する。"""
+    try:
+        migrate_open_parent_final_pr(parent_issue_number, forge=forge)
+    except ParentFinalPrMigrationError as error:
+        return _unsafe_parent_final_pr_result(parent_issue_number, error)
+    return None
+
+
 def process_parent_completion(
     parent_issue_number: int | None, apply: bool, forge: Forge | None = None
 ) -> dict:
@@ -112,6 +143,14 @@ def process_parent_completion(
 
     forge = forge or GitHubForge()
     parent_branch = f"parent/issue-{parent_issue_number}"
+
+    # #699: legacy最終PRのclosing referenceは、子Issueが追加されてopenな
+    # 状態へ戻った後でも、次cycleより先に人間がマージできる。子Issue状態を
+    # 待つ前に既存PRだけを安全化し、移行不能ならunsafeなPR番号を可視化する。
+    if unsafe_result := _migrate_legacy_final_pr_before_completion(
+        parent_issue_number, forge
+    ):
+        return unsafe_result
 
     # #255: 過去のmerged PR記録より先に現在の子Issue状態を確認する。
     # openな子Issueが1件でもあれば、親Issueを再open後に新しい作業が
@@ -145,9 +184,12 @@ def process_parent_completion(
     if children:
         # #681: 一覧テーブルの生成に必要な子Issueは既に取得済みなので、
         # `find_children_by_parent`を再実行させずそのまま渡す。
-        pr_number = ensure_parent_final_pr(
-            parent_issue_number, forge=forge, children=children
-        )
+        try:
+            pr_number = ensure_parent_final_pr(
+                parent_issue_number, forge=forge, children=children
+            )
+        except ParentFinalPrMigrationError as error:
+            return _unsafe_parent_final_pr_result(parent_issue_number, error)
         return {"status": "final_pr_ready", "pr_number": pr_number}
 
     return {"status": "waiting_on_children", "open_children": []}
