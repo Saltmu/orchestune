@@ -39,7 +39,18 @@ def build_task_branch_name(
 
     `subtask_id`が未指定/空の場合は`"task"`にフォールバックする（Orchestune起動時
     の命名規約と一致させる）。
+
+    `prefix`は`/`を含まない単一セグメントでなければならない。
+    `parse_task_branch_name`はprefixを単一セグメントとして解釈するため、
+    階層的なprefix（例: `team/codex`）を許すとこのモジュールが自身の出力を
+    読み戻せなくなり、状態表示や重複PR検出が黙ってそのブランチを取りこぼす。
+    round-trip不変条件を保つため、生成側で明示的に弾く。
     """
+    if not prefix or "/" in prefix:
+        raise ValueError(
+            "task branch prefix must be a single non-empty path segment "
+            f"(no '/'): {prefix!r}"
+        )
     return f"{prefix}/issue-{issue_number}-{subtask_id or 'task'}"
 
 

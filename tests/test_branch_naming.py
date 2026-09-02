@@ -3,6 +3,8 @@ building/parsing Orchestune task branch names (Issue #777)."""
 
 from __future__ import annotations
 
+import pytest
+
 from orchestune.branch_naming import (
     DEFAULT_TASK_BRANCH_PREFIX,
     ParsedTaskBranch,
@@ -29,6 +31,29 @@ class TestBuildTaskBranchName:
 
     def test_empty_subtask_id_falls_back_to_task(self) -> None:
         assert build_task_branch_name(5, "") == "claude/issue-5-task"
+
+    def test_rejects_hierarchical_prefix(self) -> None:
+        """`parse_task_branch_name`はprefixを単一セグメントとして解釈するため、
+        `team/codex`のような階層prefixを許すと自身の出力を読み戻せなくなる。
+        生成側で弾いてround-trip不変条件を保つ。"""
+        with pytest.raises(ValueError, match="single non-empty path segment"):
+            build_task_branch_name(42, "x", prefix="team/codex")
+
+    def test_rejects_empty_prefix(self) -> None:
+        with pytest.raises(ValueError, match="single non-empty path segment"):
+            build_task_branch_name(42, "x", prefix="")
+
+    @pytest.mark.parametrize("prefix", ["claude", "codex", "agy", "feat", "fix"])
+    @pytest.mark.parametrize("subtask_id", ["a", "multi-part-subtask", "a/b", None])
+    def test_every_built_name_round_trips(
+        self, prefix: str, subtask_id: str | None
+    ) -> None:
+        built = build_task_branch_name(42, subtask_id, prefix=prefix)
+        parsed = parse_task_branch_name(built)
+        assert parsed is not None
+        assert parsed.prefix == prefix
+        assert parsed.issue_number == 42
+        assert parsed.subtask_id == (subtask_id or "task")
 
 
 class TestParseTaskBranchName:
