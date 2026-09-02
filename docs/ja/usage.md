@@ -266,7 +266,7 @@ default self-healing allowlistは`--consistency-repair-code`から意図的に�
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
-allow-unsafe-agent-execution = false
+allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
@@ -307,7 +307,7 @@ reasoning_effort = "medium"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
-allow-unsafe-agent-execution = false
+allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1

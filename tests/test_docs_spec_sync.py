@@ -485,6 +485,20 @@ class TestDocsExecutionProfilesConsistency:
         )
         assert ja_cfg2 == en_cfg2
 
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_toml_examples_include_allow_unsafe_for_local_cli(self, lang):
+        section = _section(lang, 4)
+        toml_blocks = self._TOML_FENCE_PATTERN.findall(section)
+        for block in toml_blocks[:2]:
+            data = tomllib.loads(block)
+            config_table = data.get("tool", {}).get("orchestune", data)
+            if config_table.get("dispatch-target") in {
+                "claude-cli",
+                "codex-cli",
+                "agy-cli",
+            }:
+                assert config_table.get("allow-unsafe-agent-execution") is True
+
 
 class TestOrchestuneTomlExample:
     """orchestune.toml.example が存在し、構文・設定値・ドキュメント参照が正しいことを検証する。"""
