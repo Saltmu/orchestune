@@ -13,6 +13,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.dispatch.worktree import file_lock
@@ -560,11 +561,16 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
     @staticmethod
     def _merged_branch_names(ctx: IntegrationContext) -> list[str]:
+        """#777: 削除対象は①正規ブランチ名（Orchestuneが割り当てた名前）のみに
+        限定する。②のPR head_ref由来の名前は対象に含めない — 実際のマージが
+        ②のフォールバックを使った場合、この正規名は存在しないため
+        `_delete_merged_branches`の`branch_exists()`チェックで自然に
+        no-opとなり、無関係なブランチを削除する経路は無い。"""
         tasks = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         names = [
-            f"claude/issue-{tasks[task_id].issue_number}-{task_id}"
+            build_task_branch_name(tasks[task_id].issue_number, task_id)
             for task_id in ctx.merged_tasks
             if task_id in tasks
         ]
@@ -583,7 +589,13 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
 
     def _verify_already_integrated(self, ctx: IntegrationContext) -> bool:
         """`ctx.merged_tasks`の全ブランチが実際に`base_branch`へ含まれている
-        ことを確認できた場合のみ`True`を返す（1件でも未検証ならfail closed）。"""
+        ことを確認できた場合のみ`True`を返す（1件でも未検証ならfail closed）。
+
+        #777: ①正規ブランチ名のみで検証する（②のPR head_ref由来の名前は
+        使わない）。実際のマージが②を使っていた場合、正規名は存在せず検証は
+        失敗（`False`）するが、これは意図的な安全側の劣化であり、誤って
+        `True`を返すことは決して無い。
+        """
         base_branch_name = ctx.base_branch.removeprefix("origin/")
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
@@ -592,7 +604,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
                 return False
-            branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+            branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
             try:
                 if not ctx.forge.is_current_branch_tip_merged_into(
                     branch_name, base_branch_name

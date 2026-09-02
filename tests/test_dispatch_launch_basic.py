@@ -217,6 +217,46 @@ class TestDecideDuplicateCandidates:
         assert decisions[0].is_duplicate is True
         assert decisions[0].existing_pr is pr
 
+    def test_non_claude_prefixed_orchestune_shaped_branch_is_duplicate(self):
+        """#777: 安全弁（Closes一致フォールバック）は`claude/`固定から
+        `issue-{N}-{subtask_id}`形状一致へ広がったため、Codex等が作成した
+        同形状のブランチも重複として認識できる。"""
+        task = _task(1)
+        pr = PrRecord(
+            number=7,
+            head_ref="codex/issue-1-retry",
+            changed_files=(),
+            closes_issue_numbers=(1,),
+        )
+        ctx = _ctx(
+            run_state=RunState(active_worktrees={}, completed_worktrees=[]),
+            prs=[pr],
+            pr_by_branch={},
+        )
+        decisions = _decide_duplicate_candidates([task], ctx)
+        assert decisions[0].is_duplicate is True
+        assert decisions[0].existing_pr is pr
+
+    def test_closes_issue_pr_with_non_shaped_branch_is_not_duplicate(self):
+        """#777の安全弁: `Closes #N`とだけ書かれた無関係PRは、head_refが
+        `issue-{N}-{subtask_id}`形状に一致しない限り重複として誤検出しては
+        ならない（無条件に全プレフィックスを許すわけではない）。"""
+        task = _task(1)
+        pr = PrRecord(
+            number=8,
+            head_ref="some-completely-unrelated-branch",
+            changed_files=(),
+            closes_issue_numbers=(1,),
+        )
+        ctx = _ctx(
+            run_state=RunState(active_worktrees={}, completed_worktrees=[]),
+            prs=[pr],
+            pr_by_branch={},
+        )
+        decisions = _decide_duplicate_candidates([task], ctx)
+        assert decisions[0].is_duplicate is False
+        assert decisions[0].existing_pr is None
+
     def test_ls_remote_failure_is_treated_as_duplicate(self, monkeypatch):
         task = _task(1)
         pr = PrRecord(

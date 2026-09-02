@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.dispatch.phase_reconciliation import _dispatch_not_needed_review
@@ -260,7 +261,7 @@ def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set,
     for task in tasks_by_issue.values():
         if not task.subtask_id:
             continue
-        branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
         subtask_branch_map[task.subtask_id] = branch_name
 
         pr = pr_by_branch.get(branch_name)

@@ -13,6 +13,7 @@ from orchestune.dispatch.recovery import (
     _counter_targets,
     _extract_raw_subtask_id,
     _parse_subtask_info_from_issue,
+    _resolve_recovery_pr_and_branch,
     _restoration_candidates,
     execute_bookkeeping_repair_command,
 )
@@ -685,3 +686,95 @@ class TestRecoveryCounterTargets:
         run_state = RunState(active_worktrees={"101": active})
 
         assert _counter_targets(run_state, []) == ()
+
+
+def _issue(number, created_at="2026-01-01T00:00:00+00:00"):
+    return IssueRecord(
+        number=number, title="", body="", labels=(), created_at=created_at
+    )
+
+
+def _pr(head_ref, number=1):
+    return PrRecord(number=number, head_ref=head_ref, changed_files=())
+
+
+class TestResolveRecoveryPrAndBranch:
+    """#777: 復旧時のブランチ解決は①正規ブランチ名の完全一致を②厳密PR一致
+    より優先する（従来は逆順で、緩い`pr_matches_issue`を先に使っていた）。"""
+
+    def test_canonical_branch_pr_wins_even_with_other_loosely_matching_prs(self):
+        """②（緩いissue番号一致のみのPR）より①（正規ブランチ名との完全一致）
+        を優先すること。"""
+        issue = _issue(101)
+        canonical_pr = _pr("claude/issue-101-task-a", number=1)
+        loose_match_pr = _pr("some-other-branch-mentioning-101", number=2)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-a", [loose_match_pr, canonical_pr]
+        )
+
+        assert branch == "claude/issue-101-task-a"
+        assert external_id == "1"
+        assert external_url == "PR#1"
+
+    def test_falls_back_to_strict_single_pr_match_for_non_canonical_prefix(self):
+        """①が存在しない場合、厳密一致する②（issue番号・subtask_id双方一致）
+        のPR head_refへフォールバックする（Codex/agy/人間の別prefixブランチ
+        も認識する）。"""
+        issue = _issue(202)
+        pr = _pr("codex/issue-202-task-b", number=5)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-b", [pr]
+        )
+
+        assert branch == "codex/issue-202-task-b"
+        assert external_id == "5"
+        assert external_url == "PR#5"
+
+    def test_ambiguous_multiple_distinct_branches_falls_back_to_canonical_guess(self):
+        """②で複数の異なるブランチが厳密一致する場合はtie-breakせず、
+        PRに紐付けない（fail-closed）。ブランチ名自体は正規名を返す
+        （復旧時のstate再構築は非破壊的な最善推測であり、mergeやdeleteの
+        対象選択には使われない）。"""
+        issue = _issue(303)
+        pr_a = _pr("codex/issue-303-task-c", number=1)
+        pr_b = _pr("feat/issue-303-task-c", number=2)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-c", [pr_a, pr_b]
+        )
+
+        assert branch == "claude/issue-303-task-c"
+        assert external_id is None
+        assert external_url is None
+
+    def test_no_match_returns_canonical_guess_without_pr_link(self):
+        issue = _issue(404)
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-d", []
+        )
+
+        assert branch == "claude/issue-404-task-d"
+        assert external_id is None
+        assert external_url is None
+
+    def test_loose_closes_reference_alone_is_not_a_strict_match(self):
+        """本文に`Closes #N`とだけ書かれた無関係PRは、subtask_idを含まない
+        ため②のstrict matcherには一致しない。"""
+        issue = _issue(505)
+        unrelated_pr = PrRecord(
+            number=9,
+            head_ref="unrelated-branch-name",
+            changed_files=(),
+            closes_issue_numbers=(505,),
+        )
+
+        branch, external_id, external_url = _resolve_recovery_pr_and_branch(
+            issue, "task-e", [unrelated_pr]
+        )
+
+        assert branch == "claude/issue-505-task-e"
+        assert external_id is None
+        assert external_url is None

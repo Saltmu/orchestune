@@ -6,12 +6,16 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from orchestune.branch_naming import (
+    build_task_branch_name,
+    find_unique_matching_pr_branch,
+)
 from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import fetch_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator.pr import handle_merge_failure
-from orchestune.models import Task
+from orchestune.models import PrRecord, Task
 
 
 class IntegrationMerger:
@@ -28,6 +32,9 @@ class IntegrationMerger:
         self.original_root = original_root
         self.ci_command = ci_command
         self.forge = forge or GitHubForge()
+        # #777: 1サイクル内の複数タスクでPR一覧を使い回すためのキャッシュ
+        # （IntegrationMergerはサイクルごとに新規生成されるためcycleをまたがない）。
+        self._open_prs_cache: list[PrRecord] | None = None
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
@@ -469,6 +476,41 @@ class IntegrationMerger:
             failed.append(task.subtask_id)
             unavailable.add(task.subtask_id)
 
+    def _candidate_prs_for_fallback(self) -> list[PrRecord]:
+        if self._open_prs_cache is None:
+            try:
+                self._open_prs_cache = self.forge.list_prs(state="open")
+            except Exception:
+                self._open_prs_cache = []
+        return self._open_prs_cache
+
+    def _resolve_merge_branch(
+        self, task: Task, base_branch: str
+    ) -> tuple[str, bool, bool, str]:
+        """マージ対象ブランチ名を解決する（#777: fail-closedな段階的解決）。
+
+        ①Orchestuneが起動時に割り当てた正規ブランチ名への完全一致でのfetchを
+        まず試み、それが失敗した場合に限り②厳密一致する単一のPR head_ref
+        （`issue_number`と`subtask_id`の両方が一致し、かつマッチが一意な場合
+        のみ）へフォールバックする。②で複数の異なるブランチが一致する、また
+        は一致するブランチが無い場合は、①の失敗結果をそのまま返して
+        fail-closedにする（別のブランチを掴んでmergeしない）。
+        """
+        canonical_branch = build_task_branch_name(task.issue_number, task.subtask_id)
+        fetched, already_merged, reason = self._fetch_task_branch(
+            canonical_branch, base_branch
+        )
+        if fetched:
+            return canonical_branch, fetched, already_merged, reason
+
+        fallback_branch = find_unique_matching_pr_branch(
+            self._candidate_prs_for_fallback(), task.issue_number, task.subtask_id
+        )
+        if fallback_branch is None or fallback_branch == canonical_branch:
+            return canonical_branch, fetched, already_merged, reason
+
+        return (fallback_branch, *self._fetch_task_branch(fallback_branch, base_branch))
+
     def _merge_task_if_needed(
         self,
         task: Task,
@@ -482,9 +524,8 @@ class IntegrationMerger:
         if not apply:
             merged.append(task.subtask_id)
             return None
-        branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id or 'task'}"
-        fetched, already_merged, reason = self._fetch_task_branch(
-            branch_name, base_branch
+        branch_name, fetched, already_merged, reason = self._resolve_merge_branch(
+            task, base_branch
         )
         if not fetched:
             self._record_failure(

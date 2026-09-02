@@ -12,6 +12,10 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from orchestune.branch_naming import (
+    build_task_branch_name,
+    find_unique_matching_pr_branch,
+)
 from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
     execution_invariants,
@@ -402,10 +406,25 @@ def _resolve_recovery_pr_and_branch(
     subtask_id: str,
     open_prs: list[PrRecord],
 ) -> tuple[str, str | None, str | None]:
+    """復旧（state消失後の再構築）時のブランチ名・PR紐付けを解決する。
+
+    #777: ①割り当て済みの正規ブランチ名（Orchestuneが起動時に決定論的に
+    組み立てた名前）への完全一致 → ②厳密一致するPRのhead_ref（単一マッチ時
+    のみ）の順で解決する（従来はこの順序が逆で、緩い`pr_matches_issue`を
+    最初に使っていた）。
+    """
+    canonical_branch = build_task_branch_name(issue.number, subtask_id)
     for pr in open_prs:
-        if pr_matches_issue(pr, issue.number, subtask_id):
+        if pr.head_ref == canonical_branch:
             return pr.head_ref, str(pr.number), f"PR#{pr.number}"
-    return f"claude/issue-{issue.number}-{subtask_id}", None, None
+
+    fallback_branch = find_unique_matching_pr_branch(open_prs, issue.number, subtask_id)
+    if fallback_branch is not None:
+        for pr in open_prs:
+            if pr.head_ref == fallback_branch:
+                return pr.head_ref, str(pr.number), f"PR#{pr.number}"
+
+    return canonical_branch, None, None
 
 
 def _build_restored_active_worktree(

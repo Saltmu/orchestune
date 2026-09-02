@@ -23,6 +23,22 @@ create the PR, and handle review feedback from this directory. If the worktree
 cannot be created because the target or branch already exists, inspect it with
 `git worktree list` and choose a new slug; do not overwrite an existing task.
 
+## Branch naming convention (agent-neutral)
+
+Name `<BRANCH>` as `<type>/issue-{N}-{slug}` (e.g. `fix/issue-777-branch-naming`,
+`feat/issue-...`, `docs/issue-...`). This is not a `claude`-specific convention:
+Orchestune's issue/PR-linking logic (`orchestune.branch_naming`,
+`orchestune.pr_link_notice`) recognizes this `<prefix>/issue-{N}-{subtask_id}`
+shape regardless of which agent or human created the branch, so any prefix
+works as long as the `issue-{N}-` segment is present.
+
+When Orchestune Auto-Dispatch has already assigned and pushed the branch for a
+subtask, its name follows the same shape but is not necessarily `claude/...`
+— the default prefix is `claude` for backward compatibility, but the shared
+naming module supports other prefixes. **Always use the exact branch name
+Orchestune assigned; never rename or recreate it from an assumed
+`claude/issue-...` pattern.**
+
 ## Auto-Dispatch exception
 
 When Orchestune Auto-Dispatch has already launched the task in a

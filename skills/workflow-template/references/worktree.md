@@ -25,6 +25,17 @@ this directory. If the worktree cannot be created because the target or branch
 already exists, inspect it with `git worktree list` and choose a new slug; do not
 overwrite an existing task.
 
+## Branch naming convention (agent-neutral)
+
+Name `<BRANCH>` as `<type>/issue-{N}-{slug}` (e.g. `fix/issue-42-null-check`,
+`feat/issue-...`, `docs/issue-...`). This is not tied to any specific agent's
+name: Orchestune's issue/PR-linking logic recognizes this
+`<prefix>/issue-{N}-{subtask_id}` shape regardless of which agent or human
+created the branch, so any prefix works as long as the `issue-{N}-` segment is
+present. If Orchestune has already assigned and pushed the branch for a
+subtask, use that exact name verbatim rather than renaming or recreating it
+from an assumed prefix.
+
 ## Cleanup
 
 ### Tasks managed under Orchestune
