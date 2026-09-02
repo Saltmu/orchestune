@@ -23,6 +23,7 @@
 - **外部CI・PRレビュー待機とタスク多重起動防止**:
   GitHub Actions や AI レビュー（Claude / Codex など）の完了を待機・監視する際は、`schedule` ツールによるタイマーループやコマンドの連打（プロセスの多重起動・割り込み）を厳禁とします。必ず `poetry run python scripts/wait_for_review.py --pr <PR番号> --bot-name <claude|codex>` の単一コマンドを実行し、レビュー依頼コメントの投稿から完了待機・指摘解析サマリーの取得までをアトミックに完了させる構造とすること（事前の個別 `gh pr comment` 投稿は2重送信となるため禁止）。
   - **意図**: タイマーや監視コマンドの重複生成によるエージェントプロセスのN重起動・割り込みループおよびコメントの重複送信を防ぎ、安定した実行環境を維持するため。
+  - **ボット名義でのレビュー依頼時の注意（`.github/workflows/claude-code-review.yml`）**: `claude-code-action` は既定で GitHub App/Bot 名義のワークフロー起動を拒否する。Claude Code on the Web などボット実行環境から `wait_for_review.py --bot-name claude` を実行する場合、起動が成立するのは actor が `allowed_bots` で許可された `claude[bot]` であり、かつ投稿コメントに `wait_for_review.py` が付与する Orchestune trigger marker（`<!-- orchestune:review-trigger bot=claude -->`）が含まれる場合のみである。許可外の actor やマーカー欠落時は job が `skipped` となり、`wait_for_review.py` は Exit 20（レビュー活動なし・timeout）を返す。この場合はまず GitHub Actions の実行履歴で actor・job conclusion・認可エラーの有無を確認すること（詳細は [review-loop.md](../skills/local-ci-developer/references/review-loop.md) を参照）。
 
 ## セキュリティ & リソース制限
 - **機密情報のコミット防止**: APIキーや認証情報をコミット、ログ、チャットに露出させない。
