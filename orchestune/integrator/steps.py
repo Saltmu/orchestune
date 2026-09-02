@@ -13,6 +13,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.dispatch.worktree import file_lock
@@ -564,7 +565,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         names = [
-            f"claude/issue-{tasks[task_id].issue_number}-{task_id}"
+            build_task_branch_name(tasks[task_id].issue_number, task_id)
             for task_id in ctx.merged_tasks
             if task_id in tasks
         ]
@@ -592,7 +593,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
                 return False
-            branch_name = f"claude/issue-{task.issue_number}-{task.subtask_id}"
+            branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
             try:
                 if not ctx.forge.is_current_branch_tip_merged_into(
                     branch_name, base_branch_name
