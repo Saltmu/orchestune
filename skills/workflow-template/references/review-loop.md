@@ -102,6 +102,9 @@ different root causes and require different diagnosis:
   actual review body / inline comments returned by `wait_for_review.py`
   instead of the Actions run.
 
-In both cases, `gh run list --workflow <review-workflow-file>` and
-`gh run view <run-id> --log` show the actor and job conclusion directly.
+In both cases, `gh run list --workflow <review-workflow-file> --json databaseId,event,status,conclusion`
+finds the run, then `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq '.actor.login'`
+shows the triggering actor (neither `gh run list --json` nor `gh run view --json`
+exposes an actor field) and `gh run view <run-id> --json jobs` shows each job's
+conclusion.
 
