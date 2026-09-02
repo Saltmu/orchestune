@@ -75,3 +75,35 @@ After addressing feedback and committing fixes, write a summary reply file expli
 
 After writing the reply file, run `wait_for_review.py` with `--body-file /tmp/review_reply.md` to trigger and wait for re-review.
 
+### Diagnosing Exit 20 vs Exit 30 (Bot-Authored Trigger Failures)
+
+`Exit 20` (no review activity / timeout) and `Exit 30` (activity exists but the
+verdict could not be determined) look similar from the caller's side but have
+different root causes and require different diagnosis:
+
+- **Exit 20 (no activity at all)**: if the trigger comment was posted from a
+  bot-authored execution environment (e.g. Claude Code on the Web, where GitHub
+  records the actor as `claude[bot]` rather than a human account), first check
+  the `Claude Code Review` workflow run for this PR on GitHub Actions:
+  - If the run never appears, or the job shows `skipped`: the actor was not
+    `claude[bot]`, or the trigger comment was missing the Orchestune trigger
+    marker (`<!-- orchestune:review-trigger bot=claude -->`) that
+    `wait_for_review.py` normally stamps automatically — the workflow's `if:`
+    condition requires both for a bot actor (see `.github/workflows/claude-code-review.yml`
+    and issue #692). A missing marker usually means the trigger comment was
+    posted by some other path than `post_review_trigger()` in
+    `scripts/wait_for_review.py`.
+  - If the job shows `failure` with `Workflow initiated by non-human actor`:
+    the actor is a bot not present in `allowed_bots` (only `claude[bot]` is
+    granted) — this is expected for any other bot identity and is not a bug.
+- **Exit 30 (activity present, verdict undetermined)**: the review did run and
+  post something, so the bot-actor gate above already passed; look at the
+  actual review body / inline comments returned by `wait_for_review.py`
+  instead of the Actions run.
+
+In both cases, `gh run list --workflow claude-code-review.yml --json databaseId,event,status,conclusion`
+finds the run, then `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq '.actor.login'`
+shows the triggering actor (neither `gh run list --json` nor `gh run view --json`
+exposes an actor field) and `gh run view <run-id> --json jobs` shows each job's
+conclusion.
+
