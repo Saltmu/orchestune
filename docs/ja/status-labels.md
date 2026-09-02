@@ -237,12 +237,12 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   ことを意味する。親Issueは`reason=completed`でクローズされる。既に
   クローズ済みの親Issueは（`github.get_issue_state`で確認の上）そのまま
   にし、二重のクローズ呼び出しを避ける。
-- クローズ経路の二重化（#681）: 最終PRの本文先頭には
-  `orchestune/integrator/final_pr_body.py`が`Closes #{N}`を付与する。最終PRの
-  baseは既定ブランチ(`main`)であるため、人間がマージした瞬間にGitHub自身が
-  親Issueをクローズし、Issueサイドバーの「Development」欄にも親Issueが連携
-  される。上記のマージ検知によるクローズは冪等なので、どちらの経路が先に
-  働いても結果は変わらない。
+- クローズ責務の単一所有者（#699）: 最終PR本文は親Issueへの非closing参照
+  `Parent issue: #{N}`を保持するが、GitHubがマージ時に親Issueを自動クローズする
+  closing keywordは含めない。したがって、親Issueをクローズできるのは上記の
+  `process_parent_completion`だけである。openな子Issueがある場合は、古い最終PRが
+  マージ済みでも親Issueをクローズしない。旧版が作成したオープン最終PRの先頭
+  `Closes #{N}`も、この非closing参照へ移行する。
 - 本文には併せて、子Issue番号・タイトル・マージ済みサブタスクPR番号・
   レビュー結果（Outcome Record優先、無ければPRの`reviewDecision`）の一覧
   テーブルが自動生成される。最終レビュアーが各サブタスクの変更とAIレビュー

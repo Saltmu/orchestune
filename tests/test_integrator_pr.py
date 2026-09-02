@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from orchestune.integrator.pr import (
+    ParentFinalPrMigrationError,
     ensure_integration_pr,
     ensure_parent_final_pr,
     handle_merge_failure,
@@ -304,7 +305,7 @@ class TestEnsureParentFinalPr(_FakeForgeTest):
 
 
 class TestEnsureParentFinalPrBody(_FakeForgeTest):
-    """#681: 最終統合PR本文への`Closes #`と子Issue/サブタスクPR一覧の埋め込み。"""
+    """最終統合PR本文への非closing親Issue参照と子Issue一覧の埋め込み。"""
 
     def _child(self, number: int = 101, title: str = "[FEAT] サブタスクA"):
         return IssueRecord(
@@ -328,7 +329,7 @@ class TestEnsureParentFinalPrBody(_FakeForgeTest):
             review_decision="APPROVED",
         )
 
-    def test_created_body_contains_closes_and_the_child_table(self):
+    def test_created_body_contains_non_closing_reference_and_child_table(self):
         self.forge.list_open_prs.return_value = []
         self.forge.list_prs.return_value = [self._merged_subtask_pr()]
         self.forge.create_pull_request.return_value = 555
@@ -339,7 +340,8 @@ class TestEnsureParentFinalPrBody(_FakeForgeTest):
 
         assert pr_number == 555
         body = self.forge.create_pull_request.call_args.kwargs["body"]
-        assert body.splitlines()[0] == "Closes #100"
+        assert body.splitlines()[0] == "Parent issue: #100"
+        assert "Closes #100" not in body
         assert "| #101 | [FEAT] サブタスクA | #201 | APPROVED |" in body
 
     def test_reused_pr_body_is_refreshed_with_the_child_table(self):
@@ -446,4 +448,79 @@ class TestEnsureParentFinalPrBody(_FakeForgeTest):
         pr_number = ensure_parent_final_pr(100, forge=self.forge)
 
         assert pr_number == 557
-        assert "Closes #100" in self.forge.create_pull_request.call_args.kwargs["body"]
+        assert (
+            "Parent issue: #100"
+            in self.forge.create_pull_request.call_args.kwargs["body"]
+        )
+
+    def test_migrates_legacy_closing_reference_without_replacing_existing_body(self):
+        """既存の最終PRは、一覧収集が縮退していても先頭のOrchestune生成行だけを
+        非closing参照へ変え、説明・テーブル・人間の追記を保持する。"""
+        legacy_body = (
+            "Closes #100\n\n"
+            "既存の説明です。\n\n"
+            "## 子Issue・サブタスクPR一覧\n\n"
+            "| 子Issue | タイトル |\n"
+            "| --- | --- |\n"
+            "| #101 | 既存タスク |\n\n"
+            "人間による追記です。\n"
+        )
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+                title="Human edited title",
+                body=legacy_body,
+            )
+        ]
+
+        pr_number = ensure_parent_final_pr(100, forge=self.forge, children=[])
+
+        assert pr_number == 321
+        self.forge.create_pull_request.assert_not_called()
+        self.forge.update_pull_request.assert_called_once_with(
+            321,
+            title="Human edited title",
+            body=legacy_body.replace("Closes #100", "Parent issue: #100", 1),
+        )
+
+    def test_safe_legacy_pr_is_not_reupdated_in_a_degraded_cycle(self):
+        """移行は冪等で、すでに非closing化されたPRを一覧収集失敗時に更新しない。"""
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+                body="Parent issue: #100\n\n人間による追記です。\n",
+            )
+        ]
+
+        pr_number = ensure_parent_final_pr(100, forge=self.forge, children=[])
+
+        assert pr_number == 321
+        self.forge.update_pull_request.assert_not_called()
+
+    def test_legacy_migration_failure_is_propagated_as_unsafe(self):
+        self.forge.list_open_prs.return_value = [
+            PrRecord(
+                number=321,
+                head_ref="parent/issue-100",
+                changed_files=(),
+                base_ref="main",
+                is_cross_repository=False,
+                body="Closes #100\n\n既存の説明です。\n",
+            )
+        ]
+        self.forge.update_pull_request.side_effect = RuntimeError(
+            "transient API failure"
+        )
+
+        with pytest.raises(ParentFinalPrMigrationError, match="PR #321") as error:
+            ensure_parent_final_pr(100, forge=self.forge, children=[])
+
+        assert error.value.pr_number == 321
