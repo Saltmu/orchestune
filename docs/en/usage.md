@@ -242,6 +242,7 @@ orchestune-dispatch
 | `--not-needed-review-timeout-seconds <int>` | `86400` | Maximum number of seconds a pending `status:not-needed` independent review (Cloud Routine target only) is kept without either outcome label appearing. An entry past the limit escalates to `status:blocked-human-review`; there is no value that makes it unlimited. |
 | `--model <name>` | - | Override the concrete model name to use at runtime (e.g. `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`). When omitted, follows profile/tier settings. |
 | `--reasoning-effort <effort>` / `--effort <effort>` | - | Override the reasoning effort at runtime (e.g. `low`, `medium`, `high`). When omitted, follows profile settings. |
+| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). When omitted (default `False`), attempting to execute a local CLI target fails closed with a configuration error at startup for safety. In configuration files (`orchestune.toml`, etc.), it can be specified as `allow-unsafe-agent-execution = true` (or `allow_unsafe_agent_execution = true`). |
 | `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
 
 The default self-healing allowlist is intentionally separate from `--consistency-repair-code`. It contains `status.blocked-with-resolved-dependencies`, `status.primary-status-conflict`, `execution.requeue`, `execution.update-bookkeeping`, and `execution.reclaim`, preserving the status promotion/reconciliation, state recovery, and GC behavior that predates the optional loop. Codes that reached a built-in repair pass are not attempted again by the later repository-wide repair loop; commands that appeared only as planner candidates remain eligible for the user allowlist. Opted-in execution commands use the same guarded GC and recovery handlers as the built-in boundaries.
@@ -265,6 +266,7 @@ The dispatcher searches for configuration files in the following order and loads
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
@@ -305,6 +307,7 @@ reasoning_effort = "medium"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
+allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1

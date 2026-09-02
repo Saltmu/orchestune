@@ -152,6 +152,12 @@ class TestDocsCliConsistency:
             k: v for k, v in en.items() if v is not None
         }
 
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_allow_unsafe_agent_execution_is_documented(self, lang):
+        documented = _documented_options(lang)
+        assert "--allow-unsafe-agent-execution" in documented
+        assert documented["--allow-unsafe-agent-execution"] == "False"
+
 
 class TestDocsProvisionCliConsistency:
     """#306: Usageに記載された`orchestune provision`のオプションと実装の乖離を検知する。"""
@@ -478,6 +484,20 @@ class TestDocsExecutionProfilesConsistency:
             tomllib.loads(en_blocks[1])["tool"]["orchestune"]
         )
         assert ja_cfg2 == en_cfg2
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_toml_examples_include_allow_unsafe_for_local_cli(self, lang):
+        section = _section(lang, 4)
+        toml_blocks = self._TOML_FENCE_PATTERN.findall(section)
+        for block in toml_blocks[:2]:
+            data = tomllib.loads(block)
+            config_table = data.get("tool", {}).get("orchestune", data)
+            if config_table.get("dispatch-target") in {
+                "claude-cli",
+                "codex-cli",
+                "agy-cli",
+            }:
+                assert config_table.get("allow-unsafe-agent-execution") is True
 
 
 class TestOrchestuneTomlExample:
