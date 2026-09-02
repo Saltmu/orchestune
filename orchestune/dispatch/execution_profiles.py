@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -330,13 +331,22 @@ def _extract_target_name(target: str | Any) -> str:
     if type_name == "LocalProcessDispatchTarget":
         local_cmd = getattr(target, "_local_cmd", getattr(target, "local_cmd", None))
         if isinstance(local_cmd, str):
-            cmd_lower = local_cmd.lower()
-            if "claude" in cmd_lower:
-                return "claude-cli"
-            if "agy" in cmd_lower:
-                return "agy-cli"
-            if "codex" in cmd_lower:
-                return "codex-cli"
+            try:
+                command = shlex.split(local_cmd)
+            except ValueError:
+                command = []
+            if command:
+                executable = Path(command[0]).name.lower().removesuffix(".exe")
+                local_target_names = {
+                    "claude": "claude-cli",
+                    "claude-cli": "claude-cli",
+                    "agy": "agy-cli",
+                    "agy-cli": "agy-cli",
+                    "codex": "codex-cli",
+                    "codex-cli": "codex-cli",
+                }
+                if executable in local_target_names:
+                    return local_target_names[executable]
     return "local"
 
 
