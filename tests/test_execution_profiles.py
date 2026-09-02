@@ -16,6 +16,7 @@ from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     TargetExecutionConfig,
     TargetProfileConfig,
+    _extract_target_name,
     extract_execution_profile_config,
     load_execution_profile_config,
     resolve_execution_profile,
@@ -853,6 +854,59 @@ class TestResolveModelTier:
 
 
 class TestResolveTaskExecutionSelection:
+    @pytest.mark.parametrize(
+        ("local_cmd", "expected_target", "expected_model"),
+        [
+            (
+                'codex exec "Use claude as the PR reviewer"',
+                "codex-cli",
+                "gpt-5.6-luna",
+            ),
+            (
+                'agy -p "Use claude as the PR reviewer"',
+                "agy-cli",
+                "gemini-2.5-flash-lite",
+            ),
+        ],
+    )
+    def test_local_command_prompt_text_does_not_change_target_name(
+        self,
+        local_cmd: str,
+        expected_target: str,
+        expected_model: str,
+    ) -> None:
+        from orchestune.models import Task
+
+        task = Task(
+            issue_number=1,
+            subtask_id="t1",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            model_tier="weak",
+        )
+        target = LocalProcessDispatchTarget(local_cmd=local_cmd)
+        config = DispatcherConfig(
+            max_concurrent=1,
+            max_launches_per_window=1,
+            window_seconds=60,
+            run_state_path=Path("/tmp/rs.json"),
+            events_log_path=Path("/tmp/ev.jsonl"),
+            worktree_root=Path("/tmp/wt"),
+            apply=False,
+            dispatch_target=target,
+            execution_profile_config=ExecutionProfileConfig(
+                model_tiers={"weak": {expected_target: expected_model}}
+            ),
+        )
+
+        assert _extract_target_name(target) == expected_target
+        assert resolve_task_execution_selection(task, config).model == expected_model
+
     def test_resolve_task_execution_selection_with_model_tier(self) -> None:
         from orchestune.models import Task
 

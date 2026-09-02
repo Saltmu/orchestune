@@ -174,6 +174,8 @@ class DispatchHandle:
 class DispatchTarget(ABC):
     """タスクを実際にどこへディスパッチするかを表す戦略インターフェース。"""
 
+    target_name: str | None = None
+
     @abstractmethod
     def launch(
         self,
@@ -438,11 +440,13 @@ class LocalProcessDispatchTarget(DispatchTarget):
         log_dir: str | Path = Path("logs"),
         local_cmd: str | None = None,
         reviewer_bot: ReviewerBot | None = None,
+        target_name: str | None = None,
     ):
         self._command_builder = command_builder
         self._log_dir = Path(log_dir)
         self._local_cmd = local_cmd
         self._reviewer_bot = reviewer_bot
+        self.target_name = target_name
 
     def launch(
         self,
@@ -585,6 +589,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
     BETA_HEADER = "experimental-cc-routine-2026-04-01"
     ANTHROPIC_VERSION = "2023-06-01"
     _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+    target_name = "cloud-routine"
 
     def __init__(
         self,
@@ -834,6 +839,8 @@ class CodexCloudDispatchTarget(DispatchTarget):
     Cloud実タスク状態照合とPR状態を組み合わせて完了判定を行う。
     """
 
+    target_name = "codex-cloud"
+
     def __init__(
         self,
         environment_id: str,
@@ -1057,9 +1064,11 @@ def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
             local_cmd=config.local_cmd
             or _default_local_cmd_template(target_name, reviewer_bot),
             reviewer_bot=reviewer_bot,
+            target_name=target_name,
         )
     return LocalProcessDispatchTarget(
         log_dir=config.log_dir,
         local_cmd=config.local_cmd,
         reviewer_bot=reviewer_bot,
+        target_name="local",
     )
