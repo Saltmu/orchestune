@@ -84,12 +84,30 @@ class FakeForge:
             int(child_issue_number)
         )
 
+    def remove_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None:
+        parent = int(parent_issue_number)
+        child = int(child_issue_number)
+        children = self.sub_issues.get(parent, [])
+        if child not in children:
+            return
+        children.remove(child)
+
     def set_blocked_by(
         self, issue_number: int | str, blocking_issue_number: int | str
     ) -> None:
-        self.blocked_by.setdefault(int(issue_number), []).append(
-            int(blocking_issue_number)
-        )
+        blockers = self.blocked_by.setdefault(int(issue_number), [])
+        if int(blocking_issue_number) not in blockers:
+            blockers.append(int(blocking_issue_number))
+
+    def remove_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None:
+        blockers = self.blocked_by.get(int(issue_number), [])
+        blocker = int(blocking_issue_number)
+        if blocker in blockers:
+            blockers.remove(blocker)
 
     def list_sub_issues(self, parent_issue_number: int | str) -> list[IssueRecord]:
         numbers = self.sub_issues.get(int(parent_issue_number), [])
