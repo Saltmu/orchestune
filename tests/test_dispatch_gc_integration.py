@@ -65,6 +65,10 @@ class TestGC:
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=False,
+            ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
@@ -142,6 +146,10 @@ class TestGC:
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=False,
+            ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
@@ -205,7 +213,8 @@ class TestGC:
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
             ),
             patch(
-                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=False,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
@@ -270,7 +279,10 @@ class TestGC:
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             patch("orchestune.dispatch.gc._is_worktree_complete", return_value=False),
             patch("orchestune.dispatch.gc.zombies.is_process_alive", return_value=True),
-            patch("orchestune.dispatch.gc.zombies.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=True,
+            ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
@@ -336,6 +348,10 @@ class TestGC:
             ),
             patch(
                 "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
+            ),
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                return_value=False,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
