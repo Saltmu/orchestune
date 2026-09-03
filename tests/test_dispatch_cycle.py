@@ -50,6 +50,7 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
+            "orchestune.dispatch.execution_repair.is_process_alive",
             "orchestune.dispatch.gc.is_process_alive",
             "orchestune.dispatch.gc.completion.is_process_alive",
             "orchestune.dispatch.gc.zombies.is_process_alive",

@@ -512,7 +512,8 @@ class TestMainDispatchTargetAutoDetection:
                     str(tmp_path / "rs.json"),
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
-                ]
+                ],
+                cwd=tmp_path,
             )
 
         assert mock_build.call_args.args[0].dispatch_target_name == "auto"
@@ -533,7 +534,8 @@ class TestMainDispatchTargetAutoDetection:
                     str(tmp_path / "rs.json"),
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
-                ]
+                ],
+                cwd=tmp_path,
             )
 
         assert mock_build.call_args.args[0].dispatch_target_name == "cloud-routine"
@@ -558,7 +560,8 @@ class TestMainDispatchTargetAutoDetection:
                     str(tmp_path / "rs.json"),
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
-                ]
+                ],
+                cwd=tmp_path,
             )
 
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
@@ -580,7 +583,8 @@ class TestMainDispatchTargetAutoDetection:
                     str(tmp_path / "rs.json"),
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
-                ]
+                ],
+                cwd=tmp_path,
             )
 
         assert mock_build.call_args.args[0].reviewer_bot == "codex"
@@ -605,7 +609,8 @@ class TestMainDispatchTargetAutoDetection:
                     str(tmp_path / "rs.json"),
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
-                ]
+                ],
+                cwd=tmp_path,
             )
 
         config = mock_cycle.call_args.args[0]
@@ -628,7 +633,8 @@ class TestMainDispatchTargetAutoDetection:
                     str(tmp_path / "rs.json"),
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
-                ]
+                ],
+                cwd=tmp_path,
             )
 
         config = mock_cycle.call_args.args[0]
