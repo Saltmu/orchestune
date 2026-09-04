@@ -143,6 +143,7 @@ def _fetch_outcome_for_active(
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
         warn_forge_failure("list_comments", active.issue_number, error, error_sink)
         return "error"
+    had_error = False
     try:
         prs = forge.list_prs(state="all")
         matching_prs = [
@@ -158,11 +159,22 @@ def _fetch_outcome_for_active(
             if pr.number != active.issue_number:
                 try:
                     comments.extend(forge.list_comments(pr.number))
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return parse_from_comments(comments, since=active.started_at)
+                except Exception as error:  # noqa: BLE001 - 事実だけ表に出す
+                    warn_forge_failure("list_comments", pr.number, error, error_sink)
+                    had_error = True
+    except Exception as error:  # noqa: BLE001 - 事実だけ表に出す
+        warn_forge_failure("list_prs", active.issue_number, error, error_sink)
+        had_error = True
+
+    outcome = parse_from_comments(comments, since=active.started_at)
+    # PR#789レビュー対応(Codex P2): 後段の取得に失敗した状態で結論が見つからない
+    # 場合は保守的に保留する。ここで`None`を返すと、Outcome Recordを一時的な
+    # API障害で見落としたまま`completed_without_outcome`（人手レビューへの
+    # エスカレーションとrun_stateからの除去）へ進んでしまう。
+    # 既に読めたコメントに結論があるならそれを使う（取りこぼしていない）。
+    if outcome is None and had_error:
+        return "error"
+    return outcome
 
 
 def _decide_action_from_outcome(
@@ -762,9 +774,9 @@ def _collect_open_pr_comments(
             try:
                 all_comments.extend(config.resolved_forge.list_comments(pr_num))
             except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-                warn_forge_failure(
-                    "list_comments", handle.issue_number, error, error_sink
-                )
+                # PR#789レビュー対応(Codex P2): 読めなかったのはPRのコメントなので、
+                # Issue番号ではなくPR番号を名乗る。
+                warn_forge_failure("list_comments", pr_num, error, error_sink)
                 had_error = True
     return all_comments, had_error
 

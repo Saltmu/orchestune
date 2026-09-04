@@ -236,3 +236,77 @@ class TestWarningEncoding:
         capsys.readouterr().err.encode("ascii")
         # レポートはUTF-8で書かれるため、原文をそのまま残す。
         assert failures[0].description == "RuntimeError: 接続に失敗しました"
+
+
+class TestSecondaryOutcomeLookupFailures:
+    """PR#789レビュー(Codex P2): Issueコメント取得の後段で落ちた呼び出しも報告する。
+
+    ここを黙って握り潰すと、一時的な障害でOutcome Recordを見落としたまま
+    `completed_without_outcome`（人手レビューへのエスカレーションと
+    run_stateからの除去）へ進んでしまう。保守的な保留で待つべき場面。
+    """
+
+    def _forge(self, issue_comments):
+        forge = MagicMock()
+        forge.list_comments.side_effect = lambda number: (
+            issue_comments if number == 702 else []
+        )
+        return forge
+
+    def test_list_prs_failure_holds_when_no_outcome_was_found(self, tmp_path, capsys):
+        forge = self._forge([])
+        forge.list_prs.side_effect = RuntimeError("504 Gateway Timeout")
+        failures: list[ForgeFailure] = []
+
+        result = _fetch_outcome_for_active(_active(tmp_path), forge, failures)
+
+        assert result == "error"
+        assert [failure.operation for failure in failures] == ["list_prs"]
+        assert WARN_PREFIX in capsys.readouterr().err
+
+    def test_outcome_already_found_on_the_issue_still_wins(self, tmp_path):
+        """後段が落ちても、既に読めたコメントに結論があるならそれを使う。"""
+        forge = self._forge(
+            [
+                {
+                    "body": "<!-- orchestune:outcome -->\n"
+                    '```json\n{"result": "done", "issue": 702}\n```',
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+        )
+        forge.list_prs.side_effect = RuntimeError("504 Gateway Timeout")
+        failures: list[ForgeFailure] = []
+
+        result = _fetch_outcome_for_active(
+            _active(tmp_path, started_at=None), forge, failures
+        )
+
+        assert result != "error"
+        assert result is not None
+        assert result.result == "done"
+        # 障害自体は起きているので、記録と警告は残す。
+        assert [failure.operation for failure in failures] == ["list_prs"]
+
+    def test_pr_comment_failure_is_attributed_to_the_pr(self, tmp_path, capsys):
+        forge = MagicMock()
+        forge.list_prs.return_value = [
+            PrRecord(
+                number=1234,
+                head_ref="claude/issue-702-task-a",
+                changed_files=(),
+                state="OPEN",
+            )
+        ]
+        forge.list_comments.side_effect = lambda number: (
+            [] if number == 702 else _raise(RuntimeError("502 Bad Gateway"))
+        )
+        failures: list[ForgeFailure] = []
+
+        assert _fetch_outcome_for_active(_active(tmp_path), forge, failures) == "error"
+
+        assert "#1234" in capsys.readouterr().err
+
+
+def _raise(error):
+    raise error
