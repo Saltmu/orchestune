@@ -491,6 +491,35 @@ class TestAddSubIssue:
         assert gh_run.call_args.args[0][:3] == ["gh", "issue", "view"]
         assert gh_run.call_count == 1
 
+    def test_relinks_different_existing_parent(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": {"number": 999}, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.add_sub_issue(100, 101)
+
+        assert gh_run.call_args_list[1].args[0] == [
+            "gh",
+            "issue",
+            "edit",
+            "101",
+            "--parent",
+            "100",
+        ]
+
+    def test_precondition_read_unavailable_maps_to_relationship_unavailable_error(
+        self, forge: GitHubForge, gh_run
+    ):
+        from orchestune.forge import RelationshipUnavailableError
+
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh"], stderr=b"unknown field: parent"
+        )
+
+        with pytest.raises(RelationshipUnavailableError):
+            forge.add_sub_issue(100, 101)
+
     def test_preserves_conflicting_parent_without_mutation(
         self, forge: GitHubForge, gh_run
     ):
@@ -591,18 +620,17 @@ class TestSetBlockedBy:
 
         gh_run.assert_called_once()
 
-    def test_removing_missing_requested_relationship_conflict_is_fail_closed(
+    def test_precondition_read_unavailable_maps_to_relationship_unavailable_error(
         self, forge: GitHubForge, gh_run
     ):
-        gh_run.stdout(
-            '{"number": 102, "title": "task", "body": "", "parent": null, '
-            '"blockedBy": {"nodes": [{"number": 103}]}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        from orchestune.forge import RelationshipUnavailableError
+
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh"], stderr=b"unknown field: blockedBy"
         )
 
-        # A blocker that is absent is an idempotent removal, even when another
-        # blocker exists; no unrelated relationship is touched.
-        forge.remove_blocked_by(102, 101)
-        gh_run.assert_called_once()
+        with pytest.raises(RelationshipUnavailableError):
+            forge.set_blocked_by(102, 101)
 
     def test_propagates_unrelated_relationship_command_errors(
         self, forge: GitHubForge, gh_run

@@ -42,6 +42,28 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
 """
 
 
+def _error_detail(exc: subprocess.CalledProcessError) -> str:
+    return " ".join(
+        value.decode("utf-8", errors="replace")
+        if isinstance(value, bytes)
+        else str(value or "")
+        for value in (exc.output, exc.stderr)
+    ).lower()
+
+
+def _is_relationship_unavailable_error(exc: subprocess.CalledProcessError) -> bool:
+    detail = _error_detail(exc)
+    return any(
+        marker in detail
+        for marker in (
+            "unknown flag",
+            "unknown option",
+            "not supported",
+            "unknown field",
+        )
+    )
+
+
 class _Runner(Protocol):
     def __call__(self, args: list[str], input_text: str | None = None) -> str: ...
 
@@ -284,18 +306,25 @@ class GitHubIssueMixin:
         number = validate_issue_number(issue_number)
         self._run(["gh", "issue", "edit", str(number), "--title", title])
 
+    def _get_issue_for_relationship(self, issue_number: int) -> IssueRecord | None:
+        try:
+            return self.get_issue(issue_number)
+        except subprocess.CalledProcessError as exc:
+            if _is_relationship_unavailable_error(exc):
+                raise RelationshipUnavailableError(
+                    "native issue relationships are unavailable"
+                ) from exc
+            raise
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
         parent = validate_issue_number(parent_issue_number)
         child = validate_issue_number(child_issue_number)
-        current = self.get_issue(child)
+        current = self._get_issue_for_relationship(child)
         if current is not None and current.parent is not None:
             if current.parent.get("number") == parent:
                 return
-            raise ValueError(
-                f"Issue #{child} has parent #{current.parent.get('number')}, not #{parent}"
-            )
         self._run_relationship_command(
             ["gh", "issue", "edit", str(child), "--parent", str(parent)]
         )
@@ -305,7 +334,7 @@ class GitHubIssueMixin:
     ) -> None:
         parent = validate_issue_number(parent_issue_number)
         child = validate_issue_number(child_issue_number)
-        current = self.get_issue(child)
+        current = self._get_issue_for_relationship(child)
         if current is None or current.parent is None:
             return
         if current.parent.get("number") != parent:
@@ -321,7 +350,7 @@ class GitHubIssueMixin:
     ) -> None:
         number = validate_issue_number(issue_number)
         blocker = validate_issue_number(blocking_issue_number)
-        current = self.get_issue(number)
+        current = self._get_issue_for_relationship(number)
         if current is not None and blocker in current.blocked_by:
             return
         self._run_relationship_command(
@@ -333,7 +362,7 @@ class GitHubIssueMixin:
     ) -> None:
         number = validate_issue_number(issue_number)
         blocker = validate_issue_number(blocking_issue_number)
-        current = self.get_issue(number)
+        current = self._get_issue_for_relationship(number)
         if current is None or blocker not in current.blocked_by:
             return
         self._run_relationship_command(
@@ -344,16 +373,7 @@ class GitHubIssueMixin:
         try:
             self._run(args)
         except subprocess.CalledProcessError as exc:
-            detail = " ".join(
-                value.decode("utf-8", errors="replace")
-                if isinstance(value, bytes)
-                else str(value or "")
-                for value in (exc.output, exc.stderr)
-            ).lower()
-            if any(
-                marker in detail
-                for marker in ("unknown flag", "unknown option", "not supported")
-            ):
+            if _is_relationship_unavailable_error(exc):
                 raise RelationshipUnavailableError(
                     "native issue relationships are unavailable"
                 ) from exc
@@ -445,7 +465,7 @@ class GitHubIssueMixin:
                 ]
             )
         except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").lower()
+            detail = _error_detail(exc)
             if "404" in detail or "not found" in detail:
                 return None
             raise
