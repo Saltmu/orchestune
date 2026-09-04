@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from orchestune.branch_naming import branch_matches_task
 from orchestune.dispatch.scoring import Task
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
@@ -78,8 +79,51 @@ def _collect_branch_footprints(
     return sorted(branch_footprints), sorted(unknown_branches)
 
 
+def _direct_dependency_identities(
+    task: Task, subtask_id_to_task: dict[str, Task]
+) -> tuple[tuple[int, str], ...]:
+    """taskの直接の`depends_on`が指す依存元タスクの(issue番号, subtask_id)集合。
+
+    #796: スタッキング起動(`orchestune.dispatch.launch._get_stack_eligible_tasks`)
+    は依存元ブランチをbaseに積むため、依存元のPR・ブランチとの重複は
+    「Orchestune管理外の衝突」ではない。`_is_task_stack_eligible`はスタック時に
+    baseへ入るのが直接依存1本だけであることを前提にしているため、除外もそれに
+    揃えて直接依存に限る（祖先依存はここでは解決しない）。
+
+    `depends_on`が指すsubtask_idが候補集合に見つからない（解決不能な依存）場合は
+    無視する。fail closedのまま、従来通り衝突判定に残る。
+    """
+    identities = []
+    for dep in task.depends_on:
+        dep_task = subtask_id_to_task.get(dep)
+        if dep_task is not None:
+            identities.append((dep_task.issue_number, dep_task.subtask_id))
+    return tuple(identities)
+
+
+def _is_dependency_pr(
+    pr: PrRecord, dependency_identities: tuple[tuple[int, str], ...]
+) -> bool:
+    return any(
+        pr_matches_issue(pr, dep_issue_number, dep_subtask_id)
+        for dep_issue_number, dep_subtask_id in dependency_identities
+    )
+
+
+def _is_dependency_branch(
+    branch: str, dependency_identities: tuple[tuple[int, str], ...]
+) -> bool:
+    return any(
+        branch_matches_task(branch, dep_issue_number, dep_subtask_id)
+        for dep_issue_number, dep_subtask_id in dependency_identities
+    )
+
+
 def _external_prs(
-    task: Task, prs: list[PrRecord], active_set: set[str]
+    task: Task,
+    prs: list[PrRecord],
+    active_set: set[str],
+    dependency_identities: tuple[tuple[int, str], ...],
 ) -> list[PrRecord]:
     return sorted(
         (
@@ -87,6 +131,7 @@ def _external_prs(
             for pr in prs
             if pr.head_ref not in active_set
             and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
+            and not _is_dependency_pr(pr, dependency_identities)
         ),
         key=lambda pr: pr.number,
     )
@@ -105,19 +150,25 @@ def _collect_task_conflicts(
     prs: list[PrRecord],
     branch_footprints: list[tuple[str, set[str]]],
     unknown_branches: list[str],
+    dependency_identities: tuple[tuple[int, str], ...],
 ) -> tuple[ExternalLockConflict, ...]:
     """タスクが外部ロックされる理由をすべて集める。空タプルなら衝突なし。
 
     並びは決定的（ブランチ名昇順→PR番号昇順→fail closed種別）。Issueコメントの
-    dedupは本文の完全一致で行うため、同じ衝突集合からは毎回同じ本文が要る。"""
+    dedupは本文の完全一致で行うため、同じ衝突集合からは毎回同じ本文が要る。
+
+    `dependency_identities`（#796）に一致するPR・ブランチは、`branch-diff-unknown`
+    /`pr-files-truncated`によるfail closedも含めて衝突の母集団から除外する。
+    """
     task_footprint = {path for path in task.footprint if not _is_hotspot(path)}
     if not task_footprint:
         return ()
-    external_prs = _external_prs(task, prs, active_set)
+    external_prs = _external_prs(task, prs, active_set, dependency_identities)
     conflicts = [
         ExternalLockConflict(KIND_BRANCH, branch, files)
         for branch, footprint in branch_footprints
-        if (files := _overlapping_files(task_footprint, footprint))
+        if not _is_dependency_branch(branch, dependency_identities)
+        and (files := _overlapping_files(task_footprint, footprint))
     ]
     conflicts.extend(
         ExternalLockConflict(KIND_PR, f"#{pr.number}", files)
@@ -127,6 +178,7 @@ def _collect_task_conflicts(
     conflicts.extend(
         ExternalLockConflict(KIND_BRANCH_DIFF_UNKNOWN, branch)
         for branch in unknown_branches
+        if not _is_dependency_branch(branch, dependency_identities)
     )
     conflicts.extend(
         ExternalLockConflict(KIND_PR_FILES_TRUNCATED, f"#{pr.number}")
@@ -146,6 +198,12 @@ def scan_external_locks(
     branch_footprints, unknown_branches = _collect_branch_footprints(
         remote_branches, active_set
     )
+    # #796: `depends_on`の解決に使う。呼び出し元(`_decide_external_lock_sync`)は
+    # 実際には全タスク（queued/blocked/in-progress/done/not-needed）を渡すため、
+    # 依存元タスクがまだ完了していなくてもここで引ける。
+    subtask_id_to_task = {
+        task.subtask_id: task for task in queued_tasks if task.subtask_id
+    }
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
     conflicts_by_issue: dict[int, tuple[ExternalLockConflict, ...]] = {}
@@ -159,8 +217,14 @@ def scan_external_locks(
                 to_unlock.append(task)
             continue
 
+        dependency_identities = _direct_dependency_identities(task, subtask_id_to_task)
         conflicts = _collect_task_conflicts(
-            task, active_set, prs, branch_footprints, unknown_branches
+            task,
+            active_set,
+            prs,
+            branch_footprints,
+            unknown_branches,
+            dependency_identities,
         )
         if conflicts:
             conflicts_by_issue[task.issue_number] = conflicts

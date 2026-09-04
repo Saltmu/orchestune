@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 import orchestune.dispatch.locks
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport, _sync_external_locks
 from orchestune.dispatch.locks import (
@@ -35,10 +36,11 @@ def _task(
     footprint=("src/foo.py",),
     depends_on=(),
     status_labels=("status:queued",),
+    subtask_id=None,
 ):
     return Task(
         issue_number=issue_number,
-        subtask_id=f"task-{issue_number}",
+        subtask_id=subtask_id or f"task-{issue_number}",
         footprint=footprint,
         symbols=(),
         risk=risk,
@@ -909,3 +911,188 @@ class TestExternalLockConflicts:
             active_branches=[],
         )
         assert result.conflicts == {}
+
+
+class TestDependencyExclusion:
+    """#796: `depends_on`で指した依存元のPR・ブランチは、スタッキング起動
+    （`orchestune/dispatch/launch.py`の`_get_stack_eligible_tasks`）で
+    base取り込みが前提の変更であり、「Orchestune管理外の衝突」ではない。
+    依存元由来の重複だけを外部ロックの対象から除外する。"""
+
+    def _dependency_task(self, issue_number=100, subtask_id="dep-a", **kwargs):
+        # 依存元タスク自身のfootprintは空にする: 空footprintのタスクは
+        # `_collect_task_conflicts`が即座に`()`を返すため、依存元タスク自身が
+        # 自分の未アクティブブランチと衝突して(無関係に)ロックされる、この
+        # テストの本題ではない挙動を混入させない。
+        kwargs.setdefault("footprint", ())
+        return _task(issue_number, subtask_id=subtask_id, **kwargs)
+
+    def test_does_not_lock_task_against_dependency_pr(self):
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/dep-a-impl",
+                changed_files=("src/shared.py",),
+                closes_issue_numbers=(100,),
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert result.conflicts == {}
+
+    def test_still_locks_task_against_unrelated_pr_despite_dependency(self):
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/other",
+                changed_files=("src/shared.py",),
+                closes_issue_numbers=(999,),
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_does_not_lock_task_against_dependency_branch(self):
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        branch_name = build_task_branch_name(100, "dep-a", prefix="fix")
+        result = scan_external_locks(
+            [dep_task, task],
+            remote_branches=[(branch_name, ("src/shared.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+        assert result.conflicts == {}
+
+    def test_still_locks_task_against_unrelated_branch_despite_dependency(self):
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        result = scan_external_locks(
+            [dep_task, task],
+            remote_branches=[("fix/issue-999-other", ("src/shared.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_dependency_branch_diff_unknown_is_excluded_from_fail_closed(self):
+        """#245のfail closedは、依存元自身の差分取得不能では発動しない。"""
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        branch_name = build_task_branch_name(100, "dep-a")
+        result = scan_external_locks(
+            [dep_task, task],
+            remote_branches=[(branch_name, None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+        assert result.conflicts == {}
+
+    def test_fail_closed_still_applies_for_unrelated_unknown_branch_despite_dependency(
+        self,
+    ):
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        dep_branch_name = build_task_branch_name(100, "dep-a")
+        result = scan_external_locks(
+            [dep_task, task],
+            remote_branches=[(dep_branch_name, None), ("feat/unrelated-x", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_dependency_pr_files_truncated_is_excluded(self):
+        """truncated状態のPRはfootprintの重なりに関わらず無条件でfail closed
+        するため、依存元由来である場合は除外されないと#796の意図を満たさない。"""
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/unrelated_to_pr.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/dep-a-impl",
+                changed_files=("something_else.py",),
+                closes_issue_numbers=(100,),
+                is_files_truncated=True,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert result.conflicts == {}
+
+    def test_transitive_dependency_is_not_excluded(self):
+        """除外は直接の`depends_on`に限る。祖先依存(推移依存)のPRとの重複は
+        引き続き外部ロック対象。"""
+        grandparent = self._dependency_task(issue_number=200, subtask_id="dep-c")
+        parent = self._dependency_task(
+            issue_number=100, subtask_id="dep-b", depends_on=("dep-c",)
+        )
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-b",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/dep-c-impl",
+                changed_files=("src/shared.py",),
+                closes_issue_numbers=(200,),
+            )
+        ]
+        result = scan_external_locks(
+            [grandparent, parent, task],
+            remote_branches=[],
+            prs=prs,
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_unresolvable_dependency_subtask_id_still_locks(self):
+        """`depends_on`が指すsubtask_idが候補集合に存在しない（解決不能）場合は
+        従来通りfail closedでロック対象のままとする。"""
+        task = _task(1, footprint=("src/shared.py",), depends_on=("missing-dep",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/other",
+                changed_files=("src/shared.py",),
+                closes_issue_numbers=(55,),
+            )
+        ]
+        result = scan_external_locks(
+            [task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_unlocks_previously_locked_task_when_only_conflict_is_dependency(self):
+        """#698の実例: 依存元PRだけがロック理由だったタスクは、依存元除外の
+        導入により次サイクルで解除される。"""
+        dep_task = self._dependency_task()
+        locked_task = _task(
+            1,
+            footprint=("src/shared.py",),
+            depends_on=("dep-a",),
+            status_labels=("status:external-lock",),
+        )
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/dep-a-impl",
+                changed_files=("src/shared.py",),
+                closes_issue_numbers=(100,),
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, locked_task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.to_lock == []
+        assert [t.issue_number for t in result.to_unlock] == [1]

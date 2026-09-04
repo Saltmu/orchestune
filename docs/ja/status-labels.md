@@ -200,6 +200,14 @@ stateDiagram-v2
   （判定は`orchestune/dispatch/locks.py`の`scan_external_locks`）
 - 付与条件: タスクのfootprintが、Orchestune管理外のリモートブランチ・PRの
   変更ファイルと重なる場合（`status:done`のタスクは対象外）。
+  - ただし、タスク自身の直接の`depends_on`が指す依存元タスクのPR・ブランチとの
+    重なりは対象外（[#796](https://github.com/Saltmu/orchestune/issues/796)）。
+    スタッキング起動（`orchestune/dispatch/launch.py`の
+    `_get_stack_eligible_tasks`）は依存元ブランチをbaseに積むため、
+    その重なりは「Orchestune管理外の衝突」ではない。祖先依存（依存元の
+    さらに依存元）までは遡らない。依存元のブランチ名・PRを既存の命名規約
+    （`orchestune.branch_naming`）や`Closes`参照等から同定できない場合は、
+    従来通り衝突として扱う（fail closed）。
 - 解除条件: 重なりが解消された場合。`status:done`に到達したタスクが
   まだロック中だった場合も解除する。解除時、`status:done`でなければ
   `status:queued`へ戻す。
