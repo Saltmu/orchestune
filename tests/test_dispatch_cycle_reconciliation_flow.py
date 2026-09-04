@@ -7,7 +7,6 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 
 import subprocess
 from contextlib import ExitStack, contextmanager
-from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
 import pytest
@@ -25,6 +24,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
+from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -491,7 +491,7 @@ class TestRunDispatchCycleBlockedPromotion:
 
         def sync_locks(*_args, **_kwargs):
             order.append("external-lock-sync")
-            return SimpleNamespace(to_lock=[], to_unlock=[])
+            return ExternalLockScanResult(to_lock=[], to_unlock=[])
 
         with (
             patch(

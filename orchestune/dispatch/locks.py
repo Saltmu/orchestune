@@ -189,11 +189,15 @@ _RELEASE_NOTICE = (
 
 
 def describe_conflict(conflict: ExternalLockConflict) -> str:
-    """1行に収まる衝突の要約（サイクルサマリー・stderr向け）。"""
+    """1行に収まる衝突の要約。
+
+    サイクルサマリーのテキスト経路（stderr）にそのまま載るため、ASCIIだけで
+    組む。`local-ci.ps1`を使うWindowsのコンソール（cp932）で壊れないため。
+    """
     if conflict.kind == KIND_BRANCH_DIFF_UNKNOWN:
-        return f"{conflict.source} (差分取得不能)"
+        return f"{conflict.source} (diff unavailable)"
     if conflict.kind == KIND_PR_FILES_TRUNCATED:
-        return f"{conflict.source} (変更ファイル一覧が不完全)"
+        return f"{conflict.source} (file list truncated)"
     return f"{conflict.source} [{', '.join(conflict.files)}]"
 
 

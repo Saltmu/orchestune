@@ -10,6 +10,12 @@ from orchestune.consistency.supervisor import consistency_cycle_to_dict
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.scoring import decision_to_dict
+from orchestune.dispatch.summary import (
+    merge_skips,
+    render_forge_warnings_markdown,
+    render_skipped_markdown,
+    skip_record_to_dict,
+)
 
 
 def _format_post_cycle_summary(
@@ -107,6 +113,28 @@ def _format_scheduling_decisions(cycle_report: CycleReport) -> list[str]:
     return lines
 
 
+def _format_lock_changes(cycle_report: CycleReport) -> list[str]:
+    lines = ["### 🔒 外部ロック（External Lock）変更"]
+    to_lock = cycle_report.lock_changes.get("to_lock", [])
+    to_unlock = cycle_report.lock_changes.get("to_unlock", [])
+    if not to_lock and not to_unlock:
+        lines.append("外部ロックの変更はありませんでした。\n")
+        return lines
+    lines.append("| サブタスクID | Issue番号 | アクション |")
+    lines.append("| --- | --- | --- |")
+    lines.extend(
+        f"| `{task.subtask_id}` | #{task.issue_number} | "
+        "🔒 ロック付与 (`status:external-lock`) |"
+        for task in to_lock
+    )
+    lines.extend(
+        f"| `{task.subtask_id}` | #{task.issue_number} | 🔓 ロック解除 |"
+        for task in to_unlock
+    )
+    lines.append("")
+    return lines
+
+
 def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
     lines = ["### 🚀 新規起動タスク"]
     if not cycle_report.selected:
@@ -137,24 +165,15 @@ def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
                 )
         lines.append("")
 
-    lines.append("### 🔒 外部ロック（External Lock）変更")
-    to_lock = cycle_report.lock_changes.get("to_lock", [])
-    to_unlock = cycle_report.lock_changes.get("to_unlock", [])
-    if not to_lock and not to_unlock:
-        lines.append("外部ロックの変更はありませんでした。\n")
-    else:
-        lines.append("| サブタスクID | Issue番号 | アクション |")
-        lines.append("| --- | --- | --- |")
-        for task in to_lock:
-            lines.append(
-                f"| `{task.subtask_id}` | #{task.issue_number} | 🔒 ロック付与 (`status:external-lock`) |"
-            )
-        for task in to_unlock:
-            lines.append(
-                f"| `{task.subtask_id}` | #{task.issue_number} | 🔓 ロック解除 |"
-            )
-        lines.append("")
-    return lines + _format_scheduling_decisions(cycle_report)
+    lines.extend(_format_lock_changes(cycle_report))
+    return (
+        lines
+        + render_skipped_markdown(
+            merge_skips(cycle_report.skips, cycle_report.scheduling_decisions)
+        )
+        + render_forge_warnings_markdown(cycle_report.forge_warnings)
+        + _format_scheduling_decisions(cycle_report)
+    )
 
 
 def write_github_step_summary(
@@ -195,6 +214,9 @@ def _report_to_dict(report: CycleReport) -> dict:
         "scheduling_decisions": [
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
+        "skips": [skip_record_to_dict(record) for record in report.skips],
+        "external_lock_conflicts": report.external_lock_conflicts,
+        "forge_warnings": report.forge_warnings,
         "execution_selections": {
             str(issue): dataclasses.asdict(sel)
             for issue, sel in report.execution_selections.items()

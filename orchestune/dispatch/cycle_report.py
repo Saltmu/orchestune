@@ -13,6 +13,7 @@ from orchestune.consistency.supervisor import (
     consistency_cycle_to_dict,
 )
 from orchestune.dispatch.scoring import SchedulingDecision, Task, decision_to_dict
+from orchestune.dispatch.summary import SkipRecord, skip_record_to_dict
 
 if TYPE_CHECKING:
     from orchestune.dispatch.execution_profiles import ExecutionSelection
@@ -32,6 +33,13 @@ class CycleReport:
     # （レポート整形テスト等）に無関係な引数を強いないため。
     scheduling_decisions: list[SchedulingDecision] = field(default_factory=list)
     execution_selections: dict[int, ExecutionSelection] = field(default_factory=dict)
+    # #787: 選定フェーズに到達する前に候補から外れたタスクと、その理由。
+    skips: list[SkipRecord] = field(default_factory=list)
+    # #787: 外部ロックの衝突理由（継続ロック中のタスクを含む）。`--no-apply`では
+    # Issueコメントを投稿しないため、ドライランでの唯一の観測点になる。
+    external_lock_conflicts: dict[int, list[dict]] = field(default_factory=dict)
+    # #787: Forge API障害で判定を保留した記録。
+    forge_warnings: list[dict] = field(default_factory=list)
     consistency: ConsistencyCycleReport = field(
         default_factory=lambda: ConsistencyCycleReport(mode=ConsistencyMode.OFF)
     )
@@ -66,6 +74,8 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
         "scheduling_decisions": [
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
+        "skips": [skip_record_to_dict(record) for record in report.skips],
+        "forge_warnings": report.forge_warnings,
         "consistency": consistency_cycle_to_dict(report.consistency),
     }
 

@@ -26,6 +26,10 @@ from orchestune.dispatch.cycle import (
     build_event_log_entry,
     run_dispatch_cycle,
 )
+from orchestune.dispatch.dispatcher import (
+    _DispatcherRunResult,
+    _emit_dispatcher_report,
+)
 from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -33,6 +37,11 @@ from orchestune.dispatch.state import (
     RunState,
     load_run_state,
     save_run_state,
+)
+from orchestune.dispatch.summary import (
+    REASON_EXTERNAL_LOCK,
+    SUMMARY_PREFIX,
+    SkipRecord,
 )
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
@@ -807,3 +816,80 @@ class TestPreventDuplicateSessions:
         mock_add_label.assert_any_call(1, "status:blocked-human-review")
         mock_add_comment.assert_called_once()
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
+
+
+class TestEmitHumanSummary:
+    """#787: stdoutのJSONとは別に、人間向けの要約をstderrへ出す。"""
+
+    def _result(self, report):
+        return _DispatcherRunResult(
+            report=report, post_cycle_results=[], integrator_run_report=None
+        )
+
+    def _report(self, **overrides):
+        defaults = dict(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+        )
+        defaults.update(overrides)
+        return CycleReport(**defaults)
+
+    def test_keeps_stdout_as_pure_json(self, capsys):
+        report = self._report(
+            skips=[
+                SkipRecord(
+                    issue_number=695,
+                    subtask_id="task-695",
+                    reason=REASON_EXTERNAL_LOCK,
+                    detail="fix/issue-777 [tests/conftest.py]",
+                )
+            ]
+        )
+
+        _emit_dispatcher_report(self._result(report))
+
+        captured = capsys.readouterr()
+        json.loads(captured.out)
+        assert SUMMARY_PREFIX in captured.err
+        assert "#695" in captured.err
+        assert "fix/issue-777 [tests/conftest.py]" in captured.err
+
+    def test_stderr_summary_is_ascii_only(self, capsys):
+        report = self._report(
+            skips=[
+                SkipRecord(
+                    issue_number=1,
+                    subtask_id="task-a",
+                    reason=REASON_EXTERNAL_LOCK,
+                    detail="feat/x [a.py]",
+                )
+            ],
+            forge_warnings=[
+                {"issue_number": 2, "operation": "list_prs", "error": "HTTPError: 504"}
+            ],
+        )
+
+        _emit_dispatcher_report(self._result(report))
+
+        capsys.readouterr().err.encode("ascii")
+
+    def test_stays_silent_when_nothing_was_skipped(self, capsys):
+        _emit_dispatcher_report(self._result(self._report()))
+        assert capsys.readouterr().err == ""
+
+    def test_a_rendering_failure_does_not_break_the_report(self, capsys):
+        """要約はベストエフォート。整形に失敗してもサイクルの結果報告は落とさない。"""
+        with patch(
+            "orchestune.dispatch.dispatcher.render_skipped_text",
+            side_effect=RuntimeError("boom"),
+        ):
+            _emit_dispatcher_report(self._result(self._report()))
+
+        captured = capsys.readouterr()
+        json.loads(captured.out)
+        assert "Failed to render the cycle summary" in captured.err

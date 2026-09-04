@@ -30,7 +30,7 @@ from orchestune.dispatch.launch import (
     _get_stack_eligible_tasks,
     _launch_selected_tasks,
 )
-from orchestune.dispatch.locks import ExternalLockScanResult
+from orchestune.dispatch.locks import ExternalLockScanResult, describe_conflict
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import (
     SchedulingDecision,
@@ -41,6 +41,16 @@ from orchestune.dispatch.scoring import (
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.state import save_run_state
+from orchestune.dispatch.summary import (
+    REASON_ACTOR_UNVERIFIED,
+    REASON_DEPENDENCY,
+    REASON_DEVIATION_BLOCKED,
+    REASON_DUPLICATE_PR,
+    REASON_EARLY_DEATH_BACKOFF,
+    REASON_EXTERNAL_LOCK,
+    REASON_FORCED_SERIAL,
+    SkipRecord,
+)
 from orchestune.labels import StatusLabel
 
 
@@ -56,6 +66,10 @@ class SchedulingPhaseResult:
     quota_slots_available: int
     decisions: list[SchedulingDecision]
     execution_selections: dict[int, ExecutionSelection] = field(default_factory=dict)
+    # #787: 選定フェーズに到達する前に候補から外れたタスクと、その理由。
+    # `decisions`は候補集合しか説明しないため、これが無いと運用者からは
+    # 「一覧にも出てこないまま起動されない」タスクに見える。
+    skips: list[SkipRecord] = field(default_factory=list)
 
 
 def _filter_queued_candidates(
@@ -83,6 +97,120 @@ def _filter_queued_candidates(
     return _apply_actor_verification(actor_decisions, ctx.config)
 
 
+def _skip_record(task: Task, reason: str, detail: str = "") -> SkipRecord:
+    return SkipRecord(
+        issue_number=task.issue_number,
+        subtask_id=task.subtask_id,
+        reason=reason,
+        detail=detail,
+    )
+
+
+def _dropped_tasks(before: list[Task], after: list[Task]) -> list[Task]:
+    """フィルタ適用の前後差分。フィルタ関数自体は純粋なまま理由を取り出す。"""
+    survivors = {task.issue_number for task in after}
+    return [task for task in before if task.issue_number not in survivors]
+
+
+def _conflict_detail(lock_result: ExternalLockScanResult, issue_number: int) -> str:
+    conflicts = lock_result.conflicts.get(issue_number, ())
+    if not conflicts:
+        return ""
+    head = describe_conflict(conflicts[0])
+    return head if len(conflicts) == 1 else f"{head}, +{len(conflicts) - 1}"
+
+
+def _external_lock_skips(
+    ctx: CycleContext, issues: IssuesByStatus, lock_result: ExternalLockScanResult
+) -> list[SkipRecord]:
+    """新規ロックと、前サイクルから継続してロック中のタスクの双方を拾う。
+
+    継続ロックは`to_lock`にも`issues.queued`にも現れないため、`issues.locked`を
+    見ないと「ずっと止まっているのに一覧に出ない」タスクが残る（#695の実例）。
+    """
+    locked_numbers = {issue.number for issue in issues.locked}
+    locked_numbers |= {task.issue_number for task in lock_result.to_lock}
+    return [
+        _skip_record(
+            task, REASON_EXTERNAL_LOCK, _conflict_detail(lock_result, issue_number)
+        )
+        for issue_number in sorted(locked_numbers)
+        if (task := ctx.tasks_by_issue.get(issue_number)) is not None
+    ]
+
+
+def _queued_drop_skips(
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    survivors: list[Task],
+    now: float,
+) -> list[SkipRecord]:
+    """`_filter_queued_candidates`が落としたqueuedタスクの理由を復元する。
+
+    `status:done` / `status:in-progress`のタスクは「起動されなかった」とは
+    言えないため要約には載せない。
+    """
+    survivor_numbers = {task.issue_number for task in survivors}
+    skips = []
+    for issue in issues.queued:
+        task = ctx.tasks_by_issue.get(issue.number)
+        if task is None or issue.number in survivor_numbers:
+            continue
+        if StatusLabel.DONE in task.status_labels:
+            continue
+        if StatusLabel.IN_PROGRESS in task.status_labels:
+            continue
+        record = ctx.run_state.task_reclaim_counts.get(issue.number)
+        if record is not None and record.early_death_retry_at > now:
+            skips.append(_skip_record(task, REASON_EARLY_DEATH_BACKOFF))
+        else:
+            skips.append(_skip_record(task, REASON_ACTOR_UNVERIFIED))
+    return skips
+
+
+def _dependency_skips(
+    ctx: CycleContext, issues: IssuesByStatus, stack_eligible: list[Task]
+) -> list[SkipRecord]:
+    eligible = {task.issue_number for task in stack_eligible}
+    resolved = ctx.done_subtask_ids
+    skips = []
+    for issue in issues.blocked:
+        task = ctx.tasks_by_issue.get(issue.number)
+        if task is None or issue.number in eligible:
+            continue
+        waiting = [
+            f"#{number}"
+            for dep in task.depends_on
+            if dep not in resolved
+            and (number := ctx.issue_number_by_subtask_id.get(dep)) is not None
+        ]
+        detail = f"waiting: {', '.join(waiting)}" if waiting else ""
+        skips.append(_skip_record(task, REASON_DEPENDENCY, detail))
+    return skips
+
+
+def _drop_duplicate_candidates(
+    candidate_tasks: list[Task], ctx: CycleContext
+) -> tuple[list[Task], list[SkipRecord]]:
+    """既にオープンなPRを持つ候補を外し、除外した理由（PR番号）を残す。"""
+    decisions = _decide_duplicate_candidates(candidate_tasks, ctx)
+    remaining = _apply_duplicate_skip(decisions, ctx)
+    existing_prs = {
+        decision.task.issue_number: decision.existing_pr
+        for decision in decisions
+        if decision.existing_pr is not None
+    }
+    skips = [
+        _skip_record(
+            task,
+            REASON_DUPLICATE_PR,
+            f"PR #{pr.number}" if (pr := existing_prs.get(task.issue_number)) else "",
+        )
+        for task in _dropped_tasks(candidate_tasks, remaining)
+    ]
+    return remaining, skips
+
+
 def _determine_candidate_tasks(
     ctx: CycleContext,
     issues: IssuesByStatus,
@@ -90,9 +218,13 @@ def _determine_candidate_tasks(
     completed_subtask_ids: set[str],
     any_forced_serial: bool,
     now: float = 0.0,
-) -> tuple[list[Task], dict[int, str]]:
+) -> tuple[list[Task], dict[int, str], list[SkipRecord]]:
     """起動候補タスクを、外部ロック・actor権限・スタッキング可否・重複起動・
-    強制直列化の各観点で絞り込んで確定させる。"""
+    強制直列化の各観点で絞り込んで確定させる。
+
+    #787: 各絞り込み段の前後差分から、落ちたタスクとその理由(`SkipRecord`)も
+    併せて持ち帰る。フィルタ関数自体は純粋なまま保つ。
+    """
     queued_candidates = _filter_queued_candidates(ctx, issues, lock_result, now)
 
     stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
@@ -103,19 +235,29 @@ def _determine_candidate_tasks(
         ctx.subtask_branch_map,
         completed_subtask_ids=completed_subtask_ids,
     )
+    skips = [
+        *_external_lock_skips(ctx, issues, lock_result),
+        *_queued_drop_skips(ctx, issues, queued_candidates, now),
+        *_dependency_skips(ctx, issues, stack_eligible_tasks),
+    ]
 
     candidate_tasks = queued_candidates + stack_eligible_tasks
-    duplicate_decisions = _decide_duplicate_candidates(candidate_tasks, ctx)
-    candidate_tasks = _apply_duplicate_skip(duplicate_decisions, ctx)
+    candidate_tasks, duplicate_skips = _drop_duplicate_candidates(candidate_tasks, ctx)
+    skips.extend(duplicate_skips)
 
     if any_forced_serial:
-        candidate_tasks = _filter_candidates_for_forced_serial(
+        serialized = _filter_candidates_for_forced_serial(
             candidate_tasks,
             ctx.run_state,
             ctx.tasks_by_issue,
         )
+        skips.extend(
+            _skip_record(task, REASON_FORCED_SERIAL)
+            for task in _dropped_tasks(candidate_tasks, serialized)
+        )
+        candidate_tasks = serialized
 
-    return candidate_tasks, task_to_base_branch
+    return candidate_tasks, task_to_base_branch, skips
 
 
 def _finalize_launch(
@@ -199,15 +341,20 @@ def run_scheduling_phase(
     `_filter_deviation_blocked_candidates`（deviation_eventsによる絞り込み）
     はdispatch_filtersに定義済みのため、ここではそれを呼び出す。
     """
-    candidate_tasks, task_to_base_branch = _determine_candidate_tasks(
+    candidate_tasks, task_to_base_branch, skips = _determine_candidate_tasks(
         ctx, issues, lock_result, completed_subtask_ids, any_forced_serial, now
     )
 
-    candidate_tasks = _filter_deviation_blocked_candidates(
+    undeviated = _filter_deviation_blocked_candidates(
         candidate_tasks,
         deviation_events,
         ctx.issue_number_by_subtask_id,
     )
+    skips.extend(
+        _skip_record(task, REASON_DEVIATION_BLOCKED)
+        for task in _dropped_tasks(candidate_tasks, undeviated)
+    )
+    candidate_tasks = undeviated
 
     quota_slots = quota_available(
         ctx.run_state,
@@ -233,4 +380,5 @@ def run_scheduling_phase(
         # レポートが実態と食い違わないよう、起動結果で判定を突き合わせる。
         decisions=reconcile_decisions_with_launches(scheduling.decisions, selected),
         execution_selections=execution_selections,
+        skips=skips,
     )
