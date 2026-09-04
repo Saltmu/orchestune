@@ -34,6 +34,7 @@ from orchestune.dispatch.state import (
     TaskReclaimRecord,
     save_run_state,
 )
+from orchestune.dispatch.summary import WARN_PREFIX
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -72,12 +73,45 @@ def is_completion_hold_event(event: Mapping[str, object]) -> bool:
     return event.get("action") in COMPLETION_HOLD_ACTIONS
 
 
+def describe_forge_error(error: Exception) -> str:
+    """例外を1行のASCII表現へ縮める。stderrとサイクルレポートの双方で使う。"""
+    detail = str(error).strip().splitlines()
+    return f"{type(error).__name__}: {detail[0]}" if detail else type(error).__name__
+
+
+def warn_forge_failure(
+    operation: str,
+    issue_number: int | None,
+    error: Exception,
+    error_sink: list[str] | None = None,
+) -> str:
+    """#787: Forge呼び出しの失敗を握り潰す直前に、その事実を必ず表に出す。
+
+    これらの失敗はいずれも`"unknown"`という保守的な判定へ丸められる。無言で
+    丸めると、API障害による保留とタスク側の問題が運用者から区別できない。
+
+    stderrへ出す1行はWindows(cp932)のコンソールにも出るためASCIIで組む。
+    `error_sink`を渡すと、同じ説明をサイクルレポート用に集められる。
+    """
+    description = describe_forge_error(error)
+    subject = f"issue #{issue_number}" if issue_number is not None else "the repository"
+    print(
+        f"{WARN_PREFIX} forge API call '{operation}' failed for {subject}: "
+        f"{description}",
+        file=sys.stderr,
+    )
+    if error_sink is not None:
+        error_sink.append(description)
+    return description
+
+
 def _fetch_outcome_for_active(
     active: ActiveWorktree, forge: Forge
 ) -> OutcomeRecord | None | Literal["error"]:
     try:
         comments = list(forge.list_comments(active.issue_number))
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
+        warn_forge_failure("list_comments", active.issue_number, error)
         return "error"
     try:
         prs = forge.list_prs(state="all")
@@ -710,12 +744,15 @@ def _eval_open_pr_status(
 
 
 def _local_pr_completion_status(
-    active: ActiveWorktree, config: DispatcherConfig
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    error_sink: list[str] | None = None,
 ) -> str:
     handle = _active_dispatch_handle(active)
     try:
         candidate_prs = config.resolved_forge.list_prs(state="all")
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
+        warn_forge_failure("list_prs", active.issue_number, error, error_sink)
         return "unknown"
     matching_prs = [
         pr
@@ -750,7 +787,9 @@ def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
 
 
 def _cloud_worktree_completion_status(
-    active: ActiveWorktree, config: DispatcherConfig
+    active: ActiveWorktree,
+    config: DispatcherConfig,
+    error_sink: list[str] | None = None,
 ) -> str:
     assert config.dispatch_target is not None
     handle = _active_dispatch_handle(active)
@@ -758,7 +797,8 @@ def _cloud_worktree_completion_status(
         status = config.dispatch_target.completion_status(
             handle, forge=config.resolved_forge
         )
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
+        warn_forge_failure("completion_status", active.issue_number, error, error_sink)
         return "unknown"
     if isinstance(status, str):
         return status

@@ -31,6 +31,7 @@ from orchestune.dispatch.gc.completion import (
     _local_pr_completion_status,
     _parse_github_timestamp,
     is_completion_hold_event,
+    warn_forge_failure,
 )
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
@@ -459,16 +460,99 @@ class CompletionResolution:
         return cls(state="resolved", rule_outcome=outcome)
 
 
-def _completion_forge_error_hold(active: ActiveWorktree) -> ActiveWorktreeRuleOutcome:
-    """Build a non-mutating, same-cycle GC hold for an indeterminate completion."""
-    return ActiveWorktreeRuleOutcome(
-        completion_event={
-            "issue_number": active.issue_number,
-            "worktree_path": active.worktree_path,
-            "action": "completion_skipped_forge_error",
-        },
-        terminal=True,
+def _completion_forge_error_hold(
+    active: ActiveWorktree, operation: str = "", error: str = ""
+) -> ActiveWorktreeRuleOutcome:
+    """Build a non-mutating, same-cycle GC hold for an indeterminate completion.
+
+    #787: どのForge呼び出しがなぜ失敗して保留になったのかをイベントへ載せ、
+    サイクルレポートの警告セクションから辿れるようにする。
+    """
+    event: dict[str, object] = {
+        "issue_number": active.issue_number,
+        "worktree_path": active.worktree_path,
+        "action": "completion_skipped_forge_error",
+    }
+    if operation:
+        event["operation"] = operation
+    if error:
+        event["error"] = error
+    return ActiveWorktreeRuleOutcome(completion_event=event, terminal=True)
+
+
+def _resolve_recovered_completion(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> CompletionResolution:
+    """run_stateに起動時刻もexternal idも無い項目を、PRから復元して解決する。"""
+    try:
+        recovery_pr = _find_recovery_pr(active, ctx.config)
+    except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
+        return CompletionResolution.resolved(
+            _completion_forge_error_hold(
+                active,
+                "find_recovery_pr",
+                warn_forge_failure("find_recovery_pr", active.issue_number, error),
+            )
+        )
+    if recovery_pr is None:
+        return CompletionResolution.pending()
+    if recovery_pr.state.upper() == "CLOSED":
+        return CompletionResolution.resolved(
+            _abandoned_worktree_outcome(ctx, key, active, active_task)
+        )
+    return CompletionResolution.ready(
+        replace(
+            active,
+            branch=recovery_pr.head_ref,
+            external_id=f"recovered-pr:{recovery_pr.number}",
+            external_url=f"PR#{recovery_pr.number}",
+        )
     )
+
+
+def _resolve_cloud_completion(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> CompletionResolution:
+    errors: list[str] = []
+    status = _cloud_worktree_completion_status(active, ctx.config, errors)
+    if status == "abandoned":
+        return CompletionResolution.resolved(
+            _abandoned_worktree_outcome(ctx, key, active, active_task)
+        )
+    if status == "unknown":
+        return CompletionResolution.resolved(
+            _completion_forge_error_hold(active, "completion_status", "; ".join(errors))
+        )
+    if status != "completed":
+        return CompletionResolution.pending()
+    return CompletionResolution.ready(active)
+
+
+def _resolve_local_completion(
+    ctx: CycleContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
+) -> CompletionResolution:
+    if not _is_worktree_complete(active, ctx.config):
+        return CompletionResolution.pending()
+    errors: list[str] = []
+    status = _local_pr_completion_status(active, ctx.config, errors)
+    if status == "abandoned":
+        return CompletionResolution.resolved(
+            _abandoned_worktree_outcome(ctx, key, active, active_task)
+        )
+    if status == "unknown":
+        return CompletionResolution.resolved(
+            _completion_forge_error_hold(active, "list_prs", "; ".join(errors))
+        )
+    return CompletionResolution.ready(active)
 
 
 def _resolve_completion(
@@ -479,47 +563,10 @@ def _resolve_completion(
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
     if active.started_at is None and active.external_id is None:
-        try:
-            recovery_pr = _find_recovery_pr(active, ctx.config)
-        except Exception:
-            return CompletionResolution.resolved(_completion_forge_error_hold(active))
-        if recovery_pr is None:
-            return CompletionResolution.pending()
-        if recovery_pr.state.upper() == "CLOSED":
-            return CompletionResolution.resolved(
-                _abandoned_worktree_outcome(ctx, key, active, active_task)
-            )
-        return CompletionResolution.ready(
-            replace(
-                active,
-                branch=recovery_pr.head_ref,
-                external_id=f"recovered-pr:{recovery_pr.number}",
-                external_url=f"PR#{recovery_pr.number}",
-            )
-        )
-
+        return _resolve_recovered_completion(ctx, key, active, active_task)
     if active.external_id is not None:
-        status = _cloud_worktree_completion_status(active, ctx.config)
-        if status == "abandoned":
-            return CompletionResolution.resolved(
-                _abandoned_worktree_outcome(ctx, key, active, active_task)
-            )
-        if status == "unknown":
-            return CompletionResolution.resolved(_completion_forge_error_hold(active))
-        if status != "completed":
-            return CompletionResolution.pending()
-        return CompletionResolution.ready(active)
-
-    if not _is_worktree_complete(active, ctx.config):
-        return CompletionResolution.pending()
-    local_status = _local_pr_completion_status(active, ctx.config)
-    if local_status == "abandoned":
-        return CompletionResolution.resolved(
-            _abandoned_worktree_outcome(ctx, key, active, active_task)
-        )
-    if local_status == "unknown":
-        return CompletionResolution.resolved(_completion_forge_error_hold(active))
-    return CompletionResolution.ready(active)
+        return _resolve_cloud_completion(ctx, key, active, active_task)
+    return _resolve_local_completion(ctx, key, active, active_task)
 
 
 def _handle_completed_event_outcome(
