@@ -15,6 +15,12 @@ output_schema:
 
 This skill takes an **approved `decomposition_plan.md` from the `orchestune` skill** and files each subtask as a GitHub Issue via the `orchestune provision` CLI, wiring up the parent/child and dependency relationships.
 
+This is the **initial-generation** workflow. It must not be used to replace an
+already provisioned, unstarted decomposition generation or to synchronize
+existing Issue text. For that distinct responsibility, use `orchestune replan`
+with a read-only preview followed by its explicit `--confirm-preview` token;
+the replan workflow retires only safe old Issues and preserves their history.
+
 > [!NOTE]
 > **User-Facing Response Language**:
 > While this skill instruction is written in English, all user-facing explanations, plans, questions, and responses must use the user's preferred language (e.g., Japanese if the user interacts in Japanese or matches the user's environment). The language of this instruction document must not determine the output language.

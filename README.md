@@ -1,5 +1,11 @@
 # Orchestune
 
+> When an approved parent Issue keeps its requirements but its **unstarted**
+> decomposition becomes stale, `orchestune replan` previews a replacement
+> generation without writes. Applying it requires the exact preview token and
+> retires only safe queued/blocked Issues, preserving the old Issues as history.
+> `orchestune provision` remains the initial Issue-creation command.
+
 [English](README.md) | [日本語](README.ja.md)
 
 ⚠️ **Beta**: Orchestune's core workflow is operational, but APIs, CLI commands, and workflows may still change before the stable release.
