@@ -239,10 +239,24 @@ def effective_parent_number(issue: IssueRecord) -> int | None:
     （#485 review P2）、本文metadataを「ネイティブが無い場合のみの
     フォールバック」以上の意味で使うと、旧親の完了判定やprovisioningの
     再利用インデックスが誤って古い親の下にこのIssueを含めてしまう。
+
+    #802: 自分自身を親とする自己親化（循環・自己参照）は論理的にあり得ないため、
+    ネイティブ・本文フォールバックのいずれであっても親番号が自身と一致する場合は
+    Noneを返す。
     """
     if issue.parent and issue.parent.get("number") is not None:
-        return issue.parent.get("number")
-    return parent_issue_number_from_body(issue.body)
+        parent_number = issue.parent.get("number")
+        if issue.number is not None and parent_number == issue.number:
+            return None
+        return parent_number
+    body_parent = parent_issue_number_from_body(issue.body)
+    if (
+        body_parent is not None
+        and issue.number is not None
+        and body_parent == issue.number
+    ):
+        return None
+    return body_parent
 
 
 def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | None:
@@ -484,7 +498,15 @@ def find_children_by_parent(
     再試行に委ねる — 黙って握りつぶすと、metadataでしか発見できないIssueが
     一時的に消え、`provisioning.py`のdedup fallbackが誤って重複作成しうる。
     """
-    native = forge.list_sub_issues(parent_issue_number)
+    target_number = int(parent_issue_number)
+    # #802: 親Issue自身（自分自身が自分の子または親になる循環・自己参照）は
+    # 子Issueから確実に除外する。forgeがlist_sub_issuesで親自身を返した場合にも
+    # 備え、ネイティブ結果の段階で親Issue自身を除外する。
+    native = [
+        issue
+        for issue in forge.list_sub_issues(parent_issue_number)
+        if issue.number != target_number
+    ]
     seen = {issue.number for issue in native}
 
     try:
@@ -505,11 +527,16 @@ def find_children_by_parent(
     # `effective_parent_number` treats a present native `parent` as
     # authoritative, so such a stale-body candidate is correctly rejected
     # here instead of indefinitely blocking the old parent's completion.
-    target_number = int(parent_issue_number)
+    # #802: 親Issue自身（EPIC Issue本文にparent_issue_numberが記録されている）
+    # がmetadata検索でヒットした場合、自分自身が子Issueとして採択されてしまい、
+    # open_childrenに親Issue自身が残って最終PR作成が永久にブロックされる。
+    # 親Issue自身（candidate.number == target_number）を子Issueから確実に除外する。
+    # ネストされたEPIC子Issue（別Issueの子かつ自身も親であるIssue）は除外しない。
     extra: list[IssueRecord] = [
         candidate
         for candidate in candidates
         if candidate.number not in seen
+        and candidate.number != target_number
         and effective_parent_number(candidate) == target_number
     ]
     return ChildDiscoveryResult(issues=native + extra, metadata_search_supported=True)
