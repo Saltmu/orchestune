@@ -116,13 +116,54 @@ class TestParseFromCommentsFailClosed:
         comments = [{"body": body, "created_at": "x"}]
         assert parse_from_comments(comments) is None
 
-    def test_blocked_with_unknown_reason_returns_none(self):
+    def test_blocked_with_unknown_reason_preserves_original_reason(self):
         body = (
             f"{OUTCOME_MARKER}\n```json\n"
             '{"result": "blocked", "issue": 1, "reason": "flaky-network"}\n```\n'
         )
         comments = [{"body": body, "created_at": "x"}]
-        assert parse_from_comments(comments) is None
+        record = parse_from_comments(comments)
+        assert record is not None
+        assert record.result == "blocked"
+        assert record.reason == "flaky-network"
+
+    def test_blocked_with_review_timeout_round_trips(self):
+        record = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            pr=456,
+            reason="review-timeout",
+            review=ReviewSummary(bot="claude", rounds=1, verdict="timeout"),
+            attempt=1,
+        )
+        parsed = parse_from_comments([{"body": record.render(), "created_at": "x"}])
+        assert parsed == record
+
+    def test_is_known_reason(self):
+        from orchestune.outcome_record import (
+            REASON_BASE_BRANCH_RED,
+            REASON_REVIEW_TIMEOUT,
+            is_known_reason,
+        )
+
+        assert is_known_reason(REASON_BASE_BRANCH_RED) is True
+        assert is_known_reason(REASON_REVIEW_TIMEOUT) is True
+        assert is_known_reason("flaky-network") is False
+        assert is_known_reason(None) is False
+
+    def test_reason_sanitization_and_length_limit(self):
+        long_reason = "a" * 150
+        body = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            f'{{"result": "blocked", "issue": 1, "reason": "bad\\n\\rcontrol\\t  {long_reason}"}}\n```\n'
+        )
+        comments = [{"body": body, "created_at": "x"}]
+        record = parse_from_comments(comments)
+        assert record is not None
+        assert "\n" not in record.reason
+        assert "\r" not in record.reason
+        assert "\t" not in record.reason
+        assert len(record.reason) <= 100
 
     def test_bool_issue_value_rejected(self):
         """`bool`はPythonでは`int`のサブクラスであり、issue=Trueがissue=1として

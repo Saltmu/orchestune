@@ -24,7 +24,7 @@ from orchestune.dispatch.state import (
     load_run_state,
     save_run_state,
 )
-from orchestune.outcome_record import OutcomeRecord
+from orchestune.outcome_record import OutcomeRecord, ReviewSummary
 from tests.conftest import make_issue
 
 
@@ -408,6 +408,129 @@ class TestRunDispatchCycleCompletion:
             report = run_dispatch_cycle(config)
 
         assert report.completion_events[0]["action"] == "completed_no_commits"
+        mock_escalate.assert_called_once()
+
+    def test_review_timeout_is_requeued_with_persisted_backoff(
+        self, tmp_path, fake_forge
+    ):
+        """#795: review-timeoutの初回はqueuedへ再投入され、バックオフが永続化される。"""
+        run_state_path = tmp_path / "run_state.json"
+        self._seed_active(tmp_path, run_state_path, started_at=time.time() - 100)
+        config = self._config(
+            tmp_path,
+            run_state_path,
+            max_review_timeout_retries=2,
+            review_timeout_backoff_seconds=60,
+        )
+        in_progress_issue = _full_issue(
+            1, labels=("status:in-progress",), subtask_id="task-a"
+        )
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            pr=456,
+            reason="review-timeout",
+            review=ReviewSummary(bot="claude", rounds=1, verdict="timeout"),
+            attempt=1,
+        )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        fake_forge.list_issues_by_label.side_effect = lambda label, **_: (
+            [in_progress_issue] if label == "status:in-progress" else []
+        )
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-09-04T23:59:59Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+            ),
+            _patch_gc_process_alive(return_value=False),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "blocked_review_timeout"
+        mock_add_label.assert_any_call(1, "status:queued")
+        mock_remove_label.assert_called_once_with(1, "status:in-progress")
+
+        persisted = json.loads(run_state_path.read_text())
+        assert persisted["active_worktrees"] == {}
+        record = persisted["task_reclaim_counts"]["1"]
+        assert record["review_timeout_retry_count"] == 1
+        assert record["review_timeout_retry_at"] > 0
+        assert record["review_timeout_retry_pending"] is False
+
+    def test_review_timeout_escalates_after_retry_limit(self, tmp_path, fake_forge):
+        """#795: 2回目のreview-timeoutでstatus:blocked-human-reviewへエスカレーションする。"""
+        run_state_path = tmp_path / "run_state.json"
+        state = RunState(task_reclaim_counts={})
+        state.active_worktrees = {
+            "1": _active(
+                worktree_path=str(tmp_path / "w1"), started_at=time.time() - 100
+            )
+        }
+        state.task_reclaim_counts[1] = TaskReclaimRecord(
+            review_timeout_retry_count=1,
+            review_timeout_retry_at=100.0,
+            review_timeout_retry_pending=False,
+        )
+        save_run_state(state, run_state_path)
+        config = self._config(tmp_path, run_state_path, max_review_timeout_retries=2)
+        in_progress_issue = _full_issue(1, labels=("status:in-progress",))
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            pr=456,
+            reason="review-timeout",
+            review=ReviewSummary(bot="claude", rounds=1, verdict="timeout"),
+            attempt=2,
+        )
+        fake_forge.list_issues_by_label.side_effect = lambda label, **_: (
+            [in_progress_issue] if label == "status:in-progress" else []
+        )
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_prs.return_value = []
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-09-04T23:59:59Z"}
+        ]
+        fake_forge.add_label.reset_mock(side_effect=True)
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+            ),
+            _patch_gc_process_alive(return_value=False),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch(
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+            ) as mock_escalate,
+        ):
+            report = run_dispatch_cycle(config)
+
+        assert report.completion_events[0]["action"] == "escalated_review_timeout"
         mock_escalate.assert_called_once()
 
     def test_dirty_worktree_completion_is_skipped(self, tmp_path, fake_forge):

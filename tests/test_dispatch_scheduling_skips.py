@@ -11,10 +11,11 @@ from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,
+    REASON_REVIEW_TIMEOUT_BACKOFF,
     merge_skips,
 )
 from orchestune.models import IssueRecord, Task
@@ -329,3 +330,58 @@ class TestInProgressTasksAreNotSkipCandidates:
         )
 
         assert skips == []
+
+    def test_review_timeout_backoff_skip(self, fake_forge):
+        """review-timeoutの指数バックオフ待ちタスクがREASON_REVIEW_TIMEOUT_BACKOFFでスキップされる。"""
+        fake_forge.get_label_actor.return_value = "authorized-user"
+        fake_forge.get_actor_permission.return_value = "write"
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+        task = _task(issue_number=5, status_labels=("status:queued",))
+        run_state = RunState(
+            task_reclaim_counts={
+                5: TaskReclaimRecord(
+                    review_timeout_retry_count=1,
+                    review_timeout_retry_at=100.0,
+                )
+            }
+        )
+
+        # now=50.0 (バックオフ期間中) -> スキップされる
+        issues = IssuesByStatus(
+            queued=[_issue(5, ("status:queued",))],
+            locked=[],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+        candidates, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config),
+            issues,
+            ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
+            set(),
+            False,
+            now=50.0,
+        )
+        assert candidates == []
+        assert len(skips) == 1
+        assert skips[0].issue_number == 5
+        assert skips[0].reason == REASON_REVIEW_TIMEOUT_BACKOFF
+
+        # now=150.0 (バックオフ経過後) -> 起動候補に残る
+        candidates_after, _, skips_after = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config),
+            issues,
+            ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
+            set(),
+            False,
+            now=150.0,
+        )
+        assert len(candidates_after) == 1
+        assert candidates_after[0].issue_number == 5
+        assert skips_after == []

@@ -183,6 +183,10 @@ BOUNDED_RECOVERY_TERMINALS = {
         "dispatch/gc/completion.py",
         "apply_human_review_escalation",
     ),
+    "max_review_timeout_retries": (
+        "dispatch/gc/completion.py",
+        "apply_human_review_escalation",
+    ),
     "not_needed_review_timeout_seconds": (
         "integrator/coordinator.py",
         "apply_human_review_escalation",

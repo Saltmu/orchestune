@@ -90,6 +90,11 @@ class TaskReclaimRecord:
     # queuedラベル反映前に永続化した予約分。GitHub反映が失敗した場合、次サイクル
     # では同じ回数を再利用し、自動再投入枠を二重消費しない。
     early_death_retry_pending: bool = False
+    # #795: AIレビュー待機タイムアウト（Exit 20）による再投入回数と、指数
+    # バックオフにより次に起動してよい時刻。通常のゾンビ回収やearly-deathとは別枠。
+    review_timeout_retry_count: int = 0
+    review_timeout_retry_at: float = 0.0
+    review_timeout_retry_pending: bool = False
 
 
 @dataclass
@@ -110,6 +115,22 @@ class RunState:
     # `to_unlock`に現れないため、ここに残さないとIssue上の通知が「ロック中」の
     # まま取り残される。投稿できた時点で消える。
     pending_lock_release_notices: list[int] = field(default_factory=list)
+
+
+def _parse_non_negative_int(value: object, default: int = 0) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return default
+
+
+def _parse_finite_float(value: object, default: float = 0.0) -> float:
+    if (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
+        return float(value)
+    return default
 
 
 def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
@@ -135,40 +156,30 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
         try:
             issue_number = int(key)
         except (TypeError, ValueError):
-            # JSONのオブジェクトキーは文字列なので、Issue番号として読めない
-            # キー（手で編集された等）はエントリごと捨てる。
             continue
         if not isinstance(value, dict):
             continue
         count = value.get("count")
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             continue
-        last_reclaimed_at = value.get("last_reclaimed_at")
-        if (
-            isinstance(last_reclaimed_at, bool)
-            or not isinstance(last_reclaimed_at, int | float)
-            or not math.isfinite(last_reclaimed_at)
-        ):
-            last_reclaimed_at = 0.0
         records[issue_number] = TaskReclaimRecord(
             count=count,
-            last_reclaimed_at=float(last_reclaimed_at),
+            last_reclaimed_at=_parse_finite_float(value.get("last_reclaimed_at")),
             pending=value.get("pending") is True,
-            early_death_retry_count=(
-                value.get("early_death_retry_count", 0)
-                if isinstance(value.get("early_death_retry_count", 0), int)
-                and not isinstance(value.get("early_death_retry_count", 0), bool)
-                and value.get("early_death_retry_count", 0) >= 0
-                else 0
+            early_death_retry_count=_parse_non_negative_int(
+                value.get("early_death_retry_count")
             ),
-            early_death_retry_at=(
-                float(value.get("early_death_retry_at", 0.0))
-                if isinstance(value.get("early_death_retry_at", 0.0), int | float)
-                and not isinstance(value.get("early_death_retry_at", 0.0), bool)
-                and math.isfinite(value.get("early_death_retry_at", 0.0))
-                else 0.0
+            early_death_retry_at=_parse_finite_float(value.get("early_death_retry_at")),
+            early_death_retry_pending=value.get("early_death_retry_pending") is True,
+            review_timeout_retry_count=_parse_non_negative_int(
+                value.get("review_timeout_retry_count")
             ),
-            early_death_retry_pending=(value.get("early_death_retry_pending") is True),
+            review_timeout_retry_at=_parse_finite_float(
+                value.get("review_timeout_retry_at")
+            ),
+            review_timeout_retry_pending=(
+                value.get("review_timeout_retry_pending") is True
+            ),
         )
     return records
 

@@ -23,7 +23,22 @@ RESULT_BLOCKED = "blocked"
 VALID_RESULTS = frozenset({RESULT_DONE, RESULT_NOT_NEEDED, RESULT_BLOCKED})
 
 REASON_BASE_BRANCH_RED = "base-branch-red"
-VALID_REASONS = frozenset({REASON_BASE_BRANCH_RED})
+REASON_REVIEW_TIMEOUT = "review-timeout"
+VALID_REASONS = frozenset({REASON_BASE_BRANCH_RED, REASON_REVIEW_TIMEOUT})
+
+MAX_REASON_LENGTH = 100
+
+
+def is_known_reason(reason: str | None) -> bool:
+    """Return whether the given reason is a known, schema-defined reason."""
+    return reason in VALID_REASONS
+
+
+def _sanitize_reason(reason: str) -> str:
+    """Replace control characters with space, strip leading/trailing whitespace, and cap length."""
+    cleaned = "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in reason)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:MAX_REASON_LENGTH]
 
 
 @dataclass(frozen=True)
@@ -120,6 +135,24 @@ def _baseline_regressions_from_value(value: Any) -> tuple[str, ...] | object:
     return tuple(value)
 
 
+def _extract_optional_int(raw: Any) -> int | None | object:
+    if raw is None:
+        return None
+    val = _normalize_int(raw)
+    return val if val is not None else _INVALID
+
+
+def _extract_reason(raw: Any, result: str) -> str | None | object:
+    if raw is None:
+        return None if result != RESULT_BLOCKED else _INVALID
+    if not isinstance(raw, str):
+        return _INVALID
+    sanitized = _sanitize_reason(raw)
+    if not sanitized and result == RESULT_BLOCKED:
+        return _INVALID
+    return sanitized or None
+
+
 def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     result = data.get("result")
     if result not in VALID_RESULTS:
@@ -129,30 +162,21 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if issue is None:
         return None
 
-    pr_raw = data.get("pr")
-    pr: int | None = None
-    if pr_raw is not None:
-        pr = _normalize_int(pr_raw)
-        if pr is None:
-            return None
+    pr = _extract_optional_int(data.get("pr"))
+    if pr is _INVALID:
+        return None
 
-    reason = data.get("reason")
-    if result == RESULT_BLOCKED:
-        if reason not in VALID_REASONS:
-            return None
-    elif reason is not None and reason not in VALID_REASONS:
+    reason = _extract_reason(data.get("reason"), result)
+    if reason is _INVALID:
         return None
 
     base_sha = data.get("base_sha")
     if base_sha is not None and not isinstance(base_sha, str):
         return None
 
-    attempt_raw = data.get("attempt")
-    attempt: int | None = None
-    if attempt_raw is not None:
-        attempt = _normalize_int(attempt_raw)
-        if attempt is None:
-            return None
+    attempt = _extract_optional_int(data.get("attempt"))
+    if attempt is _INVALID:
+        return None
 
     review = _review_from_value(data.get("review"))
     if review is _INVALID:
@@ -171,10 +195,10 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     return OutcomeRecord(
         result=result,
         issue=issue,
-        pr=pr,
-        reason=reason,
+        pr=cast(int | None, pr),
+        reason=cast(str | None, reason),
         base_sha=base_sha,
-        attempt=attempt,
+        attempt=cast(int | None, attempt),
         review=cast(ReviewSummary, review),
         ci=ci,
         baseline_regressions=cast("tuple[str, ...]", baseline_regressions),
