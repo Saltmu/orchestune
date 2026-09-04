@@ -36,6 +36,10 @@ from orchestune.validation import validate_issue_number
 #: yet, so the projected parent body never underestimates the real one.
 PROJECTED_ISSUE_NUMBER = 10**10 - 1
 
+#: Values that plan loading treats as an unassigned Issue number and that apply
+#: therefore fills in (see `orchestune.provisioning.plan_loading.load_plan`).
+_UNRESOLVED_ISSUE_NUMBERS = (None, "")
+
 
 class ReplanApplyForge(ReplanOperationForge, ReplanSnapshotForge, Protocol):
     def update_issue_body(self, issue_number: int | str, body: str) -> None: ...
@@ -103,9 +107,11 @@ def _projected_plan_data(
         Path(plan_path).read_text(encoding="utf-8")
     )
     for subtask in projected.get("subtasks") or ():
-        if not isinstance(subtask, dict) or subtask.get("issue_number") is not None:
+        if not isinstance(subtask, dict):
             continue
-        number = resolved.get(str(subtask.get("id")))
+        if subtask.get("issue_number") not in _UNRESOLVED_ISSUE_NUMBERS:
+            continue
+        number = resolved.get(str(subtask.get("id")).strip())
         subtask["issue_number"] = PROJECTED_ISSUE_NUMBER if number is None else number
     return projected
 
