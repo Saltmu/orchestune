@@ -204,6 +204,38 @@ independently of the lifecycle above (see "External lock" below).
 - Applied when: a task's footprint overlaps with the changed files of a
   remote branch or PR that Orchestune does not manage (tasks already
   `status:done` are excluded).
+  - Exception: for a task that is currently **`status:blocked`**, an
+    overlap with the exact canonical branch that
+    `orchestune.branch_naming.build_task_branch_name()` generates with its
+    default prefix for its own direct `depends_on` entry does not count
+    ([#796](https://github.com/Saltmu/orchestune/issues/796)) — this
+    is the same branch name `_build_pr_mappings()`'s `subtask_branch_map`
+    and stacked launches actually use. The exemption does not apply to a
+    `status:queued` task: stacking (`_get_stack_eligible_tasks`) only ever
+    assigns a base branch to `status:blocked` tasks, and while a queued
+    task is normally expected to have every dependency already resolved,
+    it can transiently end up `status:queued` with an unresolved
+    dependency — the exact anomaly
+    `QUEUED_WITH_UNRESOLVED_DEPENDENCIES` detects and repairs. Stacked launches
+    (`_get_stack_eligible_tasks` in `orchestune/dispatch/launch.py`) build
+    on top of the dependency's branch, so that overlap is not an
+    "Orchestune-unmanaged conflict." This does not walk further up the
+    dependency chain (a dependency's own dependency is not excluded). A
+    branch that merely looks like `issue-{N}-{subtask_id}` under a
+    different prefix (e.g. one a human or another agent created) is not
+    exempted, even though it has the same shape. The exemption also stops
+    once the dependency itself reaches `status:done` or
+    `status:not-needed`: `_is_task_stack_eligible()` never picks a `done`
+    dependency as the stack base, so once it's done this task can launch
+    straight from the normal parent/main base — and if the Integrator
+    hasn't merged the dependency's PR yet, an overlap with it is a genuine
+    external conflict. For PRs, the exemption
+    only applies when the head branch name matches the dependency's exact
+    canonical branch *and*
+    the PR is confirmed same-repository (not a fork) — a `#N` mention in
+    the title/body or a `Closes` reference alone does not qualify. A PR
+    whose head doesn't match, or whose origin is a fork or unknown, is
+    still treated as a conflict (fail closed).
 - Removed when: the overlap is gone. If a task reached `status:done` while
   still locked, the lock is removed as well; on removal, a task that is not
   yet `status:done` is put back to `status:queued`.

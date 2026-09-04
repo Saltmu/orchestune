@@ -391,3 +391,23 @@ class TestProcessParentCompletionWithFakeForge:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         assert res == {"status": "waiting_on_children", "open_children": [101]}
+
+    @patch("orchestune.integrator.parent_completion.ensure_parent_final_pr")
+    def test_creates_final_pr_even_if_parent_issue_itself_in_children(
+        self, mock_ensure_pr, fake_forge: MagicMock
+    ):
+        """万一childrenに親Issue自身が混入した場合でも、open_childrenとして
+        判定されず最終PRが作成されること（多重防御）。"""
+        fake_forge.get_merged_pr_timestamp.return_value = None
+        fake_forge.list_sub_issues.return_value = [
+            _issue(101, "CLOSED"),
+            _issue(100, "OPEN"),
+        ]
+        mock_ensure_pr.return_value = 777
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        mock_ensure_pr.assert_called_once()
+        passed_children = mock_ensure_pr.call_args[1]["children"]
+        assert [c.number for c in passed_children] == [101]
+        assert res == {"status": "final_pr_ready", "pr_number": 777}

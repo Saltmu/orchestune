@@ -10,6 +10,7 @@ from orchestune.issue_parsing import (
     backfill_launch_history,
     backfill_parent_issue_number,
     backfill_recovery_counters,
+    effective_parent_number,
     ensure_parent_marker,
     find_children_by_parent,
     launch_history_from_body,
@@ -223,6 +224,98 @@ class TestFindChildrenByParent:
 
         with pytest.raises(RuntimeError):
             find_children_by_parent(forge, 100)
+
+    def test_excludes_parent_issue_itself_from_children(self):
+        """親Issue自身（EPIC本文にparent_issue_numberを持つ）がmetadata検索で
+        ヒットしても、子Issueとして返されてはならない。"""
+        native = [_issue(101, 100)]
+        parent_as_candidate = IssueRecord(
+            number=100,
+            title="[EPIC] Parent Epic",
+            body=(
+                f"# [EPIC] Parent Epic\n\n{PARENT_MARKER}\n\n"
+                "```yaml\nparent_issue_number: 100\n```\n"
+            ),
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            state="OPEN",
+        )
+        forge = _MetadataAwareForge(native, [parent_as_candidate])
+
+        result = find_children_by_parent(forge, 100)
+
+        assert [r.number for r in result.issues] == [101]
+
+    def test_retains_nested_epic_child_issues(self):
+        """別親配下の子IssueでありながらEPICとして採用されたネストされた子Issueは、
+        親Issue自身でない限りmetadata検索でも除外されずに保持されなければならない。"""
+        native = [_issue(101, 100)]
+        nested_epic_candidate = IssueRecord(
+            number=200,
+            title="[EPIC] Nested Epic Child",
+            body=f"{PARENT_MARKER}\n```yaml\nparent_issue_number: 100\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            state="OPEN",
+        )
+        forge = _MetadataAwareForge(native, [nested_epic_candidate])
+
+        result = find_children_by_parent(forge, 100)
+
+        assert sorted(r.number for r in result.issues) == [101, 200]
+
+    def test_excludes_parent_issue_itself_from_native_sub_issues(self):
+        """forgeがlist_sub_issuesで親Issue自身を返した場合でも、
+        子Issue一覧から確実に除外されなければならない。"""
+        native = [_issue(100, 100), _issue(101, 100)]
+        forge = _NativeOnlyForge(native)
+
+        result = find_children_by_parent(forge, 100)
+
+        assert [r.number for r in result.issues] == [101]
+
+
+class TestEffectiveParentNumber:
+    def test_returns_none_when_self_parenting_in_body(self):
+        issue = IssueRecord(
+            number=100,
+            title="Self-parenting issue",
+            body="```yaml\nparent_issue_number: 100\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert effective_parent_number(issue) is None
+
+    def test_returns_none_when_self_parenting_in_native_parent(self):
+        issue = IssueRecord(
+            number=100,
+            title="Self-parenting issue",
+            body="",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            parent={"number": 100},
+        )
+        assert effective_parent_number(issue) is None
+
+    def test_returns_parent_number_when_different_from_self(self):
+        issue = IssueRecord(
+            number=101,
+            title="Child issue",
+            body="```yaml\nparent_issue_number: 100\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert effective_parent_number(issue) == 100
+
+    def test_returns_none_when_parent_number_malformed(self):
+        issue = IssueRecord(
+            number=101,
+            title="Child issue",
+            body="```yaml\nparent_issue_number: abc\n```\n",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        assert effective_parent_number(issue) is None
 
 
 class TestEnsureParentMarker:
