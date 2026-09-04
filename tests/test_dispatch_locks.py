@@ -933,9 +933,9 @@ class TestDependencyExclusion:
         prs = [
             PrRecord(
                 number=99,
-                head_ref="feat/dep-a-impl",
+                head_ref=build_task_branch_name(100, "dep-a"),
                 changed_files=("src/shared.py",),
-                closes_issue_numbers=(100,),
+                is_cross_repository=False,
             )
         ]
         result = scan_external_locks(
@@ -943,6 +943,63 @@ class TestDependencyExclusion:
         )
         assert result.to_lock == []
         assert result.conflicts == {}
+
+    def test_still_locks_task_against_pr_that_merely_mentions_dependency_issue(self):
+        """Codexレビュー対応(PR#797): `pr_matches_issue`はPRのタイトル・本文
+        中の`#N`言及だけでも一致するため、依存元Issue番号に言及しているだけの
+        無関係なPR（headは依存元の正規ブランチと無関係）まで除外してしまうと、
+        本物の外部衝突を見逃す。除外は依存元の正規ブランチ名との一致に限る。"""
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/unrelated-refactor",
+                changed_files=("src/shared.py",),
+                closes_issue_numbers=(100,),
+                is_cross_repository=False,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_still_locks_task_against_fork_pr_impersonating_dependency_branch(self):
+        """Codexレビュー対応(PR#797): headブランチ名が依存元の正規ブランチと
+        文字列上一致しても、フォーク（`is_cross_repository=True`）由来なら
+        依存元の実際のスタッキング対象ではないため除外しない。"""
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(100, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=True,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_still_locks_task_against_dependency_branch_pr_with_unknown_origin(self):
+        """`is_cross_repository`が不明(`None`)な場合はfail closedで除外しない。"""
+        dep_task = self._dependency_task()
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(100, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=None,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
 
     def test_still_locks_task_against_unrelated_pr_despite_dependency(self):
         dep_task = self._dependency_task()
@@ -1020,9 +1077,9 @@ class TestDependencyExclusion:
         prs = [
             PrRecord(
                 number=99,
-                head_ref="feat/dep-a-impl",
+                head_ref=build_task_branch_name(100, "dep-a"),
                 changed_files=("something_else.py",),
-                closes_issue_numbers=(100,),
+                is_cross_repository=False,
                 is_files_truncated=True,
             )
         ]
@@ -1086,9 +1143,9 @@ class TestDependencyExclusion:
         prs = [
             PrRecord(
                 number=99,
-                head_ref="feat/dep-a-impl",
+                head_ref=build_task_branch_name(100, "dep-a"),
                 changed_files=("src/shared.py",),
-                closes_issue_numbers=(100,),
+                is_cross_repository=False,
             )
         ]
         result = scan_external_locks(

@@ -104,8 +104,21 @@ def _direct_dependency_identities(
 def _is_dependency_pr(
     pr: PrRecord, dependency_identities: tuple[tuple[int, str], ...]
 ) -> bool:
+    """PRが依存元タスクの正規ブランチそのものだと確実に同定できる場合のみ`True`。
+
+    Codexレビュー対応(PR#797): `pr_matches_issue`はPRのタイトル・本文中の
+    `#N`言及だけでも一致するため、依存元のIssue番号を(意図的か偶然かを問わず)
+    言及しているだけの無関係なPR――フォーク由来を含む――まで、その言及だけで
+    ロック判定から除外できてしまう。スタッキングが実際に取り込むのは
+    `build_task_branch_name`が生成する依存元の正規ブランチそのものなので、
+    除外もそのブランチ名との一致(`branch_matches_task`)と、`is_cross_repository
+    is False`（同一リポジトリ由来だと確認できる場合のみ。`None`＝不明も
+    fail closedで除外しない）に限定する。
+    """
+    if pr.is_cross_repository is not False:
+        return False
     return any(
-        pr_matches_issue(pr, dep_issue_number, dep_subtask_id)
+        branch_matches_task(pr.head_ref, dep_issue_number, dep_subtask_id)
         for dep_issue_number, dep_subtask_id in dependency_identities
     )
 

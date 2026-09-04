@@ -204,17 +204,20 @@ independently of the lifecycle above (see "External lock" below).
 - Applied when: a task's footprint overlaps with the changed files of a
   remote branch or PR that Orchestune does not manage (tasks already
   `status:done` are excluded).
-  - Exception: an overlap with the PR/branch of a task's own direct
-    `depends_on` entry does not count
+  - Exception: an overlap with the canonical branch
+    (`<prefix>/issue-{N}-{subtask_id}`, from `orchestune.branch_naming`) of
+    a task's own direct `depends_on` entry does not count
     ([#796](https://github.com/Saltmu/orchestune/issues/796)). Stacked
     launches (`_get_stack_eligible_tasks` in
     `orchestune/dispatch/launch.py`) build on top of the dependency's
     branch, so that overlap is not an "Orchestune-unmanaged conflict."
     This does not walk further up the dependency chain (a dependency's own
-    dependency is not excluded). If the dependency's branch/PR cannot be
-    identified via the existing naming convention
-    (`orchestune.branch_naming`) or `Closes` references, it is still
-    treated as a conflict (fail closed).
+    dependency is not excluded). For PRs, the exemption only applies when
+    the head branch name matches the dependency's canonical branch *and*
+    the PR is confirmed same-repository (not a fork) — a `#N` mention in
+    the title/body or a `Closes` reference alone does not qualify. A PR
+    whose head doesn't match, or whose origin is a fork or unknown, is
+    still treated as a conflict (fail closed).
 - Removed when: the overlap is gone. If a task reached `status:done` while
   still locked, the lock is removed as well; on removal, a task that is not
   yet `status:done` is put back to `status:queued`.
