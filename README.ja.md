@@ -1,5 +1,10 @@
 # Orchestune
 
+> 承認済み親Issueの要件を保ったまま**未着手**の分解だけが陳腐化した場合、
+> `orchestune replan` は書き込みなしで置換世代をpreviewします。applyにはその
+> preview tokenが必須で、安全なqueued/blocked Issueだけを履歴を残して廃止します。
+> 初回のIssue作成は引き続き `orchestune provision` の責務です。
+
 [English](README.md) | [日本語](README.ja.md)
 
 ⚠️ **β版**: Orchestuneの主要ワークフローは利用可能ですが、安定版までにAPI、CLIコマンド、ワークフローが変更される可能性があります。

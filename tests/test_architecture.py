@@ -37,6 +37,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.dispatcher",
             "monitor",
             "provisioning.cli",
+            "replan.cli",
         }
     ),
     3: frozenset(
@@ -164,6 +165,7 @@ ALLOWED_L4_DEPENDENTS = {
     "dispatch.dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
     "provisioning.cli": frozenset({"cli"}),
+    "replan.cli": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},
