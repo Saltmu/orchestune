@@ -204,12 +204,19 @@ independently of the lifecycle above (see "External lock" below).
 - Applied when: a task's footprint overlaps with the changed files of a
   remote branch or PR that Orchestune does not manage (tasks already
   `status:done` are excluded).
-  - Exception: an overlap with the exact canonical branch that
+  - Exception: for a task that is currently **`status:blocked`**, an
+    overlap with the exact canonical branch that
     `orchestune.branch_naming.build_task_branch_name()` generates with its
-    default prefix for a task's own direct `depends_on` entry does not
-    count ([#796](https://github.com/Saltmu/orchestune/issues/796)) — this
+    default prefix for its own direct `depends_on` entry does not count
+    ([#796](https://github.com/Saltmu/orchestune/issues/796)) — this
     is the same branch name `_build_pr_mappings()`'s `subtask_branch_map`
-    and stacked launches actually use. Stacked launches
+    and stacked launches actually use. The exemption does not apply to a
+    `status:queued` task: stacking (`_get_stack_eligible_tasks`) only ever
+    assigns a base branch to `status:blocked` tasks, and while a queued
+    task is normally expected to have every dependency already resolved,
+    it can transiently end up `status:queued` with an unresolved
+    dependency — the exact anomaly
+    `QUEUED_WITH_UNRESOLVED_DEPENDENCIES` detects and repairs. Stacked launches
     (`_get_stack_eligible_tasks` in `orchestune/dispatch/launch.py`) build
     on top of the dependency's branch, so that overlap is not an
     "Orchestune-unmanaged conflict." This does not walk further up the

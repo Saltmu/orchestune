@@ -40,7 +40,12 @@ class TestDependencyExclusion:
     """#796: `depends_on`で指した依存元のPR・ブランチは、スタッキング起動
     （`orchestune/dispatch/launch.py`の`_get_stack_eligible_tasks`）で
     base取り込みが前提の変更であり、「Orchestune管理外の衝突」ではない。
-    依存元由来の重複だけを外部ロックの対象から除外する。"""
+    依存元由来の重複だけを外部ロックの対象から除外する。
+
+    スタッキングは`status:blocked`のタスクにしか起こらない
+    （`_get_stack_eligible_tasks`は`issues.blocked`のみを走査する）ため、
+    除外を検証するテストの依存タスク側は`status:blocked`にする
+    （Codexレビュー対応 PR#797 P2, Finding 5）。"""
 
     def _dependency_task(self, issue_number=100, subtask_id="dep-a", **kwargs):
         # 依存元タスク自身のfootprintは空にする: 空footprintのタスクは
@@ -50,9 +55,13 @@ class TestDependencyExclusion:
         kwargs.setdefault("footprint", ())
         return _task(issue_number, subtask_id=subtask_id, **kwargs)
 
+    def _blocked_task(self, issue_number=1, **kwargs):
+        kwargs.setdefault("status_labels", ("status:blocked",))
+        return _task(issue_number, **kwargs)
+
     def test_does_not_lock_task_against_dependency_pr(self):
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -67,6 +76,33 @@ class TestDependencyExclusion:
         assert result.to_lock == []
         assert result.conflicts == {}
 
+    def test_still_locks_queued_task_with_unresolved_dependency(self):
+        """Codexレビュー対応(PR#797 P2, Finding 5): `status:queued`のまま
+        依存が未解決という異常系（`QUEUED_WITH_UNRESOLVED_DEPENDENCIES`が
+        検知・修復する状態）では、スタッキング（`status:blocked`前提）が
+        起こらないため除外しない。`_filter_queued_candidates`はfootprintや
+        `depends_on`を見ずに候補として扱うため、除外すると依存元の変更が
+        実際には入っていないbaseから起動されてしまう。"""
+        dep_task = self._dependency_task()
+        task = _task(
+            1,
+            footprint=("src/shared.py",),
+            depends_on=("dep-a",),
+            status_labels=("status:queued",),
+        )
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(100, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=False,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
     def test_still_locks_task_against_done_dependency_pr_not_yet_merged(self):
         """Codexレビュー対応(PR#797 P2, Finding 4): 依存元が`status:done`に
         到達すると`_is_task_stack_eligible`はそれをstackable_depsに加えない
@@ -75,7 +111,7 @@ class TestDependencyExclusion:
         依存元PRの変更が実際にはbaseへ入っていない場合、これは正真正銘の
         外部衝突であり除外してはならない。"""
         dep_task = self._dependency_task(status_labels=("status:done",))
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -91,7 +127,7 @@ class TestDependencyExclusion:
 
     def test_still_locks_task_against_done_dependency_branch_not_yet_merged(self):
         dep_task = self._dependency_task(status_labels=("status:done",))
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         branch_name = build_task_branch_name(100, "dep-a")
         result = scan_external_locks(
             [dep_task, task],
@@ -103,7 +139,7 @@ class TestDependencyExclusion:
 
     def test_still_locks_task_against_not_needed_dependency_pr(self):
         dep_task = self._dependency_task(status_labels=("status:not-needed",))
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -123,7 +159,7 @@ class TestDependencyExclusion:
         無関係なPR（headは依存元の正規ブランチと無関係）まで除外してしまうと、
         本物の外部衝突を見逃す。除外は依存元の正規ブランチ名との一致に限る。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -143,7 +179,7 @@ class TestDependencyExclusion:
         文字列上一致しても、フォーク（`is_cross_repository=True`）由来なら
         依存元の実際のスタッキング対象ではないため除外しない。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -160,7 +196,7 @@ class TestDependencyExclusion:
     def test_still_locks_task_against_dependency_branch_pr_with_unknown_origin(self):
         """`is_cross_repository`が不明(`None`)な場合はfail closedで除外しない。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -176,7 +212,7 @@ class TestDependencyExclusion:
 
     def test_still_locks_task_against_unrelated_pr_despite_dependency(self):
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -192,7 +228,7 @@ class TestDependencyExclusion:
 
     def test_does_not_lock_task_against_dependency_branch(self):
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         branch_name = build_task_branch_name(100, "dep-a")
         result = scan_external_locks(
             [dep_task, task],
@@ -212,7 +248,7 @@ class TestDependencyExclusion:
         と完全一致しなければスタッキングの取り込み対象ではないため、
         引き続き外部衝突として扱う。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         branch_name = build_task_branch_name(100, "dep-a", prefix="fix")
         result = scan_external_locks(
             [dep_task, task],
@@ -226,7 +262,7 @@ class TestDependencyExclusion:
         """Codexレビュー対応(PR#797 P2): PR側でも同様に、既定prefixのブランチ
         と完全一致しない限り除外しない。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         prs = [
             PrRecord(
                 number=99,
@@ -242,7 +278,7 @@ class TestDependencyExclusion:
 
     def test_still_locks_task_against_unrelated_branch_despite_dependency(self):
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         result = scan_external_locks(
             [dep_task, task],
             remote_branches=[("fix/issue-999-other", ("src/shared.py",))],
@@ -254,7 +290,7 @@ class TestDependencyExclusion:
     def test_dependency_branch_diff_unknown_is_excluded_from_fail_closed(self):
         """#245のfail closedは、依存元自身の差分取得不能では発動しない。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         branch_name = build_task_branch_name(100, "dep-a")
         result = scan_external_locks(
             [dep_task, task],
@@ -269,7 +305,7 @@ class TestDependencyExclusion:
         self,
     ):
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
         dep_branch_name = build_task_branch_name(100, "dep-a")
         result = scan_external_locks(
             [dep_task, task],
@@ -283,7 +319,9 @@ class TestDependencyExclusion:
         """truncated状態のPRはfootprintの重なりに関わらず無条件でfail closed
         するため、依存元由来である場合は除外されないと#796の意図を満たさない。"""
         dep_task = self._dependency_task()
-        task = _task(1, footprint=("src/unrelated_to_pr.py",), depends_on=("dep-a",))
+        task = self._blocked_task(
+            footprint=("src/unrelated_to_pr.py",), depends_on=("dep-a",)
+        )
         prs = [
             PrRecord(
                 number=99,
@@ -306,7 +344,7 @@ class TestDependencyExclusion:
         parent = self._dependency_task(
             issue_number=100, subtask_id="dep-b", depends_on=("dep-c",)
         )
-        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-b",))
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-b",))
         prs = [
             PrRecord(
                 number=99,
@@ -326,7 +364,9 @@ class TestDependencyExclusion:
     def test_unresolvable_dependency_subtask_id_still_locks(self):
         """`depends_on`が指すsubtask_idが候補集合に存在しない（解決不能）場合は
         従来通りfail closedでロック対象のままとする。"""
-        task = _task(1, footprint=("src/shared.py",), depends_on=("missing-dep",))
+        task = self._blocked_task(
+            footprint=("src/shared.py",), depends_on=("missing-dep",)
+        )
         prs = [
             PrRecord(
                 number=99,
@@ -344,11 +384,10 @@ class TestDependencyExclusion:
         """#698の実例: 依存元PRだけがロック理由だったタスクは、依存元除外の
         導入により次サイクルで解除される。"""
         dep_task = self._dependency_task()
-        locked_task = _task(
-            1,
+        locked_task = self._blocked_task(
             footprint=("src/shared.py",),
             depends_on=("dep-a",),
-            status_labels=("status:external-lock",),
+            status_labels=("status:blocked", "status:external-lock"),
         )
         prs = [
             PrRecord(

@@ -107,7 +107,20 @@ def _direct_dependency_canonical_branches(
     上で）通常のparent/mainからそのまま起動され得る。このときの依存元PR・
     ブランチとの重複は、Integratorのマージが未完了で実際にはbaseへ取り込まれて
     いない変更を意味しうる、正真正銘の外部衝突であり除外してはならない。
+
+    Codexレビュー対応(PR#797 P2, Finding 5): タスク自身が`status:blocked`で
+    ない場合は除外しない。`_get_stack_eligible_tasks`がbaseを割り当てるのは
+    `issues.blocked`のみで、スタッキングはタスクが`status:blocked`の間しか
+    起こらない。`status:queued`のタスクは通常、依存が解決済みだからqueuedに
+    昇格しているはずだが、`orchestune.consistency.invariants.status`の
+    `QUEUED_WITH_UNRESOLVED_DEPENDENCIES`が検知・修復する異常系として、
+    依存未解決のまま`status:queued`になり得る（repair実行前の一時的な状態）。
+    このとき`_filter_queued_candidates`はfootprintや`depends_on`を見ずに
+    候補として扱うため、除外を適用すると依存元の変更が実際には入っていない
+    baseから起動されてしまう。
     """
+    if StatusLabel.BLOCKED not in task.status_labels:
+        return frozenset()
     return frozenset(
         build_task_branch_name(dep_task.issue_number, dep_task.subtask_id)
         for dep in task.depends_on
