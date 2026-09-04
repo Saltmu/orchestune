@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.forge import RelationshipUnavailableError
 from orchestune.issue_parsing import (
     decomposition_plan_from_parent_body,
@@ -13,7 +14,8 @@ from orchestune.issue_parsing import (
     parent_issue_number_from_body,
 )
 from orchestune.models import IssueRecord, PrRecord
-from orchestune.replan.apply import apply_replan
+from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
+from orchestune.replan.apply import PROJECTED_ISSUE_NUMBER, apply_replan
 from orchestune.replan.audit import replan_audit_marker, retirement_marker
 from orchestune.replan.plan import load_replan_plan
 from orchestune.replan.preview import build_replan_preview
@@ -481,24 +483,62 @@ def test_unrelated_parent_comments_do_not_invalidate_preview_token(
     assert result.created_issue_numbers == (100, 101)
 
 
-def test_switch_parent_plan_oversized_body_returns_degraded_without_raising(
+def _parent_body_projecting_to(plan: Path, target_length: int) -> str:
+    """Build a parent body whose replan-embedded projection is exactly ``target_length``."""
+
+    plan_data, _ = extract_frontmatter_and_body(plan.read_text(encoding="utf-8"))
+    for subtask in plan_data["subtasks"]:
+        if subtask["issue_number"] is None:
+            subtask["issue_number"] = PROJECTED_ISSUE_NUMBER
+
+    def build(prose_length: int) -> tuple[str, str]:
+        body = embed_decomposition_plan_in_parent_body(
+            "x" * prose_length + "\n", OLD_PLAN
+        )
+        return body, embed_decomposition_plan_in_parent_body(body, plan_data)
+
+    _, probe = build(0)
+    body, projected = build(target_length - len(probe))
+    assert len(projected) == target_length
+    return body
+
+
+def test_apply_rejects_an_oversized_parent_body_before_the_first_write(
     replan_files: tuple[Path, Path],
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     plan, template = replan_files
     forge = FakeReplanForge()
+    forge.issues[PARENT]["body"] = _parent_body_projecting_to(
+        plan, GITHUB_ISSUE_BODY_LIMIT + 1
+    )
+    parent_body = forge.issues[PARENT]["body"]
     token = preview_token(forge, plan)
 
-    plan_data = {
-        "title": "Old plan",
-        "parent_issue_number": PARENT,
-        "parent_issue_source": "adopted",
-        "subtasks": [{"id": "old-a", "description": "Old A", "issue_number": 10}],
-    }
-    oversized_prose = "x" * 65400 + "\n"
-    forge.issues[PARENT]["body"] = embed_decomposition_plan_in_parent_body(
-        oversized_prose, plan_data
+    with pytest.raises(ValueError, match="over GitHub's 65536 character limit"):
+        apply_replan(
+            plan,
+            token,
+            forge=forge,
+            template_path=template,
+            repo_root=plan.parent,
+        )
+
+    assert forge.mutations == []
+    assert forge.issues[PARENT]["body"] == parent_body
+    assert forge.issues[10]["state"] == "OPEN"
+    assert forge.comments == {}
+    assert "issue_number: null" in plan.read_text(encoding="utf-8")
+
+
+def test_apply_accepts_a_parent_body_projected_onto_the_size_limit(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    forge = FakeReplanForge()
+    forge.issues[PARENT]["body"] = _parent_body_projecting_to(
+        plan, GITHUB_ISSUE_BODY_LIMIT
     )
+    token = preview_token(forge, plan)
 
     result = apply_replan(
         plan,
@@ -508,17 +548,41 @@ def test_switch_parent_plan_oversized_body_returns_degraded_without_raising(
         repo_root=plan.parent,
     )
 
-    assert result.degraded is True
-    assert "over GitHub's 65536 character limit" in capsys.readouterr().err
-    assert "Native relationship result: degraded" in forge.comments[PARENT][0]
+    assert result.degraded is False
+    assert result.created_issue_numbers == (100, 101)
+    assert len(str(forge.issues[PARENT]["body"])) <= GITHUB_ISSUE_BODY_LIMIT
+    switched = decomposition_plan_from_parent_body(str(forge.issues[PARENT]["body"]))
+    assert switched is not None
+    assert [subtask["issue_number"] for subtask in switched["subtasks"]] == [100, 101]
 
-    # Subsequent retry does not crash and completes with degraded status
-    retry_token = preview_token(forge, plan)
-    retry_result = apply_replan(
+
+def test_parent_body_inflated_after_preflight_degrades_without_raising(
+    replan_files: tuple[Path, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A parent body that grows mid-apply degrades instead of crashing after writes."""
+
+    plan, template = replan_files
+
+    class InflatingForge(FakeReplanForge):
+        def get_issue(self, issue_number: int | str) -> IssueRecord | None:
+            if int(issue_number) == PARENT and self.mutations:
+                self.issues[PARENT]["body"] = (
+                    "x" * GITHUB_ISSUE_BODY_LIMIT
+                    + "\n"
+                    + str(self.issues[PARENT]["body"])
+                )
+            return super().get_issue(issue_number)
+
+    forge = InflatingForge()
+    result = apply_replan(
         plan,
-        retry_token,
+        preview_token(forge, plan),
         forge=forge,
         template_path=template,
         repo_root=plan.parent,
     )
-    assert retry_result.degraded is True
+
+    assert result.degraded is True
+    assert "over GitHub's 65536 character limit" in capsys.readouterr().err
+    assert "parent-body" not in forge.mutations
