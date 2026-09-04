@@ -14,6 +14,8 @@ from orchestune.validation import (
     validate_username,
 )
 
+from .admin import RelationshipUnavailableError
+
 _VALID_ISSUE_STATES = frozenset({"open", "closed", "all"})
 _VALID_CLOSE_REASONS = frozenset({"completed", "not planned"})
 
@@ -38,6 +40,28 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   }
 }
 """
+
+
+def _error_detail(exc: subprocess.CalledProcessError) -> str:
+    return " ".join(
+        value.decode("utf-8", errors="replace")
+        if isinstance(value, bytes)
+        else str(value or "")
+        for value in (exc.output, exc.stderr)
+    ).lower()
+
+
+def _is_relationship_unavailable_error(exc: subprocess.CalledProcessError) -> bool:
+    detail = _error_detail(exc)
+    return any(
+        marker in detail
+        for marker in (
+            "unknown flag",
+            "unknown option",
+            "not supported",
+            "unknown field",
+        )
+    )
 
 
 class _Runner(Protocol):
@@ -282,21 +306,78 @@ class GitHubIssueMixin:
         number = validate_issue_number(issue_number)
         self._run(["gh", "issue", "edit", str(number), "--title", title])
 
+    def _get_issue_for_relationship(self, issue_number: int) -> IssueRecord | None:
+        try:
+            return self.get_issue(issue_number)
+        except subprocess.CalledProcessError as exc:
+            if _is_relationship_unavailable_error(exc):
+                raise RelationshipUnavailableError(
+                    "native issue relationships are unavailable"
+                ) from exc
+            raise
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
         parent = validate_issue_number(parent_issue_number)
         child = validate_issue_number(child_issue_number)
-        self._run(["gh", "issue", "edit", str(child), "--parent", str(parent)])
+        current = self._get_issue_for_relationship(child)
+        if current is not None and current.parent is not None:
+            if current.parent.get("number") == parent:
+                return
+        self._run_relationship_command(
+            ["gh", "issue", "edit", str(child), "--parent", str(parent)]
+        )
+
+    def remove_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None:
+        parent = validate_issue_number(parent_issue_number)
+        child = validate_issue_number(child_issue_number)
+        current = self._get_issue_for_relationship(child)
+        if current is None or current.parent is None:
+            return
+        if current.parent.get("number") != parent:
+            raise ValueError(
+                f"Issue #{child} has parent #{current.parent.get('number')}, not #{parent}"
+            )
+        self._run_relationship_command(
+            ["gh", "issue", "edit", str(child), "--remove-parent"]
+        )
 
     def set_blocked_by(
         self, issue_number: int | str, blocking_issue_number: int | str
     ) -> None:
         number = validate_issue_number(issue_number)
         blocker = validate_issue_number(blocking_issue_number)
-        self._run(
+        current = self._get_issue_for_relationship(number)
+        if current is not None and blocker in current.blocked_by:
+            return
+        self._run_relationship_command(
             ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
         )
+
+    def remove_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None:
+        number = validate_issue_number(issue_number)
+        blocker = validate_issue_number(blocking_issue_number)
+        current = self._get_issue_for_relationship(number)
+        if current is None or blocker not in current.blocked_by:
+            return
+        self._run_relationship_command(
+            ["gh", "issue", "edit", str(number), "--remove-blocked-by", str(blocker)]
+        )
+
+    def _run_relationship_command(self, args: list[str]) -> None:
+        try:
+            self._run(args)
+        except subprocess.CalledProcessError as exc:
+            if _is_relationship_unavailable_error(exc):
+                raise RelationshipUnavailableError(
+                    "native issue relationships are unavailable"
+                ) from exc
+            raise
 
     def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]:
         stdout = self._run(
@@ -384,7 +465,7 @@ class GitHubIssueMixin:
                 ]
             )
         except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").lower()
+            detail = _error_detail(exc)
             if "404" in detail or "not found" in detail:
                 return None
             raise

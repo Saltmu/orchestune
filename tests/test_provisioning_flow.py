@@ -760,6 +760,26 @@ class TestLinkSubtaskRelationships:
         assert forge.sub_issues == {}
         assert forge.blocked_by == {}
 
+    def test_degrades_gracefully_when_forge_raises_value_error(self):
+        class ConflictForge(FakeForge):
+            def add_sub_issue(self, parent_issue_number, child_issue_number) -> None:
+                raise ValueError("conflicting parent")
+
+            def set_blocked_by(self, issue_number, blocking_issue_number) -> None:
+                raise ValueError("invalid blocker")
+
+        forge = ConflictForge()
+        result = _link_subtask_relationships(
+            forge=forge,
+            parent_issue_number=100,
+            issue_number=102,
+            depends_on=("dep-1",),
+            resolved_numbers={"dep-1": 101},
+        )
+        assert result.parent_linked is False
+        assert result.unresolved_dependencies == ("dep-1",)
+        assert result.degraded is True
+
     def test_other_exceptions_still_propagate_for_retry(self):
         """#323: a transient failure (not a structural capability gap) must
         still abort the run so a rerun can pick up where it left off —
