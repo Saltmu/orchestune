@@ -407,7 +407,11 @@ orchestune replan --plan decomposition_plan.md --parent-issue 123 \
 ```
 
 An in-progress, done, closed, conflicting, or merged-result Issue is never
-automatically replaced. A partial failure requires a new preview and token;
+automatically replaced. Apply verifies before its first write that the parent
+Issue body carrying the new plan stays within GitHub's 65,536 character body
+limit, and stops with exit code `3` without creating Issues, changing
+relationships, or retiring the old generation when it would not. A partial
+failure requires a new preview and token;
 re-running a completed replacement makes no GitHub mutations. Exit codes are
 `0` (preview/success), `2` (configuration), `3` (missing or invalid approval,
 including conflicts), `4` (partial application), and `5` (already-active no-op).
