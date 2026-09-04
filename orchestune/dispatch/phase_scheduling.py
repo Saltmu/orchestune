@@ -49,6 +49,7 @@ from orchestune.dispatch.summary import (
     REASON_EARLY_DEATH_BACKOFF,
     REASON_EXTERNAL_LOCK,
     REASON_FORCED_SERIAL,
+    REASON_REVIEW_TIMEOUT_BACKOFF,
     SkipRecord,
 )
 from orchestune.labels import StatusLabel
@@ -88,7 +89,7 @@ def _filter_queued_candidates(
         not in ctx.tasks_by_issue[issue.number].status_labels
         and (
             (record := ctx.run_state.task_reclaim_counts.get(issue.number)) is None
-            or record.early_death_retry_at <= now
+            or max(record.early_death_retry_at, record.review_timeout_retry_at) <= now
         )
     ]
     actor_decisions = _decide_actor_verification(
@@ -182,6 +183,8 @@ def _queued_drop_skips(
         record = ctx.run_state.task_reclaim_counts.get(issue.number)
         if record is not None and record.early_death_retry_at > now:
             skips.append(_skip_record(task, REASON_EARLY_DEATH_BACKOFF))
+        elif record is not None and record.review_timeout_retry_at > now:
+            skips.append(_skip_record(task, REASON_REVIEW_TIMEOUT_BACKOFF))
         else:
             skips.append(_skip_record(task, REASON_ACTOR_UNVERIFIED))
     return skips

@@ -47,7 +47,7 @@ Loop (up to 5 rounds):
        comment**, even with a boilerplate summary such as "Here are some automated
        review suggestions". Read every `Inline Finding` block (path, line, full body).
      - Exit 0: clean pass / no findings. Exit 11: reviewer still in progress.
-     - Exit 20: timeout; retry once with --no-post --timeout 300, then escalate.
+     - Exit 20: timeout; retry once with --no-post --timeout 300. If still timed out, post an Outcome Record with result: "blocked", reason: "review-timeout", review.bot set to the reviewer bot, and attempt count (automatically re-queued with exponential backoff; escalates to human review after 2 attempts).
      - Exit 30: ambiguous verdict; inspect summary and inline findings before
        requesting another review or escalating. Exit 2 or 12: record and escalate.
      - Exit 10:

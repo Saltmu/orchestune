@@ -35,6 +35,7 @@ REASON_DUPLICATE_PR = "duplicate-pr"
 REASON_FORCED_SERIAL = "forced-serial"
 REASON_ACTOR_UNVERIFIED = "actor-unverified"
 REASON_EARLY_DEATH_BACKOFF = "early-death-backoff"
+REASON_REVIEW_TIMEOUT_BACKOFF = "review-timeout-backoff"
 REASON_DEVIATION_BLOCKED = "deviation-blocked"
 
 SUMMARY_PREFIX = "[orchestune:summary]"
@@ -52,6 +53,7 @@ _REASON_LABELS = {
     REASON_FORCED_SERIAL: "強制直列化の待機中",
     REASON_ACTOR_UNVERIFIED: "ラベル付与者の権限が未確認",
     REASON_EARLY_DEATH_BACKOFF: "早期終了からの再投入待ち",
+    REASON_REVIEW_TIMEOUT_BACKOFF: "レビュータイムアウト再試行の待機中",
     REASON_DEVIATION_BLOCKED: "footprint逸脱によりブロック",
     REASON_QUOTA_EXHAUSTED: "クオータ枯渇",
     REASON_TOKEN_BUDGET: "トークン予算超過",
