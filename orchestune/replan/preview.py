@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from orchestune import STATUS_LABEL_PREFIX, StatusLabel
 from orchestune.models import IssueRecord
+from orchestune.replan.audit import retirement_marker
 from orchestune.replan.models import PlanGeneration, PlanRevision, ReplanPlan
 from orchestune.replan.plan import compute_plan_revision
 from orchestune.replan.snapshot import ReplanSnapshot
@@ -73,10 +74,16 @@ def _generations(
 
 
 def _closed_retirement_decision(
-    issue: IssueRecord, status: str, subtask_id: str, revision: PlanRevision
+    issue: IssueRecord,
+    status: str,
+    subtask_id: str,
+    revision: PlanRevision,
+    comments: tuple[str, ...],
 ) -> PreviewDecision:
-    marker = f"<!-- orchestune:replan-retirement plan_revision={revision} -->"
-    if status == StatusLabel.NOT_NEEDED and marker in issue.body:
+    marker = retirement_marker(revision)
+    if status == StatusLabel.NOT_NEEDED and (
+        marker in issue.body or any(marker in comment for comment in comments)
+    ):
         return PreviewDecision(
             "no-op",
             subtask_id,
@@ -109,6 +116,29 @@ def _open_retirement_decision(
     )
 
 
+def _is_recoverable_retirement(
+    snapshot: ReplanSnapshot,
+    issue: IssueRecord,
+    issue_number: int,
+    revision: PlanRevision,
+    labels: set[str],
+) -> bool:
+    recoverable_labels = {
+        StatusLabel.QUEUED,
+        StatusLabel.BLOCKED,
+        StatusLabel.NOT_NEEDED,
+    }
+    return bool(
+        labels
+        and issue.state.upper() == "OPEN"
+        and labels <= recoverable_labels
+        and any(
+            retirement_marker(revision) in comment
+            for comment in snapshot.comments_for(issue_number)
+        )
+    )
+
+
 def _old_generation_decision(
     snapshot: ReplanSnapshot,
     issue: IssueRecord | None,
@@ -124,6 +154,14 @@ def _old_generation_decision(
             issue_number,
         )
     labels = {label for label in issue.labels if label.startswith(STATUS_LABEL_PREFIX)}
+    comments = snapshot.comments_for(issue_number)
+    if _is_recoverable_retirement(snapshot, issue, issue_number, revision, labels):
+        return PreviewDecision(
+            "retire",
+            subtask_id,
+            "matching retirement marker authorizes partial-failure recovery",
+            issue.number,
+        )
     if len(labels) != 1:
         return PreviewDecision(
             "conflict",
@@ -140,7 +178,9 @@ def _old_generation_decision(
             issue_number,
         )
     if issue.state.upper() != "OPEN":
-        return _closed_retirement_decision(issue, status, subtask_id, revision)
+        return _closed_retirement_decision(
+            issue, status, subtask_id, revision, comments
+        )
     return _open_retirement_decision(issue, status, subtask_id)
 
 
