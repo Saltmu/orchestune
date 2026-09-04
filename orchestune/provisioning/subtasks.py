@@ -141,6 +141,12 @@ def _link_subtask_relationships(
             f"Warning: this forge does not support native sub-issue linking; #{issue_number} relies on body metadata for parent #{parent_issue_number} instead: {error}",
             file=sys.stderr,
         )
+    except ValueError as error:
+        parent_linked = False
+        print(
+            f"Warning: failed to link parent #{parent_issue_number} for #{issue_number}; relying on body metadata instead: {error}",
+            file=sys.stderr,
+        )
     unresolved: list[str] = []
     for dependency_id in depends_on:
         try:
@@ -149,6 +155,12 @@ def _link_subtask_relationships(
             unresolved.append(dependency_id)
             print(
                 f"Warning: this forge does not support native blocked_by linking; #{issue_number} relies on body depends_on for {dependency_id} (#{resolved_numbers[dependency_id]}) instead: {error}",
+                file=sys.stderr,
+            )
+        except ValueError as error:
+            unresolved.append(dependency_id)
+            print(
+                f"Warning: failed to set blocker {dependency_id} (#{resolved_numbers[dependency_id]}) for #{issue_number}; relying on body depends_on instead: {error}",
                 file=sys.stderr,
             )
     return RelationshipLinkResult(parent_linked, tuple(unresolved))

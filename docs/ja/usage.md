@@ -383,3 +383,31 @@ GitHubの `Closes #N` による自動リンクとIssueサイドバーの「Devel
 2. **PRマージ時**: Integratorが統合PRを親ブランチへマージして子Issueをクローズする際、クローズの**直前**に「PR #XXX が親ブランチにマージされました」という完了通知コメントを投稿します。クローズと同じコメントに載せないのは、クローズだけが失敗した場合に次サイクルの再試行が統合PR番号を復元できず、リンクが恒久的に失われるためです。
 
 いずれのコメントにも `<!-- orchestune:pr-link:{created|merged}:{PR番号} -->` 形式のマーカーが埋め込まれ、同じ通知が二重に投稿されることはありません。既存コメントを読めなかった場合の扱いは通知の種類で異なります。作成通知は投稿を見送り次のサイクルで再試行しますが、マージ通知はクローズ直前の最後の書き込みで再試行の機会がないため、リンクを失わないよう投稿を優先します。
+
+---
+
+## 6. 未着手の分解世代を置き換える（`orchestune replan`）
+
+`orchestune provision` は計画からIssueを**初回作成**するためのコマンドです。親Issue
+の要件を維持したまま未着手の分解が陳腐化した場合は、旧Issueを履歴として残して
+世代を置き換える `orchestune replan` を使用します。既定のpreviewは必ずread-onlyです。
+
+```bash
+orchestune replan --plan decomposition_plan.md --parent-issue 123
+```
+
+previewは新世代の `create` / `reuse` と旧世代の `retire` / `manual-review` /
+`conflict` / `no-op` を対象Issueとともに表示し、snapshotに束縛されたtokenを出力します。
+applyには、その時点のtokenを明示します。
+
+```bash
+orchestune replan --plan decomposition_plan.md --parent-issue 123 \
+  --apply --confirm-preview replan-preview-v1:sha256:<token>
+```
+
+`in-progress`、`done`、closed、status競合、またはmerged成果物を持つ旧Issueは自動で
+置き換えません。applyは新planを埋め込んだ親Issue本文がGitHubの本文上限
+（65,536文字）を超えないことを最初の書き込みより前に検証し、超える場合はIssueの作成・
+関係変更・旧世代の廃止を一切行わずexit code `3` で停止します。部分失敗後は新しい
+previewとtokenが必要で、完了済みの再実行はGitHubを変更しません。exit codeは `0`（preview/成功）、`2`（設定不備）、`3`（承認不足・token
+不一致・競合）、`4`（部分適用）、`5`（active世代のno-op）です。

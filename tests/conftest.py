@@ -301,6 +301,27 @@ class FakeForge:
                 state=cur.state,
             )
 
+    def remove_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None:
+        pnum = int(parent_issue_number)
+        cnum = int(child_issue_number)
+        cur = self.issues.get(cnum)
+        if cur is None or cur.parent is None:
+            return
+        if cur.parent.get("number") != pnum:
+            raise ValueError(f"Issue #{cnum} has a different parent")
+        self.issues[cnum] = cur.__class__(
+            number=cur.number,
+            title=cur.title,
+            body=cur.body,
+            labels=cur.labels,
+            created_at=cur.created_at,
+            parent=None,
+            blocked_by=cur.blocked_by,
+            state=cur.state,
+        )
+
     def list_sub_issues(self, parent_issue_number: int | str) -> list[IssueRecord]:
         pnum = int(parent_issue_number)
         return [
@@ -317,6 +338,8 @@ class FakeForge:
         if num in self.issues:
             cur = self.issues[num]
             existing = list(cur.blocked_by) if cur.blocked_by else []
+            if bnum in existing:
+                return
             existing.append(bnum)
             self.issues[num] = IssueRecord(
                 number=cur.number,
@@ -328,6 +351,25 @@ class FakeForge:
                 blocked_by=tuple(existing),
                 state=cur.state,
             )
+
+    def remove_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None:
+        num = int(issue_number)
+        bnum = int(blocking_issue_number)
+        cur = self.issues.get(num)
+        if cur is None or bnum not in cur.blocked_by:
+            return
+        self.issues[num] = cur.__class__(
+            number=cur.number,
+            title=cur.title,
+            body=cur.body,
+            labels=cur.labels,
+            created_at=cur.created_at,
+            parent=cur.parent,
+            blocked_by=tuple(x for x in cur.blocked_by if x != bnum),
+            state=cur.state,
+        )
 
     def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]:
         return [

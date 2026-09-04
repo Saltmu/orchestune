@@ -305,3 +305,10 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
 - `risk:flagged` / `progress:partial`:
   可視化目的のラベルであり、追加の承認ゲートとしては機能しない
   （[アーキテクチャ §0.2](./architecture.md#02-人間の承認ポイント)参照）。
+
+### replanによる世代置換
+
+`orchestune replan` が自動廃止する旧子Issueは、openかつstatusが厳密に
+`status:queued` または `status:blocked` のものだけです。廃止markerを記録して
+`status:not-needed` へ遷移させ、履歴として保持します。作業中・完了・closed・status競合・
+merged成果物ありのIssueは置換せず、manual reviewとしてpreviewに表示します。

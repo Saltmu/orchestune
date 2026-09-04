@@ -17,23 +17,10 @@ from .admin import (
     ForgeError,
     GitHubRepoAdminMixin,
     LabelSpec,
+    RelationshipUnavailableError,
 )
 from .issues import GitHubIssueMixin
 from .prs import GitHubPullRequestMixin
-
-
-class RelationshipUnavailableError(ForgeError):
-    """#485: `add_sub_issue`/`set_blocked_by`/`update_issue_body`のような
-    GitHub関係・metadata書き込み操作を、この`Forge`実装が構造的にサポート
-    していないことを示す。
-
-    `gh` CLIやGitHub MCPの通常のAPI呼び出し失敗（ネットワーク瞬断、権限、
-    一時的なレート制限など）とは意味が異なる: そうした失敗は呼び出し元に
-    伝播させ、再試行できるようにすべきもの。これは「そもそもこの機能を
-    提供しない」実装（例: Sub-issue/Issue dependency書き込みを公開しない
-    GitHub MCP）が明示的に送出する専用の例外で、`provisioning.py`はこれ
-    だけを捕捉して本文metadataフォールバックへ縮退する。
-    """
 
 
 class MetadataSearchUnavailableError(ForgeError):
@@ -92,7 +79,15 @@ class IssueForge(Protocol):
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None: ...
 
+    def remove_sub_issue(
+        self, parent_issue_number: int | str, child_issue_number: int | str
+    ) -> None: ...
+
     def set_blocked_by(
+        self, issue_number: int | str, blocking_issue_number: int | str
+    ) -> None: ...
+
+    def remove_blocked_by(
         self, issue_number: int | str, blocking_issue_number: int | str
     ) -> None: ...
 

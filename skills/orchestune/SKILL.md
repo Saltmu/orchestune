@@ -15,6 +15,13 @@ output_schema:
 
 This is the **single user-facing entry point** for Orchestune. It understands a "big rock" (large-scale development task) presented by a user, decomposes it into subtasks (Decomposition), calculates and validates the dependency graph (DAG) via the `orchestune-dag` CLI, and iterates with the user until the plan is approved. Once approved, it hands off to the [orchestune-provision skill](../orchestune-provision/SKILL.md) for GitHub Issue creation, and optionally to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) for parallel dispatch — the user never needs to invoke those skills directly.
 
+For a parent Issue that already has a provisioned generation, do not use this
+initial-creation flow merely to synchronize edited Issue text. Re-evaluate the
+unstarted decomposition, then use `orchestune replan --plan <path> --parent-issue
+<N>` to preview a replacement generation. Apply only its fresh
+`--confirm-preview` token; the workflow preserves retired Issue history and
+stops for manual review when existing work must not be replaced.
+
 > [!NOTE]
 > **User-Facing Response Language**:
 > While this skill instruction is written in English, all user-facing explanations, plans, questions, and responses must use the user's preferred language (e.g., Japanese if the user interacts in Japanese or matches the user's environment). The language of this instruction document must not determine the output language.

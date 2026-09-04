@@ -43,6 +43,20 @@ def test_cli_delegates_to_bootstrap():
         assert sys.argv == ["orchestune"]
 
 
+def test_cli_delegates_to_replan():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "replan", "--plan", "plan.md"]),
+        patch("orchestune.replan.cli.main", return_value=0) as mock_replan_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_replan_main.assert_called_once()
+
+
 def test_cli_delegates_to_status():
     from orchestune.cli import main
 

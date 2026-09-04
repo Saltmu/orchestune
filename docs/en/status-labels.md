@@ -312,3 +312,11 @@ dispatcher having been run with `--parent-issue <N>` (see
 - `risk:flagged` / `progress:partial`: visualization-only labels; they do not
   act as additional approval gates (see
   [Architecture §0.2](./architecture.md#02-human-approval-points)).
+
+### Replan generation replacement
+
+`orchestune replan` only retires an old child Issue that is open and has exactly
+`status:queued` or `status:blocked`. It records the retirement marker and moves
+the Issue to `status:not-needed`, preserving it as history. Any active, done,
+closed, conflicting, or merged-result Issue is surfaced for manual review
+instead of being replaced.

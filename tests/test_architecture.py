@@ -37,6 +37,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.dispatcher",
             "monitor",
             "provisioning.cli",
+            "replan.cli",
         }
     ),
     3: frozenset(
@@ -56,6 +57,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.steps",
             "integrator.types",
             "provisioning.flow",
+            "replan.apply",
         }
     ),
     2: frozenset(
@@ -114,8 +116,14 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
+            "provisioning.plan_loading",
             "provisioning.rendering",
             "provisioning.subtasks",
+            "replan.audit",
+            "replan.operations",
+            "replan.plan",
+            "replan.preview",
+            "replan.snapshot",
             "status_snapshot",
             "symbol_verification",
         }
@@ -142,6 +150,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "outcome_record",
             "plan_writer",
             "provisioning",
+            "replan",
+            "replan.models",
             "setup_skills",
             "validation",
             "version",
@@ -155,6 +165,7 @@ ALLOWED_L4_DEPENDENTS = {
     "dispatch.dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
     "provisioning.cli": frozenset({"cli"}),
+    "replan.cli": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},
@@ -697,6 +708,57 @@ def test_no_module_imports_a_strictly_higher_layer() -> None:
         if dependency in layer and layer[dependency] > layer[module]
     ]
     assert sorted(violations) == []
+
+
+def test_replan_shared_contract_has_no_forge_or_process_dependencies() -> None:
+    contract_modules = {"replan.models", "replan.plan"}
+    forbidden_roots = {
+        "subprocess",
+        "requests",
+        "httpx",
+        "urllib",
+        "orchestune.forge",
+    }
+    violations: list[str] = []
+    modules = _package_modules()
+    import_graph = _import_graph()
+    for module_name in contract_modules:
+        path = modules[f"{PACKAGE_NAME}.{module_name}"]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imports = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        violations.extend(
+            f"{module_name} imports {imported}"
+            for imported in imports
+            if any(
+                imported == root or imported.startswith(f"{root}.")
+                for root in forbidden_roots
+            )
+        )
+        reachable: set[str] = set()
+        pending = [module_name]
+        while pending:
+            current = pending.pop()
+            for dependency in import_graph.get(current, ()):
+                if dependency not in reachable:
+                    reachable.add(dependency)
+                    pending.append(dependency)
+        violations.extend(
+            f"{module_name} transitively imports {dependency}"
+            for dependency in reachable
+            if dependency == "forge"
+            or dependency.startswith("forge.")
+            or dependency == "infra.git_cli"
+        )
+    assert violations == []
 
 
 def test_documented_subprocess_partition_matches_the_enforced_one() -> None:

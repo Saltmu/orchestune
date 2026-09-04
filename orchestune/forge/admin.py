@@ -19,6 +19,10 @@ class ForgeAuthError(ForgeError):
     """フォージCLI(gh等)が未インストール、または未認証の場合に送出する。"""
 
 
+class RelationshipUnavailableError(ForgeError):
+    """ネイティブなIssue関係操作をForgeが提供できないことを示す。"""
+
+
 _LABEL_LIST_LIMIT = 1000
 
 

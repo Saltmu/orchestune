@@ -458,9 +458,13 @@ class TestCreateIssue:
 
 class TestAddSubIssue:
     def test_calls_gh_issue_edit_with_set_parent(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": null, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
         forge.add_sub_issue(100, 101)
 
-        assert gh_run.call_args.args[0] == [
+        assert gh_run.call_args_list[1].args[0] == [
             "gh",
             "issue",
             "edit",
@@ -474,12 +478,97 @@ class TestAddSubIssue:
             forge.add_sub_issue("100; evil", 101)
         gh_run.assert_not_called()
 
+    def test_is_noop_when_child_already_has_requested_parent(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": {"number": 100}, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.add_sub_issue(100, 101)
+
+        assert gh_run.call_args.args[0][:3] == ["gh", "issue", "view"]
+        assert gh_run.call_count == 1
+
+    def test_relinks_different_existing_parent(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": {"number": 999}, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.add_sub_issue(100, 101)
+
+        assert gh_run.call_args_list[1].args[0] == [
+            "gh",
+            "issue",
+            "edit",
+            "101",
+            "--parent",
+            "100",
+        ]
+
+    def test_precondition_read_unavailable_maps_to_relationship_unavailable_error(
+        self, forge: GitHubForge, gh_run
+    ):
+        from orchestune.forge import RelationshipUnavailableError
+
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh"], stderr=b"unknown field: parent"
+        )
+
+        with pytest.raises(RelationshipUnavailableError):
+            forge.add_sub_issue(100, 101)
+
+    def test_preserves_conflicting_parent_without_mutation(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": {"number": 999}, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        with pytest.raises(ValueError, match="parent"):
+            forge.remove_sub_issue(100, 101)
+
+        gh_run.assert_called_once()
+
+    def test_removes_matching_parent(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": {"number": 100}, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.remove_sub_issue(100, 101)
+
+        assert gh_run.call_args_list[1].args[0] == [
+            "gh",
+            "issue",
+            "edit",
+            "101",
+            "--remove-parent",
+        ]
+
+    def test_removing_absent_parent_is_noop(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 101, "title": "child", "body": "", "parent": null, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.remove_sub_issue(100, 101)
+
+        gh_run.assert_called_once()
+
 
 class TestSetBlockedBy:
     def test_calls_gh_issue_edit_with_add_blocked_by(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 102, "title": "task", "body": "", "parent": null, '
+            '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
         forge.set_blocked_by(102, 101)
 
-        assert gh_run.call_args.args[0] == [
+        assert gh_run.call_args_list[1].args[0] == [
             "gh",
             "issue",
             "edit",
@@ -492,6 +581,94 @@ class TestSetBlockedBy:
         with pytest.raises(ValueError):
             forge.set_blocked_by(102, "101; evil")
         gh_run.assert_not_called()
+
+    def test_is_noop_when_blocker_already_exists(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 102, "title": "task", "body": "", "parent": null, '
+            '"blockedBy": {"nodes": [{"number": 101}]}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.set_blocked_by(102, 101)
+
+        gh_run.assert_called_once()
+
+    def test_removes_only_requested_blocker(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 102, "title": "task", "body": "", "parent": null, '
+            '"blockedBy": {"nodes": [{"number": 101}, {"number": 103}]}, '
+            '"labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.remove_blocked_by(102, 101)
+
+        assert gh_run.call_args_list[1].args[0] == [
+            "gh",
+            "issue",
+            "edit",
+            "102",
+            "--remove-blocked-by",
+            "101",
+        ]
+
+    def test_removing_absent_blocker_is_noop(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(
+            '{"number": 102, "title": "task", "body": "", "parent": null, '
+            '"blockedBy": {"nodes": [{"number": 103}]}, "labels": [], "state": "OPEN", "createdAt": ""}'
+        )
+
+        forge.remove_blocked_by(102, 101)
+
+        gh_run.assert_called_once()
+
+    def test_precondition_read_unavailable_maps_to_relationship_unavailable_error(
+        self, forge: GitHubForge, gh_run
+    ):
+        from orchestune.forge import RelationshipUnavailableError
+
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh"], stderr=b"unknown field: blockedBy"
+        )
+
+        with pytest.raises(RelationshipUnavailableError):
+            forge.set_blocked_by(102, 101)
+
+    def test_propagates_unrelated_relationship_command_errors(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.side_effect = [
+            subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout='{"number": 102, "title": "task", "body": "", "parent": null, '
+                '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}',
+                stderr="",
+            ),
+            subprocess.CalledProcessError(1, ["gh"]),
+        ]
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.set_blocked_by(102, 101)
+
+    def test_maps_unsupported_relationship_command_error(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.side_effect = [
+            subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout='{"number": 102, "title": "task", "body": "", "parent": null, '
+                '"blockedBy": {"nodes": []}, "labels": [], "state": "OPEN", "createdAt": ""}',
+                stderr="",
+            ),
+            subprocess.CalledProcessError(
+                1, ["gh"], stderr=b"unknown flag: --add-blocked-by"
+            ),
+        ]
+
+        from orchestune.forge import RelationshipUnavailableError
+
+        with pytest.raises(RelationshipUnavailableError):
+            forge.set_blocked_by(102, 101)
 
 
 class TestFindOpenIssuesByExactTitle:

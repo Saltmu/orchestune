@@ -383,3 +383,35 @@ GitHub's `Closes #N` auto-linking and the "Development" sidebar on an issue only
 2. **When a PR is merged**: when the Integrator merges the integration PR into the parent branch and closes the child issue, it posts a "PR #XXX has been merged into the parent branch" completion notice *just before* closing. The notice is deliberately not folded into the closing comment: if only the close fails, the retry on the next cycle can no longer recover the integration PR number, and the link would be lost for good.
 
 Both comments embed a `<!-- orchestune:pr-link:{created|merged}:{pr_number} -->` marker, so the same notice is never posted twice. The two notices differ in how they handle a failure to read the existing comments: the creation notice is skipped and retried on the next cycle, while the merge notice is posted anyway, because it is the last write before the issue is closed and would otherwise never be retried.
+
+---
+
+## 6. Replacing an unstarted decomposition generation (`orchestune replan`)
+
+`orchestune provision` is for the initial creation of a plan's Issues. When a
+parent Issue's requirements remain valid but its unstarted decomposition is
+stale, use `orchestune replan` to replace that generation while retaining the
+old Issues as history. Preview is always read-only:
+
+```bash
+orchestune replan --plan decomposition_plan.md --parent-issue 123
+```
+
+The preview lists `create`/`reuse` targets for the new generation and
+`retire`, `manual-review`, `conflict`, or `no-op` targets for the old one, and
+prints a snapshot-bound token. Apply only the exact fresh token:
+
+```bash
+orchestune replan --plan decomposition_plan.md --parent-issue 123 \
+  --apply --confirm-preview replan-preview-v1:sha256:<token>
+```
+
+An in-progress, done, closed, conflicting, or merged-result Issue is never
+automatically replaced. Apply verifies before its first write that the parent
+Issue body carrying the new plan stays within GitHub's 65,536 character body
+limit, and stops with exit code `3` without creating Issues, changing
+relationships, or retiring the old generation when it would not. A partial
+failure requires a new preview and token;
+re-running a completed replacement makes no GitHub mutations. Exit codes are
+`0` (preview/success), `2` (configuration), `3` (missing or invalid approval,
+including conflicts), `4` (partial application), and `5` (already-active no-op).
