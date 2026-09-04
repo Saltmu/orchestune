@@ -11,7 +11,10 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.locks import ExternalLockScanResult
+from orchestune.dispatch.locks import (
+    ExternalLockConflict,
+    ExternalLockScanResult,
+)
 from orchestune.dispatch.phase_rebase import (
     _apply_external_lock_sync,
     _decide_external_lock_sync,
@@ -23,6 +26,7 @@ from orchestune.dispatch.state import (
     RunState,
     save_run_state,
 )
+from orchestune.issue_notice import notice_marker, render_notice
 from orchestune.models import PrRecord
 from tests.conftest import make_issue
 
@@ -442,3 +446,134 @@ class TestRunDispatchCycleBranchNormalization:
             report = run_dispatch_cycle(config)
 
         assert [t.issue_number for t in report.lock_changes["to_lock"]] == [1]
+
+
+class TestExternalLockNotice:
+    """#787: ロック理由（衝突相手・衝突ファイル）を対象Issueのコメントへ残す。"""
+
+    def _config(self, tmp_path, apply=True):
+        return DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=apply)
+
+    def test_posts_conflict_detail_for_newly_locked_task(self, tmp_path, fake_forge):
+        task = _task(status_labels=("status:queued",))
+        lock_result = ExternalLockScanResult(
+            to_lock=[task],
+            to_unlock=[],
+            conflicts={
+                1: (
+                    ExternalLockConflict(
+                        kind="branch",
+                        source="fix/issue-777-branch-naming",
+                        files=("tests/conftest.py",),
+                    ),
+                )
+            },
+        )
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+
+        body = fake_forge.add_comment.call_args.args[1]
+        assert notice_marker("external-lock") in body
+        assert "fix/issue-777-branch-naming" in body
+        assert "tests/conftest.py" in body
+
+    def test_posts_conflict_detail_for_task_that_stays_locked(
+        self, tmp_path, fake_forge
+    ):
+        """継続ロック中のタスクは`to_lock`に載らないが、理由は残す必要がある。"""
+        lock_result = ExternalLockScanResult(
+            to_lock=[],
+            to_unlock=[],
+            conflicts={
+                695: (
+                    ExternalLockConflict(
+                        kind="branch",
+                        source="fix/issue-777-branch-naming",
+                        files=("tests/conftest.py",),
+                    ),
+                )
+            },
+        )
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+
+        assert fake_forge.add_comment.call_args.args[0] == 695
+
+    def test_does_not_post_when_not_applying(self, tmp_path, fake_forge):
+        task = _task(status_labels=("status:queued",))
+        lock_result = ExternalLockScanResult(
+            to_lock=[task],
+            to_unlock=[],
+            conflicts={
+                1: (
+                    ExternalLockConflict(
+                        kind="branch", source="feat/x", files=("a.py",)
+                    )
+                )
+            },
+        )
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path, apply=False))
+
+        fake_forge.add_comment.assert_not_called()
+
+    def test_does_not_repost_unchanged_reason(self, tmp_path, fake_forge):
+        conflicts = {
+            1: (ExternalLockConflict(kind="branch", source="feat/x", files=("a.py",)),)
+        }
+        lock_result = ExternalLockScanResult(
+            to_lock=[_task(status_labels=("status:queued",))],
+            to_unlock=[],
+            conflicts=conflicts,
+        )
+        posted: list[str] = []
+        fake_forge.add_comment.side_effect = lambda number, body: posted.append(body)
+        fake_forge.list_comments.side_effect = lambda number: [
+            {"body": body} for body in posted
+        ]
+
+        config = self._config(tmp_path)
+        _apply_external_lock_sync(lock_result, config)
+        _apply_external_lock_sync(lock_result, config)
+
+        assert len(posted) == 1
+
+    def test_posts_release_notice_only_when_a_reason_was_recorded(
+        self, tmp_path, fake_forge
+    ):
+        """ロック理由を書いたIssueにだけ解除を伝える。理由を書いていない
+        Issue（本機能導入前のロックや`--no-apply`サイクル）には触れない。"""
+        unlocked = _task(status_labels=("status:queued", "status:external-lock"))
+        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[unlocked])
+        fake_forge.list_comments.return_value = []
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+        fake_forge.add_comment.assert_not_called()
+
+        fake_forge.list_comments.return_value = [
+            {"body": render_notice("external-lock", "ロック中です")}
+        ]
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+        assert (
+            notice_marker("external-lock") in (fake_forge.add_comment.call_args.args[1])
+        )
+
+    def test_renders_fail_closed_kinds_without_file_list(self, tmp_path, fake_forge):
+        """差分を取得できないブランチは衝突ファイルを特定できないため、
+        件数へ丸めて毎サイクル同じ本文になるようにする。"""
+        lock_result = ExternalLockScanResult(
+            to_lock=[_task(status_labels=("status:queued",))],
+            to_unlock=[],
+            conflicts={
+                1: (
+                    ExternalLockConflict(kind="branch-diff-unknown", source="feat/a"),
+                    ExternalLockConflict(kind="branch-diff-unknown", source="feat/b"),
+                )
+            },
+        )
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+
+        body = fake_forge.add_comment.call_args.args[1]
+        assert "2" in body
+        assert "feat/a" not in body

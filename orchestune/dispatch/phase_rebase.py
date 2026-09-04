@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.locks import (
+    NOTICE_KIND_EXTERNAL_LOCK,
     ExternalLockScanResult,
     _strip_remote_prefix,
+    render_external_lock_notice,
+    render_external_lock_release_notice,
     scan_external_locks,
 )
 from orchestune.dispatch.scoring import Task
@@ -19,6 +22,7 @@ from orchestune.infra.git_cli import (
     ensure_parent_branch,
     list_remote_branches,
 )
+from orchestune.issue_notice import post_notice_if_changed
 from orchestune.issue_parsing import is_epic_issue
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
@@ -74,6 +78,32 @@ def _decide_external_lock_sync(
     )
 
 
+def _notify_external_locks(
+    lock_result: ExternalLockScanResult, config: DispatcherConfig
+) -> None:
+    """#787: ロック理由と解除をIssueコメントへ残す。
+
+    `conflicts`は新規ロックだけでなく継続ロック中のタスクも含むため、
+    ロックが続いている間に衝突相手が変わってもIssue上の理由が追随する。
+    """
+    forge = config.resolved_forge
+    for issue_number, conflicts in sorted(lock_result.conflicts.items()):
+        post_notice_if_changed(
+            forge,
+            issue_number,
+            NOTICE_KIND_EXTERNAL_LOCK,
+            render_external_lock_notice(conflicts),
+        )
+    for task in lock_result.to_unlock:
+        post_notice_if_changed(
+            forge,
+            task.issue_number,
+            NOTICE_KIND_EXTERNAL_LOCK,
+            render_external_lock_release_notice(),
+            update_only=True,
+        )
+
+
 def _apply_external_lock_sync(
     lock_result: ExternalLockScanResult, config: DispatcherConfig
 ) -> None:
@@ -90,6 +120,7 @@ def _apply_external_lock_sync(
             and StatusLabel.DONE not in task.status_labels
         ):
             config.resolved_forge.add_label(task.issue_number, StatusLabel.QUEUED)
+    _notify_external_locks(lock_result, config)
 
 
 def _sync_external_locks(

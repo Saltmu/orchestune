@@ -892,18 +892,16 @@ class TestExternalLockConflicts:
             active_branches=[],
         )
         assert result.conflicts[1] == (
-            ExternalLockConflict(kind="branch", source="feat/a", files=("a.py", "b.py")),
+            ExternalLockConflict(
+                kind="branch", source="feat/a", files=("a.py", "b.py")
+            ),
             ExternalLockConflict(kind="branch", source="feat/b", files=("b.py",)),
             ExternalLockConflict(kind="pr", source="#3", files=("a.py",)),
             ExternalLockConflict(kind="pr", source="#7", files=("b.py",)),
         )
 
     def test_done_task_records_no_conflict(self):
-        done = [
-            _task(
-                1, footprint=("src/shared.py",), status_labels=("status:done",)
-            )
-        ]
+        done = [_task(1, footprint=("src/shared.py",), status_labels=("status:done",))]
         result = scan_external_locks(
             done,
             remote_branches=[("feat/other", ("src/shared.py",))],

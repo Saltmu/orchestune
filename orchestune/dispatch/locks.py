@@ -95,9 +95,7 @@ def _external_prs(
 def _overlapping_files(
     task_footprint: set[str], other_files: Iterable[str]
 ) -> tuple[str, ...]:
-    overlap = task_footprint & {
-        path for path in other_files if not _is_hotspot(path)
-    }
+    overlap = task_footprint & {path for path in other_files if not _is_hotspot(path)}
     return tuple(sorted(overlap))
 
 
@@ -174,6 +172,86 @@ def scan_external_locks(
     return ExternalLockScanResult(
         to_lock=to_lock, to_unlock=to_unlock, conflicts=conflicts_by_issue
     )
+
+
+_CONFLICT_KIND_LABELS = {
+    KIND_BRANCH: "リモートブランチ",
+    KIND_PR: "PR",
+}
+
+NOTICE_KIND_EXTERNAL_LOCK = "external-lock"
+
+_RELEASE_NOTICE = (
+    "🔓 外部ロックを解除しました（`status:external-lock` を外しました）。\n\n"
+    "衝突していた変更が解消されたため、次のディスパッチサイクルから"
+    "起動候補に戻ります。"
+)
+
+
+def describe_conflict(conflict: ExternalLockConflict) -> str:
+    """1行に収まる衝突の要約（サイクルサマリー・stderr向け）。"""
+    if conflict.kind == KIND_BRANCH_DIFF_UNKNOWN:
+        return f"{conflict.source} (差分取得不能)"
+    if conflict.kind == KIND_PR_FILES_TRUNCATED:
+        return f"{conflict.source} (変更ファイル一覧が不完全)"
+    return f"{conflict.source} [{', '.join(conflict.files)}]"
+
+
+def _fail_closed_lines(conflicts: tuple[ExternalLockConflict, ...]) -> list[str]:
+    """fail closed由来のロックは件数へ丸める。
+
+    衝突ファイルを特定できない以上ブランチ名を並べても手掛かりにならず、
+    一時的な取得失敗のたびに本文が変わるとIssueコメントが連投になる
+    （通知の重複判定は本文の完全一致で行う）。"""
+    lines = []
+    unknown = sum(1 for c in conflicts if c.kind == KIND_BRANCH_DIFF_UNKNOWN)
+    truncated = sum(1 for c in conflicts if c.kind == KIND_PR_FILES_TRUNCATED)
+    if unknown:
+        lines.append(
+            f"- 差分を取得できないリモートブランチが {unknown} 件あるため、"
+            "保守的にロックしています。"
+        )
+    if truncated:
+        lines.append(
+            f"- 変更ファイル一覧を完全に取得できないPRが {truncated} 件あるため、"
+            "保守的にロックしています。"
+        )
+    return lines
+
+
+def render_external_lock_notice(conflicts: tuple[ExternalLockConflict, ...]) -> str:
+    """ロック理由をIssueコメント本文（Markdown）へ整形する。"""
+    lines = [
+        "🔒 このタスクは外部ロック中です（`status:external-lock`）。",
+        "",
+        "他の変更とfootprintが重なっているため、衝突が解消されるまで自動起動しません。",
+        "",
+    ]
+    identified = [c for c in conflicts if c.kind in _CONFLICT_KIND_LABELS]
+    if identified:
+        lines.extend(
+            [
+                "| 衝突相手 | 種別 | 衝突ファイル |",
+                "| --- | --- | --- |",
+            ]
+        )
+        lines.extend(
+            f"| `{conflict.source}` | {_CONFLICT_KIND_LABELS[conflict.kind]} | "
+            f"{', '.join(f'`{path}`' for path in conflict.files)} |"
+            for conflict in identified
+        )
+        lines.append("")
+    lines.extend(_fail_closed_lines(conflicts))
+    if not identified:
+        lines.append("")
+    lines.append(
+        "衝突相手がマージ・削除されると、次のディスパッチサイクルで自動的に解除されます。"
+    )
+    return "\n".join(lines)
+
+
+def render_external_lock_release_notice() -> str:
+    return _RELEASE_NOTICE
 
 
 def _parse_numstat_line(
