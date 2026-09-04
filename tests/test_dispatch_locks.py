@@ -6,7 +6,11 @@ import pytest
 import orchestune.dispatch.locks
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport, _sync_external_locks
-from orchestune.dispatch.locks import check_footprint_deviation, scan_external_locks
+from orchestune.dispatch.locks import (
+    ExternalLockConflict,
+    check_footprint_deviation,
+    scan_external_locks,
+)
 from orchestune.dispatch.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState
@@ -30,6 +34,7 @@ def _task(
     created_at="2023-01-01T00:00:00+00:00",
     footprint=("src/foo.py",),
     depends_on=(),
+    status_labels=("status:queued",),
 ):
     return Task(
         issue_number=issue_number,
@@ -39,7 +44,7 @@ def _task(
         risk=risk,
         priority=priority,
         progress_partial=progress_partial,
-        status_labels=("status:queued",),
+        status_labels=status_labels,
         created_at=created_at,
         depends_on=depends_on,
     )
@@ -753,3 +758,154 @@ class TestSyncExternalLocks:
 
         content = summary_file.read_text(encoding="utf-8")
         assert "統合PR" not in content
+
+
+class TestExternalLockConflicts:
+    """#787: ロック理由（衝突相手のブランチ/PRと衝突ファイル）を観測可能にする。"""
+
+    def test_reports_conflicting_branch_and_files(self):
+        queued = [_task(1, footprint=("tests/conftest.py", "src/only_mine.py"))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[
+                ("fix/issue-777-branch-naming", ("tests/conftest.py", "src/other.py"))
+            ],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.conflicts[1] == (
+            ExternalLockConflict(
+                kind="branch",
+                source="fix/issue-777-branch-naming",
+                files=("tests/conftest.py",),
+            ),
+        )
+
+    def test_reports_conflicting_pr_number_and_files(self):
+        queued = [_task(1, footprint=("src/shared.py",))]
+        prs = [
+            PrRecord(number=99, head_ref="feat/other", changed_files=("src/shared.py",))
+        ]
+        result = scan_external_locks(
+            queued, remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.conflicts[1] == (
+            ExternalLockConflict(kind="pr", source="#99", files=("src/shared.py",)),
+        )
+
+    def test_reports_conflicts_for_task_that_stays_locked(self):
+        """継続ロック中のタスクは`to_lock`に載らないため、
+        `conflicts`から理由を引けないと運用者は原因を追えない（#695の実例）。"""
+        locked = [
+            _task(
+                695,
+                footprint=("tests/conftest.py",),
+                status_labels=("status:external-lock",),
+            )
+        ]
+        result = scan_external_locks(
+            locked,
+            remote_branches=[("fix/issue-777-branch-naming", ("tests/conftest.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.to_lock == []
+        assert result.to_unlock == []
+        assert result.conflicts[695] == (
+            ExternalLockConflict(
+                kind="branch",
+                source="fix/issue-777-branch-naming",
+                files=("tests/conftest.py",),
+            ),
+        )
+
+    def test_records_no_conflict_for_unlocked_task(self):
+        queued = [_task(1, footprint=("src/unique.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/other", ("src/shared.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.conflicts == {}
+
+    def test_records_branch_diff_unknown_conflict(self):
+        """差分取得不能ブランチによるfail closedロックは、専用の種別で観測できる。"""
+        queued = [_task(1, footprint=("src/unrelated.py",))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/unfetchable", None)],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+        assert result.conflicts[1] == (
+            ExternalLockConflict(
+                kind="branch-diff-unknown", source="feat/unfetchable", files=()
+            ),
+        )
+
+    def test_records_pr_files_truncated_conflict(self):
+        queued = [_task(1, footprint=("src/unrelated.py",))]
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref="feat/truncated",
+                changed_files=("file1.py",),
+                is_files_truncated=True,
+            )
+        ]
+        result = scan_external_locks(
+            queued, remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert result.conflicts[1] == (
+            ExternalLockConflict(kind="pr-files-truncated", source="#99", files=()),
+        )
+
+    def test_conflict_files_exclude_hotspot_paths(self):
+        """hotspotファイルはロック判定から除外されるため、理由にも現れない。"""
+        queued = [_task(1, footprint=("poetry.lock", "src/shared.py"))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/other", ("poetry.lock", "src/shared.py"))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.conflicts[1] == (
+            ExternalLockConflict(
+                kind="branch", source="feat/other", files=("src/shared.py",)
+            ),
+        )
+
+    def test_conflicts_are_deterministically_ordered(self):
+        """同一の衝突集合からは毎サイクル同一の並びが得られる
+        （Issueコメントの本文比較によるdedupがフラッピングしないため）。"""
+        queued = [_task(1, footprint=("a.py", "b.py"))]
+        prs = [
+            PrRecord(number=7, head_ref="feat/z", changed_files=("b.py",)),
+            PrRecord(number=3, head_ref="feat/y", changed_files=("a.py",)),
+        ]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("feat/b", ("b.py",)), ("feat/a", ("a.py", "b.py"))],
+            prs=prs,
+            active_branches=[],
+        )
+        assert result.conflicts[1] == (
+            ExternalLockConflict(
+                kind="branch", source="feat/a", files=("a.py", "b.py")
+            ),
+            ExternalLockConflict(kind="branch", source="feat/b", files=("b.py",)),
+            ExternalLockConflict(kind="pr", source="#3", files=("a.py",)),
+            ExternalLockConflict(kind="pr", source="#7", files=("b.py",)),
+        )
+
+    def test_done_task_records_no_conflict(self):
+        done = [_task(1, footprint=("src/shared.py",), status_labels=("status:done",))]
+        result = scan_external_locks(
+            done,
+            remote_branches=[("feat/other", ("src/shared.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.conflicts == {}

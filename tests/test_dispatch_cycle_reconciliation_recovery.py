@@ -77,6 +77,7 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
+            "orchestune.dispatch.execution_repair.is_process_alive",
             "orchestune.dispatch.gc.is_process_alive",
             "orchestune.dispatch.gc.completion.is_process_alive",
             "orchestune.dispatch.gc.zombies.is_process_alive",
@@ -183,7 +184,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([blocked_task, normal_task], {}),
+                return_value=([blocked_task, normal_task], {}, []),
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling.select_tasks_with_decisions"
@@ -260,7 +261,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
         ):
             run_dispatch_cycle(config)
@@ -363,7 +364,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.locks.check_footprint_deviation", return_value=None
@@ -467,7 +468,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.locks.check_footprint_deviation",

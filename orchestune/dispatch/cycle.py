@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 import time
@@ -918,6 +919,16 @@ def _pipeline_report(
         applied=applied,
         scheduling_decisions=scheduling.decisions,
         execution_selections=scheduling.execution_selections,
+        skips=scheduling.skips,
+        external_lock_conflicts={
+            issue_number: [dataclasses.asdict(c) for c in conflicts]
+            for issue_number, conflicts in lock_result.conflicts.items()
+        },
+        forge_warnings=[
+            event
+            for event in completion_events
+            if event.get("action") == "completion_skipped_forge_error"
+        ],
     )
 
 

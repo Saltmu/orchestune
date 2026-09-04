@@ -8,17 +8,21 @@ from __future__ import annotations
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.locks import (
+    NOTICE_KIND_EXTERNAL_LOCK,
     ExternalLockScanResult,
     _strip_remote_prefix,
+    render_external_lock_notice,
+    render_external_lock_release_notice,
     scan_external_locks,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import MAX_PENDING_LOCK_RELEASE_NOTICES, RunState
 from orchestune.infra.git_cli import (
     branch_changed_files,
     ensure_parent_branch,
     list_remote_branches,
 )
+from orchestune.issue_notice import post_notice_if_changed
 from orchestune.issue_parsing import is_epic_issue
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
@@ -74,8 +78,67 @@ def _decide_external_lock_sync(
     )
 
 
+def _release_notice_targets(
+    lock_result: ExternalLockScanResult, run_state: RunState
+) -> list[int]:
+    """解除を伝えるべきIssue番号。今サイクルの解除と、前回書けなかった分。
+
+    PR#789レビュー対応(Codex P2): ラベルは通知より先に外れるため、投稿に失敗
+    したタスクは次サイクルの`to_unlock`には現れない。再試行キューを持たないと、
+    Issue上の最後の通知が「ロック中」のまま永久に取り残される。
+    再ロックされたタスクはロック理由の通知で本文が上書きされるので対象外。
+    """
+    targets = {task.issue_number for task in lock_result.to_unlock}
+    targets |= set(run_state.pending_lock_release_notices)
+    return sorted(targets - set(lock_result.conflicts))
+
+
+def _notify_external_locks(
+    lock_result: ExternalLockScanResult,
+    config: DispatcherConfig,
+    run_state: RunState | None = None,
+) -> None:
+    """#787: ロック理由と解除をIssueコメントへ残す。
+
+    `conflicts`は新規ロックだけでなく継続ロック中のタスクも含むため、
+    ロックが続いている間に衝突相手が変わってもIssue上の理由が追随する。
+    """
+    forge = config.resolved_forge
+    pending = list(run_state.pending_lock_release_notices) if run_state else []
+    for issue_number, conflicts in sorted(lock_result.conflicts.items()):
+        post_notice_if_changed(
+            forge,
+            issue_number,
+            NOTICE_KIND_EXTERNAL_LOCK,
+            render_external_lock_notice(conflicts),
+        )
+        if issue_number in pending:
+            pending.remove(issue_number)
+
+    for issue_number in _release_notice_targets(lock_result, run_state or RunState()):
+        outcome = post_notice_if_changed(
+            forge,
+            issue_number,
+            NOTICE_KIND_EXTERNAL_LOCK,
+            render_external_lock_release_notice(),
+            update_only=True,
+        )
+        if outcome.settled:
+            if issue_number in pending:
+                pending.remove(issue_number)
+        elif issue_number not in pending:
+            pending.append(issue_number)
+
+    if run_state is not None:
+        run_state.pending_lock_release_notices = pending[
+            -MAX_PENDING_LOCK_RELEASE_NOTICES:
+        ]
+
+
 def _apply_external_lock_sync(
-    lock_result: ExternalLockScanResult, config: DispatcherConfig
+    lock_result: ExternalLockScanResult,
+    config: DispatcherConfig,
+    run_state: RunState | None = None,
 ) -> None:
     if not config.apply:
         return
@@ -90,6 +153,7 @@ def _apply_external_lock_sync(
             and StatusLabel.DONE not in task.status_labels
         ):
             config.resolved_forge.add_label(task.issue_number, StatusLabel.QUEUED)
+    _notify_external_locks(lock_result, config, run_state)
 
 
 def _sync_external_locks(
@@ -100,7 +164,7 @@ def _sync_external_locks(
 ) -> ExternalLockScanResult:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state, config)
-    _apply_external_lock_sync(lock_result, config)
+    _apply_external_lock_sync(lock_result, config, run_state)
     return lock_result
 
 

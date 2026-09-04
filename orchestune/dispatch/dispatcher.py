@@ -21,6 +21,7 @@ from orchestune.dag.models import (
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,
     extract_execution_profile_config,
@@ -34,6 +35,11 @@ from orchestune.dispatch.postcycle import (
 )
 from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.summary import (
+    merge_skips,
+    render_forge_warnings_text,
+    render_skipped_text,
+)
 from orchestune.dispatch.targets import (
     TargetBuildConfig,
     build_dispatch_target,
@@ -617,12 +623,34 @@ def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
     )
 
 
+def _emit_human_summary(report: CycleReport) -> None:
+    """#787: 未選定タスクとForge障害の要約をstderrへ出す。
+
+    stdoutはスキル・CIがパースするJSON専用の経路なので触らない。Markdownの
+    サマリーはGITHUB_STEP_SUMMARYがある実行環境でしか作られず、ローカル実行や
+    Codex Cloudでは人間向けの出力が一切無かった。
+
+    整形の失敗でサイクルの結果報告を落とさないよう、ベストエフォートで囲む
+    （`write_github_step_summary`と同じ方針）。stderrがcp932のコンソールへ
+    繋がる場合に備え、`summary`側のテキスト経路はASCIIのみで組んである。
+    """
+    try:
+        lines = render_skipped_text(
+            merge_skips(report.skips, report.scheduling_decisions)
+        ) + render_forge_warnings_text(report.forge_warnings)
+        for line in lines:
+            print(line, file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - 要約はベストエフォート
+        print(f"Warning: Failed to render the cycle summary: {e}", file=sys.stderr)
+
+
 def _emit_dispatcher_report(result: _DispatcherRunResult) -> None:
     final_dict = _report_to_dict(result.report)
     final_dict["post_cycle_results"] = [
         phase.to_dict() for phase in result.post_cycle_results
     ]
     print(json.dumps(final_dict, ensure_ascii=False, indent=2))
+    _emit_human_summary(result.report)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:

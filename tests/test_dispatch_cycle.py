@@ -50,6 +50,7 @@ def _patch_gc_process_alive(*, return_value: bool):
     """Patch every consumer split from the former dispatch_gc dependency."""
     with ExitStack() as stack:
         for target in (
+            "orchestune.dispatch.execution_repair.is_process_alive",
             "orchestune.dispatch.gc.is_process_alive",
             "orchestune.dispatch.gc.completion.is_process_alive",
             "orchestune.dispatch.gc.zombies.is_process_alive",
@@ -403,12 +404,12 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         )
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
 
-        candidate_tasks, _ = _determine_candidate_tasks(
+        candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx, issues, lock_result, set(), False, now=119.0
         )
         assert candidate_tasks == []
 
-        candidate_tasks, _ = _determine_candidate_tasks(
+        candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx, issues, lock_result, set(), False, now=120.0
         )
         assert candidate_tasks == [task]
@@ -442,7 +443,7 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         fake_forge.get_label_actor.return_value = "some-user"
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
-        candidate_tasks, _ = _determine_candidate_tasks(
+        candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx,
             issues,
             lock_result,
@@ -489,7 +490,7 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         fake_forge.get_label_actor.return_value = "some-user"
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
-        candidate_tasks, _ = _determine_candidate_tasks(
+        candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx,
             issues,
             lock_result,
