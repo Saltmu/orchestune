@@ -556,6 +556,53 @@ def test_apply_accepts_a_parent_body_projected_onto_the_size_limit(
     assert [subtask["issue_number"] for subtask in switched["subtasks"]] == [100, 101]
 
 
+def test_apply_projects_a_reused_generation_with_its_real_issue_number(
+    replan_files: tuple[Path, Path],
+) -> None:
+    """A reuse decision must be projected with its known number, not the sentinel."""
+
+    plan, template = replan_files
+
+    class LateParentSwitchForge(FakeReplanForge):
+        """Simulates an earlier apply whose parent-plan switch never landed."""
+
+        suppress_parent_body = True
+
+        def update_issue_body(self, issue_number: int | str, body: str) -> None:
+            if int(issue_number) == PARENT and self.suppress_parent_body:
+                return
+            super().update_issue_body(issue_number, body)
+
+    forge = LateParentSwitchForge()
+    apply_replan(
+        plan,
+        preview_token(forge, plan),
+        forge=forge,
+        template_path=template,
+        repo_root=plan.parent,
+    )
+    forge.suppress_parent_body = False
+    plan.write_text(PLAN_TEXT, encoding="utf-8")
+    # Only the create-sentinel projection overflows; #100 and #101 already exist.
+    forge.issues[PARENT]["body"] = _parent_body_projecting_to(
+        plan, GITHUB_ISSUE_BODY_LIMIT + 1
+    )
+
+    result = apply_replan(
+        plan,
+        preview_token(forge, plan),
+        forge=forge,
+        template_path=template,
+        repo_root=plan.parent,
+    )
+
+    assert result.created_issue_numbers == ()
+    assert result.reused_issue_numbers == (100, 101)
+    switched = decomposition_plan_from_parent_body(str(forge.issues[PARENT]["body"]))
+    assert switched is not None
+    assert [subtask["issue_number"] for subtask in switched["subtasks"]] == [100, 101]
+
+
 def test_parent_body_inflated_after_preflight_degrades_without_raising(
     replan_files: tuple[Path, Path],
     capsys: pytest.CaptureFixture[str],

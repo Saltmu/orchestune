@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -31,8 +32,8 @@ from orchestune.replan.snapshot import (
 )
 from orchestune.validation import validate_issue_number
 
-#: Widest issue number the preflight assumes for a not-yet-created generation, so
-#: the projected parent body never underestimates the real one.
+#: Widest issue number the preflight assumes for a generation that does not exist
+#: yet, so the projected parent body never underestimates the real one.
 PROJECTED_ISSUE_NUMBER = 10**10 - 1
 
 
@@ -93,23 +94,31 @@ def _assert_safe(preview: ReplanPreview) -> None:
         raise ValueError(f"replan cannot be applied automatically: {detail}")
 
 
-def _projected_plan_data(plan_path: str | Path) -> dict:
+def _projected_plan_data(
+    plan_path: str | Path, resolved: Mapping[str, int | None]
+) -> dict:
     """Read the plan as it will look once apply has assigned every Issue number."""
 
     projected, _ = extract_frontmatter_and_body(
         Path(plan_path).read_text(encoding="utf-8")
     )
     for subtask in projected.get("subtasks") or ():
-        if isinstance(subtask, dict) and subtask.get("issue_number") is None:
-            subtask["issue_number"] = PROJECTED_ISSUE_NUMBER
+        if not isinstance(subtask, dict) or subtask.get("issue_number") is not None:
+            continue
+        number = resolved.get(str(subtask.get("id")))
+        subtask["issue_number"] = PROJECTED_ISSUE_NUMBER if number is None else number
     return projected
 
 
-def _assert_parent_plan_fits(snapshot: ReplanSnapshot, plan_path: str | Path) -> None:
+def _assert_parent_plan_fits(
+    snapshot: ReplanSnapshot,
+    plan_path: str | Path,
+    resolved: Mapping[str, int | None],
+) -> None:
     """Fail closed before the first write if the new plan cannot fit the parent body."""
 
     projected = embed_decomposition_plan_in_parent_body(
-        snapshot.parent_issue.body, _projected_plan_data(plan_path)
+        snapshot.parent_issue.body, _projected_plan_data(plan_path, resolved)
     )
     if len(projected) > GITHUB_ISSUE_BODY_LIMIT:
         raise ValueError(
@@ -265,7 +274,7 @@ def apply_replan(
         _audit_once(resolved_forge, parent, result)
         return result
     _assert_safe(preview)
-    _assert_parent_plan_fits(snapshot, plan_path)
+    _assert_parent_plan_fits(snapshot, plan_path, _decision_maps(preview))
 
     root = Path(repo_root) if repo_root is not None else Path.cwd()
     template = Path(template_path).read_text(encoding="utf-8")
