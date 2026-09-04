@@ -201,14 +201,18 @@ stateDiagram-v2
 - 付与条件: タスクのfootprintが、Orchestune管理外のリモートブランチ・PRの
   変更ファイルと重なる場合（`status:done`のタスクは対象外）。
   - ただし、タスク自身の直接の`depends_on`が指す依存元タスクの正規ブランチ
-    （`orchestune.branch_naming`が生成する`<prefix>/issue-{N}-{subtask_id}`）
-    そのものとの重なりは対象外（[#796](https://github.com/Saltmu/orchestune/issues/796)）。
+    （`orchestune.branch_naming.build_task_branch_name`が既定prefixで生成する
+    ブランチ名そのもの。`_build_pr_mappings`の`subtask_branch_map`やスタッキング
+    起動が実際に使うブランチと完全一致する場合に限る）との重なりは対象外
+    （[#796](https://github.com/Saltmu/orchestune/issues/796)）。
     スタッキング起動（`orchestune/dispatch/launch.py`の
     `_get_stack_eligible_tasks`）は依存元ブランチをbaseに積むため、
     その重なりは「Orchestune管理外の衝突」ではない。祖先依存（依存元の
-    さらに依存元）までは遡らない。PRについては、headブランチ名が依存元の
-    正規ブランチと一致し、かつ同一リポジトリ由来（フォークでない）と
-    確認できる場合に限って対象外とする（タイトル・本文中の`#N`言及や
+    さらに依存元）までは遡らない。見た目上は`issue-{N}-{subtask_id}`の
+    形状に一致していても、既定prefix以外のブランチ（人間や他エージェントが
+    独自prefixで作成したもの等）は対象外としない。PRについては、headブランチ
+    名が依存元の正規ブランチと完全一致し、かつ同一リポジトリ由来（フォーク
+    でない）と確認できる場合に限って対象外とする（タイトル・本文中の`#N`言及や
     `Closes`参照だけでは対象外にしない）。ブランチ名が一致しない、または
     フォーク／出自不明のPRは、従来通り衝突として扱う（fail closed）。
 - 解除条件: 重なりが解消された場合。`status:done`に到達したタスクが
