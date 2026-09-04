@@ -239,10 +239,24 @@ def effective_parent_number(issue: IssueRecord) -> int | None:
     （#485 review P2）、本文metadataを「ネイティブが無い場合のみの
     フォールバック」以上の意味で使うと、旧親の完了判定やprovisioningの
     再利用インデックスが誤って古い親の下にこのIssueを含めてしまう。
+
+    #802: 自分自身を親とする自己親化（循環・自己参照）は論理的にあり得ないため、
+    ネイティブ・本文フォールバックのいずれであっても親番号が自身と一致する場合は
+    Noneを返す。
     """
     if issue.parent and issue.parent.get("number") is not None:
-        return issue.parent.get("number")
-    return parent_issue_number_from_body(issue.body)
+        parent_number = issue.parent.get("number")
+        if issue.number is not None and parent_number == issue.number:
+            return None
+        return parent_number
+    body_parent = parent_issue_number_from_body(issue.body)
+    if (
+        body_parent is not None
+        and issue.number is not None
+        and body_parent == issue.number
+    ):
+        return None
+    return body_parent
 
 
 def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | None:
@@ -505,11 +519,18 @@ def find_children_by_parent(
     # `effective_parent_number` treats a present native `parent` as
     # authoritative, so such a stale-body candidate is correctly rejected
     # here instead of indefinitely blocking the old parent's completion.
+    # #802: 親Issue自身（EPIC Issue本文にparent_issue_numberが記録されている）
+    # がmetadata検索でヒットした場合、自分自身が子Issueとして採択されてしまい、
+    # open_childrenに親Issue自身が残って最終PR作成が永久にブロックされる。
+    # 親Issue自身（candidate.number == target_number）およびEPIC Issueは
+    # 子Issueから確実に除外する。
     target_number = int(parent_issue_number)
     extra: list[IssueRecord] = [
         candidate
         for candidate in candidates
         if candidate.number not in seen
+        and candidate.number != target_number
+        and not is_epic_issue(candidate)
         and effective_parent_number(candidate) == target_number
     ]
     return ChildDiscoveryResult(issues=native + extra, metadata_search_supported=True)
