@@ -17,6 +17,11 @@ from pathlib import Path
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.summary import (
+    merge_skips,
+    render_forge_warnings_markdown,
+    render_skipped_markdown,
+)
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator import IntegrationStatus, Integrator, IntegratorConfig
@@ -246,6 +251,13 @@ def _format_event_log_comment(report: CycleReport, deviation_events: list[dict])
         lines.extend(f"- {item}" for item in items)
         lines.append("")
 
+    # #787: 未選定タスクの有無は`_post_event_log_comment`の投稿要否
+    # (`has_events`)には算入しない。未選定は毎サイクル起こりうるため、算入すると
+    # 何も動いていないサイクルでも親Issueにコメントが積み上がる。
+    lines.extend(
+        render_skipped_markdown(merge_skips(report.skips, report.scheduling_decisions))
+    )
+    lines.extend(render_forge_warnings_markdown(report.forge_warnings))
     return "\n".join(lines)
 
 

@@ -184,7 +184,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([blocked_task, normal_task], {}),
+                return_value=([blocked_task, normal_task], {}, []),
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling.select_tasks_with_decisions"
@@ -261,7 +261,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
         ):
             run_dispatch_cycle(config)
@@ -364,7 +364,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.locks.check_footprint_deviation", return_value=None
@@ -468,7 +468,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             patch("orchestune.dispatch.phase_scheduling.save_run_state"),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.locks.check_footprint_deviation",

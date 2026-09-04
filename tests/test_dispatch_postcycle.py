@@ -23,6 +23,7 @@ from orchestune.dispatch.postcycle import (
     _run_semantic_integrator,
 )
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.summary import REASON_EXTERNAL_LOCK, SkipRecord
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     LocalProcessDispatchTarget,
@@ -779,6 +780,53 @@ class TestPostEventLogComment:
         config.forge.add_comment.assert_not_called()
         assert result.report is not None
         assert result.report["posted"] is False
+
+    def _config(self, tmp_path):
+        return DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+
+    def test_includes_the_skipped_task_summary(self, tmp_path):
+        """#787: 起動されなかったタスクの理由を親Issueのサイクルコメントに載せる。"""
+        report = self._report_with_events()
+        report.skips = [
+            SkipRecord(
+                issue_number=695,
+                subtask_id="task-695",
+                reason=REASON_EXTERNAL_LOCK,
+                detail="fix/issue-777 [tests/conftest.py]",
+            )
+        ]
+        config = self._config(tmp_path)
+
+        _post_event_log_comment(config, report)
+
+        posted_body = config.forge.add_comment.call_args.args[1]
+        assert "未選定タスク" in posted_body
+        assert "fix/issue-777 [tests/conftest.py]" in posted_body
+
+    def test_skipped_tasks_alone_do_not_trigger_a_comment(self, tmp_path):
+        """#787: 未選定は毎サイクル起こりうるため、投稿要否の判定には算入しない。
+        算入すると何も動いていないサイクルでも親Issueにコメントが積み上がる。"""
+        report = self._empty_report()
+        report.skips = [
+            SkipRecord(
+                issue_number=695,
+                subtask_id="task-695",
+                reason=REASON_EXTERNAL_LOCK,
+                detail="fix/issue-777 [tests/conftest.py]",
+            )
+        ]
+        config = self._config(tmp_path)
+
+        _post_event_log_comment(config, report)
+
+        config.forge.add_comment.assert_not_called()
 
     def test_returns_retryable_failure_when_add_comment_raises(self, tmp_path, capsys):
         config = DispatcherConfig(

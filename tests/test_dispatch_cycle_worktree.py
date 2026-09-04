@@ -284,7 +284,7 @@ class TestProcessActiveWorktrees:
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling._finalize_launch", return_value=[]
@@ -357,7 +357,7 @@ class TestProcessActiveWorktrees:
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
-                return_value=([], {}),
+                return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling._finalize_launch", return_value=[]

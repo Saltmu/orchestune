@@ -235,6 +235,9 @@ class TestRuleCompleted:
             "issue_number": active.issue_number,
             "worktree_path": active.worktree_path,
             "action": "completion_skipped_forge_error",
+            # #787: どのForge呼び出しがなぜ失敗して保留になったのかを残す。
+            "operation": "list_prs",
+            "error": "RuntimeError: temporary GitHub failure",
         }
         assert outcome.terminal is True
         mock_finalize.assert_not_called()

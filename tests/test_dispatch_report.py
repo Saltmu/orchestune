@@ -6,10 +6,13 @@
 本ファイルで単体テストとして完結させる。
 """
 
+import json
+
 from orchestune.dispatch.cycle import CycleReport
-from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents, Task
+from orchestune.dispatch.summary import REASON_EXTERNAL_LOCK, SkipRecord
 
 
 def _task(**overrides):
@@ -310,3 +313,97 @@ class TestSchedulingDecisionsSection:
         write_github_step_summary(_cycle_report(), None, str(summary_file))
 
         assert "スケジューリング判定" not in summary_file.read_text(encoding="utf-8")
+
+
+class TestSkippedTasksSection:
+    """#787: 未選定タスクとその理由をStep Summaryへ出す。"""
+
+    def _write(self, tmp_path, cycle_report):
+        summary_file = tmp_path / "step_summary.md"
+        write_github_step_summary(
+            cycle_report=cycle_report,
+            integrator_report=None,
+            summary_path=str(summary_file),
+        )
+        return summary_file.read_text(encoding="utf-8")
+
+    def test_renders_prefilter_skips_with_their_detail(self, tmp_path):
+        content = self._write(
+            tmp_path,
+            _cycle_report(
+                skips=[
+                    SkipRecord(
+                        issue_number=695,
+                        subtask_id="task-695",
+                        reason=REASON_EXTERNAL_LOCK,
+                        detail="fix/issue-777 [tests/conftest.py]",
+                    )
+                ]
+            ),
+        )
+        assert "未選定タスク" in content
+        assert "#695" in content
+        assert "fix/issue-777 [tests/conftest.py]" in content
+
+    def test_renders_unselected_scheduling_decisions(self, tmp_path):
+        decision = SchedulingDecision(
+            issue_number=701,
+            subtask_id="task-701",
+            mode="critical-path",
+            score=0.0,
+            components=ScoreComponents(),
+            selected=False,
+            reason="quota-exhausted",
+        )
+        content = self._write(tmp_path, _cycle_report(scheduling_decisions=[decision]))
+        assert "#701" in content
+        assert "クオータ枯渇" in content
+
+    def test_omitted_when_nothing_was_skipped(self, tmp_path):
+        assert "未選定タスク" not in self._write(tmp_path, _cycle_report())
+
+    def test_renders_forge_warnings(self, tmp_path):
+        content = self._write(
+            tmp_path,
+            _cycle_report(
+                forge_warnings=[
+                    {
+                        "issue_number": 702,
+                        "operation": "list_prs",
+                        "error": "RuntimeError: 504",
+                    }
+                ]
+            ),
+        )
+        assert "Forge API" in content
+        assert "list_prs" in content
+
+
+class TestReportToDict:
+    def test_carries_the_new_observability_fields(self):
+        report = _cycle_report(
+            skips=[
+                SkipRecord(
+                    issue_number=1,
+                    subtask_id="task-a",
+                    reason=REASON_EXTERNAL_LOCK,
+                    detail="feat/x [a.py]",
+                )
+            ],
+            external_lock_conflicts={
+                1: [{"kind": "branch", "source": "feat/x", "files": ["a.py"]}]
+            },
+            forge_warnings=[{"issue_number": 2, "operation": "list_prs"}],
+        )
+        as_dict = _report_to_dict(report)
+        assert as_dict["skips"] == [
+            {
+                "issue_number": 1,
+                "subtask_id": "task-a",
+                "reason": REASON_EXTERNAL_LOCK,
+                "detail": "feat/x [a.py]",
+            }
+        ]
+        assert as_dict["external_lock_conflicts"][1][0]["source"] == "feat/x"
+        assert as_dict["forge_warnings"][0]["operation"] == "list_prs"
+        json.dumps(as_dict, ensure_ascii=False)

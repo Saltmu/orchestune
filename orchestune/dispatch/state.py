@@ -105,6 +105,11 @@ class RunState:
     # いずれ確認される（壁時計に基づくローテーションでは、一定周期で起動される
     # ディスパッチャーが同じ位置ばかり見てしまう組み合わせがあるため）。
     task_reclaim_lookup_cursor: int = 0
+    # #787/PR#789レビュー対応(Codex P2): 外部ロック解除をIssueへ伝えられなかった
+    # タスクのIssue番号。ラベルは先に外れており、次サイクルではそのタスクは
+    # `to_unlock`に現れないため、ここに残さないとIssue上の通知が「ロック中」の
+    # まま取り残される。投稿できた時点で消える。
+    pending_lock_release_notices: list[int] = field(default_factory=list)
 
 
 def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
@@ -179,6 +184,27 @@ def _parse_lookup_cursor(value: object) -> int:
     return value
 
 
+#: 解除通知の再試行キューの上限。Issueがクローズされる等で永久に投稿できない
+#: 記録が残り続けても、`run_state.json`が無制限に膨らまないようにする。
+MAX_PENDING_LOCK_RELEASE_NOTICES = 100
+
+
+def _parse_pending_lock_release_notices(value: object) -> list[int]:
+    """#787: 解除通知の再試行キューを検証しつつ復元する。
+
+    欠落（本フィールド導入前の`run_state.json`）や壊れた値は空へ倒す。失うのは
+    「通知を1回書き直す機会」だけで、ディスパッチの判断には影響しない。
+    """
+    if not isinstance(value, list):
+        return []
+    numbers = [
+        item
+        for item in value
+        if isinstance(item, int) and not isinstance(item, bool) and item > 0
+    ]
+    return list(dict.fromkeys(numbers))[-MAX_PENDING_LOCK_RELEASE_NOTICES:]
+
+
 def _parse_active_worktrees(data: dict) -> dict[str, ActiveWorktree]:
     return {
         key: ActiveWorktree(
@@ -241,6 +267,9 @@ def load_run_state(path: str | Path) -> RunState:
         task_reclaim_counts=_parse_task_reclaim_counts(data.get("task_reclaim_counts")),
         task_reclaim_lookup_cursor=_parse_lookup_cursor(
             data.get("task_reclaim_lookup_cursor")
+        ),
+        pending_lock_release_notices=_parse_pending_lock_release_notices(
+            data.get("pending_lock_release_notices")
         ),
     )
 
@@ -359,6 +388,11 @@ def prune_run_state(
         last_reconciled_at=state.last_reconciled_at,
         task_reclaim_counts=_retained_task_reclaim_counts(state),
         task_reclaim_lookup_cursor=state.task_reclaim_lookup_cursor,
+        # 未送信の解除通知は経過時間では刈らない。刈るとIssue上の通知が
+        # 「ロック中」のまま取り残される（上限による打ち切りのみ行う）。
+        pending_lock_release_notices=state.pending_lock_release_notices[
+            -MAX_PENDING_LOCK_RELEASE_NOTICES:
+        ],
     )
 
 
@@ -396,5 +430,8 @@ def save_run_state(
             for issue_number, record in state.task_reclaim_counts.items()
         },
         "task_reclaim_lookup_cursor": state.task_reclaim_lookup_cursor,
+        "pending_lock_release_notices": state.pending_lock_release_notices[
+            -MAX_PENDING_LOCK_RELEASE_NOTICES:
+        ],
     }
     write_json_atomic(path, data)

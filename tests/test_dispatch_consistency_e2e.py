@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
@@ -31,6 +30,7 @@ from orchestune.dispatch.cycle import (
 )
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
@@ -594,7 +594,7 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
         patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
         patch(
             "orchestune.dispatch.cycle._sync_external_locks",
-            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+            return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
     ):
         first = run_dispatch_cycle(config)
@@ -686,7 +686,7 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
         patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
         patch(
             "orchestune.dispatch.cycle._sync_external_locks",
-            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+            return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
     ):
         first = run_dispatch_cycle(config)
@@ -778,7 +778,7 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
         patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
         patch(
             "orchestune.dispatch.cycle._sync_external_locks",
-            return_value=SimpleNamespace(to_lock=[], to_unlock=[]),
+            return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
     ):
         first = run_dispatch_cycle(config)
