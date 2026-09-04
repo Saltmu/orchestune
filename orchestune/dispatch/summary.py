@@ -77,6 +77,17 @@ class SkipRecord:
     detail: str = ""
 
 
+def ascii_safe(text: str) -> str:
+    """テキスト経路へ出す文字列を、必ずASCIIで表現できる形へ落とす。
+
+    PR#789レビュー対応(Codex P2): ブランチ名・ファイルパス・例外メッセージは
+    外部由来で、非ASCII文字を含みうる。cp932のコンソールへそのまま書くと
+    `UnicodeEncodeError`が送出され、「保守的に保留する」はずの判定がサイクル
+    自体の失敗に化ける。原文はUTF-8で書かれるMarkdown経路とJSONレポートに残す。
+    """
+    return text.encode("ascii", "backslashreplace").decode("ascii")
+
+
 def skip_record_to_dict(record: SkipRecord) -> dict:
     return dataclasses.asdict(record)
 
@@ -134,13 +145,17 @@ def render_skipped_text(records: list[SkipRecord]) -> list[str]:
     for record in listed:
         detail = f"  {record.detail}" if record.detail else ""
         lines.append(
-            f"{SUMMARY_PREFIX}   #{record.issue_number} "
-            f"{record.subtask_id or '-'}  {record.reason}{detail}"
+            ascii_safe(
+                f"{SUMMARY_PREFIX}   #{record.issue_number} "
+                f"{record.subtask_id or '-'}  {record.reason}{detail}"
+            )
         )
     for reason, group in aggregated.items():
         lines.append(
-            f"{SUMMARY_PREFIX}   {reason}: {len(group)} task(s) "
-            f"({_aggregate_issue_list(group)})"
+            ascii_safe(
+                f"{SUMMARY_PREFIX}   {reason}: {len(group)} task(s) "
+                f"({_aggregate_issue_list(group)})"
+            )
         )
     return lines
 
@@ -182,7 +197,9 @@ def _warning_text(warning: dict) -> str:
 
 def render_forge_warnings_text(warnings: list[dict]) -> list[str]:
     """stderr向けのForge障害要約。ASCIIのみで組む。"""
-    return [f"{WARN_PREFIX} {_warning_text(warning)}" for warning in warnings]
+    return [
+        ascii_safe(f"{WARN_PREFIX} {_warning_text(warning)}") for warning in warnings
+    ]
 
 
 def render_forge_warnings_markdown(warnings: list[dict]) -> list[str]:

@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
@@ -34,7 +34,7 @@ from orchestune.dispatch.state import (
     TaskReclaimRecord,
     save_run_state,
 )
-from orchestune.dispatch.summary import WARN_PREFIX
+from orchestune.dispatch.summary import WARN_PREFIX, ascii_safe
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -77,8 +77,30 @@ def is_completion_hold_event(event: Mapping[str, object]) -> bool:
     return event.get("action") in COMPLETION_HOLD_ACTIONS
 
 
+class ForgeFailure(NamedTuple):
+    """握り潰したForge呼び出し1件。どの操作がなぜ失敗したのかを対で保つ。
+
+    PR#789レビュー対応(Codex P2): 説明文字列だけを集めると、呼び出し側が
+    「どの操作が失敗したのか」を推測で補うことになる（オープンPRのコメント取得が
+    失敗しても`list_prs`と報告されていた）。
+    """
+
+    operation: str
+    description: str
+
+
+def failed_operations(failures: Sequence[ForgeFailure]) -> str:
+    """失敗した呼び出し名を重複なく並べる。空なら空文字。"""
+    return ", ".join(dict.fromkeys(failure.operation for failure in failures))
+
+
+def failure_descriptions(failures: Sequence[ForgeFailure]) -> str:
+    """同じ説明は畳む。同一の障害で複数の呼び出しが落ちるのが普通のため。"""
+    return "; ".join(dict.fromkeys(failure.description for failure in failures))
+
+
 def describe_forge_error(error: Exception) -> str:
-    """例外を1行のASCII表現へ縮める。stderrとサイクルレポートの双方で使う。"""
+    """例外を1行へ縮める。原文はUTF-8のレポートに残すためここでは変換しない。"""
     detail = str(error).strip().splitlines()
     return f"{type(error).__name__}: {detail[0]}" if detail else type(error).__name__
 
@@ -87,30 +109,34 @@ def warn_forge_failure(
     operation: str,
     issue_number: int | None,
     error: Exception,
-    error_sink: list[str] | None = None,
+    error_sink: list[ForgeFailure] | None = None,
 ) -> str:
     """#787: Forge呼び出しの失敗を握り潰す直前に、その事実を必ず表に出す。
 
     これらの失敗はいずれも`"unknown"`という保守的な判定へ丸められる。無言で
     丸めると、API障害による保留とタスク側の問題が運用者から区別できない。
 
-    stderrへ出す1行はWindows(cp932)のコンソールにも出るためASCIIで組む。
-    `error_sink`を渡すと、同じ説明をサイクルレポート用に集められる。
+    stderrへ出す1行はWindows(cp932)のコンソールにも出るため`ascii_safe`を通す。
+    例外メッセージは外部由来で非ASCII文字を含みうるが、ここで送出される
+    `UnicodeEncodeError`は保守的な保留をサイクルの失敗に化けさせてしまう。
+    原文はUTF-8で書かれるレポート側に`error_sink`経由で残す。
     """
     description = describe_forge_error(error)
     subject = f"issue #{issue_number}" if issue_number is not None else "the repository"
     print(
-        f"{WARN_PREFIX} forge API call '{operation}' failed for {subject}: "
-        f"{description}",
+        ascii_safe(
+            f"{WARN_PREFIX} forge API call '{operation}' failed for {subject}: "
+            f"{description}"
+        ),
         file=sys.stderr,
     )
     if error_sink is not None:
-        error_sink.append(description)
+        error_sink.append(ForgeFailure(operation, description))
     return description
 
 
 def _fetch_outcome_for_active(
-    active: ActiveWorktree, forge: Forge, error_sink: list[str] | None = None
+    active: ActiveWorktree, forge: Forge, error_sink: list[ForgeFailure] | None = None
 ) -> OutcomeRecord | None | Literal["error"]:
     try:
         comments = list(forge.list_comments(active.issue_number))
@@ -180,15 +206,15 @@ def _decide_completed_worktree_outcome(
         commit_sha = None
 
     if forge is not None:
-        errors: list[str] = []
-        outcome_or_err = _fetch_outcome_for_active(active, forge, errors)
+        failures: list[ForgeFailure] = []
+        outcome_or_err = _fetch_outcome_for_active(active, forge, failures)
         if outcome_or_err == "error":
             if has_new_commits:
                 return CompletedWorktreeDecision(
                     action="completion_skipped_forge_error",
                     subtask_id=subtask_id,
-                    operation="list_comments",
-                    error="; ".join(errors),
+                    operation=failed_operations(failures),
+                    error=failure_descriptions(failures),
                 )
             outcome = None
         else:
@@ -718,6 +744,7 @@ def _collect_open_pr_comments(
     handle: DispatchHandle,
     open_prs: list[PrRecord],
     config: DispatcherConfig,
+    error_sink: list[ForgeFailure] | None = None,
 ) -> tuple[list[dict], bool]:
     all_comments: list[dict] = []
     had_error = False
@@ -726,14 +753,18 @@ def _collect_open_pr_comments(
             all_comments.extend(
                 config.resolved_forge.list_comments(handle.issue_number)
             )
-        except Exception:
+        except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
+            warn_forge_failure("list_comments", handle.issue_number, error, error_sink)
             had_error = True
     pr_numbers = {pr.number for pr in open_prs}
-    for pr_num in pr_numbers:
+    for pr_num in sorted(pr_numbers):
         if handle.issue_number is None or pr_num != handle.issue_number:
             try:
                 all_comments.extend(config.resolved_forge.list_comments(pr_num))
-            except Exception:
+            except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
+                warn_forge_failure(
+                    "list_comments", handle.issue_number, error, error_sink
+                )
                 had_error = True
     return all_comments, had_error
 
@@ -743,9 +774,10 @@ def _eval_open_pr_status(
     handle: DispatchHandle,
     open_prs: list[PrRecord],
     config: DispatcherConfig,
+    error_sink: list[ForgeFailure] | None = None,
 ) -> str:
     all_comments, had_error = _collect_open_pr_comments(
-        active, handle, open_prs, config
+        active, handle, open_prs, config, error_sink
     )
     outcome = parse_from_comments(all_comments, since=active.started_at)
     if outcome is not None and outcome.result in (
@@ -762,7 +794,7 @@ def _eval_open_pr_status(
 def _local_pr_completion_status(
     active: ActiveWorktree,
     config: DispatcherConfig,
-    error_sink: list[str] | None = None,
+    error_sink: list[ForgeFailure] | None = None,
 ) -> str:
     handle = _active_dispatch_handle(active)
     try:
@@ -786,7 +818,7 @@ def _local_pr_completion_status(
         return "completed"
     open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
     if open_prs:
-        return _eval_open_pr_status(active, handle, open_prs, config)
+        return _eval_open_pr_status(active, handle, open_prs, config, error_sink)
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"
@@ -805,7 +837,7 @@ def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
 def _cloud_worktree_completion_status(
     active: ActiveWorktree,
     config: DispatcherConfig,
-    error_sink: list[str] | None = None,
+    error_sink: list[ForgeFailure] | None = None,
 ) -> str:
     assert config.dispatch_target is not None
     handle = _active_dispatch_handle(active)

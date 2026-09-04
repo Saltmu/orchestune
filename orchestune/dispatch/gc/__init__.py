@@ -17,6 +17,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
+    ForgeFailure,
     _active_dispatch_handle,
     _apply_completed_worktree_outcome,
     _call_is_complete,
@@ -30,6 +31,8 @@ from orchestune.dispatch.gc.completion import (
     _is_worktree_complete,
     _local_pr_completion_status,
     _parse_github_timestamp,
+    failed_operations,
+    failure_descriptions,
     is_completion_hold_event,
     warn_forge_failure,
 )
@@ -519,15 +522,19 @@ def _resolve_cloud_completion(
     active: ActiveWorktree,
     active_task: Task | None,
 ) -> CompletionResolution:
-    errors: list[str] = []
-    status = _cloud_worktree_completion_status(active, ctx.config, errors)
+    failures: list[ForgeFailure] = []
+    status = _cloud_worktree_completion_status(active, ctx.config, failures)
     if status == "abandoned":
         return CompletionResolution.resolved(
             _abandoned_worktree_outcome(ctx, key, active, active_task)
         )
     if status == "unknown":
         return CompletionResolution.resolved(
-            _completion_forge_error_hold(active, "completion_status", "; ".join(errors))
+            _completion_forge_error_hold(
+                active,
+                failed_operations(failures) or "completion_status",
+                failure_descriptions(failures),
+            )
         )
     if status != "completed":
         return CompletionResolution.pending()
@@ -542,15 +549,21 @@ def _resolve_local_completion(
 ) -> CompletionResolution:
     if not _is_worktree_complete(active, ctx.config):
         return CompletionResolution.pending()
-    errors: list[str] = []
-    status = _local_pr_completion_status(active, ctx.config, errors)
+    failures: list[ForgeFailure] = []
+    status = _local_pr_completion_status(active, ctx.config, failures)
     if status == "abandoned":
         return CompletionResolution.resolved(
             _abandoned_worktree_outcome(ctx, key, active, active_task)
         )
     if status == "unknown":
         return CompletionResolution.resolved(
-            _completion_forge_error_hold(active, "list_prs", "; ".join(errors))
+            _completion_forge_error_hold(
+                active,
+                # PR#789レビュー対応(Codex P2): 実際に失敗した呼び出しを名乗る。
+                # オープンPRのコメント取得が失敗しても`list_prs`と報告していた。
+                failed_operations(failures) or "list_prs",
+                failure_descriptions(failures),
+            )
         )
     return CompletionResolution.ready(active)
 

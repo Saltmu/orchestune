@@ -169,3 +169,32 @@ class TestMergeSkipsPrecedence:
             issue_number=1, subtask_id="task-1", reason="actor-unverified"
         )
         assert merge_skips([detailed, vague]) == [detailed]
+
+
+class TestAsciiSafety:
+    """PR#789レビュー(Codex P2): テキスト経路のASCII契約を、補間される外部由来の
+    文字列（例外メッセージ・ブランチ名・ファイルパス）にも適用する。
+
+    cp932のコンソールへ表現できない文字を書くと`UnicodeEncodeError`になり、
+    「保守的に保留する」はずの判定がサイクルの失敗に化ける。"""
+
+    def test_skip_detail_with_non_ascii_paths_is_escaped(self):
+        record = _skip(1, REASON_EXTERNAL_LOCK, "feat/日本語 [tests/テスト.py]")
+        rendered = "\n".join(render_skipped_text([record]))
+        rendered.encode("ascii")
+        assert "\\u" in rendered
+
+    def test_forge_warning_with_non_ascii_error_is_escaped(self):
+        warnings = [
+            {
+                "issue_number": 1,
+                "operation": "list_prs",
+                "error": "RuntimeError: 接続に失敗しました",
+            }
+        ]
+        "\n".join(render_forge_warnings_text(warnings)).encode("ascii")
+
+    def test_markdown_keeps_the_original_text(self):
+        """Markdown経路はUTF-8で書かれるため、原文を保つ。"""
+        record = _skip(1, REASON_EXTERNAL_LOCK, "feat/日本語 [tests/テスト.py]")
+        assert "feat/日本語" in "\n".join(render_skipped_markdown([record]))

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc import _completion_forge_error_hold
+from orchestune.dispatch.gc import (
+    _completion_forge_error_hold,
+    _resolve_local_completion,
+)
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
+    ForgeFailure,
     _apply_completed_worktree_outcome,
     _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
@@ -16,6 +21,7 @@ from orchestune.dispatch.gc.completion import (
 )
 from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.summary import WARN_PREFIX
+from orchestune.models import PrRecord
 
 
 def _active(tmp_path, **overrides):
@@ -59,13 +65,15 @@ class TestLocalPrCompletionStatus:
     def test_collects_the_error_description_for_the_cycle_report(self, tmp_path):
         forge = MagicMock()
         forge.list_prs.side_effect = RuntimeError("504 Gateway Timeout")
-        errors: list[str] = []
+        failures: list[ForgeFailure] = []
 
         _local_pr_completion_status(
-            _active(tmp_path), _config(tmp_path, forge), error_sink=errors
+            _active(tmp_path), _config(tmp_path, forge), error_sink=failures
         )
 
-        assert errors == ["RuntimeError: 504 Gateway Timeout"]
+        assert failures == [
+            ForgeFailure("list_prs", "RuntimeError: 504 Gateway Timeout")
+        ]
 
     def test_warning_is_ascii_only(self, tmp_path, capsys):
         forge = MagicMock()
@@ -163,4 +171,68 @@ class TestCompletedWorktreeDecisionCarriesForgeError:
         )
 
         assert event["operation"] == "list_comments"
+        # 同一の障害で複数の呼び出しが落ちても、説明は畳んで1つに保つ。
         assert event["error"] == "RuntimeError: 502 Bad Gateway"
+
+
+class TestOpenPrCommentFailures:
+    """PR#789レビュー(Codex P2): オープンPR経路のコメント取得失敗も、どの呼び出しが
+    失敗したのかを警告とレポートへ伝える。"""
+
+    def _open_pr_config(self, tmp_path):
+        forge = MagicMock()
+        forge.list_prs.return_value = [
+            PrRecord(
+                number=1,
+                head_ref="claude/issue-702-task-a",
+                changed_files=(),
+                state="OPEN",
+            )
+        ]
+        forge.list_comments.side_effect = RuntimeError("502 Bad Gateway")
+        return forge, _config(tmp_path, forge)
+
+    def test_warns_and_names_list_comments_not_list_prs(self, tmp_path, capsys):
+        forge, config = self._open_pr_config(tmp_path)
+        failures: list[ForgeFailure] = []
+
+        status = _local_pr_completion_status(_active(tmp_path), config, failures)
+
+        assert status == "unknown"
+        # Issue側とPR側の2回の`list_comments`が落ちるので記録も2件になる。
+        assert {failure.operation for failure in failures} == {"list_comments"}
+        assert failures[0].description == "RuntimeError: 502 Bad Gateway"
+        captured = capsys.readouterr().err
+        assert WARN_PREFIX in captured
+        assert "list_comments" in captured
+
+    def test_hold_event_names_the_call_that_actually_failed(self, tmp_path):
+        forge, config = self._open_pr_config(tmp_path)
+        ctx = SimpleNamespace(config=config)
+        active = _active(tmp_path)
+
+        with patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True):
+            resolution = _resolve_local_completion(ctx, "702", active, None)
+
+        event = resolution.rule_outcome.completion_event
+        assert event["operation"] == "list_comments"
+        # 同一の障害で複数の呼び出しが落ちても、説明は畳んで1つに保つ。
+        assert event["error"] == "RuntimeError: 502 Bad Gateway"
+
+
+class TestWarningEncoding:
+    def test_non_ascii_exception_text_does_not_break_the_warning(
+        self, tmp_path, capsys
+    ):
+        """cp932のコンソールでも壊れないよう、stderrへ出す前にASCIIへ落とす。"""
+        forge = MagicMock()
+        forge.list_prs.side_effect = RuntimeError("接続に失敗しました")
+        failures: list[ForgeFailure] = []
+
+        _local_pr_completion_status(
+            _active(tmp_path), _config(tmp_path, forge), failures
+        )
+
+        capsys.readouterr().err.encode("ascii")
+        # レポートはUTF-8で書かれるため、原文をそのまま残す。
+        assert failures[0].description == "RuntimeError: 接続に失敗しました"
