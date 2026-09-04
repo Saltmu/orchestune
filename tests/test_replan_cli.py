@@ -78,6 +78,35 @@ def test_apply_requires_current_confirmation_token_without_mutation(
     assert forge.mutations == []
 
 
+def test_apply_unsafe_preview_returns_conflict_exit_code(
+    replan_files: tuple[Path, Path],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch,
+) -> None:
+    plan, _ = replan_files
+    forge = FakeReplanForge(old_status="status:in-progress")
+    token = preview_token(forge, plan)
+
+    monkeypatch.setattr("orchestune.replan.cli.GitHubForge", lambda: forge)
+    assert (
+        main(
+            [
+                "--plan",
+                str(plan),
+                "--parent-issue",
+                str(PARENT),
+                "--apply",
+                "--confirm-preview",
+                token,
+            ]
+        )
+        == 6
+    )
+
+    assert "manual review" in capsys.readouterr().err
+    assert forge.mutations == []
+
+
 def test_apply_reports_partial_failure_with_distinct_exit_code(
     replan_files: tuple[Path, Path], capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:

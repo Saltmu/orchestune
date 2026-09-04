@@ -64,12 +64,18 @@ def _apply(
     if args.confirm_preview is None:
         print("Error: --apply requires --confirm-preview TOKEN", file=sys.stderr)
         return EXIT_CONFIRMATION
-    if args.confirm_preview != preview.preview_token or _is_unsafe(preview):
+    if args.confirm_preview != preview.preview_token:
         print(
             "Error: preview requires a fresh, conflict-free confirmation",
             file=sys.stderr,
         )
         return EXIT_CONFIRMATION
+    if _is_unsafe(preview):
+        print(
+            "Error: preview contains conflicts requiring manual review",
+            file=sys.stderr,
+        )
+        return EXIT_CONFLICT
     try:
         result = apply_replan(
             args.plan,
