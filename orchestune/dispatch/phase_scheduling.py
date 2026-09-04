@@ -121,20 +121,24 @@ def _conflict_detail(lock_result: ExternalLockScanResult, issue_number: int) -> 
 
 
 def _external_lock_skips(
-    ctx: CycleContext, issues: IssuesByStatus, lock_result: ExternalLockScanResult
+    ctx: CycleContext, lock_result: ExternalLockScanResult
 ) -> list[SkipRecord]:
     """新規ロックと、前サイクルから継続してロック中のタスクの双方を拾う。
 
-    継続ロックは`to_lock`にも`issues.queued`にも現れないため、`issues.locked`を
-    見ないと「ずっと止まっているのに一覧に出ない」タスクが残る（#695の実例）。
+    継続ロックは`to_lock`にも`issues.queued`にも現れないため、これが無いと
+    「ずっと止まっているのに一覧に出ない」タスクが残る（#695の実例）。
+
+    PR#789レビュー対応(Codex P2): 母集団は`issues.locked`ではなく現在の
+    `conflicts`とする。ラベルを持つIssueを起点にすると、同じサイクルで
+    ロックを外すタスク（`to_unlock`）や、終端状態のまま古いラベルが残って
+    いるタスクまで「外部ロックで見送った候補」として報告してしまう。
+    `to_lock`は必ず`conflicts`に含まれる（`scan_external_locks`参照）。
     """
-    locked_numbers = {issue.number for issue in issues.locked}
-    locked_numbers |= {task.issue_number for task in lock_result.to_lock}
     return [
         _skip_record(
             task, REASON_EXTERNAL_LOCK, _conflict_detail(lock_result, issue_number)
         )
-        for issue_number in sorted(locked_numbers)
+        for issue_number in sorted(lock_result.conflicts)
         if (task := ctx.tasks_by_issue.get(issue_number)) is not None
     ]
 
@@ -255,7 +259,7 @@ def _determine_candidate_tasks(
         completed_subtask_ids=completed_subtask_ids,
     )
     skips = [
-        *_external_lock_skips(ctx, issues, lock_result),
+        *_external_lock_skips(ctx, lock_result),
         *_queued_drop_skips(ctx, issues, lock_result, queued_candidates, now),
         *_dependency_skips(ctx, issues, stack_eligible_tasks),
     ]

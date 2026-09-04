@@ -183,3 +183,80 @@ class TestDetermineCandidateTaskSkips:
         assert [(r.reason, r.detail) for r in skips] == [
             (REASON_DEPENDENCY, "waiting: #695")
         ]
+
+
+class TestExternalLockSkipScope:
+    """PR#789レビュー(Codex P2): 同じサイクルでロックを外すタスクを
+    「外部ロックで見送った」と報告しない。"""
+
+    def _issues(self, locked_numbers):
+        return IssuesByStatus(
+            queued=[],
+            locked=[
+                _issue(number, labels=("status:external-lock",))
+                for number in locked_numbers
+            ],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+
+    def test_task_being_unlocked_is_not_reported_as_locked(self, fake_forge):
+        """`lock_changes`が同じサイクルでロック解除を報告しているのに、
+        未選定一覧では「ロック中」と出るのは矛盾している。"""
+        task = _task(issue_number=1, status_labels=("status:external-lock",))
+
+        _, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={1: task}),
+            self._issues([1]),
+            ExternalLockScanResult(to_lock=[], to_unlock=[task], conflicts={}),
+            set(),
+            False,
+            now=0.0,
+        )
+
+        assert skips == []
+
+    def test_terminal_task_with_a_stale_lock_is_not_a_skipped_candidate(
+        self, fake_forge
+    ):
+        """`status:done`のタスクはそもそも起動候補ではない。"""
+        done_task = _task(
+            issue_number=2, status_labels=("status:done", "status:external-lock")
+        )
+
+        _, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={2: done_task}),
+            self._issues([2]),
+            ExternalLockScanResult(to_lock=[], to_unlock=[done_task], conflicts={}),
+            set(),
+            False,
+            now=0.0,
+        )
+
+        assert skips == []
+
+    def test_task_that_stays_locked_is_still_reported(self, fake_forge):
+        task = _task(issue_number=695, status_labels=("status:external-lock",))
+        conflicts = {
+            695: (
+                ExternalLockConflict(
+                    kind="branch", source="feat/x", files=("tests/conftest.py",)
+                ),
+            )
+        }
+
+        _, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={695: task}),
+            self._issues([695]),
+            ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts=conflicts),
+            set(),
+            False,
+            now=0.0,
+        )
+
+        assert [(r.issue_number, r.reason) for r in skips] == [
+            (695, REASON_EXTERNAL_LOCK)
+        ]
+        assert skips[0].detail == "feat/x [tests/conftest.py]"
