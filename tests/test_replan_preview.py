@@ -3,6 +3,7 @@ from __future__ import annotations
 from orchestune.dag.models import SubTask
 from orchestune.models import IssueRecord
 from orchestune.replan.models import PlanRevision, ReplanPlan, RetirementCandidate
+from orchestune.replan.plan import compute_plan_revision
 from orchestune.replan.preview import build_replan_preview, compute_preview_token
 from orchestune.replan.snapshot import ReplanSnapshot
 
@@ -130,3 +131,25 @@ def test_preview_token_is_stable_and_includes_snapshot_state() -> None:
     assert compute_preview_token(REVISION, snapshot) != compute_preview_token(
         REVISION, changed
     )
+
+
+def test_merged_closing_takes_precedence_over_stale_retirement_marker() -> None:
+    plan = _plan()
+    revision = compute_plan_revision(plan)
+    marker = f"<!-- orchestune:replan-retirement plan_revision={revision} -->"
+    snapshot = ReplanSnapshot(
+        parent_issue=_issue(693),
+        parent_plan_fingerprint="parent-plan",
+        retirement_candidates=(RetirementCandidate("old-a", 10),),
+        old_issues=(_issue(10, labels=("status:queued",)),),
+        child_issues=(_issue(10, labels=("status:queued",)),),
+        merged_closing_issue_numbers=(10,),
+        retirement_comments=((10, (marker,)),),
+    )
+
+    preview = build_replan_preview(plan, snapshot)
+
+    assert [(item.action, item.subject) for item in preview.decisions] == [
+        ("create", "new-a"),
+        ("manual-review", "old-a"),
+    ]

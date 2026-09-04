@@ -155,6 +155,13 @@ def _old_generation_decision(
         )
     labels = {label for label in issue.labels if label.startswith(STATUS_LABEL_PREFIX)}
     comments = snapshot.comments_for(issue_number)
+    if issue_number in snapshot.merged_closing_issue_numbers:
+        return PreviewDecision(
+            "manual-review",
+            subtask_id,
+            "a merged PR closes the old Issue",
+            issue_number,
+        )
     if _is_recoverable_retirement(snapshot, issue, issue_number, revision, labels):
         return PreviewDecision(
             "retire",
@@ -170,13 +177,6 @@ def _old_generation_decision(
             issue_number,
         )
     status = next(iter(labels))
-    if issue_number in snapshot.merged_closing_issue_numbers:
-        return PreviewDecision(
-            "manual-review",
-            subtask_id,
-            "a merged PR closes the old Issue",
-            issue_number,
-        )
     if issue.state.upper() != "OPEN":
         return _closed_retirement_decision(
             issue, status, subtask_id, revision, comments

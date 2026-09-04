@@ -89,20 +89,6 @@ def _assert_safe(preview: ReplanPreview) -> None:
         raise ValueError(f"replan cannot be applied automatically: {detail}")
 
 
-def _assert_parent_plan_size_within_limit(
-    forge: ReplanApplyForge, parent_issue_number: int, plan_path: str | Path
-) -> None:
-    parent = forge.get_issue(parent_issue_number)
-    if parent is None:
-        raise ValueError(f"parent Issue #{parent_issue_number} was not found")
-    plan_data, _ = extract_frontmatter_and_body(
-        Path(plan_path).read_text(encoding="utf-8")
-    )
-    updated = embed_decomposition_plan_in_parent_body(parent.body, plan_data)
-    if len(updated) > GITHUB_ISSUE_BODY_LIMIT:
-        raise ValueError("updated parent Issue body exceeds GitHub's size limit")
-
-
 def _switch_parent_plan(
     forge: ReplanApplyForge, parent_issue_number: int, plan_path: str | Path
 ) -> bool:
@@ -248,7 +234,6 @@ def apply_replan(
         _audit_once(resolved_forge, parent, result)
         return result
     _assert_safe(preview)
-    _assert_parent_plan_size_within_limit(resolved_forge, parent, plan_path)
 
     root = Path(repo_root) if repo_root is not None else Path.cwd()
     template = Path(template_path).read_text(encoding="utf-8")
