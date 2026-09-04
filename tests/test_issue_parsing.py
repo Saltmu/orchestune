@@ -264,6 +264,16 @@ class TestFindChildrenByParent:
 
         assert sorted(r.number for r in result.issues) == [101, 200]
 
+    def test_excludes_parent_issue_itself_from_native_sub_issues(self):
+        """forgeがlist_sub_issuesで親Issue自身を返した場合でも、
+        子Issue一覧から確実に除外されなければならない。"""
+        native = [_issue(100, 100), _issue(101, 100)]
+        forge = _NativeOnlyForge(native)
+
+        result = find_children_by_parent(forge, 100)
+
+        assert [r.number for r in result.issues] == [101]
+
 
 class TestEffectiveParentNumber:
     def test_returns_none_when_self_parenting_in_body(self):

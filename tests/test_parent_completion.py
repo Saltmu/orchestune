@@ -408,4 +408,6 @@ class TestProcessParentCompletionWithFakeForge:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         mock_ensure_pr.assert_called_once()
+        passed_children = mock_ensure_pr.call_args[1]["children"]
+        assert [c.number for c in passed_children] == [101]
         assert res == {"status": "final_pr_ready", "pr_number": 777}

@@ -498,7 +498,15 @@ def find_children_by_parent(
     再試行に委ねる — 黙って握りつぶすと、metadataでしか発見できないIssueが
     一時的に消え、`provisioning.py`のdedup fallbackが誤って重複作成しうる。
     """
-    native = forge.list_sub_issues(parent_issue_number)
+    target_number = int(parent_issue_number)
+    # #802: 親Issue自身（自分自身が自分の子または親になる循環・自己参照）は
+    # 子Issueから確実に除外する。forgeがlist_sub_issuesで親自身を返した場合にも
+    # 備え、ネイティブ結果の段階で親Issue自身を除外する。
+    native = [
+        issue
+        for issue in forge.list_sub_issues(parent_issue_number)
+        if issue.number != target_number
+    ]
     seen = {issue.number for issue in native}
 
     try:
@@ -524,7 +532,6 @@ def find_children_by_parent(
     # open_childrenに親Issue自身が残って最終PR作成が永久にブロックされる。
     # 親Issue自身（candidate.number == target_number）を子Issueから確実に除外する。
     # ネストされたEPIC子Issue（別Issueの子かつ自身も親であるIssue）は除外しない。
-    target_number = int(parent_issue_number)
     extra: list[IssueRecord] = [
         candidate
         for candidate in candidates
