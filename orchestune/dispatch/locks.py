@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune.dispatch.scoring import Task
@@ -33,52 +33,109 @@ def _is_hotspot(path: str) -> bool:
     return any(pattern.search(path) for pattern in _HOTSPOT_PATTERNS)
 
 
+KIND_BRANCH = "branch"
+KIND_PR = "pr"
+KIND_BRANCH_DIFF_UNKNOWN = "branch-diff-unknown"
+KIND_PR_FILES_TRUNCATED = "pr-files-truncated"
+
+
+@dataclass(frozen=True)
+class ExternalLockConflict:
+    """#787: 外部ロック1件分の理由。運用者が「なぜ起動しないのか」を追える最小単位。
+
+    `files`は`branch`/`pr`種別でのみ埋まる。差分を取得できなかったブランチや
+    changed filesが打ち切られたPRはfail closedでロックするため衝突ファイルを
+    特定できず、種別だけで理由を表す。"""
+
+    kind: str
+    source: str
+    files: tuple[str, ...] = ()
+
+
 @dataclass
 class ExternalLockScanResult:
     to_lock: list[Task]
     to_unlock: list[Task]
+    # #787: 新規ロック(to_lock)だけでなく「前サイクルから継続してロック中の
+    # タスク」も収録する。継続ロックはto_lock/to_unlockのどちらにも現れず、
+    # 理由を引ける場所が他に無いため（#695の実例）。
+    conflicts: dict[int, tuple[ExternalLockConflict, ...]] = field(default_factory=dict)
 
 
 def _collect_branch_footprints(
     remote_branches: Iterable[tuple[str, tuple[str, ...] | None]],
     active_set: set[str],
-) -> tuple[list[set[str]], bool]:
-    branch_footprints: list[set[str]] = []
-    has_unknown = False
+) -> tuple[list[tuple[str, set[str]]], list[str]]:
+    branch_footprints: list[tuple[str, set[str]]] = []
+    unknown_branches: list[str] = []
     for branch, changed_files in list(remote_branches):
         if branch in active_set:
             continue
         if changed_files is None:
-            has_unknown = True
+            unknown_branches.append(branch)
         else:
-            branch_footprints.append(set(changed_files))
-    return branch_footprints, has_unknown
+            branch_footprints.append((branch, set(changed_files)))
+    return sorted(branch_footprints), sorted(unknown_branches)
 
 
-def _check_task_overlap(
+def _external_prs(
+    task: Task, prs: list[PrRecord], active_set: set[str]
+) -> list[PrRecord]:
+    return sorted(
+        (
+            pr
+            for pr in prs
+            if pr.head_ref not in active_set
+            and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
+        ),
+        key=lambda pr: pr.number,
+    )
+
+
+def _overlapping_files(
+    task_footprint: set[str], other_files: Iterable[str]
+) -> tuple[str, ...]:
+    overlap = task_footprint & {
+        path for path in other_files if not _is_hotspot(path)
+    }
+    return tuple(sorted(overlap))
+
+
+def _collect_task_conflicts(
     task: Task,
     active_set: set[str],
     prs: list[PrRecord],
-    branch_footprints: list[set[str]],
-    has_unknown_branch_footprint: bool,
-) -> bool:
-    pr_footprints = [
-        set(pr.changed_files)
-        for pr in prs
-        if pr.head_ref not in active_set
-        and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
-    ]
-    has_truncated_pr = any(
-        pr.is_files_truncated
-        for pr in prs
-        if pr.head_ref not in active_set
-        and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
-    )
+    branch_footprints: list[tuple[str, set[str]]],
+    unknown_branches: list[str],
+) -> tuple[ExternalLockConflict, ...]:
+    """タスクが外部ロックされる理由をすべて集める。空タプルなら衝突なし。
+
+    並びは決定的（ブランチ名昇順→PR番号昇順→fail closed種別）。Issueコメントの
+    dedupは本文の完全一致で行うため、同じ衝突集合からは毎回同じ本文が要る。"""
     task_footprint = {path for path in task.footprint if not _is_hotspot(path)}
-    return any(
-        task_footprint & {path for path in footprint if not _is_hotspot(path)}
-        for footprint in [*branch_footprints, *pr_footprints]
-    ) or ((has_unknown_branch_footprint or has_truncated_pr) and bool(task_footprint))
+    if not task_footprint:
+        return ()
+    external_prs = _external_prs(task, prs, active_set)
+    conflicts = [
+        ExternalLockConflict(KIND_BRANCH, branch, files)
+        for branch, footprint in branch_footprints
+        if (files := _overlapping_files(task_footprint, footprint))
+    ]
+    conflicts.extend(
+        ExternalLockConflict(KIND_PR, f"#{pr.number}", files)
+        for pr in external_prs
+        if (files := _overlapping_files(task_footprint, pr.changed_files))
+    )
+    conflicts.extend(
+        ExternalLockConflict(KIND_BRANCH_DIFF_UNKNOWN, branch)
+        for branch in unknown_branches
+    )
+    conflicts.extend(
+        ExternalLockConflict(KIND_PR_FILES_TRUNCATED, f"#{pr.number}")
+        for pr in external_prs
+        if pr.is_files_truncated
+    )
+    return tuple(conflicts)
 
 
 def scan_external_locks(
@@ -88,11 +145,12 @@ def scan_external_locks(
     active_branches: Iterable[str],
 ) -> ExternalLockScanResult:
     active_set = set(active_branches)
-    branch_footprints, has_unknown = _collect_branch_footprints(
+    branch_footprints, unknown_branches = _collect_branch_footprints(
         remote_branches, active_set
     )
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
+    conflicts_by_issue: dict[int, tuple[ExternalLockConflict, ...]] = {}
     for task in queued_tasks:
         currently_locked = StatusLabel.EXTERNAL_LOCK in task.status_labels
         if (
@@ -103,15 +161,19 @@ def scan_external_locks(
                 to_unlock.append(task)
             continue
 
-        overlaps = _check_task_overlap(
-            task, active_set, prs, branch_footprints, has_unknown
+        conflicts = _collect_task_conflicts(
+            task, active_set, prs, branch_footprints, unknown_branches
         )
-        if overlaps and not currently_locked:
-            to_lock.append(task)
-        elif not overlaps and currently_locked:
+        if conflicts:
+            conflicts_by_issue[task.issue_number] = conflicts
+            if not currently_locked:
+                to_lock.append(task)
+        elif currently_locked:
             to_unlock.append(task)
 
-    return ExternalLockScanResult(to_lock=to_lock, to_unlock=to_unlock)
+    return ExternalLockScanResult(
+        to_lock=to_lock, to_unlock=to_unlock, conflicts=conflicts_by_issue
+    )
 
 
 def _parse_numstat_line(
