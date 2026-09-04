@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -88,7 +89,7 @@ def _assert_safe(preview: ReplanPreview) -> None:
         raise ValueError(f"replan cannot be applied automatically: {detail}")
 
 
-def _switch_parent_plan(
+def _assert_parent_plan_size_within_limit(
     forge: ReplanApplyForge, parent_issue_number: int, plan_path: str | Path
 ) -> None:
     parent = forge.get_issue(parent_issue_number)
@@ -100,8 +101,29 @@ def _switch_parent_plan(
     updated = embed_decomposition_plan_in_parent_body(parent.body, plan_data)
     if len(updated) > GITHUB_ISSUE_BODY_LIMIT:
         raise ValueError("updated parent Issue body exceeds GitHub's size limit")
+
+
+def _switch_parent_plan(
+    forge: ReplanApplyForge, parent_issue_number: int, plan_path: str | Path
+) -> bool:
+    parent = forge.get_issue(parent_issue_number)
+    if parent is None:
+        raise ValueError(f"parent Issue #{parent_issue_number} was not found")
+    plan_data, _ = extract_frontmatter_and_body(
+        Path(plan_path).read_text(encoding="utf-8")
+    )
+    updated = embed_decomposition_plan_in_parent_body(parent.body, plan_data)
+    if len(updated) > GITHUB_ISSUE_BODY_LIMIT:
+        print(
+            f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: "
+            f"the resulting body is {len(updated)} characters, over GitHub's "
+            f"{GITHUB_ISSUE_BODY_LIMIT} character limit",
+            file=sys.stderr,
+        )
+        return False
     if updated != parent.body:
         forge.update_issue_body(parent_issue_number, updated)
+    return True
 
 
 def _audit_once(
@@ -169,6 +191,43 @@ def _link_generations(
     return degraded
 
 
+def _validated_preview(
+    forge: ReplanApplyForge,
+    plan_path: str | Path,
+    confirm_token: str,
+    parent_issue_number: int | None,
+) -> tuple[int, ReplanSnapshot, ReplanPreview]:
+    plan = load_replan_plan(plan_path)
+    parent = _parent_number(plan.parent_issue_number, parent_issue_number)
+    snapshot = collect_replan_snapshot(forge, parent)
+    preview = build_replan_preview(plan, snapshot)
+    if confirm_token != preview.preview_token:
+        raise ValueError("confirmed preview token does not match the current snapshot")
+    return parent, snapshot, preview
+
+
+def _retire_candidates(
+    forge: ReplanApplyForge,
+    parent: int,
+    snapshot: ReplanSnapshot,
+    preview: ReplanPreview,
+    replacement_numbers: tuple[int, ...],
+) -> tuple[tuple[int, ...], bool]:
+    retired: list[int] = []
+    degraded = False
+    for candidate in snapshot.retirement_candidates:
+        retirement = retire_replan_generation(
+            forge,
+            parent,
+            candidate,
+            preview.plan_revision,
+            replacement_issue_numbers=replacement_numbers,
+        )
+        retired.append(retirement.issue_number)
+        degraded |= retirement.degraded
+    return tuple(retired), degraded
+
+
 def apply_replan(
     plan_path: str | Path,
     confirm_token: str,
@@ -181,17 +240,15 @@ def apply_replan(
     """Apply a freshly confirmed preview in recoverable, fail-closed phases."""
 
     resolved_forge = cast(ReplanApplyForge, forge or GitHubForge())
-    plan = load_replan_plan(plan_path)
-    parent = _parent_number(plan.parent_issue_number, parent_issue_number)
-    snapshot = collect_replan_snapshot(resolved_forge, parent)
-    preview = build_replan_preview(plan, snapshot)
-    if confirm_token != preview.preview_token:
-        raise ValueError("confirmed preview token does not match the current snapshot")
+    parent, snapshot, preview = _validated_preview(
+        resolved_forge, plan_path, confirm_token, parent_issue_number
+    )
     if _already_active_generation(preview, snapshot):
         result = _completed_result(preview)
         _audit_once(resolved_forge, parent, result)
         return result
     _assert_safe(preview)
+    _assert_parent_plan_size_within_limit(resolved_forge, parent, plan_path)
 
     root = Path(repo_root) if repo_root is not None else Path.cwd()
     template = Path(template_path).read_text(encoding="utf-8")
@@ -200,26 +257,22 @@ def apply_replan(
         resolved_forge, preview, plan_path, template, root, parent
     )
     degraded = _link_generations(resolved_forge, plan_path, parent, resolved)
-    retired: list[int] = []
-    for candidate in snapshot.retirement_candidates:
-        retirement = retire_replan_generation(
-            resolved_forge,
-            parent,
-            candidate,
-            preview.plan_revision,
-            replacement_issue_numbers=tuple(resolved.values()),
-        )
-        retired.append(retirement.issue_number)
-        degraded |= retirement.degraded
+    retired, retirement_degraded = _retire_candidates(
+        resolved_forge, parent, snapshot, preview, tuple(resolved.values())
+    )
+    degraded |= retirement_degraded
     result = ReplacementResult(
-        preview.plan_revision,
-        tuple(created),
-        tuple(reused),
-        tuple(retired),
-        degraded,
+        preview.plan_revision, tuple(created), tuple(reused), retired, degraded
     )
     _audit_once(resolved_forge, parent, result)
-    _switch_parent_plan(resolved_forge, parent, plan_path)
+    if not _switch_parent_plan(resolved_forge, parent, plan_path):
+        result = ReplacementResult(
+            result.plan_revision,
+            result.created_issue_numbers,
+            result.reused_issue_numbers,
+            result.retired_issue_numbers,
+            degraded=True,
+        )
     return result
 
 

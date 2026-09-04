@@ -153,7 +153,11 @@ class ReplanSnapshot:
             "merged_closing": self.merged_closing_issue_numbers,
             "conflicts": self.conflicts,
             "retirement_comments": self.retirement_comments,
-            "parent_comments": self.parent_comments,
+            "parent_comments": tuple(
+                comment
+                for comment in self.parent_comments
+                if "<!-- orchestune:replan" in comment
+            ),
         }
 
 
@@ -229,7 +233,11 @@ def collect_replan_snapshot(
         merged_closing,
         conflicts,
         retirement_comments,
-        _comment_bodies(forge, parent_issue_number),
+        tuple(
+            comment
+            for comment in _comment_bodies(forge, parent_issue_number)
+            if "<!-- orchestune:replan" in comment
+        ),
     )
 
 

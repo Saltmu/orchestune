@@ -456,3 +456,94 @@ def test_completed_generation_is_a_write_free_no_op(
     assert result.reused_issue_numbers == (100, 101)
     assert result.retired_issue_numbers == ()
     assert forge.mutations == []
+
+
+def test_apply_rejects_oversized_parent_plan_before_the_first_write(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    forge = FakeReplanForge()
+    plan_data = {
+        "title": "Old plan",
+        "parent_issue_number": PARENT,
+        "parent_issue_source": "adopted",
+        "subtasks": [{"id": "old-a", "description": "Old A", "issue_number": 10}],
+    }
+    oversized_prose = "x" * 65400 + "\n"
+    forge.issues[PARENT]["body"] = embed_decomposition_plan_in_parent_body(
+        oversized_prose, plan_data
+    )
+    token = preview_token(forge, plan)
+
+    with pytest.raises(ValueError, match="exceeds GitHub's size limit"):
+        apply_replan(
+            plan,
+            token,
+            forge=forge,
+            template_path=template,
+            repo_root=plan.parent,
+        )
+
+    assert forge.mutations == []
+
+
+def test_unrelated_parent_comments_do_not_invalidate_preview_token(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    forge = FakeReplanForge()
+    token = preview_token(forge, plan)
+
+    # An unrelated bot comment or notification is posted to the parent issue
+    forge.comments.setdefault(PARENT, []).append(
+        "<!-- orchestune:issue-notice --> Automated notification: branch rebased."
+    )
+
+    # apply_replan should succeed with the original token without raising stale token error!
+    result = apply_replan(
+        plan,
+        token,
+        forge=forge,
+        template_path=template,
+        repo_root=plan.parent,
+    )
+    assert result.created_issue_numbers == (100, 101)
+
+
+def test_switch_parent_plan_oversized_body_returns_degraded_without_raising(
+    replan_files: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import orchestune.replan.apply
+
+    plan, template = replan_files
+    forge = FakeReplanForge()
+    token = preview_token(forge, plan)
+
+    monkeypatch.setattr(
+        orchestune.replan.apply,
+        "_assert_parent_plan_size_within_limit",
+        lambda *args, **kwargs: None,
+    )
+    plan_data = {
+        "title": "Old plan",
+        "parent_issue_number": PARENT,
+        "parent_issue_source": "adopted",
+        "subtasks": [{"id": "old-a", "description": "Old A", "issue_number": 10}],
+    }
+    oversized_prose = "x" * 65400 + "\n"
+    forge.issues[PARENT]["body"] = embed_decomposition_plan_in_parent_body(
+        oversized_prose, plan_data
+    )
+
+    result = apply_replan(
+        plan,
+        token,
+        forge=forge,
+        template_path=template,
+        repo_root=plan.parent,
+    )
+
+    assert result.degraded is True
+    assert "over GitHub's 65536 character limit" in capsys.readouterr().err

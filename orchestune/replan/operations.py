@@ -155,6 +155,8 @@ def _ensure_retirement_comment(
     replacements: tuple[int, ...],
 ) -> None:
     marker = retirement_marker(revision)
+    # Deliberate check-immediately-before-write idempotency guard to prevent duplicate
+    # retirement comments if a retry or concurrent mutation happened since snapshot.
     if not comments_contain_marker(forge.list_comments(candidate.issue_number), marker):
         forge.add_comment(
             candidate.issue_number,
