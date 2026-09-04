@@ -82,7 +82,7 @@ def _apply(
         return EXIT_CONFIRMATION
     except Exception as error:
         print(
-            f"Error: replan partially applied; run a new preview before retrying: {error}",
+            f"Error: replan did not complete; run a new preview before retrying: {error}",
             file=sys.stderr,
         )
         return EXIT_PARTIAL

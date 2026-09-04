@@ -89,7 +89,7 @@ def test_apply_reports_partial_failure_with_distinct_exit_code(
         == 4
     )
 
-    assert "partially applied" in capsys.readouterr().err
+    assert "did not complete" in capsys.readouterr().err
 
 
 def test_apply_reports_noop_with_distinct_exit_code(
