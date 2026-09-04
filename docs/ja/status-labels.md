@@ -200,6 +200,31 @@ stateDiagram-v2
   （判定は`orchestune/dispatch/locks.py`の`scan_external_locks`）
 - 付与条件: タスクのfootprintが、Orchestune管理外のリモートブランチ・PRの
   変更ファイルと重なる場合（`status:done`のタスクは対象外）。
+  - ただし、**`status:blocked`のタスク自身**の直接の`depends_on`が指す
+    依存元タスクの正規ブランチ（`orchestune.branch_naming.build_task_branch_name`
+    が既定prefixで生成するブランチ名そのもの。`_build_pr_mappings`の
+    `subtask_branch_map`やスタッキング起動が実際に使うブランチと完全一致
+    する場合に限る）との重なりは対象外（[#796](https://github.com/Saltmu/orchestune/issues/796)）。
+    スタッキング（`_get_stack_eligible_tasks`）がbaseを割り当てるのは
+    `status:blocked`のタスクだけなので、`status:queued`のタスク（本来は
+    依存解決済みのはずだが、`QUEUED_WITH_UNRESOLVED_DEPENDENCIES`が
+    検知・修復する異常系として依存未解決のまま`status:queued`になり得る）
+    には適用しない。
+    スタッキング起動（`orchestune/dispatch/launch.py`の
+    `_get_stack_eligible_tasks`）は依存元ブランチをbaseに積むため、
+    その重なりは「Orchestune管理外の衝突」ではない。祖先依存（依存元の
+    さらに依存元）までは遡らない。見た目上は`issue-{N}-{subtask_id}`の
+    形状に一致していても、既定prefix以外のブランチ（人間や他エージェントが
+    独自prefixで作成したもの等）は対象外としない。依存元が既に`status:done`
+    または`status:not-needed`に到達している場合も対象外としない
+    （`_is_task_stack_eligible`はdoneな依存をスタックのbaseに選ばないため、
+    その時点でこのタスクは通常のparent/mainからそのまま起動され得る。
+    Integratorのマージが未完了で依存元PRの変更が実際にはbaseへ入っていない
+    場合、これは正真正銘の外部衝突であるため）。PRについては、headブランチ
+    名が依存元の正規ブランチと完全一致し、かつ同一リポジトリ由来（フォーク
+    でない）と確認できる場合に限って対象外とする（タイトル・本文中の`#N`言及や
+    `Closes`参照だけでは対象外にしない）。ブランチ名が一致しない、または
+    フォーク／出自不明のPRは、従来通り衝突として扱う（fail closed）。
 - 解除条件: 重なりが解消された場合。`status:done`に到達したタスクが
   まだロック中だった場合も解除する。解除時、`status:done`でなければ
   `status:queued`へ戻す。
