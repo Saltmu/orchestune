@@ -60,6 +60,21 @@ def test_preview_fails_closed_for_active_or_merged_old_issues() -> None:
     assert merged.decisions[-1].action == "manual-review"
 
 
+def test_preview_reports_a_missing_old_child_once() -> None:
+    snapshot = ReplanSnapshot(
+        parent_issue=_issue(693),
+        parent_plan_fingerprint="parent-plan",
+        retirement_candidates=(RetirementCandidate("old-a", 10),),
+        old_issues=(),
+        child_issues=(),
+        merged_closing_issue_numbers=(),
+    )
+
+    preview = build_replan_preview(_plan(), snapshot)
+
+    assert [item.action for item in preview.decisions] == ["create", "conflict"]
+
+
 def test_preview_recognizes_a_completed_matching_retirement_as_no_op() -> None:
     initial = build_replan_preview(
         _plan(), _snapshot(old=_issue(10, labels=("status:queued",)))

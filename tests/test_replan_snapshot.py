@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.replan.snapshot import collect_replan_snapshot
 
@@ -61,3 +63,14 @@ def test_snapshot_fails_closed_when_parent_plan_number_and_body_id_disagree() ->
     assert snapshot.conflicts == (
         "old Issue #10 declares subtask_id 'other', expected 'old-a'",
     )
+
+
+def test_snapshot_rejects_non_string_subtask_id_in_parent_plan() -> None:
+    parent = _issue(
+        693,
+        "<!-- orchestune:decomposition-plan -->\n```yaml\nsubtasks:\n"
+        "- id: 12\n  issue_number: 10\n```\n",
+    )
+
+    with pytest.raises(ValueError, match="invalid old subtask"):
+        collect_replan_snapshot(FakeForge(parent, [_issue(10)], []), 693)

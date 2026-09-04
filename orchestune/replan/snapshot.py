@@ -7,7 +7,10 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 
-from orchestune.issue_parsing import decomposition_plan_from_parent_body
+from orchestune.issue_parsing import (
+    _parse_footprint_block,
+    decomposition_plan_from_parent_body,
+)
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.replan.models import RetirementCandidate
 
@@ -38,9 +41,10 @@ def _old_candidates(parent: IssueRecord) -> tuple[RetirementCandidate, ...]:
         if not isinstance(entry, dict) or "issue_number" not in entry:
             continue
         try:
-            candidates.append(
-                RetirementCandidate(str(entry["id"]), entry["issue_number"])
-            )
+            subtask_id = entry["id"]
+            if not isinstance(subtask_id, str):
+                raise ValueError("subtask ID must be a string")
+            candidates.append(RetirementCandidate(subtask_id, entry["issue_number"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(
                 "parent decomposition plan has an invalid old subtask"
@@ -53,19 +57,7 @@ def _old_candidates(parent: IssueRecord) -> tuple[RetirementCandidate, ...]:
 def _body_subtask_id(issue: IssueRecord) -> str | None:
     """Read a Footprint subtask ID without treating malformed text as a match."""
 
-    import yaml
-
-    marker = "```yaml"
-    start = issue.body.find(marker)
-    if start < 0:
-        return None
-    end = issue.body.find("```", start + len(marker))
-    if end < 0:
-        return None
-    try:
-        value = yaml.safe_load(issue.body[start + len(marker) : end])
-    except yaml.YAMLError:
-        return None
+    value = _parse_footprint_block(issue.body)
     raw_id = value.get("subtask_id") if isinstance(value, dict) else None
     return raw_id if isinstance(raw_id, str) and raw_id.strip() else None
 
@@ -153,9 +145,6 @@ def collect_replan_snapshot(
     for candidate in candidates:
         issue = children_by_number.get(candidate.issue_number)
         if issue is None:
-            conflicts.append(
-                f"old Issue #{candidate.issue_number} is not a current child of the parent"
-            )
             continue
         body_id = _body_subtask_id(issue)
         if body_id is not None and body_id != candidate.subtask_id:

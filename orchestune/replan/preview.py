@@ -6,10 +6,10 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from orchestune import StatusLabel
+from orchestune import STATUS_LABEL_PREFIX, StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.replan.models import PlanGeneration, PlanRevision, ReplanPlan
-from orchestune.replan.plan import build_replacement_preview, compute_plan_revision
+from orchestune.replan.plan import compute_plan_revision
 from orchestune.replan.snapshot import ReplanSnapshot
 
 
@@ -66,6 +66,12 @@ def _new_generation_decision(
     )
 
 
+def _generations(
+    new_plan: ReplanPlan, revision: PlanRevision
+) -> tuple[PlanGeneration, ...]:
+    return tuple(PlanGeneration(revision, subtask.id) for subtask in new_plan.subtasks)
+
+
 def _closed_retirement_decision(
     issue: IssueRecord, status: str, subtask_id: str, revision: PlanRevision
 ) -> PreviewDecision:
@@ -117,7 +123,7 @@ def _old_generation_decision(
             "old Issue is absent from the parent children",
             issue_number,
         )
-    labels = {label for label in issue.labels if label.startswith("status:")}
+    labels = {label for label in issue.labels if label.startswith(STATUS_LABEL_PREFIX)}
     if len(labels) != 1:
         return PreviewDecision(
             "conflict",
@@ -143,12 +149,12 @@ def build_replan_preview(
 ) -> ReplanPreview:
     """Classify only generation creation/reuse and old-generation retirement."""
 
-    replacement = build_replacement_preview(new_plan, new_plan)
     revision = compute_plan_revision(new_plan)
+    generations = _generations(new_plan, revision)
     old_by_number = {issue.number: issue for issue in snapshot.old_issues}
     decisions = [
         _new_generation_decision(generation, snapshot.child_issues)
-        for generation in replacement.generations
+        for generation in generations
     ]
     decisions.extend(
         _old_generation_decision(
@@ -165,7 +171,7 @@ def build_replan_preview(
     )
     return ReplanPreview(
         revision,
-        replacement.generations,
+        generations,
         tuple(decisions),
         compute_preview_token(revision, snapshot),
     )
