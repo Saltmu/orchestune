@@ -147,10 +147,10 @@ def _extract_reason(raw: Any, result: str) -> str | None | object:
         return None if result != RESULT_BLOCKED else _INVALID
     if not isinstance(raw, str):
         return _INVALID
+    if result != RESULT_BLOCKED:
+        return raw if raw in VALID_REASONS else _INVALID
     sanitized = _sanitize_reason(raw)
-    if not sanitized and result == RESULT_BLOCKED:
-        return _INVALID
-    return sanitized or None
+    return sanitized if sanitized else _INVALID
 
 
 def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:

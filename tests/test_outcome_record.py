@@ -139,6 +139,30 @@ class TestParseFromCommentsFailClosed:
         parsed = parse_from_comments([{"body": record.render(), "created_at": "x"}])
         assert parsed == record
 
+    def test_non_blocked_with_unknown_reason_returns_none(self):
+        body_done = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            '{"result": "done", "issue": 1, "pr": 2, "reason": "unknown-reason"}\n```\n'
+        )
+        assert parse_from_comments([{"body": body_done, "created_at": "x"}]) is None
+        body_not_needed = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            '{"result": "not-needed", "issue": 1, "reason": "unknown-reason"}\n```\n'
+        )
+        assert (
+            parse_from_comments([{"body": body_not_needed, "created_at": "x"}]) is None
+        )
+
+    def test_non_blocked_with_valid_reason_is_accepted(self):
+        body = (
+            f"{OUTCOME_MARKER}\n```json\n"
+            '{"result": "not-needed", "issue": 1, "reason": "review-timeout"}\n```\n'
+        )
+        record = parse_from_comments([{"body": body, "created_at": "x"}])
+        assert record is not None
+        assert record.result == "not-needed"
+        assert record.reason == "review-timeout"
+
     def test_is_known_reason(self):
         from orchestune.outcome_record import (
             REASON_BASE_BRANCH_RED,

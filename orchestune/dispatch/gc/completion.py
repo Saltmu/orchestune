@@ -368,7 +368,9 @@ def _apply_escalated_base_branch_red(
     ctx: _CompletionContext, decision: CompletedWorktreeDecision
 ) -> None:
     attempt = (
-        decision.outcome.attempt if decision.outcome and decision.outcome.attempt else 3
+        decision.outcome.attempt
+        if decision.outcome and decision.outcome.attempt is not None
+        else 3
     )
     _apply_escalation(
         ctx.active,
@@ -620,17 +622,6 @@ def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
     return commit_sha
 
 
-def _handle_retry_or_escalate(
-    decision: CompletedWorktreeDecision,
-    retry_result: dict | None,
-    escalate_fn: Callable[[], None],
-) -> dict:
-    if retry_result is not None:
-        return retry_result
-    escalate_fn()
-    return {"subtask_id": decision.subtask_id, "commit_sha": decision.commit_sha}
-
-
 def _dispatch_terminal_or_blocked_action(
     ctx: _CompletionContext, decision: CompletedWorktreeDecision
 ) -> bool:
@@ -655,8 +646,8 @@ def _handle_special_retry(
 ) -> dict | None:
     action = decision.action
     if action == "completed_no_commits":
-        retry = (
-            _apply_early_death_retry(
+        if ctx.run_state is not None:
+            retry = _apply_early_death_retry(
                 ctx.active,
                 ctx.active_task,
                 ctx.config,
@@ -665,28 +656,19 @@ def _handle_special_retry(
                 ctx.open_prs,
                 ctx.on_early_death_requeue,
             )
-            if ctx.run_state is not None
-            else None
-        )
-        return _handle_retry_or_escalate(
-            decision, retry, lambda: _apply_no_commits_escalation(ctx)
-        )
-    if action == "blocked_review_timeout":
-        retry = (
-            _apply_review_timeout_retry(
-                ctx.active,
-                ctx.active_task,
-                ctx.config,
-                ctx.run_state,
-                ctx.now,
-                ctx.open_prs,
-                ctx.on_review_timeout_requeue,
-            )
-            if ctx.run_state is not None
-            else None
-        )
-        return _handle_retry_or_escalate(
-            decision, retry, lambda: _apply_escalated_review_timeout(ctx, decision)
+            if retry is not None:
+                return retry
+        _apply_no_commits_escalation(ctx)
+        return {"subtask_id": decision.subtask_id, "commit_sha": decision.commit_sha}
+    if action == "blocked_review_timeout" and ctx.run_state is not None:
+        return _apply_review_timeout_retry(
+            ctx.active,
+            ctx.active_task,
+            ctx.config,
+            ctx.run_state,
+            ctx.now,
+            ctx.open_prs,
+            ctx.on_review_timeout_requeue,
         )
     return None
 
