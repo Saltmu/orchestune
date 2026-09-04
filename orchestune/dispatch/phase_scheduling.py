@@ -134,12 +134,20 @@ def _external_lock_skips(
     いるタスクまで「外部ロックで見送った候補」として報告してしまう。
     `to_lock`は必ず`conflicts`に含まれる（`scan_external_locks`参照）。
     """
+    running = {
+        active.issue_number for active in ctx.run_state.active_worktrees.values()
+    }
     return [
         _skip_record(
             task, REASON_EXTERNAL_LOCK, _conflict_detail(lock_result, issue_number)
         )
         for issue_number in sorted(lock_result.conflicts)
         if (task := ctx.tasks_by_issue.get(issue_number)) is not None
+        # PR#789レビュー対応(Codex P2): 実行中のタスクは起動候補ではない。
+        # `scan_external_locks`はdone/not-neededしか除外しないため、実行中の
+        # タスクが外部ブランチと重なると「見送った候補」として報告されてしまう。
+        and issue_number not in running
+        and StatusLabel.IN_PROGRESS not in task.status_labels
     ]
 
 

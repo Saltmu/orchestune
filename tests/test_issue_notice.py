@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from orchestune.issue_notice import (
+    NoticeOutcome,
     latest_notice_body,
     notice_marker,
     post_notice_if_changed,
@@ -62,13 +63,19 @@ class TestLatestNoticeBody:
 class TestPostNoticeIfChanged:
     def test_posts_when_no_prior_notice(self):
         forge = FakeForge()
-        assert post_notice_if_changed(forge, 1, "external-lock", "理由A") is True
+        assert (
+            post_notice_if_changed(forge, 1, "external-lock", "理由A")
+            is NoticeOutcome.POSTED
+        )
         assert latest_notice_body(forge.list_comments(1), "external-lock") == "理由A"
 
     def test_skips_when_body_is_unchanged(self):
         forge = FakeForge()
         post_notice_if_changed(forge, 1, "external-lock", "理由A")
-        assert post_notice_if_changed(forge, 1, "external-lock", "理由A") is False
+        assert (
+            post_notice_if_changed(forge, 1, "external-lock", "理由A")
+            is NoticeOutcome.UNCHANGED
+        )
         assert len(forge.list_comments(1)) == 1
 
     def test_reposts_when_body_changed(self):
@@ -76,26 +83,38 @@ class TestPostNoticeIfChanged:
         ならないよう再投稿する。"""
         forge = FakeForge()
         post_notice_if_changed(forge, 1, "external-lock", "理由A")
-        assert post_notice_if_changed(forge, 1, "external-lock", "理由B") is True
+        assert (
+            post_notice_if_changed(forge, 1, "external-lock", "理由B")
+            is NoticeOutcome.POSTED
+        )
         assert len(forge.list_comments(1)) == 2
         assert latest_notice_body(forge.list_comments(1), "external-lock") == "理由B"
 
     def test_kinds_are_deduplicated_independently(self):
         forge = FakeForge()
         post_notice_if_changed(forge, 1, "external-lock", "同じ本文")
-        assert post_notice_if_changed(forge, 1, "other-kind", "同じ本文") is True
+        assert (
+            post_notice_if_changed(forge, 1, "other-kind", "同じ本文")
+            is NoticeOutcome.POSTED
+        )
         assert len(forge.list_comments(1)) == 2
 
     def test_fails_closed_when_comments_cannot_be_read(self, capsys):
         """既存コメントを読めないまま投稿すると多重投稿になるため見送る。"""
         forge = _RaisingListComments()
-        assert post_notice_if_changed(forge, 1, "external-lock", "理由A") is False
+        assert (
+            post_notice_if_changed(forge, 1, "external-lock", "理由A")
+            is NoticeOutcome.FAILED
+        )
         assert forge.comments == {}
         assert "[orchestune:warn]" in capsys.readouterr().err
 
     def test_reports_failure_to_post(self, capsys):
         forge = _RaisingAddComment()
-        assert post_notice_if_changed(forge, 1, "external-lock", "理由A") is False
+        assert (
+            post_notice_if_changed(forge, 1, "external-lock", "理由A")
+            is NoticeOutcome.FAILED
+        )
         assert "[orchestune:warn]" in capsys.readouterr().err
 
     @pytest.mark.parametrize(
@@ -117,7 +136,7 @@ class TestUpdateOnlyNotices:
             post_notice_if_changed(
                 forge, 1, "external-lock", "解除しました", update_only=True
             )
-            is False
+            is NoticeOutcome.NO_PRIOR_NOTICE
         )
         assert forge.comments == {}
 
@@ -128,9 +147,19 @@ class TestUpdateOnlyNotices:
             post_notice_if_changed(
                 forge, 1, "external-lock", "解除しました", update_only=True
             )
-            is True
+            is NoticeOutcome.POSTED
         )
         assert (
             latest_notice_body(forge.list_comments(1), "external-lock")
             == "解除しました"
         )
+
+
+class TestNoticeOutcome:
+    """PR#789レビュー(Codex P2): 「書く必要が無かった」と「書けなかった」を区別する。"""
+
+    def test_only_failures_are_unsettled(self):
+        assert NoticeOutcome.POSTED.settled
+        assert NoticeOutcome.UNCHANGED.settled
+        assert NoticeOutcome.NO_PRIOR_NOTICE.settled
+        assert not NoticeOutcome.FAILED.settled

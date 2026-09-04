@@ -577,3 +577,84 @@ class TestExternalLockNotice:
         body = fake_forge.add_comment.call_args.args[1]
         assert "2" in body
         assert "feat/a" not in body
+
+
+class TestExternalLockReleaseNoticeRetry:
+    """PR#789レビュー(Codex P2): 解除通知が一度失われても次サイクルで書き直す。
+
+    ラベルは通知より先に外れるため、投稿に失敗したタスクは次サイクルの
+    `to_unlock`には現れない。再試行キューが無いと、Issue上の最後の通知が
+    「ロック中」のまま永久に取り残される。
+    """
+
+    def _config(self, tmp_path):
+        return DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+
+    def test_failed_release_notice_is_queued_for_retry(self, tmp_path, fake_forge):
+        task = _task(status_labels=("status:queued", "status:external-lock"))
+        run_state = RunState()
+        fake_forge.list_comments.side_effect = RuntimeError("504 Gateway Timeout")
+
+        _apply_external_lock_sync(
+            ExternalLockScanResult(to_lock=[], to_unlock=[task]),
+            self._config(tmp_path),
+            run_state,
+        )
+
+        assert run_state.pending_lock_release_notices == [1]
+
+    def test_queued_release_notice_is_retried_without_the_task_in_to_unlock(
+        self, tmp_path, fake_forge
+    ):
+        run_state = RunState(pending_lock_release_notices=[1])
+        fake_forge.list_comments.return_value = [
+            {"body": render_notice("external-lock", "ロック中です")}
+        ]
+
+        _apply_external_lock_sync(
+            ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            self._config(tmp_path),
+            run_state,
+        )
+
+        assert fake_forge.add_comment.call_args.args[0] == 1
+        assert run_state.pending_lock_release_notices == []
+
+    def test_issue_without_a_prior_notice_leaves_the_queue(self, tmp_path, fake_forge):
+        """通知そのものが無いIssueは書く必要がない。永久に再試行しない。"""
+        run_state = RunState(pending_lock_release_notices=[1])
+        fake_forge.list_comments.return_value = []
+
+        _apply_external_lock_sync(
+            ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            self._config(tmp_path),
+            run_state,
+        )
+
+        fake_forge.add_comment.assert_not_called()
+        assert run_state.pending_lock_release_notices == []
+
+    def test_relocked_task_drops_out_of_the_queue(self, tmp_path, fake_forge):
+        """再ロックされたタスクはロック理由の通知で本文が上書きされる。"""
+        task = _task(status_labels=("status:queued",))
+        run_state = RunState(pending_lock_release_notices=[1])
+        fake_forge.list_comments.return_value = []
+
+        _apply_external_lock_sync(
+            ExternalLockScanResult(
+                to_lock=[task],
+                to_unlock=[],
+                conflicts={
+                    1: (
+                        ExternalLockConflict(
+                            kind="branch", source="feat/x", files=("a.py",)
+                        ),
+                    )
+                },
+            ),
+            self._config(tmp_path),
+            run_state,
+        )
+
+        assert run_state.pending_lock_release_notices == []
+        assert "ロック中" in fake_forge.add_comment.call_args.args[1]

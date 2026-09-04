@@ -11,7 +11,7 @@ from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,
@@ -260,3 +260,72 @@ class TestExternalLockSkipScope:
             (695, REASON_EXTERNAL_LOCK)
         ]
         assert skips[0].detail == "feat/x [tests/conftest.py]"
+
+
+class TestInProgressTasksAreNotSkipCandidates:
+    """PR#789レビュー(Codex P2): 実行中のタスクは起動候補ではない。"""
+
+    def _locked_issues(self, number):
+        return IssuesByStatus(
+            queued=[],
+            locked=[_issue(number, labels=("status:external-lock",))],
+            in_progress=[],
+            blocked=[],
+            done=[],
+            not_needed=[],
+        )
+
+    def _conflicts(self, number):
+        return {
+            number: (
+                ExternalLockConflict(kind="branch", source="feat/x", files=("a.py",)),
+            )
+        }
+
+    def test_in_progress_label_excludes_the_task(self, fake_forge):
+        task = _task(
+            issue_number=5,
+            status_labels=("status:in-progress", "status:external-lock"),
+        )
+
+        _, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={5: task}),
+            self._locked_issues(5),
+            ExternalLockScanResult(
+                to_lock=[], to_unlock=[], conflicts=self._conflicts(5)
+            ),
+            set(),
+            False,
+            now=0.0,
+        )
+
+        assert skips == []
+
+    def test_active_worktree_excludes_the_task(self, fake_forge):
+        """ラベルの反映が遅れていても、run_stateに実行記録があれば除外する。"""
+        task = _task(issue_number=5, status_labels=("status:external-lock",))
+        run_state = RunState(
+            active_worktrees={
+                "5": ActiveWorktree(
+                    issue_number=5,
+                    branch="claude/issue-5-task-a",
+                    worktree_path="worktrees/w5",
+                    pid=1,
+                    started_at=1.0,
+                    declared_footprint=(),
+                )
+            }
+        )
+
+        _, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={5: task}, run_state=run_state),
+            self._locked_issues(5),
+            ExternalLockScanResult(
+                to_lock=[], to_unlock=[], conflicts=self._conflicts(5)
+            ),
+            set(),
+            False,
+            now=0.0,
+        )
+
+        assert skips == []

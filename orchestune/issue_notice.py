@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterable, Mapping
+from enum import StrEnum
 from typing import Any
 
 from orchestune.forge import Forge
@@ -32,6 +33,29 @@ from orchestune.models import normalize_newlines
 #: stderrへ出す警告の接頭辞。`local-ci.ps1`を使うWindows(cp932)でも壊れない
 #: よう、この経路には非ASCII文字を出さない。
 WARN_PREFIX = "[orchestune:warn]"
+
+
+class NoticeOutcome(StrEnum):
+    """通知1件の結果。
+
+    PR#789レビュー対応(Codex P2): 「投稿しなかった」を真偽値1つで表すと、
+    通知が既に望む状態にある（同じ本文がある・書く必要がない）ことと、API障害で
+    書けなかったことが区別できない。呼び出し側が再試行の要否を判断できるよう、
+    結果を明示的な値にする。
+    """
+
+    POSTED = "posted"
+    #: 直近の通知が同じ本文だったため何もしなかった。
+    UNCHANGED = "unchanged"
+    #: `update_only`指定で、そもそも通知の無いIssueだったため何もしなかった。
+    NO_PRIOR_NOTICE = "no-prior-notice"
+    #: API障害で確認・投稿ができなかった。呼び出し側は次サイクルで再試行できる。
+    FAILED = "failed"
+
+    @property
+    def settled(self) -> bool:
+        """Issue上の通知が望む状態になったか（＝再試行が不要か）。"""
+        return self is not NoticeOutcome.FAILED
 
 
 def notice_marker(kind: str) -> str:
@@ -65,8 +89,8 @@ def post_notice_if_changed(
     body: str,
     *,
     update_only: bool = False,
-) -> bool:
-    """理由が前回と変わっている場合だけ通知を投稿し、投稿したかどうかを返す。
+) -> NoticeOutcome:
+    """理由が前回と変わっている場合だけ通知を投稿し、その結果を返す。
 
     既存コメントを読めなかった場合はfail closed（投稿しない）で次サイクルの
     再試行に委ねる。読めないまま投稿すると、サイクルのたびに同じ理由を
@@ -83,12 +107,12 @@ def post_notice_if_changed(
             f"skipped the '{kind}' notice on issue #{issue_number}: "
             f"could not read existing comments ({type(error).__name__})"
         )
-        return False
+        return NoticeOutcome.FAILED
 
     if update_only and previous is None:
-        return False
+        return NoticeOutcome.NO_PRIOR_NOTICE
     if previous == normalize_newlines(body):
-        return False
+        return NoticeOutcome.UNCHANGED
 
     try:
         forge.add_comment(issue_number, render_notice(kind, body))
@@ -97,5 +121,5 @@ def post_notice_if_changed(
             f"failed to post the '{kind}' notice on issue #{issue_number} "
             f"({type(error).__name__})"
         )
-        return False
-    return True
+        return NoticeOutcome.FAILED
+    return NoticeOutcome.POSTED

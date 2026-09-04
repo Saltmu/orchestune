@@ -1,6 +1,7 @@
 import json
 
 from orchestune.dispatch.state import (
+    MAX_PENDING_LOCK_RELEASE_NOTICES,
     ActiveWorktree,
     CompletedWorktree,
     RunState,
@@ -704,3 +705,40 @@ class TestTaskReclaimCounts:
         pruned = prune_run_state(state, now=now)
 
         assert len(pruned.task_reclaim_counts) == 1_000
+
+
+class TestPendingLockReleaseNotices:
+    """#787: 解除通知の再試行キューの永続化と、壊れた値への耐性。"""
+
+    def test_round_trips_through_run_state_json(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        save_run_state(RunState(pending_lock_release_notices=[695, 696]), path)
+        assert load_run_state(path).pending_lock_release_notices == [695, 696]
+
+    def test_missing_field_loads_as_empty(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(json.dumps({"active_worktrees": {}}), encoding="utf-8")
+        assert load_run_state(path).pending_lock_release_notices == []
+
+    def test_corrupt_entries_are_dropped(self, tmp_path):
+        """通知を書き直す機会を失うだけで、ディスパッチの判断には影響しない。"""
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "pending_lock_release_notices": [1, "x", True, -3, 0, 1, 2],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_run_state(path).pending_lock_release_notices == [1, 2]
+
+    def test_queue_is_bounded(self, tmp_path):
+        """クローズされたIssue等で永久に投稿できない記録が溜まっても膨らまない。"""
+        path = tmp_path / "run_state.json"
+        oversized = list(range(1, MAX_PENDING_LOCK_RELEASE_NOTICES + 51))
+        save_run_state(RunState(pending_lock_release_notices=oversized), path)
+        restored = load_run_state(path).pending_lock_release_notices
+        assert len(restored) == MAX_PENDING_LOCK_RELEASE_NOTICES
+        assert restored[-1] == oversized[-1]
