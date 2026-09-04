@@ -10,6 +10,7 @@ from typing import Protocol
 from orchestune.issue_parsing import (
     _parse_footprint_block,
     decomposition_plan_from_parent_body,
+    find_children_by_parent,
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.replan.models import RetirementCandidate
@@ -73,6 +74,8 @@ class ReplanSnapshot:
     child_issues: tuple[IssueRecord, ...]
     merged_closing_issue_numbers: tuple[int, ...]
     conflicts: tuple[str, ...] = ()
+    retirement_comments: tuple[tuple[int, tuple[str, ...]], ...] = ()
+    parent_comments: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -96,6 +99,25 @@ class ReplanSnapshot:
             tuple(sorted(set(self.merged_closing_issue_numbers))),
         )
         object.__setattr__(self, "conflicts", tuple(sorted(set(self.conflicts))))
+        object.__setattr__(
+            self,
+            "retirement_comments",
+            tuple(
+                sorted(
+                    (
+                        number,
+                        tuple(sorted(set(comments))),
+                    )
+                    for number, comments in self.retirement_comments
+                )
+            ),
+        )
+        object.__setattr__(
+            self, "parent_comments", tuple(sorted(set(self.parent_comments)))
+        )
+
+    def comments_for(self, issue_number: int) -> tuple[str, ...]:
+        return dict(self.retirement_comments).get(issue_number, ())
 
     def state_fingerprint(self) -> dict[str, object]:
         """Return the complete normalized state that guards preview confirmation."""
@@ -108,6 +130,10 @@ class ReplanSnapshot:
                     "body": issue.body,
                     "labels": sorted(issue.labels),
                     "state": issue.state,
+                    "parent": (
+                        issue.parent.get("number") if issue.parent is not None else None
+                    ),
+                    "blocked_by": sorted(issue.blocked_by),
                 }
                 for issue in self.old_issues
             ],
@@ -117,12 +143,57 @@ class ReplanSnapshot:
                     "body": issue.body,
                     "labels": sorted(issue.labels),
                     "state": issue.state,
+                    "parent": (
+                        issue.parent.get("number") if issue.parent is not None else None
+                    ),
+                    "blocked_by": sorted(issue.blocked_by),
                 }
                 for issue in self.child_issues
             ],
             "merged_closing": self.merged_closing_issue_numbers,
             "conflicts": self.conflicts,
+            "retirement_comments": self.retirement_comments,
+            "parent_comments": tuple(
+                comment
+                for comment in self.parent_comments
+                if "<!-- orchestune:replan" in comment
+            ),
         }
+
+
+def _comment_bodies(forge: ReplanSnapshotForge, issue_number: int) -> tuple[str, ...]:
+    list_comments = getattr(forge, "list_comments", None)
+    if not callable(list_comments):
+        return ()
+    try:
+        comments = list_comments(issue_number)
+    except NotImplementedError:
+        return ()
+    return tuple(
+        str(comment.get("body", ""))
+        for comment in comments
+        if isinstance(comment, dict)
+    )
+
+
+def _old_issues_and_conflicts(
+    candidates: tuple[RetirementCandidate, ...],
+    children: tuple[IssueRecord, ...],
+) -> tuple[tuple[IssueRecord, ...], tuple[str, ...]]:
+    children_by_number = {issue.number: issue for issue in children}
+    old_issues = tuple(
+        children_by_number[number]
+        for number in (item.issue_number for item in candidates)
+        if number in children_by_number
+    )
+    conflicts = tuple(
+        f"old Issue #{issue.number} declares subtask_id {body_id!r}, expected {candidate.subtask_id!r}"
+        for candidate in candidates
+        if (issue := children_by_number.get(candidate.issue_number)) is not None
+        if (body_id := _body_subtask_id(issue)) is not None
+        if body_id != candidate.subtask_id
+    )
+    return old_issues, conflicts
 
 
 def collect_replan_snapshot(
@@ -134,23 +205,8 @@ def collect_replan_snapshot(
     if parent is None:
         raise ValueError(f"parent Issue #{parent_issue_number} was not found")
     candidates = _old_candidates(parent)
-    children = tuple(forge.list_sub_issues(parent_issue_number))
-    children_by_number = {issue.number: issue for issue in children}
-    old_issues = tuple(
-        children_by_number[number]
-        for number in (item.issue_number for item in candidates)
-        if number in children_by_number
-    )
-    conflicts: list[str] = []
-    for candidate in candidates:
-        issue = children_by_number.get(candidate.issue_number)
-        if issue is None:
-            continue
-        body_id = _body_subtask_id(issue)
-        if body_id is not None and body_id != candidate.subtask_id:
-            conflicts.append(
-                f"old Issue #{issue.number} declares subtask_id {body_id!r}, expected {candidate.subtask_id!r}"
-            )
+    children = tuple(find_children_by_parent(forge, parent_issue_number).issues)  # type: ignore[arg-type]
+    old_issues, conflicts = _old_issues_and_conflicts(candidates, children)
     merged = forge.list_prs(state="merged")
     old_numbers = {item.issue_number for item in candidates}
     merged_closing = tuple(
@@ -164,6 +220,10 @@ def collect_replan_snapshot(
         )
     )
     plan = decomposition_plan_from_parent_body(parent.body)
+    retirement_comments = tuple(
+        (candidate.issue_number, _comment_bodies(forge, candidate.issue_number))
+        for candidate in candidates
+    )
     return ReplanSnapshot(
         parent,
         _stable_fingerprint(plan),
@@ -171,7 +231,13 @@ def collect_replan_snapshot(
         old_issues,
         children,
         merged_closing,
-        tuple(conflicts),
+        conflicts,
+        retirement_comments,
+        tuple(
+            comment
+            for comment in _comment_bodies(forge, parent_issue_number)
+            if "<!-- orchestune:replan" in comment
+        ),
     )
 
 

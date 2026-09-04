@@ -56,6 +56,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.steps",
             "integrator.types",
             "provisioning.flow",
+            "replan.apply",
         }
     ),
     2: frozenset(
@@ -117,6 +118,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "provisioning.plan_loading",
             "provisioning.rendering",
             "provisioning.subtasks",
+            "replan.audit",
+            "replan.operations",
             "replan.plan",
             "replan.preview",
             "replan.snapshot",
