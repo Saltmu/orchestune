@@ -246,23 +246,23 @@ class TestFindChildrenByParent:
 
         assert [r.number for r in result.issues] == [101]
 
-    def test_excludes_epic_issues_from_children(self):
-        """EPICマーカーを持つ親Issueがmetadata検索でヒットした場合、
-        子Issueとして扱われてはならない。"""
+    def test_retains_nested_epic_child_issues(self):
+        """別親配下の子IssueでありながらEPICとして採用されたネストされた子Issueは、
+        親Issue自身でない限りmetadata検索でも除外されずに保持されなければならない。"""
         native = [_issue(101, 100)]
-        epic_candidate = IssueRecord(
+        nested_epic_candidate = IssueRecord(
             number=200,
-            title="[EPIC] Another Epic",
+            title="[EPIC] Nested Epic Child",
             body=f"{PARENT_MARKER}\n```yaml\nparent_issue_number: 100\n```\n",
             labels=(),
             created_at="2026-01-01T00:00:00Z",
             state="OPEN",
         )
-        forge = _MetadataAwareForge(native, [epic_candidate])
+        forge = _MetadataAwareForge(native, [nested_epic_candidate])
 
         result = find_children_by_parent(forge, 100)
 
-        assert [r.number for r in result.issues] == [101]
+        assert sorted(r.number for r in result.issues) == [101, 200]
 
 
 class TestEffectiveParentNumber:

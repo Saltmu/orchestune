@@ -522,15 +522,14 @@ def find_children_by_parent(
     # #802: 親Issue自身（EPIC Issue本文にparent_issue_numberが記録されている）
     # がmetadata検索でヒットした場合、自分自身が子Issueとして採択されてしまい、
     # open_childrenに親Issue自身が残って最終PR作成が永久にブロックされる。
-    # 親Issue自身（candidate.number == target_number）およびEPIC Issueは
-    # 子Issueから確実に除外する。
+    # 親Issue自身（candidate.number == target_number）を子Issueから確実に除外する。
+    # ネストされたEPIC子Issue（別Issueの子かつ自身も親であるIssue）は除外しない。
     target_number = int(parent_issue_number)
     extra: list[IssueRecord] = [
         candidate
         for candidate in candidates
         if candidate.number not in seen
         and candidate.number != target_number
-        and not is_epic_issue(candidate)
         and effective_parent_number(candidate) == target_number
     ]
     return ChildDiscoveryResult(issues=native + extra, metadata_search_supported=True)
