@@ -63,6 +63,10 @@ PADDED_ID_PLAN_TEXT = PLAN_TEXT.replace("  - id: task-", '  - id: " task-').repl
 EMPTY_ISSUE_NUMBER_PLAN_TEXT = PLAN_TEXT.replace(
     "issue_number: null", "issue_number: ''"
 )
+# A plan still carrying the Issue numbers of an interrupted earlier apply.
+STALE_ISSUE_NUMBER_PLAN_TEXT = PLAN_TEXT.replace(
+    "issue_number: null", "issue_number: 1", 1
+).replace("issue_number: null", "issue_number: 2", 1)
 TEMPLATE = """\
 # [FEAT] {{subtask_id}}: {{description}}
 
@@ -503,10 +507,9 @@ def _parent_body_projecting_to(
     plan_data, _ = extract_frontmatter_and_body(plan.read_text(encoding="utf-8"))
     assigned = list(numbers)
     for subtask in plan_data["subtasks"]:
-        if subtask["issue_number"] in (None, ""):
-            subtask["issue_number"] = (
-                assigned.pop(0) if assigned else PROJECTED_ISSUE_NUMBER
-            )
+        subtask["issue_number"] = (
+            assigned.pop(0) if assigned else PROJECTED_ISSUE_NUMBER
+        )
 
     def build(prose_length: int) -> tuple[str, str]:
         body = embed_decomposition_plan_in_parent_body(
@@ -556,6 +559,34 @@ def test_apply_rejects_an_empty_issue_number_plan_before_the_first_write(
     plan.write_text(EMPTY_ISSUE_NUMBER_PLAN_TEXT, encoding="utf-8")
     forge = FakeReplanForge()
     # Sized so that only the assigned numbers, not the empty scalars, overflow.
+    forge.issues[PARENT]["body"] = _parent_body_projecting_to(
+        plan, GITHUB_ISSUE_BODY_LIMIT + 1, numbers=(100, 101)
+    )
+    parent_body = forge.issues[PARENT]["body"]
+
+    with pytest.raises(ValueError, match="over GitHub's 65536 character limit"):
+        apply_replan(
+            plan,
+            preview_token(forge, plan),
+            forge=forge,
+            template_path=template,
+            repo_root=plan.parent,
+        )
+
+    assert forge.mutations == []
+    assert forge.issues[PARENT]["body"] == parent_body
+    assert forge.issues[10]["state"] == "OPEN"
+
+
+def test_apply_rejects_a_stale_issue_number_plan_before_the_first_write(
+    replan_files: tuple[Path, Path],
+) -> None:
+    """Apply rewrites every subtask number, so a stale one must not shrink the projection."""
+
+    plan, template = replan_files
+    plan.write_text(STALE_ISSUE_NUMBER_PLAN_TEXT, encoding="utf-8")
+    forge = FakeReplanForge()
+    # Sized so that only the numbers apply will write back, not the stale ones, overflow.
     forge.issues[PARENT]["body"] = _parent_body_projecting_to(
         plan, GITHUB_ISSUE_BODY_LIMIT + 1, numbers=(100, 101)
     )

@@ -36,10 +36,6 @@ from orchestune.validation import validate_issue_number
 #: yet, so the projected parent body never underestimates the real one.
 PROJECTED_ISSUE_NUMBER = 10**10 - 1
 
-#: Values that plan loading treats as an unassigned Issue number and that apply
-#: therefore fills in (see `orchestune.provisioning.plan_loading.load_plan`).
-_UNRESOLVED_ISSUE_NUMBERS = (None, "")
-
 
 class ReplanApplyForge(ReplanOperationForge, ReplanSnapshotForge, Protocol):
     def update_issue_body(self, issue_number: int | str, body: str) -> None: ...
@@ -101,15 +97,18 @@ def _assert_safe(preview: ReplanPreview) -> None:
 def _projected_plan_data(
     plan_path: str | Path, resolved: Mapping[str, int | None]
 ) -> dict:
-    """Read the plan as it will look once apply has assigned every Issue number."""
+    """Read the plan as it will look once apply has assigned every Issue number.
+
+    `create_replan_generation()` writes back the decided number for every subtask,
+    so any number already in the file is projected away, and a subtask that is
+    still to be created is projected at its widest possible number.
+    """
 
     projected, _ = extract_frontmatter_and_body(
         Path(plan_path).read_text(encoding="utf-8")
     )
     for subtask in projected.get("subtasks") or ():
         if not isinstance(subtask, dict):
-            continue
-        if subtask.get("issue_number") not in _UNRESOLVED_ISSUE_NUMBERS:
             continue
         number = resolved.get(str(subtask.get("id")).strip())
         subtask["issue_number"] = PROJECTED_ISSUE_NUMBER if number is None else number
