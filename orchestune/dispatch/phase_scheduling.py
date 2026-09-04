@@ -142,6 +142,7 @@ def _external_lock_skips(
 def _queued_drop_skips(
     ctx: CycleContext,
     issues: IssuesByStatus,
+    lock_result: ExternalLockScanResult,
     survivors: list[Task],
     now: float,
 ) -> list[SkipRecord]:
@@ -149,8 +150,14 @@ def _queued_drop_skips(
 
     `status:done` / `status:in-progress`のタスクは「起動されなかった」とは
     言えないため要約には載せない。
+
+    PR#789レビュー対応(Codex P2): 新規ロックされたタスクも`_filter_queued_candidates`
+    から外れるが、その理由は`_external_lock_skips`が衝突の詳細付きで既に記録して
+    いる。ここで拾うと「actor権限の未確認で落ちた」という誤った記録がJSONレポートと
+    events.jsonlに残る。
     """
     survivor_numbers = {task.issue_number for task in survivors}
+    survivor_numbers |= {task.issue_number for task in lock_result.to_lock}
     skips = []
     for issue in issues.queued:
         task = ctx.tasks_by_issue.get(issue.number)
@@ -171,6 +178,15 @@ def _queued_drop_skips(
 def _dependency_skips(
     ctx: CycleContext, issues: IssuesByStatus, stack_eligible: list[Task]
 ) -> list[SkipRecord]:
+    """未解決の依存を実際に持つ`status:blocked`タスクだけを依存待ちとして記録する。
+
+    PR#789レビュー対応(Codex P2): `status:blocked`は依存待ち以外の経路でも付く
+    （base-branch-redの保留は`gc.completion`が、ブランチ名不正等の起動失敗は
+    `launch`が付ける）。それらを一律に「依存タスク未完了」と報告すると、待って
+    いる相手が空欄のまま診断を誤らせる。依存が全て解決済みなのに`status:blocked`
+    が残っている状態自体は、consistency kernelの
+    `status.blocked-with-resolved-dependencies`が扱う関心事である。
+    """
     eligible = {task.issue_number for task in stack_eligible}
     resolved = ctx.done_subtask_ids
     skips = []
@@ -184,8 +200,11 @@ def _dependency_skips(
             if dep not in resolved
             and (number := ctx.issue_number_by_subtask_id.get(dep)) is not None
         ]
-        detail = f"waiting: {', '.join(waiting)}" if waiting else ""
-        skips.append(_skip_record(task, REASON_DEPENDENCY, detail))
+        if not waiting:
+            continue
+        skips.append(
+            _skip_record(task, REASON_DEPENDENCY, f"waiting: {', '.join(waiting)}")
+        )
     return skips
 
 
@@ -237,7 +256,7 @@ def _determine_candidate_tasks(
     )
     skips = [
         *_external_lock_skips(ctx, issues, lock_result),
-        *_queued_drop_skips(ctx, issues, queued_candidates, now),
+        *_queued_drop_skips(ctx, issues, lock_result, queued_candidates, now),
         *_dependency_skips(ctx, issues, stack_eligible_tasks),
     ]
 

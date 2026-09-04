@@ -156,3 +156,16 @@ class TestSkipRecordToDict:
             "reason": REASON_EXTERNAL_LOCK,
             "detail": "feat/x",
         }
+
+
+class TestMergeSkipsPrecedence:
+    """PR#789レビュー(Codex P2): 同一Issueに複数の記録が来たときの優先順。"""
+
+    def test_keeps_the_first_record_for_an_issue(self):
+        """並びの先頭ほど具体的な理由（外部ロックの衝突詳細など）が来る。
+        後勝ちにすると、詳細を持つ記録が詳細なしの記録で潰される。"""
+        detailed = _skip(1, REASON_EXTERNAL_LOCK, "feat/x [a.py]")
+        vague = SkipRecord(
+            issue_number=1, subtask_id="task-1", reason="actor-unverified"
+        )
+        assert merge_skips([detailed, vague]) == [detailed]

@@ -75,6 +75,9 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
         "skips": [skip_record_to_dict(record) for record in report.skips],
+        # PR#789レビュー対応(Codex P2): events.jsonlを歴史的成果物として保持する
+        # 運用でも、衝突相手のブランチ/PRと衝突ファイルを後から特定できるようにする。
+        "external_lock_conflicts": report.external_lock_conflicts,
         "forge_warnings": report.forge_warnings,
         "consistency": consistency_cycle_to_dict(report.consistency),
     }

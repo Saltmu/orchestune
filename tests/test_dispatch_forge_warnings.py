@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc import _completion_forge_error_hold
 from orchestune.dispatch.gc.completion import (
+    CompletedWorktreeDecision,
+    _apply_completed_worktree_outcome,
     _cloud_worktree_completion_status,
+    _decide_completed_worktree_outcome,
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )
@@ -117,3 +120,47 @@ class TestCompletionForgeErrorHold:
     def test_operation_and_error_are_optional(self, tmp_path):
         outcome = _completion_forge_error_hold(_active(tmp_path))
         assert outcome.completion_event["action"] == "completion_skipped_forge_error"
+
+
+class TestCompletedWorktreeDecisionCarriesForgeError:
+    """PR#789レビュー(Codex P2): stderrが失われた後も、保存されたレポートから
+    どのForge呼び出しがなぜ失敗したのかを特定できるようにする。"""
+
+    def test_comment_fetch_failure_reaches_the_completion_event(self, tmp_path):
+        forge = MagicMock()
+        forge.list_comments.side_effect = RuntimeError("502 Bad Gateway")
+        worktree = tmp_path / "w1"
+        worktree.mkdir()
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=True,
+            ),
+        ):
+            decision = _decide_completed_worktree_outcome(
+                _active(tmp_path, worktree_path=str(worktree)), None, forge=forge
+            )
+
+        assert decision.action == "completion_skipped_forge_error"
+        assert decision.operation == "list_comments"
+        assert decision.error == "RuntimeError: 502 Bad Gateway"
+
+    def test_event_renders_the_operation_and_error(self, tmp_path):
+        config = _config(tmp_path, MagicMock())
+        event = _apply_completed_worktree_outcome(
+            _active(tmp_path),
+            CompletedWorktreeDecision(
+                action="completion_skipped_forge_error",
+                operation="list_comments",
+                error="RuntimeError: 502 Bad Gateway",
+            ),
+            config,
+        )
+
+        assert event["operation"] == "list_comments"
+        assert event["error"] == "RuntimeError: 502 Bad Gateway"

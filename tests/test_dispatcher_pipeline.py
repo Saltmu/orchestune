@@ -893,3 +893,34 @@ class TestEmitHumanSummary:
         captured = capsys.readouterr()
         json.loads(captured.out)
         assert "Failed to render the cycle summary" in captured.err
+
+
+class TestEventLogCarriesLockConflicts:
+    """PR#789レビュー(Codex P2): events.jsonlを歴史的成果物として保持する運用でも
+    衝突相手のブランチ/PRとファイルを特定できるようにする。"""
+
+    def test_build_event_log_entry_includes_external_lock_conflicts(self):
+        conflicts = {
+            695: [
+                {
+                    "kind": "branch",
+                    "source": "fix/issue-777-branch-naming",
+                    "files": ["tests/conftest.py"],
+                }
+            ]
+        }
+        report = CycleReport(
+            selected=[],
+            quota_slots_available=0,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+            external_lock_conflicts=conflicts,
+        )
+
+        entry = build_event_log_entry(report, now=1700000000.0)
+
+        assert entry["external_lock_conflicts"] == conflicts
+        json.dumps(entry, ensure_ascii=False)

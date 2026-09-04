@@ -61,6 +61,10 @@ class CompletedWorktreeDecision:
     subtask_id: str = ""
     commit_sha: str | None = None
     outcome: OutcomeRecord | None = None
+    # PR#789レビュー対応(Codex P2): 判定を保留させたForge呼び出しと、その失敗内容。
+    # stderrの警告が失われた後もレポートから原因を特定できるようにする。
+    operation: str = ""
+    error: str = ""
 
 
 COMPLETION_HOLD_ACTIONS = frozenset(
@@ -106,12 +110,12 @@ def warn_forge_failure(
 
 
 def _fetch_outcome_for_active(
-    active: ActiveWorktree, forge: Forge
+    active: ActiveWorktree, forge: Forge, error_sink: list[str] | None = None
 ) -> OutcomeRecord | None | Literal["error"]:
     try:
         comments = list(forge.list_comments(active.issue_number))
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-        warn_forge_failure("list_comments", active.issue_number, error)
+        warn_forge_failure("list_comments", active.issue_number, error, error_sink)
         return "error"
     try:
         prs = forge.list_prs(state="all")
@@ -176,11 +180,15 @@ def _decide_completed_worktree_outcome(
         commit_sha = None
 
     if forge is not None:
-        outcome_or_err = _fetch_outcome_for_active(active, forge)
+        errors: list[str] = []
+        outcome_or_err = _fetch_outcome_for_active(active, forge, errors)
         if outcome_or_err == "error":
             if has_new_commits:
                 return CompletedWorktreeDecision(
-                    action="completion_skipped_forge_error", subtask_id=subtask_id
+                    action="completion_skipped_forge_error",
+                    subtask_id=subtask_id,
+                    operation="list_comments",
+                    error="; ".join(errors),
                 )
             outcome = None
         else:
@@ -526,6 +534,17 @@ def _check_token_limit_exceeded(
     return False
 
 
+def _is_completion_hold(decision: CompletedWorktreeDecision, event: dict) -> bool:
+    """同一サイクルでの完了処理を見送る判定か。保留理由をイベントへ書き足す。"""
+    if decision.action not in COMPLETION_HOLD_ACTIONS:
+        return False
+    if decision.operation:
+        event["operation"] = decision.operation
+    if decision.error:
+        event["error"] = decision.error
+    return True
+
+
 def _apply_completed_worktree_outcome(
     active: ActiveWorktree,
     decision: CompletedWorktreeDecision,
@@ -545,10 +564,7 @@ def _apply_completed_worktree_outcome(
     }
     if isinstance(usage, Usage):
         event["usage"] = dataclasses.asdict(usage)
-    if decision.action in (
-        "completion_skipped_dirty_worktree",
-        "completion_skipped_forge_error",
-    ):
+    if _is_completion_hold(decision, event):
         return event
 
     special = _apply_special_completed_action(

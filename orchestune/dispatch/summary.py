@@ -86,10 +86,16 @@ def merge_skips(
 ) -> list[SkipRecord]:
     """事前フィルタの記録と、選定フェーズの未選出判定を1つの並びにまとめる。
 
-    同じIssueが両方に現れた場合は事前フィルタ側を採る。候補から外れた理由の
-    方が具体的で、運用者が次に取る行動に直結するため。
+    同じIssueが複数回現れた場合は先に来たものを採る。候補から外れた理由の方が
+    具体的で、運用者が次に取る行動に直結するため。
+
+    PR#789レビュー対応(Codex P2): `skips`内での重複も先勝ちにする。dict内包表記
+    による後勝ちだと、外部ロックの衝突詳細を持つ記録が、後段のフィルタが付けた
+    詳細なしの記録で上書きされ、理由が失われる。
     """
-    merged = {record.issue_number: record for record in skips}
+    merged: dict[int, SkipRecord] = {}
+    for record in skips:
+        merged.setdefault(record.issue_number, record)
     for decision in decisions:
         if decision.selected or decision.issue_number in merged:
             continue
