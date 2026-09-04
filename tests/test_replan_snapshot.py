@@ -50,6 +50,30 @@ def test_collects_only_issues_enumerated_by_parent_plan_and_is_read_only() -> No
     assert snapshot.merged_closing_issue_numbers == (10,)
 
 
+def test_collects_merged_subissue_branch_issue_without_closing_reference() -> None:
+    parent = _issue(
+        693,
+        "<!-- orchestune:decomposition-plan -->\n```yaml\nsubtasks:\n"
+        "- id: old-a\n  issue_number: 10\n```\n",
+    )
+    forge = FakeForge(
+        parent,
+        [_issue(10)],
+        [
+            PrRecord(
+                99,
+                "claude/issue-10-old-a",
+                (),
+                closes_issue_numbers=(),
+            )
+        ],
+    )
+
+    snapshot = collect_replan_snapshot(forge, 693)
+
+    assert snapshot.merged_closing_issue_numbers == (10,)
+
+
 def test_snapshot_fails_closed_when_parent_plan_number_and_body_id_disagree() -> None:
     parent = _issue(
         693,

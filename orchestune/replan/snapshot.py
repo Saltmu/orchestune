@@ -13,6 +13,7 @@ from orchestune.issue_parsing import (
     find_children_by_parent,
 )
 from orchestune.models import IssueRecord, PrRecord
+from orchestune.pr_link_notice import extract_issue_numbers_from_pr
 from orchestune.replan.models import RetirementCandidate
 
 
@@ -214,7 +215,7 @@ def collect_replan_snapshot(
             {
                 number
                 for pr in merged
-                for number in pr.closes_issue_numbers
+                for number in extract_issue_numbers_from_pr(pr)
                 if number in old_numbers
             }
         )
