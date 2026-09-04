@@ -216,7 +216,13 @@ independently of the lifecycle above (see "External lock" below).
     dependency chain (a dependency's own dependency is not excluded). A
     branch that merely looks like `issue-{N}-{subtask_id}` under a
     different prefix (e.g. one a human or another agent created) is not
-    exempted, even though it has the same shape. For PRs, the exemption
+    exempted, even though it has the same shape. The exemption also stops
+    once the dependency itself reaches `status:done` or
+    `status:not-needed`: `_is_task_stack_eligible()` never picks a `done`
+    dependency as the stack base, so once it's done this task can launch
+    straight from the normal parent/main base — and if the Integrator
+    hasn't merged the dependency's PR yet, an overlap with it is a genuine
+    external conflict. For PRs, the exemption
     only applies when the head branch name matches the dependency's exact
     canonical branch *and*
     the PR is confirmed same-repository (not a fork) — a `#N` mention in

@@ -67,6 +67,56 @@ class TestDependencyExclusion:
         assert result.to_lock == []
         assert result.conflicts == {}
 
+    def test_still_locks_task_against_done_dependency_pr_not_yet_merged(self):
+        """Codexレビュー対応(PR#797 P2, Finding 4): 依存元が`status:done`に
+        到達すると`_is_task_stack_eligible`はそれをstackable_depsに加えない
+        （＝スタックのbaseとして選ばれない）ため、このタスクは通常の
+        parent/mainからそのまま起動され得る。Integratorのマージが未完了で
+        依存元PRの変更が実際にはbaseへ入っていない場合、これは正真正銘の
+        外部衝突であり除外してはならない。"""
+        dep_task = self._dependency_task(status_labels=("status:done",))
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(100, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=False,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_still_locks_task_against_done_dependency_branch_not_yet_merged(self):
+        dep_task = self._dependency_task(status_labels=("status:done",))
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        branch_name = build_task_branch_name(100, "dep-a")
+        result = scan_external_locks(
+            [dep_task, task],
+            remote_branches=[(branch_name, ("src/shared.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_still_locks_task_against_not_needed_dependency_pr(self):
+        dep_task = self._dependency_task(status_labels=("status:not-needed",))
+        task = _task(1, footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(100, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=False,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_task, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
+
     def test_still_locks_task_against_pr_that_merely_mentions_dependency_issue(self):
         """Codexレビュー対応(PR#797): `pr_matches_issue`はPRのタイトル・本文
         中の`#N`言及だけでも一致するため、依存元Issue番号に言及しているだけの

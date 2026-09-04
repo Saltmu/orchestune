@@ -99,11 +99,21 @@ def _direct_dependency_canonical_branches(
 
     `depends_on`が指すsubtask_idが候補集合に見つからない（解決不能な依存）場合は
     無視する。fail closedのまま、従来通り衝突判定に残る。
+
+    Codexレビュー対応(PR#797 P2, Finding 4): 依存元が既に`status:done`/
+    `status:not-needed`に到達している場合は除外しない。`_is_task_stack_eligible`
+    はdoneな依存を`stackable_deps`に加えない（＝スタックのbaseとして選ばれない）
+    ため、依存元がdoneになった時点でこのタスクは（`status:queued`へ昇格した
+    上で）通常のparent/mainからそのまま起動され得る。このときの依存元PR・
+    ブランチとの重複は、Integratorのマージが未完了で実際にはbaseへ取り込まれて
+    いない変更を意味しうる、正真正銘の外部衝突であり除外してはならない。
     """
     return frozenset(
         build_task_branch_name(dep_task.issue_number, dep_task.subtask_id)
         for dep in task.depends_on
         if (dep_task := subtask_id_to_task.get(dep)) is not None
+        and StatusLabel.DONE not in dep_task.status_labels
+        and StatusLabel.NOT_NEEDED not in dep_task.status_labels
     )
 
 
