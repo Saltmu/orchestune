@@ -261,18 +261,12 @@ def apply_replan(
         resolved_forge, parent, snapshot, preview, tuple(resolved.values())
     )
     degraded |= retirement_degraded
+    if not _switch_parent_plan(resolved_forge, parent, plan_path):
+        degraded = True
     result = ReplacementResult(
         preview.plan_revision, tuple(created), tuple(reused), retired, degraded
     )
     _audit_once(resolved_forge, parent, result)
-    if not _switch_parent_plan(resolved_forge, parent, plan_path):
-        result = ReplacementResult(
-            result.plan_revision,
-            result.created_issue_numbers,
-            result.reused_issue_numbers,
-            result.retired_issue_numbers,
-            degraded=True,
-        )
     return result
 
 

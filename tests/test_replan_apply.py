@@ -347,8 +347,8 @@ def test_apply_prepares_new_generation_then_retires_and_switches_parent_plan(
     assert max(
         operations.index("parent:100"), operations.index("parent:101")
     ) < operations.index("comment:retirement:10")
-    assert operations.index("detach:10") < operations.index(f"comment:audit:{PARENT}")
-    assert operations.index(f"comment:audit:{PARENT}") < operations.index("parent-body")
+    assert operations.index("detach:10") < operations.index("parent-body")
+    assert operations.index("parent-body") < operations.index(f"comment:audit:{PARENT}")
 
     parent_body = str(forge.issues[PARENT]["body"])
     assert "Requirements stay here." in parent_body
@@ -547,3 +547,4 @@ def test_switch_parent_plan_oversized_body_returns_degraded_without_raising(
 
     assert result.degraded is True
     assert "over GitHub's 65536 character limit" in capsys.readouterr().err
+    assert "Native relationship result: degraded" in forge.comments[PARENT][0]
