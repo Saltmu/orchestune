@@ -402,6 +402,19 @@ def _apply_escalated_review_timeout(
     _apply_escalation(ctx.active, ctx.config, msg, ctx.active_task)
 
 
+def _apply_blocked_review_timeout_hold(
+    ctx: _CompletionContext, decision: CompletedWorktreeDecision
+) -> None:
+    _apply_blocked_hold(
+        ctx.active,
+        ctx.config,
+        ctx.active_task,
+        "AIレビュー待機のタイムアウト（review-timeout）を検知しましたが、"
+        "再投入管理状態（run_state）が未設定のため自動再投入を見送り、`status:blocked`で保留しました。"
+        "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+    )
+
+
 def _apply_blocked_unknown_reason(
     ctx: _CompletionContext, decision: CompletedWorktreeDecision
 ) -> None:
@@ -632,6 +645,8 @@ def _dispatch_terminal_or_blocked_action(
         _apply_blocked_base_branch_red(ctx, decision)
     elif action == "escalated_base_branch_red":
         _apply_escalated_base_branch_red(ctx, decision)
+    elif action == "blocked_review_timeout":
+        _apply_blocked_review_timeout_hold(ctx, decision)
     elif action == "escalated_review_timeout":
         _apply_escalated_review_timeout(ctx, decision)
     elif action == "blocked_unknown_reason":

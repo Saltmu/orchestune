@@ -297,3 +297,47 @@ class TestDispatchGcCompletionReviewTimeout:
         record = run_state.task_reclaim_counts[280]
         assert record.review_timeout_retry_count == 1
         assert record.review_timeout_retry_at == 1060.0
+
+    def test_review_timeout_without_run_state_holds_as_blocked(self, tmp_path):
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=280,
+            pr=456,
+            reason="review-timeout",
+            review=ReviewSummary(bot="claude", rounds=1, verdict="timeout"),
+            attempt=1,
+        )
+        fake_forge = MagicMock()
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}
+        ]
+        fake_forge.list_prs.return_value = []
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=fake_forge,
+        )
+        with (
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.remove_worktree"
+            ) as mock_remove_worktree,
+        ):
+            event = _finalize_completed_worktree(active, task, config, run_state=None)
+
+        assert event["action"] == "blocked_review_timeout"
+        mock_remove_worktree.assert_called_once_with("worktrees/w1")
+        fake_forge.add_label.assert_called_once_with(280, "status:blocked")
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_comment.assert_called_once()
