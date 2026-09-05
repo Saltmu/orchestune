@@ -18,6 +18,7 @@ EXIT_CONFIG = 2
 EXIT_CONFIRMATION = 3
 EXIT_PARTIAL = 4
 EXIT_NOOP = 5
+EXIT_CONFLICT = 6
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -63,12 +64,18 @@ def _apply(
     if args.confirm_preview is None:
         print("Error: --apply requires --confirm-preview TOKEN", file=sys.stderr)
         return EXIT_CONFIRMATION
-    if args.confirm_preview != preview.preview_token or _is_unsafe(preview):
+    if args.confirm_preview != preview.preview_token:
         print(
             "Error: preview requires a fresh, conflict-free confirmation",
             file=sys.stderr,
         )
         return EXIT_CONFIRMATION
+    if _is_unsafe(preview):
+        print(
+            "Error: preview contains conflicts requiring manual review",
+            file=sys.stderr,
+        )
+        return EXIT_CONFLICT
     try:
         result = apply_replan(
             args.plan,
@@ -116,6 +123,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _print_preview(preview, parent)
     if not args.apply:
+        if _is_unsafe(preview):
+            print(
+                "Error: preview contains conflicts requiring manual review",
+                file=sys.stderr,
+            )
+            return EXIT_CONFLICT
         return EXIT_SUCCESS
     return _apply(args, preview, forge)
 

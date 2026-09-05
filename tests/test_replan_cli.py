@@ -50,6 +50,21 @@ def test_preview_is_read_only_and_prints_token_and_target_issues(
     assert forge.mutations == []
 
 
+def test_unsafe_preview_returns_distinct_conflict_exit_code(
+    replan_files: tuple[Path, Path],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch,
+) -> None:
+    plan, _ = replan_files
+    forge = FakeReplanForge(old_status="status:in-progress")
+
+    monkeypatch.setattr("orchestune.replan.cli.GitHubForge", lambda: forge)
+    assert main(["--plan", str(plan), "--parent-issue", str(PARENT)]) == 6
+
+    assert "manual-review: old-a (#10)" in capsys.readouterr().out
+    assert forge.mutations == []
+
+
 def test_apply_requires_current_confirmation_token_without_mutation(
     replan_files: tuple[Path, Path], capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
@@ -60,6 +75,35 @@ def test_apply_requires_current_confirmation_token_without_mutation(
     assert main(["--plan", str(plan), "--parent-issue", str(PARENT), "--apply"]) == 3
 
     assert "--confirm-preview" in capsys.readouterr().err
+    assert forge.mutations == []
+
+
+def test_apply_unsafe_preview_returns_conflict_exit_code(
+    replan_files: tuple[Path, Path],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch,
+) -> None:
+    plan, _ = replan_files
+    forge = FakeReplanForge(old_status="status:in-progress")
+    token = preview_token(forge, plan)
+
+    monkeypatch.setattr("orchestune.replan.cli.GitHubForge", lambda: forge)
+    assert (
+        main(
+            [
+                "--plan",
+                str(plan),
+                "--parent-issue",
+                str(PARENT),
+                "--apply",
+                "--confirm-preview",
+                token,
+            ]
+        )
+        == 6
+    )
+
+    assert "manual review" in capsys.readouterr().err
     assert forge.mutations == []
 
 
