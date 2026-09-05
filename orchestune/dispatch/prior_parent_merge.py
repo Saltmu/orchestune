@@ -285,6 +285,7 @@ def reconcile_prior_parent_merges(
     *,
     apply: bool,
     issues_by_number: dict[int, IssueRecord] | None = None,
+    active_issue_numbers: frozenset[int] = frozenset(),
 ) -> PriorParentMergeReconciliation:
     """Repair only verified historical merges and hold only indeterminate tasks.
 
@@ -298,6 +299,11 @@ def reconcile_prior_parent_merges(
     events: list[dict[str, object]] = []
     for issue_number, task in tasks_by_issue.items():
         if task.parent_number is None or not task.subtask_id:
+            continue
+        # A living local/cloud execution owns its worktree until GC observes a
+        # natural completion.  Closing it here could strand that agent while it
+        # still has unsaved work; GC re-evaluates the same evidence afterward.
+        if issue_number in active_issue_numbers:
             continue
         evidence, issue = inspect_prior_parent_merge(
             forge,

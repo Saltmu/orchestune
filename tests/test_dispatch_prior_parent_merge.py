@@ -210,3 +210,22 @@ def test_partial_repair_failure_holds_without_marking_dependencies_completed():
     assert result.held_issue_numbers == {101}
     assert result.completed_subtask_ids == set()
     assert result.events[0]["action"] == "already_merged_repair_pending"
+
+
+def test_active_worktree_defers_repair_without_closing_or_marking_done():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        {101: _task()},
+        apply=True,
+        issues_by_number={101: issue},
+        active_issue_numbers=frozenset({101}),
+    )
+
+    assert result.held_issue_numbers == set()
+    assert result.completed_subtask_ids == set()
+    assert result.events == ()
+    forge.list_merged_prs_for_base.assert_not_called()
+    forge.close_issue.assert_not_called()

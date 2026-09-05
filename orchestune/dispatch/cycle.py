@@ -1014,6 +1014,9 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             tasks_by_issue,
             apply=config.apply,
             issues_by_number={issue.number: issue for issue in issues.all()},
+            active_issue_numbers=frozenset(
+                active.issue_number for active in run_state.active_worktrees.values()
+            ),
         )
         ctx = _build_cycle_context(
             issues,
