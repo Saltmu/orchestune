@@ -403,7 +403,9 @@ class TestNoticeExpectedBases:
 
     def test_excludes_tasks_without_a_parent(self):
         # 親が特定できないタスクは、PRのbaseと照合する基準を持たない。
-        tasks = [make_task(12, status_labels=("status:in-progress",))]
+        tasks = [
+            make_task(12, status_labels=("status:in-progress",), parent_number=None)
+        ]
 
         assert notice_expected_bases(tasks) == {}
 

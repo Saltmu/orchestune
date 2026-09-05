@@ -76,6 +76,11 @@ def make_task(issue_number: int = 1, **overrides: Any) -> Task:
         "status_labels": ("status:queued",),
         "created_at": "2026-01-01T00:00:00+00:00",
         "depends_on": (),
+        # #799: `make_issue`のparentデフォルト（`{"number": 100}`）と揃える。
+        # 依存解決は`(parent_number, subtask_id)`でスコープするため、これが
+        # 揃っていないと`make_task`で組んだ`depends_on`が既定では一切
+        # 解決できない。
+        "parent_number": 100,
     }
     values.update(overrides)
     return Task(**values)

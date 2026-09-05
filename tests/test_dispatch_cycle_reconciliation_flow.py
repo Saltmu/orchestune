@@ -124,7 +124,9 @@ def _install_mutable_issue_snapshot(fake_forge, specs):
                 labels=tuple(labels_by_issue[issue_number]),
                 subtask_id=subtask_id,
                 depends_on=depends_on,
-                parent_number=None,
+                # #799: 依存解決は`(parent_number, subtask_id)`でスコープする
+                # ため、依存し合うIssue同士は同じ親を持つ必要がある。
+                parent_number=100,
             )
             for issue_number, subtask_id, _, depends_on in specs
             if label in labels_by_issue[issue_number]

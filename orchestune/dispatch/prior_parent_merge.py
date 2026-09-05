@@ -48,7 +48,9 @@ class PriorParentMergeReconciliation:
 
     evidence_by_issue: dict[int, PriorParentMergeEvidence]
     held_issue_numbers: frozenset[int]
-    completed_subtask_ids: frozenset[str]
+    # #799: issue番号で保持する。`tasks_by_issue`はグローバル（複数EPIC横断）
+    # に構築されうるため、subtask_id文字列は別EPICの同名タスクと衝突しうる。
+    completed_issue_numbers: frozenset[int]
     events: tuple[dict[str, object], ...]
 
 
@@ -295,7 +297,7 @@ def reconcile_prior_parent_merges(
     """
     evidence_by_issue: dict[int, PriorParentMergeEvidence] = {}
     held: set[int] = set()
-    completed: set[str] = set()
+    completed: set[int] = set()
     events: list[dict[str, object]] = []
     for issue_number, task in tasks_by_issue.items():
         if task.parent_number is None or not task.subtask_id:
@@ -323,12 +325,12 @@ def reconcile_prior_parent_merges(
             forge, issue_number, task, apply=apply
         )
         if repair_completed:
-            completed.add(task.subtask_id)
+            completed.add(issue_number)
         events.append(event)
     return PriorParentMergeReconciliation(
         evidence_by_issue=evidence_by_issue,
         held_issue_numbers=frozenset(held),
-        completed_subtask_ids=frozenset(completed),
+        completed_issue_numbers=frozenset(completed),
         events=tuple(events),
     )
 

@@ -449,10 +449,11 @@ class TestTaskTokenLimitEscalation:
             issue_number_by_subtask_id={"task-x": 42},
             prs=[],
             pr_by_branch={},
-            done_subtask_ids=set(),
-            ci_passed_pr_subtask_ids=set(),
-            changes_requested_subtask_ids=set(),
-            subtask_branch_map={},
+            dependency_resolution={},
+            done_issue_numbers=set(),
+            ci_passed_pr_issue_numbers=set(),
+            changes_requested_issue_numbers=set(),
+            branch_by_issue_number={},
         )
 
         from unittest.mock import patch

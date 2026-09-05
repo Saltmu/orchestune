@@ -37,6 +37,7 @@ import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
 
@@ -93,14 +94,22 @@ def _successor_map(tasks: list[Task]) -> tuple[list[str], dict[str, list[str]]]:
     ディスパッチャーが見るのはIssue一覧のスナップショットであり、既に完了して
     一覧から消えた依存先や、手編集で壊れた自己参照が混じり得る。ここでは既知の
     ノードを指す辺だけを採用し、未知の依存先と自己参照は捨てる。
+
+    #799レビュー指摘(Codex P2): `Task.depends_on`は本文由来の文字列のみを
+    保持するため、ネイティブ`blocked_by`しか宣言していない依存は
+    `legacy_merged_depends_on`で復元してから辺を張る（`tasks`集合内で
+    完結するrank計算であり、cross-EPICの衝突安全性は対象外）。
     """
     node_ids = sorted({task.subtask_id for task in tasks if task.subtask_id})
     known = set(node_ids)
+    issue_to_subtask_id = {
+        task.issue_number: task.subtask_id for task in tasks if task.subtask_id
+    }
     successors: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     for task in tasks:
         if not task.subtask_id:
             continue
-        for dependency in task.depends_on:
+        for dependency in legacy_merged_depends_on(task, issue_to_subtask_id):
             if dependency in known and dependency != task.subtask_id:
                 successors[dependency].add(task.subtask_id)
     return node_ids, {node: sorted(targets) for node, targets in successors.items()}

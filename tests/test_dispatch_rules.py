@@ -31,10 +31,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -137,8 +138,13 @@ class TestRuleChainRun:
             )
 
         aggregates = _ActiveWorktreeAggregates()
-        RuleChain(rules=[_rule]).run(_ctx(), "1", _active(), None, aggregates)
+        RuleChain(rules=[_rule]).run(
+            _ctx(), "1", _active(issue_number=42), None, aggregates
+        )
         assert aggregates.completion_events == [{"action": "done"}]
         assert aggregates.deviation_events == [{"action": "recomputed"}]
         assert aggregates.completed_subtask_ids == {"task-a"}
+        # #799: 集約時のissue_numberの同一性は`active.issue_number`から取る
+        # （`ActiveWorktreeRuleOutcome`自体はsubtask_idしか持たない）。
+        assert aggregates.completed_issue_numbers == {42}
         assert aggregates.any_forced_serial is True

@@ -235,7 +235,26 @@ class TestParseTaskFromIssue:
         assert task.parent_number == 100
         assert task.parent_state == "OPEN"
 
-    def test_parses_depends_on_from_blocked_by(self):
+    def test_self_parenting_native_parent_is_excluded(self):
+        """#799/#802: `Task.parent_number`も`effective_parent_number`と同様、
+        自分自身を親とする自己親化を除外しなければならない。"""
+        issue = IssueRecord(
+            number=15,
+            title="t",
+            body="no yaml",
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+            parent={"number": 15, "state": "OPEN"},
+        )
+        task = parse_task_from_issue(issue)
+        assert task.parent_number is None
+        assert task.parent_state is None
+
+    def test_native_blocked_by_is_kept_as_issue_numbers(self):
+        """#799: ネイティブ`blocked_by`はIssue番号のまま`native_depends_on`に
+        保持し、本文の`depends_on`（subtask_id文字列）とは混ぜない
+        （依存解決は`orchestune.dispatch.dependency_resolution`が担う）。
+        """
         issue = IssueRecord(
             number=11,
             title="t",
@@ -244,15 +263,22 @@ class TestParseTaskFromIssue:
             created_at="2026-01-01T00:00:00+00:00",
             blocked_by=(20, 30),
         )
-        issue_to_subtask_id = {20: "task-dep-a", 30: "task-dep-b"}
-        task = parse_task_from_issue(issue, issue_to_subtask_id)
-        assert task.depends_on == ("task-dep-a", "task-dep-b")
+        task = parse_task_from_issue(issue)
+        assert task.native_depends_on == (20, 30)
+        assert task.depends_on == ()
 
-    def test_falls_back_to_yaml_when_blocked_by_empty(self):
-        issue = _issue(12, depends_on=("task-yaml-a",))
-        issue_to_subtask_id = {20: "task-dep-a"}
-        task = parse_task_from_issue(issue, issue_to_subtask_id)
+    def test_body_depends_on_and_native_depends_on_are_independent(self):
+        issue = IssueRecord(
+            number=12,
+            title="t",
+            body=("```yaml\nsubtask_id: task-a\ndepends_on: [task-yaml-a]\n```\n"),
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+            blocked_by=(20,),
+        )
+        task = parse_task_from_issue(issue)
         assert task.depends_on == ("task-yaml-a",)
+        assert task.native_depends_on == (20,)
 
 
 class TestQuotaAvailable:

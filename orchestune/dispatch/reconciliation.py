@@ -6,6 +6,10 @@ from typing import Any
 
 from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+)
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
@@ -67,7 +71,7 @@ def _handle_blocked_recompute_recovery(
     issues: Any,
     run_state: RunState,
     ctx: CycleContext,
-    completed_subtask_ids: set[str],
+    completed_issue_numbers: set[int],
     config: DispatcherConfig,
 ) -> list[dict]:
     """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
@@ -95,9 +99,9 @@ def _handle_blocked_recompute_recovery(
                     issue.number, StatusLabel.BLOCKED_RECOMPUTE
                 )
 
-            done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
-            has_pending_deps = any(
-                dep not in done_subtask_ids for dep in task.depends_on
+            done_issue_numbers = ctx.done_issue_numbers | completed_issue_numbers
+            has_pending_deps = _has_pending_dependencies(
+                task, done_issue_numbers, ctx.dependency_resolution
             )
 
             if not has_pending_deps:
@@ -141,26 +145,98 @@ def _get_branch_commit_sha(
 def _resolve_base_branch_for_task(
     task: Task,
     config: DispatcherConfig,
-    subtask_branch_map: dict[str, str] | None = None,
-    done_subtask_ids: set[str] | None = None,
+    branch_by_issue_number: dict[int, str] | None = None,
+    done_issue_numbers: set[int] | None = None,
+    dependency_resolution: dict[int, TaskDependencies] | None = None,
 ) -> str:
-    if task.depends_on and subtask_branch_map and done_subtask_ids is not None:
+    """#799: 依存元は`dependency_resolution`で解決済みのIssue番号を使う。
+    未解決の依存が1件でもある場合は、依存先ブランチを推測せず親/mainへ
+    フォールバックする（依存元ロック除外・自動リベース対象選定と同じ方針）。
+    """
+    deps = (
+        dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
+        if dependency_resolution is not None
+        else EMPTY_DEPENDENCIES
+    )
+    if (
+        not deps.is_empty
+        and not deps.unresolved
+        and branch_by_issue_number
+        and done_issue_numbers is not None
+    ):
         unresolved_deps = [
-            dep for dep in task.depends_on if dep not in done_subtask_ids
+            dep_issue
+            for dep_issue in deps.resolved
+            if dep_issue not in done_issue_numbers
         ]
         if len(unresolved_deps) == 1:
-            dep = unresolved_deps[0]
-            if dep in subtask_branch_map:
-                return subtask_branch_map[dep]
+            dep_issue = unresolved_deps[0]
+            if dep_issue in branch_by_issue_number:
+                return branch_by_issue_number[dep_issue]
     if config.parent_issue_number is not None:
         return f"parent/issue-{config.parent_issue_number}"
     return "origin/main"
 
 
+def _has_pending_dependencies(
+    task: Task,
+    done_issue_numbers: set[int],
+    dependency_resolution: dict[int, TaskDependencies],
+) -> bool:
+    """#799: 未解決の依存は常に保留扱いにする（依存なしへ倒さない）。"""
+    deps = dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
+    return bool(deps.unresolved) or any(
+        dep_issue not in done_issue_numbers for dep_issue in deps.resolved
+    )
+
+
+def _decide_single_base_branch_red_recovery(
+    issue: IssueRecord,
+    task: Task,
+    outcome: OutcomeRecord,
+    current_base_shas: dict[int, str | None],
+    done_issue_numbers: set[int],
+    dependency_resolution: dict[int, TaskDependencies],
+) -> BaseBranchRedRecoveryDecision | None:
+    if outcome.attempt is not None and outcome.attempt >= 3:
+        return BaseBranchRedRecoveryDecision(
+            issue_number=issue.number,
+            subtask_id=task.subtask_id,
+            action="escalate",
+            attempt=outcome.attempt,
+        )
+    if not outcome.base_sha:
+        return None
+    current_sha = current_base_shas.get(issue.number)
+    if current_sha is None:
+        return None
+    has_advanced = (
+        current_sha != outcome.base_sha
+        and not current_sha.startswith(outcome.base_sha)
+        and not outcome.base_sha.startswith(current_sha)
+    )
+    if not has_advanced:
+        return None
+    action = (
+        "unmark_only"
+        if _has_pending_dependencies(task, done_issue_numbers, dependency_resolution)
+        else "requeue"
+    )
+    return BaseBranchRedRecoveryDecision(
+        issue_number=issue.number,
+        subtask_id=task.subtask_id,
+        action=action,
+        recorded_base_sha=outcome.base_sha,
+        current_base_sha=current_sha,
+        attempt=outcome.attempt,
+    )
+
+
 def _decide_base_branch_red_recovery(
     base_branch_red_issues: list[IssueRecord],
     tasks_by_issue: dict[int, Task],
-    done_subtask_ids: set[str],
+    done_issue_numbers: set[int],
+    dependency_resolution: dict[int, TaskDependencies],
     current_base_shas: dict[int, str | None],
     outcomes_by_issue: dict[int, OutcomeRecord | None],
 ) -> list[BaseBranchRedRecoveryDecision]:
@@ -173,39 +249,16 @@ def _decide_base_branch_red_recovery(
         outcome = outcomes_by_issue.get(issue.number)
         if outcome is None:
             continue
-        if outcome.attempt is not None and outcome.attempt >= 3:
-            decisions.append(
-                BaseBranchRedRecoveryDecision(
-                    issue_number=issue.number,
-                    subtask_id=task.subtask_id,
-                    action="escalate",
-                    attempt=outcome.attempt,
-                )
-            )
-            continue
-        if outcome.base_sha:
-            current_sha = current_base_shas.get(issue.number)
-            if current_sha is not None:
-                has_advanced = (
-                    current_sha != outcome.base_sha
-                    and not current_sha.startswith(outcome.base_sha)
-                    and not outcome.base_sha.startswith(current_sha)
-                )
-                if has_advanced:
-                    has_pending_deps = any(
-                        dep not in done_subtask_ids for dep in task.depends_on
-                    )
-                    action = "unmark_only" if has_pending_deps else "requeue"
-                    decisions.append(
-                        BaseBranchRedRecoveryDecision(
-                            issue_number=issue.number,
-                            subtask_id=task.subtask_id,
-                            action=action,
-                            recorded_base_sha=outcome.base_sha,
-                            current_base_sha=current_sha,
-                            attempt=outcome.attempt,
-                        )
-                    )
+        decision = _decide_single_base_branch_red_recovery(
+            issue,
+            task,
+            outcome,
+            current_base_shas,
+            done_issue_numbers,
+            dependency_resolution,
+        )
+        if decision is not None:
+            decisions.append(decision)
     return decisions
 
 
@@ -299,7 +352,7 @@ def _apply_base_branch_red_recovery(
 def _handle_base_branch_red_recovery(
     issues: Any,
     ctx: CycleContext,
-    completed_subtask_ids: set[str],
+    completed_issue_numbers: set[int],
     config: DispatcherConfig,
 ) -> list[dict]:
     """#555: ci:base-branch-red マーカーを持つタスクのベースコミット前進検知および再キューを行う。"""
@@ -312,7 +365,7 @@ def _handle_base_branch_red_recovery(
     outcomes_by_issue: dict[int, OutcomeRecord | None] = {}
     current_base_shas: dict[int, str | None] = {}
     repo_root = config.worktree_root.parent if config.worktree_root else None
-    done_subtask_ids = ctx.done_subtask_ids | completed_subtask_ids
+    done_issue_numbers = ctx.done_issue_numbers | completed_issue_numbers
 
     for issue in base_branch_red_issues:
         try:
@@ -325,7 +378,11 @@ def _handle_base_branch_red_recovery(
         task = ctx.tasks_by_issue.get(issue.number)
         if task is not None:
             base_branch = _resolve_base_branch_for_task(
-                task, config, ctx.subtask_branch_map, done_subtask_ids
+                task,
+                config,
+                ctx.branch_by_issue_number,
+                done_issue_numbers,
+                ctx.dependency_resolution,
             )
             current_base_shas[issue.number] = _get_branch_commit_sha(
                 base_branch, repo_root
@@ -334,7 +391,8 @@ def _handle_base_branch_red_recovery(
     decisions = _decide_base_branch_red_recovery(
         base_branch_red_issues,
         ctx.tasks_by_issue,
-        done_subtask_ids,
+        done_issue_numbers,
+        ctx.dependency_resolution,
         current_base_shas,
         outcomes_by_issue,
     )

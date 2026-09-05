@@ -10,6 +10,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import (
+    REASON_AMBIGUOUS,
+    TaskDependencies,
+    UnresolvedDependency,
+)
 from orchestune.dispatch.reconciliation import (
     BaseBranchRedRecoveryDecision,
     _apply_base_branch_red_recovery,
@@ -112,7 +117,8 @@ class TestBaseBranchRedRecovery:
         decisions = _decide_base_branch_red_recovery(
             base_branch_red_issues=[issue],
             tasks_by_issue={1: task},
-            done_subtask_ids=set(),
+            done_issue_numbers=set(),
+            dependency_resolution={1: TaskDependencies()},
             current_base_shas={1: "2222222222222222222222222222222222222222"},
             outcomes_by_issue={1: outcome},
         )
@@ -134,7 +140,8 @@ class TestBaseBranchRedRecovery:
         decisions = _decide_base_branch_red_recovery(
             base_branch_red_issues=[issue],
             tasks_by_issue={1: task},
-            done_subtask_ids=set(),  # task-dep is not done
+            done_issue_numbers=set(),  # dependency (issue 99) is not done
+            dependency_resolution={1: TaskDependencies(resolved=(99,))},
             current_base_shas={1: "2222222222222222222222222222222222222222"},
             outcomes_by_issue={1: outcome},
         )
@@ -154,7 +161,8 @@ class TestBaseBranchRedRecovery:
         decisions = _decide_base_branch_red_recovery(
             base_branch_red_issues=[issue],
             tasks_by_issue={1: task},
-            done_subtask_ids=set(),
+            done_issue_numbers=set(),
+            dependency_resolution={1: TaskDependencies()},
             current_base_shas={1: "1111111111111111111111111111111111111111"},
             outcomes_by_issue={1: outcome},
         )
@@ -173,7 +181,8 @@ class TestBaseBranchRedRecovery:
         decisions = _decide_base_branch_red_recovery(
             base_branch_red_issues=[issue],
             tasks_by_issue={1: task},
-            done_subtask_ids=set(),
+            done_issue_numbers=set(),
+            dependency_resolution={1: TaskDependencies()},
             current_base_shas={1: "2222222222222222222222222222222222222222"},
             outcomes_by_issue={1: outcome},
         )
@@ -262,8 +271,9 @@ class TestBaseBranchRedRecovery:
         )
         ctx = MagicMock()
         ctx.tasks_by_issue = {1: task}
-        ctx.done_subtask_ids = set()
-        ctx.subtask_branch_map = {}
+        ctx.done_issue_numbers = set()
+        ctx.branch_by_issue_number = {}
+        ctx.dependency_resolution = {1: TaskDependencies()}
 
         with patch(
             "orchestune.dispatch.reconciliation._get_branch_commit_sha",
@@ -284,11 +294,16 @@ class TestResolveBaseBranchForTask:
             run_state_path=tmp_path / "run_state.json",
             parent_issue_number=None,
         )
-        subtask_branch_map = {"task-a": "claude/issue-1-task-a"}
-        done_subtask_ids = {"task-a"}
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        done_issue_numbers = {1}
+        dependency_resolution = {2: TaskDependencies(resolved=(1,))}
 
         base_branch = _resolve_base_branch_for_task(
-            task, config, subtask_branch_map, done_subtask_ids
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
         )
         assert base_branch == "origin/main"
 
@@ -301,11 +316,16 @@ class TestResolveBaseBranchForTask:
             run_state_path=tmp_path / "run_state.json",
             parent_issue_number=100,
         )
-        subtask_branch_map = {"task-a": "claude/issue-1-task-a"}
-        done_subtask_ids = {"task-a"}
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        done_issue_numbers = {1}
+        dependency_resolution = {2: TaskDependencies(resolved=(1,))}
 
         base_branch = _resolve_base_branch_for_task(
-            task, config, subtask_branch_map, done_subtask_ids
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
         )
         assert base_branch == "parent/issue-100"
 
@@ -316,11 +336,16 @@ class TestResolveBaseBranchForTask:
             run_state_path=tmp_path / "run_state.json",
             parent_issue_number=100,
         )
-        subtask_branch_map = {"task-a": "claude/issue-1-task-a"}
-        done_subtask_ids = set()
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        done_issue_numbers = set()
+        dependency_resolution = {2: TaskDependencies(resolved=(1,))}
 
         base_branch = _resolve_base_branch_for_task(
-            task, config, subtask_branch_map, done_subtask_ids
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
         )
         assert base_branch == "claude/issue-1-task-a"
 
@@ -337,13 +362,39 @@ class TestResolveBaseBranchForTask:
             run_state_path=tmp_path / "run_state.json",
             parent_issue_number=100,
         )
-        subtask_branch_map = {
-            "task-a": "claude/issue-1-task-a",
-            "task-b": "claude/issue-2-task-b",
+        branch_by_issue_number = {
+            1: "claude/issue-1-task-a",
+            2: "claude/issue-2-task-b",
         }
-        done_subtask_ids = set()
+        done_issue_numbers = set()
+        dependency_resolution = {3: TaskDependencies(resolved=(1, 2))}
 
         base_branch = _resolve_base_branch_for_task(
-            task, config, subtask_branch_map, done_subtask_ids
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
+        )
+        assert base_branch == "parent/issue-100"
+
+    def test_when_dependency_is_unresolved_does_not_guess_branch(self, tmp_path):
+        """#799: 依存が未解決の場合は依存先を推測せず、親/mainへ倒す。"""
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        dependency_resolution = {
+            2: TaskDependencies(
+                unresolved=(
+                    UnresolvedDependency(raw="task-a", reason=REASON_AMBIGUOUS),
+                ),
+            )
+        }
+
+        base_branch = _resolve_base_branch_for_task(
+            task, config, {}, set(), dependency_resolution
         )
         assert base_branch == "parent/issue-100"

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.issue_parsing import effective_parent_number
@@ -10,31 +14,40 @@ def _candidate_conflicts_with_forced_serial_active(
     candidate: Task,
     active: ActiveWorktree,
     active_task: Task | None,
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> bool:
+    """#799: タスク間依存判定はsubtask_idの文字列一致ではなく、親Issueで
+    スコープ済みに解決されたIssue番号（`dependency_resolution`）で行う。
+    `active_task`が特定できない場合は、従来通り依存関係による判定は行わず
+    footprintの重なりのみで判定する。
+    """
     active_footprint = active.declared_footprint
-    active_subtask_id = ""
-    active_depends_on: tuple[str, ...] = ()
     if active_task is not None:
         active_footprint = active_task.footprint or active.declared_footprint
-        active_subtask_id = active_task.subtask_id
-        active_depends_on = active_task.depends_on
 
     if set(candidate.footprint) & set(active_footprint):
         return True
 
-    if active_subtask_id and active_subtask_id in candidate.depends_on:
+    if active_task is None:
+        return False
+
+    active_deps = dependency_resolution.get(
+        active_task.issue_number, EMPTY_DEPENDENCIES
+    )
+    if candidate.issue_number in active_deps.resolved:
         return True
 
-    if candidate.subtask_id and candidate.subtask_id in active_depends_on:
-        return True
-
-    return False
+    candidate_deps = dependency_resolution.get(
+        candidate.issue_number, EMPTY_DEPENDENCIES
+    )
+    return active_task.issue_number in candidate_deps.resolved
 
 
 def _filter_candidates_for_forced_serial(
     candidate_tasks: list[Task],
     run_state: RunState,
     tasks_by_issue: dict[int, Task],
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> list[Task]:
     forced_serial_actives = [
         (active, tasks_by_issue.get(active.issue_number))
@@ -49,7 +62,7 @@ def _filter_candidates_for_forced_serial(
         for candidate in candidate_tasks
         if not any(
             _candidate_conflicts_with_forced_serial_active(
-                candidate, active, active_task
+                candidate, active, active_task, dependency_resolution
             )
             for active, active_task in forced_serial_actives
         )

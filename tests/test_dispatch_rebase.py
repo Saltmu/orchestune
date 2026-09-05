@@ -76,9 +76,10 @@ class TestRebaseContext:
             "active_task",
             "key",
             "run_state",
-            "done_subtask_ids",
-            "ci_passed_pr_subtask_ids",
-            "subtask_branch_map",
+            "done_issue_numbers",
+            "ci_passed_pr_issue_numbers",
+            "branch_by_issue_number",
+            "dependency_resolution",
             "config",
         }
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.dispatch.phase_reconciliation import _dispatch_not_needed_review
 from orchestune.dispatch.recovery import _extract_raw_subtask_id
@@ -228,7 +229,7 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
 
 def _build_task_mappings(
     all_issues: list[IssueRecord],
-) -> tuple[dict, dict, set[str]]:
+) -> tuple[dict, dict, set[int]]:
     issue_to_subtask_id: dict[int, str] = {}
     for issue in all_issues:
         sub_id = _extract_raw_subtask_id(issue)
@@ -239,43 +240,49 @@ def _build_task_mappings(
         issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
         for issue in all_issues
     }
+    # #799: 表示・footprint DAG通知専用（依存解決には使わない。
+    # `dependency_resolution`参照）。
     issue_number_by_subtask_id = {
         task.subtask_id: task.issue_number
         for task in tasks_by_issue.values()
         if task.subtask_id
     }
-    done_subtask_ids = {
-        task.subtask_id
+    # 各タスク自身のissue_numberをキーにするだけなので、subtask_idの
+    # グローバル一意性には依存しない。
+    done_issue_numbers = {
+        task.issue_number
         for task in tasks_by_issue.values()
-        if StatusLabel.DONE in task.status_labels and task.subtask_id
+        if StatusLabel.DONE in task.status_labels
     }
-    return tasks_by_issue, issue_number_by_subtask_id, done_subtask_ids
+    return tasks_by_issue, issue_number_by_subtask_id, done_issue_numbers
 
 
-def _build_pr_mappings(tasks_by_issue: dict, prs: list) -> tuple[dict, set, set, dict]:
+def _build_pr_mappings(
+    tasks_by_issue: dict, prs: list
+) -> tuple[dict, set[int], set[int], dict[int, str]]:
     pr_by_branch = {pr.head_ref: pr for pr in prs}
-    ci_passed_pr_subtask_ids = set()
-    changes_requested_subtask_ids = set()
-    subtask_branch_map = {}
+    ci_passed_pr_issue_numbers: set[int] = set()
+    changes_requested_issue_numbers: set[int] = set()
+    branch_by_issue_number: dict[int, str] = {}
 
     for task in tasks_by_issue.values():
         if not task.subtask_id:
             continue
         branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
-        subtask_branch_map[task.subtask_id] = branch_name
+        branch_by_issue_number[task.issue_number] = branch_name
 
         pr = pr_by_branch.get(branch_name)
         if pr:
             if pr.review_decision == "CHANGES_REQUESTED":
-                changes_requested_subtask_ids.add(task.subtask_id)
+                changes_requested_issue_numbers.add(task.issue_number)
             elif pr.is_ci_passing:
-                ci_passed_pr_subtask_ids.add(task.subtask_id)
+                ci_passed_pr_issue_numbers.add(task.issue_number)
 
     return (
         pr_by_branch,
-        ci_passed_pr_subtask_ids,
-        changes_requested_subtask_ids,
-        subtask_branch_map,
+        ci_passed_pr_issue_numbers,
+        changes_requested_issue_numbers,
+        branch_by_issue_number,
     )
 
 
@@ -285,32 +292,34 @@ def _build_cycle_context(
     config: DispatcherConfig,
     *,
     prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
-    prior_parent_merge_completed_subtask_ids: frozenset[str] = frozenset(),
+    prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
 ) -> CycleContext:
     all_issues = issues.all()
     (
         tasks_by_issue,
         issue_number_by_subtask_id,
-        done_subtask_ids,
+        done_issue_numbers,
     ) = _build_task_mappings(all_issues)
+    dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
     prs = config.resolved_forge.list_open_prs(paginate_files=True)
     (
         pr_by_branch,
-        ci_passed_pr_subtask_ids,
-        changes_requested_subtask_ids,
-        subtask_branch_map,
+        ci_passed_pr_issue_numbers,
+        changes_requested_issue_numbers,
+        branch_by_issue_number,
     ) = _build_pr_mappings(tasks_by_issue, prs)
 
     return CycleContext(
         run_state=run_state,
         tasks_by_issue=tasks_by_issue,
         issue_number_by_subtask_id=issue_number_by_subtask_id,
-        done_subtask_ids=done_subtask_ids
-        | set(prior_parent_merge_completed_subtask_ids),
-        ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-        changes_requested_subtask_ids=changes_requested_subtask_ids,
-        subtask_branch_map=subtask_branch_map,
+        dependency_resolution=dependency_resolution,
+        done_issue_numbers=done_issue_numbers
+        | set(prior_parent_merge_completed_issue_numbers),
+        ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+        changes_requested_issue_numbers=changes_requested_issue_numbers,
+        branch_by_issue_number=branch_by_issue_number,
         prs=prs,
         pr_by_branch=pr_by_branch,
         config=config,

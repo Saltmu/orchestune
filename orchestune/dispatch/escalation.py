@@ -6,6 +6,10 @@ import os
 from collections.abc import Callable
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+)
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
 from orchestune.dispatch.scoring import Task
@@ -62,14 +66,21 @@ def apply_human_review_escalation(
 
 
 def _decide_changes_requested_escalation(
-    active_task: Task | None, changes_requested_subtask_ids: set[str]
+    active_task: Task | None,
+    changes_requested_issue_numbers: set[int],
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> bool:
-    """依存元PRがCHANGES_REQUESTEDを受けているかを副作用なしで判定する。"""
-    if active_task and active_task.depends_on:
-        return any(
-            dep in changes_requested_subtask_ids for dep in active_task.depends_on
-        )
-    return False
+    """依存元PRがCHANGES_REQUESTEDを受けているかを副作用なしで判定する。
+
+    #799: 依存元は`dependency_resolution`で解決済みのIssue番号を見る
+    （親Issueでスコープ済みのため、別EPICの同名subtask_idを取り違えない）。
+    """
+    if active_task is None:
+        return False
+    deps = dependency_resolution.get(active_task.issue_number, EMPTY_DEPENDENCIES)
+    return any(
+        dep_issue in changes_requested_issue_numbers for dep_issue in deps.resolved
+    )
 
 
 def _apply_changes_requested_escalation(
@@ -106,7 +117,7 @@ def _rule_changes_requested(
 ) -> ActiveWorktreeRuleOutcome | None:
     """#185: 自動リベースや逸脱判定の前に、CHANGES_REQUESTEDになった親を持つかチェックする。"""
     if not _decide_changes_requested_escalation(
-        active_task, ctx.changes_requested_subtask_ids
+        active_task, ctx.changes_requested_issue_numbers, ctx.dependency_resolution
     ):
         return None
     assert active_task is not None

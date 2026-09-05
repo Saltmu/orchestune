@@ -7,18 +7,31 @@ from collections.abc import Iterable
 
 from orchestune.dag.graph import build_conflict_graph
 from orchestune.dag.models import ConflictEdge, ConflictGraph, SubTask
+from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.models import Task
 
 
 def subtasks_from_tasks(tasks: Iterable[Task]) -> dict[str, SubTask]:
-    """Convert dispatcher tasks to the shared DAG/conflict domain model."""
+    """Convert dispatcher tasks to the shared DAG/conflict domain model.
+
+    #799レビュー指摘(Codex P2): `Task.depends_on`は本文由来の文字列のみを
+    保持するため、ネイティブ`blocked_by`しか宣言していない依存は
+    `legacy_merged_depends_on`で復元してから`SubTask.depends_on`へ渡す
+    （渡ってきた`tasks`集合内でだけ解決すれば足りる——このConflict
+    Graph/critical-pathは元々1回のディスパッチサイクルが見るタスク集合で
+    完結しており、cross-EPICの衝突安全性は対象外）。
+    """
+    materialized = list(tasks)
+    issue_to_subtask_id = {
+        task.issue_number: task.subtask_id for task in materialized if task.subtask_id
+    }
     return {
         task.subtask_id: SubTask(
             id=task.subtask_id,
             description="",
             footprint=task.footprint,
             symbols=task.symbols,
-            depends_on=task.depends_on,
+            depends_on=legacy_merged_depends_on(task, issue_to_subtask_id),
             risk=task.risk,
             risk_reasons=(),
             priority=task.priority,
@@ -26,7 +39,7 @@ def subtasks_from_tasks(tasks: Iterable[Task]) -> dict[str, SubTask]:
             writes_shared_contract=task.writes_shared_contract,
             issue_number=task.issue_number,
         )
-        for task in tasks
+        for task in materialized
         if task.subtask_id
     }
 
