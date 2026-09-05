@@ -8,6 +8,7 @@
 import json
 import subprocess
 import time
+from datetime import datetime, timezone
 from contextlib import ExitStack, contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -440,7 +441,10 @@ class TestRunDispatchCycleCompletion:
         fake_forge.list_open_prs.return_value = []
         fake_forge.list_prs.return_value = []
         fake_forge.list_comments.return_value = [
-            {"body": outcome.render(), "created_at": "2026-09-04T23:59:59Z"}
+            {
+                "body": outcome.render(),
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
         ]
         fake_forge.add_label.reset_mock(side_effect=True)
         mock_add_label = fake_forge.add_label
@@ -506,7 +510,10 @@ class TestRunDispatchCycleCompletion:
         fake_forge.list_open_prs.return_value = []
         fake_forge.list_prs.return_value = []
         fake_forge.list_comments.return_value = [
-            {"body": outcome.render(), "created_at": "2026-09-04T23:59:59Z"}
+            {
+                "body": outcome.render(),
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
         ]
         fake_forge.add_label.reset_mock(side_effect=True)
 
