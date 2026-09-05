@@ -8,8 +8,8 @@
 import json
 import subprocess
 import time
-from datetime import datetime, timezone
 from contextlib import ExitStack, contextmanager
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -443,7 +443,7 @@ class TestRunDispatchCycleCompletion:
         fake_forge.list_comments.return_value = [
             {
                 "body": outcome.render(),
-                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         ]
         fake_forge.add_label.reset_mock(side_effect=True)
@@ -512,7 +512,7 @@ class TestRunDispatchCycleCompletion:
         fake_forge.list_comments.return_value = [
             {
                 "body": outcome.render(),
-                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         ]
         fake_forge.add_label.reset_mock(side_effect=True)
