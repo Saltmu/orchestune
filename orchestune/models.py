@@ -85,6 +85,8 @@ class PrRecord:
     is_ci_passing: bool = True
     state: str = "OPEN"
     closed_at: str = ""
+    merged_at: str = ""
+    merge_commit_oid: str = ""
     base_ref: str = ""
     is_cross_repository: bool | None = None
     is_files_truncated: bool = False

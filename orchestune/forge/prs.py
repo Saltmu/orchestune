@@ -12,6 +12,12 @@ from urllib.parse import quote
 from orchestune.models import PrRecord
 from orchestune.validation import validate_issue_number, validate_ref_name
 
+_PR_JSON_FIELDS = (
+    "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,"
+    "mergedAt,mergeCommit,reviewDecision,statusCheckRollup,files,"
+    "closingIssuesReferences,title,body"
+)
+
 _PR_FILES_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -185,6 +191,22 @@ class GitHubPullRequestMixin:
         ).strip()
         return status in {"ahead", "identical"}
 
+    def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
+        """Whether a historical PR merge commit remains in the current base tip."""
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", commit_oid):
+            raise ValueError(f"invalid merge commit SHA: {commit_oid!r}")
+        validate_ref_name(base)
+        status = self._run(
+            [
+                "gh",
+                "api",
+                f"repos/{{owner}}/{{repo}}/compare/{commit_oid}...{base}",
+                "--jq",
+                ".status",
+            ]
+        ).strip()
+        return status in {"ahead", "identical"}
+
     def _fetch_all_pr_files(self, pr_number: int) -> tuple[tuple[str, ...], bool]:
         paths: list[str] = []
         after: str | None = None
@@ -242,6 +264,12 @@ class GitHubPullRequestMixin:
             self._is_check_passing(check) for check in rollup
         )
         raw_is_cross = raw.get("isCrossRepository")
+        raw_merge_commit = raw.get("mergeCommit")
+        merge_commit_oid = (
+            str(raw_merge_commit.get("oid") or "")
+            if isinstance(raw_merge_commit, dict)
+            else ""
+        )
         return PrRecord(
             number=number,
             head_ref=raw["headRefName"],
@@ -253,6 +281,8 @@ class GitHubPullRequestMixin:
             is_ci_passing=is_ci_passing,
             state=(raw.get("state") or "OPEN").upper(),
             base_ref=raw.get("baseRefName") or "",
+            merged_at=raw.get("mergedAt") or "",
+            merge_commit_oid=merge_commit_oid,
             is_cross_repository=(
                 raw_is_cross if isinstance(raw_is_cross, bool) else None
             ),
@@ -276,11 +306,39 @@ class GitHubPullRequestMixin:
                 "--limit",
                 str(limit),
                 "--json",
-                "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,reviewDecision,statusCheckRollup,files,closingIssuesReferences,title,body",
+                _PR_JSON_FIELDS,
             ]
         )
         return [
             self._parse_pr_record(raw, state, paginate_files)
+            for raw in json.loads(stdout)
+        ]
+
+    def list_merged_prs_for_base(self, base: str) -> list[PrRecord]:
+        """Retrieve complete merged PR history for one parent branch.
+
+        This is deliberately a base-scoped query with a high CLI pagination
+        limit instead of reinterpreting the normal 1000-item `list_prs` view as
+        repository history.  `gh pr list` paginates internally to this limit.
+        """
+        validate_ref_name(base)
+        stdout = self._run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--base",
+                base,
+                "--limit",
+                "100000",
+                "--json",
+                _PR_JSON_FIELDS,
+            ]
+        )
+        return [
+            self._parse_pr_record(raw, "merged", paginate_files=False)
             for raw in json.loads(stdout)
         ]
 

@@ -283,6 +283,9 @@ def _build_cycle_context(
     issues: IssuesByStatus,
     run_state: RunState,
     config: DispatcherConfig,
+    *,
+    prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
+    prior_parent_merge_completed_subtask_ids: frozenset[str] = frozenset(),
 ) -> CycleContext:
     all_issues = issues.all()
     (
@@ -303,7 +306,8 @@ def _build_cycle_context(
         run_state=run_state,
         tasks_by_issue=tasks_by_issue,
         issue_number_by_subtask_id=issue_number_by_subtask_id,
-        done_subtask_ids=done_subtask_ids,
+        done_subtask_ids=done_subtask_ids
+        | set(prior_parent_merge_completed_subtask_ids),
         ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
         changes_requested_subtask_ids=changes_requested_subtask_ids,
         subtask_branch_map=subtask_branch_map,
@@ -311,4 +315,6 @@ def _build_cycle_context(
         pr_by_branch=pr_by_branch,
         config=config,
         not_needed_review_dispatcher=_dispatch_not_needed_review,
+        issue_records_by_number={issue.number: issue for issue in all_issues},
+        prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
     )

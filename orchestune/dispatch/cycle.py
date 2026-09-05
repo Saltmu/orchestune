@@ -99,6 +99,7 @@ from orchestune.dispatch.phase_reconciliation import (
     run_post_gc_reconciliation,
 )
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
+from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
 from orchestune.dispatch.recovery import (
     LAUNCH_HISTORY_STALE,
     RecoveryBookkeepingAdapter,
@@ -951,6 +952,7 @@ def _execute_cycle_pipeline(
     config: DispatcherConfig,
     now: float,
     repair_cycle: _RepairCycleState,
+    prior_parent_merge_events: tuple[dict[str, object], ...] = (),
 ) -> CycleReport:
     (
         completion_events,
@@ -958,6 +960,7 @@ def _execute_cycle_pipeline(
         any_forced_serial,
         completed_subtask_ids,
     ) = _process_active_worktrees(ctx)
+    completion_events = [*prior_parent_merge_events, *completion_events]
     _notify_pr_links(ctx, config)
 
     completion_events = _run_gc_reclaim_phase(
@@ -1005,12 +1008,34 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             issues = _fetch_issues(config).filtered_by_parent(
                 config.parent_issue_number
             )
-        ctx = _build_cycle_context(issues, run_state, config)
+        tasks_by_issue, _, _ = _build_task_mappings(issues.all())
+        prior_merges = reconcile_prior_parent_merges(
+            config.resolved_forge,
+            tasks_by_issue,
+            apply=config.apply,
+            issues_by_number={issue.number: issue for issue in issues.all()},
+            active_issue_numbers=frozenset(
+                active.issue_number for active in run_state.active_worktrees.values()
+            ),
+        )
+        ctx = _build_cycle_context(
+            issues,
+            run_state,
+            config,
+            prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
+            prior_parent_merge_completed_subtask_ids=prior_merges.completed_subtask_ids,
+        )
         consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
         repair_cycle = _RepairCycleState()
         repair_cycle.add_report(recovery_report)
         report = _execute_cycle_pipeline(
-            ctx, issues, run_state, config, now, repair_cycle
+            ctx,
+            issues,
+            run_state,
+            config,
+            now,
+            repair_cycle,
+            prior_merges.events,
         )
         _finish_consistency_runtime(
             consistency_runtime, report, ctx, now, config, repair_cycle

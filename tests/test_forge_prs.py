@@ -209,6 +209,25 @@ class TestDeleteBranch:
 
 
 class TestListPrsQuery:
+    def test_lists_merged_history_scoped_to_one_parent_without_default_truncation(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(
+            '[{"number": 5, "headRefName": "claude/issue-101-child", '
+            '"state": "MERGED", "baseRefName": "parent/issue-100", '
+            '"mergedAt": "2026-09-01T00:00:00Z", '
+            '"mergeCommit": {"oid": "' + "a" * 40 + '"}}]'
+        )
+
+        prs = forge.list_merged_prs_for_base("parent/issue-100")
+
+        args = gh_run.call_args.args[0]
+        assert args[args.index("--state") + 1] == "merged"
+        assert args[args.index("--base") + 1] == "parent/issue-100"
+        assert args[args.index("--limit") + 1] == "100000"
+        assert prs[0].merged_at == "2026-09-01T00:00:00Z"
+        assert prs[0].merge_commit_oid == "a" * 40
+
     def test_can_include_all_pr_states(self, forge: GitHubForge, gh_run):
         gh_run.stdout("[]")
 
