@@ -8,6 +8,7 @@ from dataclasses import replace
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import SubTask
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.forge import Forge, GitHubForge
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
@@ -43,19 +44,12 @@ def _with_merged_depends_on(task: Task, issue_to_subtask_id: dict[int, str]) -> 
     このモジュールの`_topological_order`/`_check_task_blocking`はいずれも
     `task.depends_on`のsubtask_id文字列だけを見て統合順序・ブロック伝播を
     決めており、この統合(integrator)処理は`parent_issue_number`で常に単一
-    EPICへスコープされる（`_load_integration_issues`参照）ため、ここでは
-    従来通りネイティブ依存をsubtask_id文字列へ変換して合成してよい
-    （`dependency_resolution`が防ぐ別EPIC横断の衝突はそもそも起こらない）。
+    EPICへスコープされる（`_load_integration_issues`参照）ため、
+    `legacy_merged_depends_on`で従来通りネイティブ依存をsubtask_id文字列へ
+    変換して合成してよい（`dependency_resolution`が防ぐ別EPIC横断の衝突は
+    そもそも起こらない）。
     """
-    native = tuple(
-        issue_to_subtask_id[num]
-        for num in task.native_depends_on
-        if num in issue_to_subtask_id
-    )
-    merged = native
-    for dep in task.depends_on:
-        if dep not in merged:
-            merged += (dep,)
+    merged = legacy_merged_depends_on(task, issue_to_subtask_id)
     return replace(task, depends_on=merged) if merged != task.depends_on else task
 
 

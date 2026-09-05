@@ -160,6 +160,35 @@ def resolve_task_dependencies(
     return TaskDependencies(resolved=tuple(resolved), unresolved=tuple(unresolved))
 
 
+def legacy_merged_depends_on(
+    task: Task, issue_to_subtask_id: Mapping[int, str]
+) -> tuple[str, ...]:
+    """#799レビュー指摘(Codex P1/P2): `Task.depends_on`は本文由来の文字列のみを
+    保持するようになった（ネイティブ`blocked_by`は`native_depends_on`に
+    Issue番号のまま残る）。まだIssue番号ベースへ移行していない、単一EPICへ
+    既にスコープ済みのsubtask_id文字列ベース消費者
+    （footprint逸脱によるConflict Graph再計算・critical-pathランキング・
+    Integratorの統合順序判定など）向けに、ネイティブ依存を含めた従来の
+    合成済みビューを復元するヘルパー。
+
+    これらの消費者は呼び出し側で既に単一EPIC（`--parent-issue`や
+    `parent_issue_number`によるフィルタ）へスコープされているため、
+    `native_depends_on`をIssue番号のまま扱う必要はなく、
+    `issue_to_subtask_id`で変換してunionしてよい
+    （本resolverが防ぐ別EPIC横断の衝突はそもそも起こらない）。
+    """
+    native = tuple(
+        issue_to_subtask_id[num]
+        for num in task.native_depends_on
+        if num in issue_to_subtask_id
+    )
+    merged = native
+    for dep in task.depends_on:
+        if dep not in merged:
+            merged += (dep,)
+    return merged
+
+
 def describe_unresolved_dependency(dependency: UnresolvedDependency) -> str:
     """1件の未解決依存を、運用者向けの1行診断テキストへ整形する。
 
@@ -198,6 +227,7 @@ __all__ = [
     "TaskDependencies",
     "UnresolvedDependency",
     "describe_unresolved_dependency",
+    "legacy_merged_depends_on",
     "resolve_all_dependencies",
     "resolve_task_dependencies",
 ]

@@ -24,6 +24,46 @@ def _task(subtask_id, depends_on=(), status_labels=("status:queued",), state="OP
     )
 
 
+class TestNativeOnlyDependency:
+    """#799レビュー指摘(Codex P2): `Task.depends_on`は本文由来の文字列のみを
+    保持するため、ネイティブ`blocked_by`しか宣言していない依存が
+    Precedence DAGから消えてはならない（消えると critical-path bonus /
+    unlock計算が過小評価される）。"""
+
+    def test_native_only_dependency_still_creates_an_edge(self):
+        upstream = Task(
+            issue_number=1,
+            subtask_id="root",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        downstream = Task(
+            issue_number=2,
+            subtask_id="leaf",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2026-01-01T00:00:00+00:00",
+            native_depends_on=(1,),
+        )
+
+        ranks = compute_precedence_ranks(
+            [upstream, downstream], {"root": 1.0, "leaf": 1.0}
+        )
+
+        assert ranks.unlocked_count("root") == 1
+        assert ranks.downstream_count("root") == 1
+        assert ranks.bottom_level_of("root") == 2.0
+
+
 class TestBottomLevel:
     def test_chain_ranks_decrease_towards_the_tail(self):
         # a -> b -> c: 先頭ほど残りチェーンが長く、bottom levelが大きい。
