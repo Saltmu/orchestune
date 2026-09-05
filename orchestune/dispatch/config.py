@@ -65,6 +65,11 @@ class DispatcherConfig:
     early_death_window_seconds: int = 120
     max_early_death_retries: int = 2
     early_death_backoff_seconds: int = 60
+    # #795: AIレビュー待機タイムアウト（Exit 20）時に自動再投入できる上限回数と
+    # 指数バックオフ秒数。2回に達したタスクはstatus:blocked-human-reviewへエスカレーションされる。
+    max_review_timeout_retries: int = 2
+    review_timeout_backoff_seconds: int = 60
+
     # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
     max_tokens_per_window: int | None = None
     max_tokens_per_task: int | None = None

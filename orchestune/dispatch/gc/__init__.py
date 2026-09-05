@@ -607,6 +607,9 @@ def _handle_completed_event_outcome(
         "not_needed_review_dispatched",
         "blocked_base_branch_red",
         "escalated_base_branch_red",
+        "blocked_review_timeout",
+        "escalated_review_timeout",
+        "blocked_unknown_reason",
     ):
         if ctx.config.apply:
             ctx.run_state.active_worktrees.pop(key, None)
@@ -640,6 +643,18 @@ def _rule_completed(
             open_prs=ctx.prs,
         )
 
+    def _settle_review_timeout_requeue() -> None:
+        ctx.run_state.active_worktrees.pop(key, None)
+        record = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+        if record is not None:
+            record.review_timeout_retry_pending = False
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+
     completion_event = _finalize_completed_worktree(
         completion_active,
         active_task,
@@ -649,6 +664,7 @@ def _rule_completed(
         now=time.time(),
         open_prs=ctx.prs,
         on_early_death_requeue=_settle_early_death_requeue,
+        on_review_timeout_requeue=_settle_review_timeout_requeue,
     )
     return _handle_completed_event_outcome(
         ctx, key, completion_active, active_task, completion_event

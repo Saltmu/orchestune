@@ -527,7 +527,13 @@ class TestTaskReclaimCounts:
         now = 1700000000.0
         state = RunState(
             task_reclaim_counts={
-                280: TaskReclaimRecord(count=2, last_reclaimed_at=now),
+                280: TaskReclaimRecord(
+                    count=2,
+                    last_reclaimed_at=now,
+                    review_timeout_retry_count=1,
+                    review_timeout_retry_at=now + 60.0,
+                    review_timeout_retry_pending=True,
+                ),
             },
         )
         save_run_state(state, path, now=now)
@@ -535,8 +541,35 @@ class TestTaskReclaimCounts:
         loaded = load_run_state(path)
 
         assert loaded.task_reclaim_counts == {
-            280: TaskReclaimRecord(count=2, last_reclaimed_at=now)
+            280: TaskReclaimRecord(
+                count=2,
+                last_reclaimed_at=now,
+                review_timeout_retry_count=1,
+                review_timeout_retry_at=now + 60.0,
+                review_timeout_retry_pending=True,
+            )
         }
+
+    def test_review_timeout_retry_fields_corrupted_fallback(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        payload = {
+            "active_worktrees": {},
+            "launch_history": [],
+            "task_reclaim_counts": {
+                "280": {
+                    "count": 1,
+                    "review_timeout_retry_count": "invalid",
+                    "review_timeout_retry_at": "invalid",
+                    "review_timeout_retry_pending": "not-a-bool",
+                }
+            },
+        }
+        path.write_text(json.dumps(payload))
+        loaded = load_run_state(path)
+        record = loaded.task_reclaim_counts[280]
+        assert record.review_timeout_retry_count == 0
+        assert record.review_timeout_retry_at == 0.0
+        assert record.review_timeout_retry_pending is False
 
     def test_missing_key_defaults_to_empty_ledger(self, tmp_path):
         path = tmp_path / "run_state.json"
