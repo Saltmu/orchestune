@@ -27,7 +27,7 @@ from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
 )
-from orchestune.models import PrRecord
+from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -523,6 +523,67 @@ class TestDecideCompletedWorktreeOutcome:
             decision = _decide_completed_worktree_outcome(active, task)
         assert decision.action == "completed_no_commits"
         assert decision.subtask_id == "task-a"
+
+    def test_verified_prior_parent_merge_beats_zero_commit_escalation(self):
+        active = _active()
+        task = _task(parent_number=100, status_labels=("status:in-progress",))
+        issue = IssueRecord(
+            number=280,
+            title="child",
+            body="",
+            labels=("status:in-progress",),
+            created_at="2026-09-01T00:00:00Z",
+            parent={"number": 100},
+        )
+        forge = MagicMock()
+        forge.list_merged_prs_for_base.return_value = [
+            PrRecord(
+                number=301,
+                head_ref="claude/issue-280-task-a",
+                changed_files=(),
+                state="MERGED",
+                base_ref="parent/issue-100",
+                closes_issue_numbers=(280,),
+                is_cross_repository=False,
+                merged_at="2026-09-02T00:00:00Z",
+                merge_commit_oid="a" * 40,
+            )
+        ]
+        forge.get_issue_last_reopened_at.return_value = None
+        forge.is_merge_commit_reachable_from.return_value = True
+        forge.get_issue.return_value = issue
+        with patch(
+            "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+            return_value=False,
+        ):
+            decision = _decide_completed_worktree_outcome(
+                active, task, forge=forge, issue=issue
+            )
+
+        assert decision.action == "already_merged"
+
+    def test_indeterminate_prior_merge_holds_without_zero_commit_escalation(self):
+        active = _active()
+        task = _task(parent_number=100, status_labels=("status:in-progress",))
+        issue = IssueRecord(
+            number=280,
+            title="child",
+            body="",
+            labels=("status:in-progress",),
+            created_at="2026-09-01T00:00:00Z",
+            parent={"number": 100},
+        )
+        forge = MagicMock()
+        forge.list_merged_prs_for_base.side_effect = RuntimeError("API unavailable")
+        with patch(
+            "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+            return_value=False,
+        ):
+            decision = _decide_completed_worktree_outcome(
+                active, task, forge=forge, issue=issue
+            )
+
+        assert decision.action == "completion_skipped_prior_merge_indeterminate"
 
     def test_no_new_commits_with_forge_error_falls_back_to_completed_no_commits(
         self,

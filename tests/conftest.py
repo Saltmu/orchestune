@@ -524,6 +524,9 @@ class FakeForge:
     def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool:
         return self.is_branch_merged_into(head, base)
 
+    def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
+        return bool(commit_oid) and self.branch_exists(base)
+
     def get_merged_pr_timestamp(self, head: str, base: str) -> str | None:
         return self.merged_branches.get((head, base))
 
@@ -545,6 +548,13 @@ class FakeForge:
         self, limit: int = 1000, paginate_files: bool = False
     ) -> list[PrRecord]:
         return self.list_prs(state="open", limit=limit, paginate_files=paginate_files)
+
+    def list_merged_prs_for_base(self, base: str) -> list[PrRecord]:
+        return [
+            pr
+            for pr in self.list_prs(state="merged", limit=100000)
+            if pr.base_ref == base
+        ]
 
     def seed_issue(self, issue: IssueRecord) -> None:
         self.issues[issue.number] = issue
@@ -595,6 +605,8 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     forge.is_branch_merged_into.return_value = False
     forge.is_current_branch_tip_merged_into.return_value = False
     forge.get_merged_pr_timestamp.return_value = None
+    forge.is_merge_commit_reachable_from.return_value = True
+    forge.list_merged_prs_for_base.return_value = []
 
     original_init = DispatcherConfig.__init__
 

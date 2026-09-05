@@ -84,6 +84,7 @@ def _filter_queued_candidates(
         ctx.tasks_by_issue[issue.number]
         for issue in issues.queued
         if issue.number not in newly_locked
+        and issue.number not in ctx.prior_parent_merge_hold_issue_numbers
         and StatusLabel.DONE not in ctx.tasks_by_issue[issue.number].status_labels
         and StatusLabel.IN_PROGRESS
         not in ctx.tasks_by_issue[issue.number].status_labels
@@ -276,6 +277,11 @@ def _determine_candidate_tasks(
     ]
 
     candidate_tasks = queued_candidates + stack_eligible_tasks
+    candidate_tasks = [
+        task
+        for task in candidate_tasks
+        if task.issue_number not in ctx.prior_parent_merge_hold_issue_numbers
+    ]
     candidate_tasks, duplicate_skips = _drop_duplicate_candidates(candidate_tasks, ctx)
     skips.extend(duplicate_skips)
 

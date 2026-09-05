@@ -21,6 +21,11 @@ from orchestune.dispatch.gc.git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch.gc.outcome_decision import (
+    _decide_action_from_outcome,
+    _get_review_timeout_retry_state,
+)
+from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
 from orchestune.dispatch.labels import (
     PRIMARY_STATUS_LABELS,
     TERMINAL_ESCALATION_LABELS,
@@ -43,10 +48,8 @@ from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
-from orchestune.models import PrRecord, Usage
+from orchestune.models import IssueRecord, PrRecord, Usage
 from orchestune.outcome_record import (
-    REASON_BASE_BRANCH_RED,
-    REASON_REVIEW_TIMEOUT,
     RESULT_BLOCKED,
     RESULT_DONE,
     RESULT_NOT_NEEDED,
@@ -81,7 +84,11 @@ class _CompletionContext(NamedTuple):
 
 
 COMPLETION_HOLD_ACTIONS = frozenset(
-    {"completion_skipped_dirty_worktree", "completion_skipped_forge_error"}
+    {
+        "completion_skipped_dirty_worktree",
+        "completion_skipped_forge_error",
+        "completion_skipped_prior_merge_indeterminate",
+    }
 )
 
 
@@ -190,39 +197,6 @@ def _fetch_outcome_for_active(
     return outcome
 
 
-def _decide_action_from_outcome(
-    outcome: OutcomeRecord | None,
-    has_new_commits: bool,
-    review_timeout_retry_count: int = 0,
-    max_review_timeout_retries: int = 2,
-    review_timeout_retry_pending: bool = False,
-) -> str:
-    if outcome is None:
-        return (
-            "completed_without_outcome" if has_new_commits else "completed_no_commits"
-        )
-    if outcome.result == RESULT_NOT_NEEDED:
-        return "not_needed"
-    if outcome.result == RESULT_BLOCKED:
-        if outcome.reason == REASON_BASE_BRANCH_RED:
-            attempt = outcome.attempt if outcome.attempt is not None else 1
-            return (
-                "escalated_base_branch_red"
-                if attempt >= 3
-                else "blocked_base_branch_red"
-            )
-        if outcome.reason == REASON_REVIEW_TIMEOUT:
-            is_esc = (
-                review_timeout_retry_count >= max_review_timeout_retries - 1
-                and not review_timeout_retry_pending
-            )
-            return "escalated_review_timeout" if is_esc else "blocked_review_timeout"
-        return "blocked_unknown_reason"
-    if outcome.result == RESULT_DONE:
-        return "completed" if has_new_commits else "completed_no_commits"
-    return "blocked_unknown_reason"
-
-
 def _detect_worktree_commits(
     active: ActiveWorktree, repository_root: str | Path | None
 ) -> tuple[bool, str | None]:
@@ -235,13 +209,23 @@ def _detect_worktree_commits(
     return worktree_has_new_commits(active.worktree_path, active.base_branch), None
 
 
-def _get_review_timeout_retry_state(
-    run_state: RunState | None, issue_number: int
-) -> tuple[int, bool]:
-    rec = run_state.task_reclaim_counts.get(issue_number) if run_state else None
-    if rec is not None:
-        return rec.review_timeout_retry_count, rec.review_timeout_retry_pending
-    return 0, False
+def _prior_merge_decision(
+    active: ActiveWorktree,
+    active_task: Task | None,
+    forge: Forge | None,
+    issue: IssueRecord | None,
+) -> CompletedWorktreeDecision | None:
+    prior_merge = decide_prior_parent_merge_completion(
+        active.issue_number, active_task, forge, issue
+    )
+    if prior_merge is None:
+        return None
+    return CompletedWorktreeDecision(
+        action=prior_merge.action,
+        subtask_id=active_task.subtask_id if active_task else "",
+        operation="prior_parent_merge",
+        error=prior_merge.error,
+    )
 
 
 def _decide_completed_worktree_outcome(
@@ -251,10 +235,13 @@ def _decide_completed_worktree_outcome(
     forge: Forge | None = None,
     run_state: RunState | None = None,
     max_review_timeout_retries: int = 2,
+    issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
     if worktree_has_uncommitted_changes(active.worktree_path):
         return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+    if prior_merge_decision := _prior_merge_decision(active, active_task, forge, issue):
+        return prior_merge_decision
     has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
 
     outcome = None
@@ -802,6 +789,7 @@ def _finalize_completed_worktree(
     open_prs: Sequence[PrRecord] | None = None,
     on_early_death_requeue: Callable[[], None] | None = None,
     on_review_timeout_requeue: Callable[[], None] | None = None,
+    issue: IssueRecord | None = None,
 ) -> dict:
     repo_root = config.worktree_root.parent if config.worktree_root else None
     decision = _decide_completed_worktree_outcome(
@@ -811,6 +799,7 @@ def _finalize_completed_worktree(
         forge=config.resolved_forge,
         run_state=run_state,
         max_review_timeout_retries=config.max_review_timeout_retries,
+        issue=issue,
     )
     return _apply_completed_worktree_outcome(
         active,
