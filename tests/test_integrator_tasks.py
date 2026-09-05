@@ -51,6 +51,41 @@ def test_sorts_done_tasks_using_injected_fake_forge():
     assert [task.subtask_id for task in sorted_done] == ["task-1"]
 
 
+def test_topological_order_respects_native_only_dependency():
+    """#799レビュー指摘(Codex P1): `Task.depends_on`は本文由来の文字列のみを
+    保持するようになった（ネイティブ`blocked_by`は`native_depends_on`）。
+    ネイティブ依存しか宣言していないタスクを、依存なしとして扱ってはならない
+    （統合順序を誤り、失敗・エスカレーション済みの依存元をブロック伝播から
+    取りこぼす）。
+
+    subtask_idはあえて辞書順が依存関係と逆になるよう選んでいる
+    （"aaa-downstream" < "zzz-upstream"）。ネイティブ依存が消えて無エッジに
+    なると、トポロジカルソートの同着タイブレークが辞書順になり、依存元より
+    先に依存先が並んでしまう。
+    """
+    upstream = _done_issue(1, "zzz-upstream")
+    downstream = IssueRecord(
+        number=2,
+        title="Issue 2",
+        body="```yaml\nsubtask_id: aaa-downstream\nfootprint: []\n```\n",
+        labels=("status:done",),
+        created_at="2026-07-13T00:00:00Z",
+        blocked_by=(1,),
+    )
+    fake_forge = MagicMock()
+    fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
+        [downstream, upstream] if label == "status:done" else []
+    )
+
+    sorted_done, unparsable = get_sorted_done_tasks(None, forge=fake_forge)
+
+    assert unparsable == []
+    assert [task.subtask_id for task in sorted_done] == [
+        "zzz-upstream",
+        "aaa-downstream",
+    ]
+
+
 def test_parent_scoped_filter_includes_metadata_only_children():
     """#485 review (P1): a child created while native sub-issue linking was
     unavailable has no `IssueRecord.parent`, only the body's

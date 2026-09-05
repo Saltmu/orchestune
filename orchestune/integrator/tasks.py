@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Iterable
+from dataclasses import replace
 
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import SubTask
@@ -35,6 +36,29 @@ def build_issue_to_subtask_id_map(issues: list[IssueRecord]) -> dict[int, str]:
     return issue_to_subtask_id
 
 
+def _with_merged_depends_on(task: Task, issue_to_subtask_id: dict[int, str]) -> Task:
+    """#799: `Task.depends_on`は本文由来の文字列のみを保持するようになった
+    （ネイティブ`blocked_by`は`Task.native_depends_on`にIssue番号のまま残る）。
+
+    このモジュールの`_topological_order`/`_check_task_blocking`はいずれも
+    `task.depends_on`のsubtask_id文字列だけを見て統合順序・ブロック伝播を
+    決めており、この統合(integrator)処理は`parent_issue_number`で常に単一
+    EPICへスコープされる（`_load_integration_issues`参照）ため、ここでは
+    従来通りネイティブ依存をsubtask_id文字列へ変換して合成してよい
+    （`dependency_resolution`が防ぐ別EPIC横断の衝突はそもそも起こらない）。
+    """
+    native = tuple(
+        issue_to_subtask_id[num]
+        for num in task.native_depends_on
+        if num in issue_to_subtask_id
+    )
+    merged = native
+    for dep in task.depends_on:
+        if dep not in merged:
+            merged += (dep,)
+    return replace(task, depends_on=merged) if merged != task.depends_on else task
+
+
 def get_sorted_done_tasks(
     parent_issue_number: int | None,
     forge: Forge | None = None,
@@ -63,7 +87,9 @@ def get_sorted_done_tasks(
         _unique_issues(all_issues) + done_issues
     )
     tasks = [
-        parse_task_from_issue(issue, issue_to_subtask_id)
+        _with_merged_depends_on(
+            parse_task_from_issue(issue, issue_to_subtask_id), issue_to_subtask_id
+        )
         for issue in _unique_issues(all_issues)
     ]
     order = _topological_order(tasks, threshold, ignore_patterns)
@@ -131,7 +157,10 @@ def _topological_order(
 def _order_done_tasks(
     done_issues: list[IssueRecord], identifiers: dict[int, str], order: list[str]
 ) -> tuple[list[Task], list[Task]]:
-    done = [parse_task_from_issue(issue, identifiers) for issue in done_issues]
+    done = [
+        _with_merged_depends_on(parse_task_from_issue(issue, identifiers), identifiers)
+        for issue in done_issues
+    ]
     unparsable = [task for task in done if not task.subtask_id]
     by_id = {task.subtask_id: task for task in done if task.subtask_id}
     sorted_done = [by_id.pop(task_id) for task_id in order if task_id in by_id]
