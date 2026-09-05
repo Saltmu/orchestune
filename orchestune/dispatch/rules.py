@@ -15,7 +15,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
-from orchestune.models import PrRecord
+from orchestune.models import IssueRecord, PrRecord
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
@@ -51,6 +51,10 @@ class CycleContext:
     pr_by_branch: dict[str, PrRecord]
     config: DispatcherConfig
     not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
+    issue_records_by_number: dict[int, IssueRecord] = field(default_factory=dict)
+    # #791: verified historical merges and indeterminate evidence are both
+    # excluded from launch; only the former is a same-cycle dependency result.
+    prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset()
 
 
 @dataclass

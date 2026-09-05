@@ -249,6 +249,19 @@ class DummyGitHub:
         # 登場しないため、`state="all"`呼び出しでも十分。
         return list(self.prs.values())
 
+    def list_merged_prs_for_base(self, base: str) -> list[PrRecord]:
+        return [
+            pr
+            for pr in self.prs.values()
+            if pr.state == "MERGED" and pr.base_ref == base
+        ]
+
+    def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None:
+        return None
+
+    def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
+        return bool(commit_oid)
+
     def list_remote_branches(self) -> list[str]:
         # Use subprocess to list remote tracking branches in the test local repo
         res = subprocess.run(

@@ -591,11 +591,14 @@ def _handle_completed_event_outcome(
 ) -> ActiveWorktreeRuleOutcome | None:
     """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
     action = completion_event["action"]
-    if action == "completion_skipped_forge_error":
+    if action in (
+        "completion_skipped_forge_error",
+        "completion_skipped_prior_merge_indeterminate",
+    ):
         return ActiveWorktreeRuleOutcome(
             completion_event=completion_event, terminal=True
         )
-    if action in ("completed", "escalated_token_limit_exceeded"):
+    if action in ("completed", "already_merged", "escalated_token_limit_exceeded"):
         return _record_completed_worktree(
             ctx, key, completion_active, active_task, completion_event
         )
@@ -665,6 +668,7 @@ def _rule_completed(
         open_prs=ctx.prs,
         on_early_death_requeue=_settle_early_death_requeue,
         on_review_timeout_requeue=_settle_review_timeout_requeue,
+        issue=ctx.issue_records_by_number.get(active.issue_number),
     )
     return _handle_completed_event_outcome(
         ctx, key, completion_active, active_task, completion_event
