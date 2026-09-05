@@ -94,9 +94,27 @@ def _resolve_native(
             seen.add(dep_number)
 
 
+def _own_native_subtask_ids(
+    task: Task, tasks_by_issue: Mapping[int, Task]
+) -> dict[str, set[int]]:
+    """このタスク**自身**のネイティブ依存が名乗るsubtask_id → Issue番号。
+
+    探索範囲はタスク自身の`blocked_by`に明示された依存だけなので、
+    グローバルな`{subtask_id: ...}`辞書とは違い別EPICの無関係な同名タスクを
+    引き当てることはない。
+    """
+    index: dict[str, set[int]] = defaultdict(set)
+    for dep_number in task.native_depends_on:
+        dep_task = tasks_by_issue.get(dep_number)
+        if dep_task is not None and dep_task.subtask_id:
+            index[dep_task.subtask_id].add(dep_number)
+    return index
+
+
 def _resolve_body(
     task: Task,
     index: _CandidateIndex,
+    native_subtask_ids: Mapping[str, set[int]],
     resolved: list[int],
     unresolved: list[UnresolvedDependency],
     seen: set[int],
@@ -104,6 +122,17 @@ def _resolve_body(
     """本文の`depends_on`文字列は、必ず自タスクの親Issueでスコープした
     (親, subtask_id)の組で解決する。親が不明な場合は、共通スコープへ
     格上げせず全て未解決にする。
+
+    親スコープ内に候補が無い場合に限り、**自身のネイティブ依存**に同名の
+    subtask_idがちょうど1件あるかを見る。あれば本文とネイティブは同じ依存の
+    二重表現なので、Issue番号で重複排除して未解決にはしない（本文とネイティブ
+    の両方で別EPICへの依存を宣言する実データのケース）。無条件に未解決へ
+    倒すと、ネイティブ側で正しく解決できているのに恒久的な幽霊依存が残り、
+    依存元が完了してもタスクが永久に起動できなくなる。
+
+    この救済は「同一親内に候補が無い（missing）」場合だけで、曖昧
+    （同一親内に複数候補）な本文依存には適用しない——同名のネイティブ依存が
+    あるという理由だけで曖昧さを消してはならない（#799の契約）。
     """
     if task.parent_number is None:
         unresolved.extend(
@@ -114,6 +143,8 @@ def _resolve_body(
 
     for raw in task.depends_on:
         candidates = index.get((task.parent_number, raw), set())
+        if not candidates:
+            candidates = native_subtask_ids.get(raw, set())
         if len(candidates) == 1:
             (dep_number,) = tuple(candidates)
             if dep_number not in seen:
@@ -154,8 +185,18 @@ def resolve_task_dependencies(
 
     # ネイティブと本文は独立に解決する: 曖昧な本文依存は、たまたま同名の
     # ネイティブ依存が別途存在しても解消されない（両者は別個の依存表明である）。
+    # 唯一の例外は「同一親内に候補が無い本文依存」で、これだけは自身の
+    # ネイティブ依存に同名が1件あれば同じ依存として重複排除する
+    # （`_resolve_body`のdocstring参照）。
     _resolve_native(task, tasks_by_issue, resolved, unresolved, seen)
-    _resolve_body(task, index, resolved, unresolved, seen)
+    _resolve_body(
+        task,
+        index,
+        _own_native_subtask_ids(task, tasks_by_issue),
+        resolved,
+        unresolved,
+        seen,
+    )
 
     return TaskDependencies(resolved=tuple(resolved), unresolved=tuple(unresolved))
 

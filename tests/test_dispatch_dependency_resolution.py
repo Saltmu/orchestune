@@ -197,6 +197,75 @@ def test_native_and_body_dependency_to_same_issue_deduplicate_by_number() -> Non
     assert result.resolved == (301,)
 
 
+def test_cross_epic_body_dependency_is_satisfied_by_its_own_native_link() -> None:
+    """#799 ドライラン検出: 別EPICへの依存を本文とネイティブの両方で宣言している
+    実データのケース（#529 → #656 等）。
+
+    本文文字列は親スコープ外なので単体では解決できないが、そのタスク自身の
+    ネイティブ依存に同名のsubtask_idがちょうど1件あるなら、両者は同じ依存の
+    二重表現である。これを未解決として残すと、ネイティブ側で正しく解決できて
+    いるのに恒久的な「幽霊依存」が残り、依存元が完了してもタスクが永久に
+    起動できなくなる。
+    """
+    other_epic_upstream = _task(656, "semantic-review-merge-gate", parent_number=486)
+    downstream = _task(
+        529,
+        "integration-revalidation-gate",
+        parent_number=490,
+        depends_on=("semantic-review-merge-gate",),
+        native_depends_on=(656,),
+    )
+    tasks_by_issue = {t.issue_number: t for t in (other_epic_upstream, downstream)}
+
+    result = resolve_task_dependencies(downstream, tasks_by_issue)
+
+    assert result.resolved == (656,)
+    assert result.unresolved == ()
+
+
+def test_cross_epic_body_dependency_without_native_link_stays_unresolved() -> None:
+    """ネイティブリンクの裏付けが無い別EPIC参照は、従来どおり未解決のまま。
+
+    本文文字列だけを頼りに別EPICへ解決を広げると、#799が塞いだ
+    グローバル一意性の前提が戻ってしまう。
+    """
+    other_epic_upstream = _task(656, "semantic-review-merge-gate", parent_number=486)
+    downstream = _task(
+        529,
+        "integration-revalidation-gate",
+        parent_number=490,
+        depends_on=("semantic-review-merge-gate",),
+    )
+    tasks_by_issue = {t.issue_number: t for t in (other_epic_upstream, downstream)}
+
+    result = resolve_task_dependencies(downstream, tasks_by_issue)
+
+    assert result.resolved == ()
+    assert result.unresolved[0].reason == REASON_MISSING
+
+
+def test_body_dependency_matching_two_native_links_stays_unresolved() -> None:
+    """自身のネイティブ依存の中に同名subtask_idが2件ある場合は曖昧として扱う。"""
+    first = _task(601, "shared-name", parent_number=486)
+    second = _task(602, "shared-name", parent_number=487)
+    downstream = _task(
+        529,
+        "downstream",
+        parent_number=490,
+        depends_on=("shared-name",),
+        native_depends_on=(601, 602),
+    )
+    tasks_by_issue = {t.issue_number: t for t in (first, second, downstream)}
+
+    result = resolve_task_dependencies(downstream, tasks_by_issue)
+
+    assert set(result.resolved) == {601, 602}
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].raw == "shared-name"
+    assert result.unresolved[0].reason == REASON_AMBIGUOUS
+    assert result.unresolved[0].candidates == (601, 602)
+
+
 def test_ambiguous_body_dependency_is_not_cleared_by_same_named_native_dependency() -> (
     None
 ):
