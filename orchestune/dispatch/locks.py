@@ -109,8 +109,9 @@ def _direct_dependency_canonical_branches(
     見た目が同じ形状でも別prefixのブランチ・PRはスタッキングの取り込み対象
     ではないため、比較は既定prefixの完全一致に限定する。
 
-    `depends_on`が指すsubtask_idが候補集合に見つからない（解決不能な依存）場合は
-    無視する。fail closedのまま、従来通り衝突判定に残る。
+    `depends_on`が指す依存が1件でも未解決（親不明・曖昧・候補集合に見つからない
+    等）の場合は、他の依存が解決済みでも一切除外しない。fail closedのまま、
+    従来通り衝突判定に残る。
 
     Codexレビュー対応(PR#797 P2, Finding 4): 依存元が既に`status:done`/
     `status:not-needed`に到達している場合は除外しない。`_is_task_stack_eligible`
@@ -134,6 +135,14 @@ def _direct_dependency_canonical_branches(
     if StatusLabel.BLOCKED not in task.status_labels:
         return frozenset()
     deps = dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
+    # #799レビュー指摘(Codex P2): 依存の一部でも未解決（親不明・曖昧・依存先
+    # 欠落）なら、他の依存が解決済みでも一切除外しない。`_is_task_stack_eligible`
+    # は未解決が1件でもあればスタック不可と判定するため、このタスクは
+    # スタックされず通常のparent/mainから起動され得る——その場合、解決済み
+    # だった依存元ブランチとの重複も正真正銘の外部衝突であり、部分的に
+    # 除外してしまうとfail closedの原則（本Issueの受け入れ基準）が崩れる。
+    if deps.unresolved:
+        return frozenset()
     return frozenset(
         build_task_branch_name(dep_task.issue_number, dep_task.subtask_id)
         for dep_issue in deps.resolved

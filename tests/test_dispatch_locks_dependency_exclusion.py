@@ -428,3 +428,32 @@ class TestDependencyExclusion:
         # `dep-a`はtaskと同じparent(100)配下には存在しないため未解決＝fail
         # closedのまま。別EPIC(#900)のPRとの重複を依存元として除外しない。
         assert [t.issue_number for t in result.to_lock] == [1]
+
+    def test_partial_unresolved_dependency_disables_all_exclusions(self):
+        """#799レビュー指摘(Codex P2): 依存の一部が未解決（同一親内の重複＝
+        曖昧）な場合、他の依存が解決済みでも一切除外してはならない。
+        `_is_task_stack_eligible`は未解決が1件でもあればスタック不可と
+        判定するため、このタスクは通常のparent/mainから起動され得る——
+        その場合、解決済みだった依存元ブランチとの重複も正真正銘の外部衝突。
+        """
+        dep_a = self._dependency_task(issue_number=100, subtask_id="dep-a")
+        ambiguous_dep_b1 = self._dependency_task(issue_number=101, subtask_id="dep-b")
+        ambiguous_dep_b2 = self._dependency_task(issue_number=102, subtask_id="dep-b")
+        task = self._blocked_task(
+            footprint=("src/shared.py",), depends_on=("dep-a", "dep-b")
+        )
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(100, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=False,
+            )
+        ]
+        result = scan_external_locks(
+            [dep_a, ambiguous_dep_b1, ambiguous_dep_b2, task],
+            remote_branches=[],
+            prs=prs,
+            active_branches=[],
+        )
+        assert [t.issue_number for t in result.to_lock] == [1]
