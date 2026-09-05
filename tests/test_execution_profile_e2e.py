@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.execution_profiles import (
@@ -42,6 +44,8 @@ from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.provisioning.flow import provision_issues
 from tests.conftest import FakeForge
+
+pytestmark = pytest.mark.e2e
 
 
 class RecordingDispatchTarget(DispatchTarget):

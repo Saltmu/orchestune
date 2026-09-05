@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from orchestune.replan.cli import main
 from tests.test_replan_apply import (
     PARENT,
@@ -12,6 +14,8 @@ from tests.test_replan_apply import (
     FakeReplanForge,
     preview_token,
 )
+
+pytestmark = pytest.mark.e2e
 
 
 def test_stale_footprint_generation_replaces_one_old_issue_with_two_new_issues(

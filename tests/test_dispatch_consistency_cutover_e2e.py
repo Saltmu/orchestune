@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     PRIMARY_STATUS_CONFLICT,
@@ -40,6 +42,8 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from tests.conftest import make_issue
+
+pytestmark = pytest.mark.e2e
 
 
 def _outcome(disposition: RepairDisposition) -> ConsistencyRepairOutcome:

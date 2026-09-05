@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -36,6 +38,8 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.dispatch.status_repair import status_intent_journal_path
 from tests.conftest import make_issue, make_pr, make_task
+
+pytestmark = pytest.mark.e2e
 
 
 def _repair_command_codes(report) -> list[str]:
