@@ -30,6 +30,37 @@ from orchestune.models import IssueRecord, PrRecord
 pytest_plugins = ["tests.test_provisioning_support"]
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
+SUITE_MARKERS = frozenset({"unit", "integration", "e2e"})
+
+
+def _suite_markers(item: Any) -> set[str]:
+    return {
+        marker.name for marker in item.iter_markers() if marker.name in SUITE_MARKERS
+    }
+
+
+def _classify_suite(item: Any) -> None:
+    markers = _suite_markers(item)
+    if len(markers) > 1:
+        names = ", ".join(sorted(markers))
+        raise pytest.UsageError(
+            f"{item.nodeid} has multiple mutually exclusive suite markers: {names}"
+        )
+    if not markers:
+        # Unit is the safe default. Tests crossing a real infrastructure or
+        # public workflow boundary must opt into integration/e2e explicitly.
+        item.add_marker(pytest.mark.unit)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Give every collected test exactly one mutually exclusive suite marker."""
+    for item in items:
+        _classify_suite(item)
+        markers = _suite_markers(item)
+        if len(markers) != 1:  # pragma: no cover - defensive invariant
+            raise pytest.UsageError(
+                f"{item.nodeid} must have exactly one suite marker; got {markers}"
+            )
 
 
 def make_task(issue_number: int = 1, **overrides: Any) -> Task:

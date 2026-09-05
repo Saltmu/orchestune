@@ -27,9 +27,26 @@ Then install the local Git pre-commit hook to prevent force-added `.gitignore` f
 
 ## Running Tests
 
-Execute unit tests using `pytest`:
+Execute the full test suite using `pytest`:
 ```bash
 poetry run pytest
+```
+
+### Test suite markers
+
+Every collected test belongs to exactly one suite:
+
+- `unit`: an isolated module, class, or function tested with fakes/mocks and no real infrastructure boundary.
+- `integration`: coordination across components or a real boundary such as git, subprocesses, or file locks.
+- `e2e`: a public CLI or major workflow exercised from its entry point through the resulting outcome.
+
+Tests without a more specific marker default to `unit`. The collection guard rejects conflicting suite markers, while `uses_real_file_lock` remains an orthogonal execution-characteristic marker.
+
+Run a selected suite with strict marker validation:
+```bash
+poetry run pytest --strict-markers -m unit
+poetry run pytest --strict-markers -m integration
+poetry run pytest --strict-markers -m e2e
 ```
 
 Coverage instrumentation is intentionally left out of the default `pytest` run to keep the local dev loop fast. To check coverage, pass the flags explicitly (this is also what `local-ci.sh` runs):
