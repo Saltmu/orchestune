@@ -409,5 +409,5 @@ orchestune replan --plan decomposition_plan.md --parent-issue 123 \
 置き換えません。applyは新planを埋め込んだ親Issue本文がGitHubの本文上限
 （65,536文字）を超えないことを最初の書き込みより前に検証し、超える場合はIssueの作成・
 関係変更・旧世代の廃止を一切行わずexit code `3` で停止します。部分失敗後は新しい
-previewとtokenが必要で、完了済みの再実行はGitHubを変更しません。exit codeは `0`（preview/成功）、`2`（設定不備）、`3`（承認不足・token
-不一致・競合）、`4`（部分適用）、`5`（active世代のno-op）です。
+previewとtokenが必要で、完了済みの再実行はGitHubを変更しません。exit codeは `0`（安全なpreview/成功）、`2`（設定不備）、`3`（承認不足・token
+不一致）、`4`（部分適用）、`5`（active世代のno-op）、`6`（競合またはmanual-reviewを含むpreview）です。

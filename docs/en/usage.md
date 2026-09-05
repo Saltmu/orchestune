@@ -413,5 +413,6 @@ limit, and stops with exit code `3` without creating Issues, changing
 relationships, or retiring the old generation when it would not. A partial
 failure requires a new preview and token;
 re-running a completed replacement makes no GitHub mutations. Exit codes are
-`0` (preview/success), `2` (configuration), `3` (missing or invalid approval,
-including conflicts), `4` (partial application), and `5` (already-active no-op).
+`0` (safe preview/success), `2` (configuration), `3` (missing or invalid
+approval), `4` (partial application), `5` (already-active no-op), and `6`
+(preview contains conflicts or manual-review targets).
