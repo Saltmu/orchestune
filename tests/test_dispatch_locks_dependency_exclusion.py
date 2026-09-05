@@ -21,6 +21,7 @@ def _task(
     depends_on=(),
     status_labels=("status:queued",),
     subtask_id=None,
+    parent_number=100,
 ):
     return Task(
         issue_number=issue_number,
@@ -33,6 +34,9 @@ def _task(
         status_labels=status_labels,
         created_at=created_at,
         depends_on=depends_on,
+        # #799: 本ファイルのタスク群は同一EPIC内の依存解決を検証するため、
+        # 共通のparent_numberでスコープする。
+        parent_number=parent_number,
     )
 
 
@@ -402,3 +406,25 @@ class TestDependencyExclusion:
         )
         assert result.to_lock == []
         assert [t.issue_number for t in result.to_unlock] == [1]
+
+    def test_same_subtask_id_in_different_epic_is_not_treated_as_dependency(self):
+        """#799: 別EPIC（別parent）に同名subtask_idの依存元らしきタスクが
+        あっても、依存元として同定して外部ロックから除外してはならない。"""
+        other_epic_dep = self._dependency_task(
+            issue_number=900, subtask_id="dep-a", parent_number=200
+        )
+        task = self._blocked_task(footprint=("src/shared.py",), depends_on=("dep-a",))
+        prs = [
+            PrRecord(
+                number=99,
+                head_ref=build_task_branch_name(900, "dep-a"),
+                changed_files=("src/shared.py",),
+                is_cross_repository=False,
+            )
+        ]
+        result = scan_external_locks(
+            [other_epic_dep, task], remote_branches=[], prs=prs, active_branches=[]
+        )
+        # `dep-a`はtaskと同じparent(100)配下には存在しないため未解決＝fail
+        # closedのまま。別EPIC(#900)のPRとの重複を依存元として除外しない。
+        assert [t.issue_number for t in result.to_lock] == [1]

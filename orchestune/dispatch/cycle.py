@@ -85,6 +85,10 @@ from orchestune.dispatch.cycle_report import (
     append_event_log,
     build_event_log_entry,
 )
+from orchestune.dispatch.dependency_resolution import (
+    TaskDependencies,
+    resolve_all_dependencies,
+)
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
@@ -161,6 +165,24 @@ def _repository_id() -> str:
     return os.environ.get("GITHUB_REPOSITORY") or "orchestune-repository"
 
 
+def _desired_depends_on(task: Task, deps: TaskDependencies | None) -> tuple[str, ...]:
+    """#799: `orchestune.consistency.desired`は`depends_on`の各要素を
+    「他タスクの`task_id`と一致すれば解決済み」というopaqueな文字列として
+    扱う。解決済みの依存はそのIssue番号を文字列化して渡し、未解決の依存は
+    どの`task_id`・`completed_task_ids`とも一致しない合成IDを1件ずつ割り当てる
+    ことで、「恒久的に未解決」（依存なし扱いへ倒れない）をそのまま表現する。
+    """
+    if deps is None:
+        return ()
+    return (
+        *(str(dep_issue) for dep_issue in deps.resolved),
+        *(
+            f"unresolved-dependency:{task.issue_number}:{index}"
+            for index in range(len(deps.unresolved))
+        ),
+    )
+
+
 class _DispatchConsistencyAdapter:
     """Maps one dispatch-cycle view onto the consistency kernel contracts."""
 
@@ -172,16 +194,16 @@ class _DispatchConsistencyAdapter:
         ctx,
         *,
         fresh: bool,
-        completed_subtask_ids=(),
+        completed_issue_numbers=(),
         include_status_intents: bool = True,
     ) -> None:
         self._config = config
         self._run_state = run_state
         self._cached_issues = issues
         self._cached_prs = ctx.prs
-        self._cached_branches = ctx.subtask_branch_map
+        self._cached_branches = ctx.branch_by_issue_number
         self._fresh = fresh
-        self._completed_subtask_ids = frozenset(completed_subtask_ids)
+        self._completed_issue_numbers = frozenset(completed_issue_numbers)
         self._include_status_intents = include_status_intents
         self._tasks_by_issue: dict[int, Task] = ctx.tasks_by_issue
 
@@ -220,7 +242,7 @@ class _DispatchConsistencyAdapter:
             for active in self._run_state.active_worktrees.values()
         }
         for task in self._tasks_by_issue.values():
-            branch = self._cached_branches.get(task.subtask_id)
+            branch = self._cached_branches.get(task.issue_number)
             if branch is not None:
                 branches.setdefault(task.issue_number, branch)
         return branches
@@ -250,32 +272,46 @@ class _DispatchConsistencyAdapter:
     def _active_task_ids(self) -> tuple[str, ...]:
         return tuple(
             sorted(
-                task.subtask_id
+                str(task.issue_number)
                 for task in self._tasks_by_issue.values()
                 if StatusLabel.IN_PROGRESS in task.status_labels and task.subtask_id
             )
         )
 
     def _desired_tasks(self) -> tuple[DesiredTaskInput, ...]:
+        """#799: `DesiredTaskInput.task_id`/`depends_on`はIssue番号ベースで
+        構築する。`subtask_id`は1つの分解計画（EPIC）内でしか一意性が
+        保証されないため、`task_id=task.subtask_id`のままでは
+        `--parent-issue`無指定時に別EPICの同名subtask_idが衝突し、
+        `derive_desired_repository_state`が重複`task_id`でValueErrorを
+        送出しうる（サイクル全体が例外停止するバグでもあった）。
+
+        未解決の依存は、`completed_ids`に絶対に一致しない合成IDへ割り当てる
+        ことで、`consistency.desired`側の仕組みをそのまま使って「恒久的に
+        未解決」を表現する（依存なし扱いへ倒さない）。
+        """
         forced_serial_issues = {
             active.issue_number
             for active in self._run_state.active_worktrees.values()
             if active.forced_serial
         }
+        dependency_resolution = resolve_all_dependencies(self._tasks_by_issue)
         return tuple(
             DesiredTaskInput(
-                task_id=task.subtask_id,
+                task_id=str(task.issue_number),
                 subject_id=str(task.issue_number),
-                depends_on=task.depends_on,
+                depends_on=_desired_depends_on(
+                    task, dependency_resolution.get(task.issue_number)
+                ),
                 footprint=task.footprint,
                 lifecycle=task_lifecycle(
                     task.status_labels,
-                    completed=task.subtask_id in self._completed_subtask_ids,
+                    completed=task.issue_number in self._completed_issue_numbers,
                 ),
                 forced_serial=task.issue_number in forced_serial_issues,
             )
             for task in sorted(
-                self._tasks_by_issue.values(), key=lambda task: task.subtask_id
+                self._tasks_by_issue.values(), key=lambda task: task.issue_number
             )
             if task.subtask_id
         )
@@ -292,7 +328,9 @@ class _DispatchConsistencyAdapter:
             observed.repository_id,
             self._desired_tasks(),
             active_task_ids=self._active_task_ids(),
-            completed_task_ids=self._completed_subtask_ids,
+            completed_task_ids=frozenset(
+                str(issue_number) for issue_number in self._completed_issue_numbers
+            ),
             policy=DispatchPolicy(
                 max_concurrent=self._config.max_concurrent,
                 task_timeout_seconds=self._config.task_timeout_seconds,
@@ -311,7 +349,7 @@ class _DispatchConsistencyAdapter:
 class _DispatchRepairExecutor:
     config: DispatcherConfig
     adapter: _DispatchConsistencyAdapter | RecoveryBookkeepingAdapter
-    completed_subtask_ids: frozenset[str]
+    completed_issue_numbers: frozenset[int]
     execution_handlers: Mapping[str, RepairCommandHandler] = field(default_factory=dict)
 
     def execute(self, command: RepairCommand) -> RepairResult:
@@ -319,7 +357,7 @@ class _DispatchRepairExecutor:
             return execute_status_repair_command(
                 command,
                 self.adapter.tasks_by_issue,
-                completed_subtask_ids=self.completed_subtask_ids,
+                completed_issue_numbers=self.completed_issue_numbers,
                 config=self.config,
             )
         return DispatchRepairExecutorAdapter(self.execution_handlers).execute(command)
@@ -412,10 +450,10 @@ def _promotion_events(
 
 
 def _status_boundary_adapters(
-    *, issues, run_state, ctx, completed_subtask_ids, config
+    *, issues, run_state, ctx, completed_issue_numbers, config
 ) -> tuple[_DispatchConsistencyAdapter, _DispatchConsistencyAdapter]:
     common = {
-        "completed_subtask_ids": completed_subtask_ids,
+        "completed_issue_numbers": completed_issue_numbers,
         "include_status_intents": False,
     }
     cached = _DispatchConsistencyAdapter(
@@ -433,7 +471,7 @@ def _status_boundary_report(
     *,
     cached_adapter: _DispatchConsistencyAdapter,
     fresh_adapter: _DispatchConsistencyAdapter,
-    completed_subtask_ids,
+    completed_issue_numbers,
     config: DispatcherConfig,
 ):
     supervisor = _status_repair_supervisor()
@@ -447,7 +485,7 @@ def _status_boundary_report(
         executor=_DispatchRepairExecutor(
             config=config,
             adapter=fresh_adapter,
-            completed_subtask_ids=frozenset(completed_subtask_ids),
+            completed_issue_numbers=frozenset(completed_issue_numbers),
         ),
         allowlist=(
             (finding_code,)
@@ -466,7 +504,7 @@ def _run_status_repair_boundary(
     issues,
     run_state,
     ctx,
-    completed_subtask_ids,
+    completed_issue_numbers,
     config: DispatcherConfig,
     cycle_state: _RepairCycleState,
 ) -> list[dict]:
@@ -475,7 +513,7 @@ def _run_status_repair_boundary(
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        completed_subtask_ids=completed_subtask_ids,
+        completed_issue_numbers=completed_issue_numbers,
         config=config,
     )
     initial_scan, boundary_report = _status_boundary_report(
@@ -483,7 +521,7 @@ def _run_status_repair_boundary(
         finding_code,
         cached_adapter=cached_adapter,
         fresh_adapter=fresh_adapter,
-        completed_subtask_ids=completed_subtask_ids,
+        completed_issue_numbers=completed_issue_numbers,
         config=config,
     )
     cycle_state.add_report(boundary_report)
@@ -705,7 +743,7 @@ def _finish_consistency_runtime(
             executor=_DispatchRepairExecutor(
                 config=config,
                 adapter=runtime.fresh_adapter,
-                completed_subtask_ids=frozenset(ctx.done_subtask_ids),
+                completed_issue_numbers=frozenset(ctx.done_issue_numbers),
                 execution_handlers=_final_execution_repair_handlers(
                     runtime,
                     report,
@@ -797,7 +835,7 @@ def _run_recovery_bookkeeping_boundary(
         executor=_DispatchRepairExecutor(
             config=config,
             adapter=adapter,
-            completed_subtask_ids=frozenset(),
+            completed_issue_numbers=frozenset(),
             execution_handlers=handlers,
         ),
         allowlist=allowlist,
@@ -845,13 +883,13 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
         )
 
 
-def _completed_subtask_ids(ctx, completed_in_cycle: Iterable[str]) -> set[str]:
+def _completed_issue_numbers(ctx, completed_in_cycle: Iterable[int]) -> set[int]:
     terminal = {
         TaskLifecycle.DONE,
         TaskLifecycle.NOT_NEEDED,
     }
     persisted = {
-        task.subtask_id
+        task.issue_number
         for task in ctx.tasks_by_issue.values()
         if task.subtask_id and task_lifecycle(task.status_labels) in terminal
     }
@@ -874,7 +912,7 @@ def _run_pre_scheduling_reconciliation(
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        completed_subtask_ids=completed,
+        completed_issue_numbers=completed,
         config=config,
         cycle_state=repair_cycle,
     )
@@ -890,7 +928,7 @@ def _run_pre_scheduling_reconciliation(
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        completed_subtask_ids=completed,
+        completed_issue_numbers=completed,
         config=config,
         cycle_state=repair_cycle,
     )
@@ -956,19 +994,19 @@ def _execute_cycle_pipeline(
         completion_events,
         deviation_events,
         any_forced_serial,
-        completed_subtask_ids,
+        completed_issue_numbers,
     ) = _process_active_worktrees(ctx)
     _notify_pr_links(ctx, config)
 
     completion_events = _run_gc_reclaim_phase(
         ctx, config, completion_events, repair_cycle
     )
-    completed = _completed_subtask_ids(ctx, completed_subtask_ids)
+    completed = _completed_issue_numbers(ctx, completed_issue_numbers)
     promotion_events, lock_result = _run_pre_scheduling_reconciliation(
         ctx=ctx,
         issues=issues,
         run_state=run_state,
-        completed_in_cycle=completed_subtask_ids,
+        completed_in_cycle=completed_issue_numbers,
         completed=completed,
         config=config,
         repair_cycle=repair_cycle,
@@ -977,7 +1015,7 @@ def _execute_cycle_pipeline(
         ctx,
         issues,
         lock_result,
-        completed_subtask_ids,
+        completed_issue_numbers,
         any_forced_serial,
         deviation_events,
         now,

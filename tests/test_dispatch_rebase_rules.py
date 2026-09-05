@@ -9,6 +9,11 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.dag.models import compile_extra_ignore_patterns
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import (
+    REASON_MISSING,
+    TaskDependencies,
+    UnresolvedDependency,
+)
 from orchestune.dispatch.rebase import (
     FootprintDeviationDecision,
     RebaseContext,
@@ -58,17 +63,19 @@ def _context(
     run_state: RunState,
     config: DispatcherConfig,
     *,
-    ci_passed_pr_subtask_ids: set[str],
-    subtask_branch_map: dict[str, str],
+    ci_passed_pr_issue_numbers: set[int],
+    branch_by_issue_number: dict[int, str],
+    dependency_resolution: dict[int, TaskDependencies] | None = None,
 ) -> RebaseContext:
     return RebaseContext(
         active=active,
         active_task=task,
         key="1",
         run_state=run_state,
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-        subtask_branch_map=subtask_branch_map,
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+        branch_by_issue_number=branch_by_issue_number,
+        dependency_resolution=dependency_resolution or {},
         config=config,
     )
 
@@ -184,57 +191,78 @@ class TestDecideFootprintDeviationOutcome:
 
 
 class TestDecideRebaseTarget:
+    """#799: `_decide_rebase_target`は`dependency_resolution`が解決済みの
+    Issue番号で判定する（親Issueでスコープした解決結果を使い、subtask_id
+    文字列を直接見ない）。"""
+
     def test_no_depends_on_returns_none(self):
-        assert _decide_rebase_target(_task(depends_on=()), set(), set(), {}) is None
+        task = _task(depends_on=())
+        deps = {1: TaskDependencies()}
+        assert _decide_rebase_target(task, set(), set(), {}, deps) is None
 
     def test_returns_branch_when_exactly_one_ci_passed_dependency_exists(self):
         task = _task(depends_on=("task-x", "task-y"))
+        deps = {1: TaskDependencies(resolved=(2, 3))}
         branch = _decide_rebase_target(
             task,
-            {"task-x"},
-            {"task-y"},
-            {"task-y": "claude/issue-2-task-y"},
+            {2},
+            {3},
+            {3: "claude/issue-2-task-y"},
+            deps,
         )
         assert branch == "claude/issue-2-task-y"
 
     def test_no_ci_passed_dependency_returns_none(self):
         task = _task(depends_on=("task-x",))
-        assert _decide_rebase_target(task, set(), set(), {}) is None
+        deps = {1: TaskDependencies(resolved=(2,))}
+        assert _decide_rebase_target(task, set(), set(), {}, deps) is None
 
     def test_multiple_ci_passed_dependencies_return_none(self):
         task = _task(depends_on=("task-x", "task-y"))
+        deps = {1: TaskDependencies(resolved=(2, 3))}
         assert (
             _decide_rebase_target(
                 task,
                 set(),
-                {"task-x", "task-y"},
+                {2, 3},
                 {
-                    "task-x": "claude/issue-2-task-x",
-                    "task-y": "claude/issue-3-task-y",
+                    2: "claude/issue-2-task-x",
+                    3: "claude/issue-3-task-y",
                 },
+                deps,
             )
             is None
         )
 
     def test_unresolved_dependency_blocks_auto_rebase(self):
+        """#799: 未解決の依存が1件でもあれば、他が解決済みでもリベース先を推測しない。"""
         task = _task(depends_on=("task-x", "task-y"))
+        deps = {
+            1: TaskDependencies(
+                resolved=(3,),
+                unresolved=(UnresolvedDependency(raw="task-x", reason=REASON_MISSING),),
+            )
+        }
         assert (
             _decide_rebase_target(
                 task,
                 set(),
-                {"task-y"},
-                {"task-y": "claude/issue-3-task-y"},
+                {3},
+                {3: "claude/issue-3-task-y"},
+                deps,
             )
             is None
         )
 
     def test_done_dependencies_are_ignored_when_exactly_one_ci_passed(self):
         task = _task(depends_on=("task-x", "task-y"))
+        deps = {1: TaskDependencies(resolved=(2, 3))}
         branch = _decide_rebase_target(
             task,
-            {"task-x"},
-            {"task-y"},
-            {"task-y": "claude/issue-3-task-y"},
+            {2},
+            {3},
+            {3: "claude/issue-3-task-y"},
+            deps,
         )
         assert branch == "claude/issue-3-task-y"
 
@@ -319,8 +347,9 @@ class TestTryAutoRebase:
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
-        ci_passed_pr_subtask_ids = {"task-parent"}
-        subtask_branch_map = {"task-parent": "parent-branch"}
+        ci_passed_pr_issue_numbers = {2}
+        branch_by_issue_number = {2: "parent-branch"}
+        dependency_resolution = {1: TaskDependencies(resolved=(2,))}
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
@@ -342,8 +371,9 @@ class TestTryAutoRebase:
                     task,
                     run_state,
                     config,
-                    ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-                    subtask_branch_map=subtask_branch_map,
+                    ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+                    branch_by_issue_number=branch_by_issue_number,
+                    dependency_resolution=dependency_resolution,
                 )
             )
 
@@ -354,8 +384,9 @@ class TestTryAutoRebase:
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
-        ci_passed_pr_subtask_ids = {"task-parent"}
-        subtask_branch_map = {"task-parent": "parent-branch"}
+        ci_passed_pr_issue_numbers = {2}
+        branch_by_issue_number = {2: "parent-branch"}
+        dependency_resolution = {1: TaskDependencies(resolved=(2,))}
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
@@ -376,8 +407,9 @@ class TestTryAutoRebase:
                 task,
                 run_state,
                 config,
-                ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-                subtask_branch_map=subtask_branch_map,
+                ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+                branch_by_issue_number=branch_by_issue_number,
+                dependency_resolution=dependency_resolution,
             )
             result = _try_auto_rebase(context)
 

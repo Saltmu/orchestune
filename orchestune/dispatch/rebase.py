@@ -16,6 +16,10 @@ from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import subtasks_from_tasks
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+)
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
@@ -40,9 +44,10 @@ class RebaseContext:
     active_task: Task | None
     key: str
     run_state: RunState
-    done_subtask_ids: set[str]
-    ci_passed_pr_subtask_ids: set[str]
-    subtask_branch_map: dict[str, str]
+    done_issue_numbers: set[int]
+    ci_passed_pr_issue_numbers: set[int]
+    branch_by_issue_number: dict[int, str]
+    dependency_resolution: dict[int, TaskDependencies]
     config: DispatcherConfig
 
 
@@ -307,26 +312,34 @@ def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
 
 def _decide_rebase_target(
     active_task: Task | None,
-    done_subtask_ids: set[str],
-    ci_passed_pr_subtask_ids: set[str],
-    subtask_branch_map: dict[str, str],
+    done_issue_numbers: set[int],
+    ci_passed_pr_issue_numbers: set[int],
+    branch_by_issue_number: dict[int, str],
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> str | None:
     """起動時のスタッキング制約に合わせて、自動リベース対象を1件に絞れる場合のみ
-    その依存先ブランチを返す（副作用なし）。"""
-    if not active_task or not active_task.depends_on:
+    その依存先ブランチを返す（副作用なし）。
+
+    #799: 依存元は`dependency_resolution`が解決済みのIssue番号で判定する。
+    未解決の依存が1件でもあれば、依存先を推測せずリベースを見送る。
+    """
+    if active_task is None:
         return None
-    stackable_deps = []
-    for dep in active_task.depends_on:
-        if dep in done_subtask_ids:
+    deps = dependency_resolution.get(active_task.issue_number, EMPTY_DEPENDENCIES)
+    if deps.is_empty or deps.unresolved:
+        return None
+    stackable_deps: list[int] = []
+    for dep_issue in deps.resolved:
+        if dep_issue in done_issue_numbers:
             continue
-        if dep in ci_passed_pr_subtask_ids:
-            stackable_deps.append(dep)
+        if dep_issue in ci_passed_pr_issue_numbers:
+            stackable_deps.append(dep_issue)
             continue
         return None
 
     if len(stackable_deps) != 1:
         return None
-    return subtask_branch_map.get(stackable_deps[0])
+    return branch_by_issue_number.get(stackable_deps[0])
 
 
 def _decide_rebase_needed(
@@ -521,9 +534,10 @@ def _try_auto_rebase(ctx: RebaseContext) -> bool:
     フォールスルーできるようにするため）。"""
     parent_branch = _decide_rebase_target(
         ctx.active_task,
-        ctx.done_subtask_ids,
-        ctx.ci_passed_pr_subtask_ids,
-        ctx.subtask_branch_map,
+        ctx.done_issue_numbers,
+        ctx.ci_passed_pr_issue_numbers,
+        ctx.branch_by_issue_number,
+        ctx.dependency_resolution,
     )
     if parent_branch is None:
         return False
@@ -547,9 +561,10 @@ def _rule_auto_rebase(
         active_task=active_task,
         key=key,
         run_state=ctx.run_state,
-        done_subtask_ids=ctx.done_subtask_ids,
-        ci_passed_pr_subtask_ids=ctx.ci_passed_pr_subtask_ids,
-        subtask_branch_map=ctx.subtask_branch_map,
+        done_issue_numbers=ctx.done_issue_numbers,
+        ci_passed_pr_issue_numbers=ctx.ci_passed_pr_issue_numbers,
+        branch_by_issue_number=ctx.branch_by_issue_number,
+        dependency_resolution=ctx.dependency_resolution,
         config=ctx.config,
     )
     if not _try_auto_rebase(rebase_ctx):

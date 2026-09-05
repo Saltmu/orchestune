@@ -15,6 +15,7 @@ from orchestune.dag.models import (
     compile_extra_ignore_patterns,
 )
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.reconciliation import (
     _collect_active_conflict_subtask_ids,
     _handle_blocked_recompute_recovery,
@@ -39,9 +40,20 @@ def _task(**overrides):
         status_labels=("status:in-progress",),
         created_at="2026-01-01T00:00:00+00:00",
         depends_on=(),
+        parent_number=100,
     )
     defaults.update(overrides)
     return Task(**defaults)
+
+
+def _dependency_task(issue_number=2, subtask_id="task-x", **overrides):
+    """`depends_on=("task-x",)`が解決される依存先タスク。"""
+    return _task(
+        issue_number=issue_number,
+        subtask_id=subtask_id,
+        status_labels=(),
+        **overrides,
+    )
 
 
 def _active(**overrides):
@@ -62,10 +74,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -75,6 +88,10 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
+    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
+        defaults["dependency_resolution"] = resolve_all_dependencies(
+            overrides["tasks_by_issue"]
+        )
     return CycleContext(**defaults)
 
 
@@ -439,8 +456,11 @@ class TestHandleBlockedRecomputeRecovery:
             depends_on=("task-x",),
             status_labels=(),
         )
+        dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids={"task-x"})
+        ctx = _ctx(
+            tasks_by_issue={1: task, 2: dep}, done_issue_numbers={dep.issue_number}
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -480,8 +500,11 @@ class TestHandleBlockedRecomputeRecovery:
             depends_on=("task-x",),
             status_labels=(),
         )
+        dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids={"task-x"})
+        ctx = _ctx(
+            tasks_by_issue={1: task, 2: dep}, done_issue_numbers={dep.issue_number}
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -524,7 +547,7 @@ class TestHandleBlockedRecomputeRecovery:
             status_labels=(),
         )
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids=set())
+        ctx = _ctx(tasks_by_issue={1: task}, done_issue_numbers=set())
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -550,8 +573,8 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_not_called()
         assert result == []
 
-    def test_dependency_resolved_via_completed_subtask_ids(self, tmp_path):
-        """`completed_subtask_ids`（status:not-neededを含む解決経路）でも
+    def test_dependency_resolved_via_completed_issue_numbers(self, tmp_path):
+        """`completed_issue_numbers`（status:not-neededを含む解決経路）でも
         依存解決とみなされることを確認する。"""
         task = _task(
             issue_number=1,
@@ -559,8 +582,9 @@ class TestHandleBlockedRecomputeRecovery:
             depends_on=("task-x",),
             status_labels=(),
         )
+        dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task}, done_subtask_ids=set())
+        ctx = _ctx(tasks_by_issue={1: task, 2: dep}, done_issue_numbers=set())
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -578,7 +602,7 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                {"task-x"},
+                {dep.issue_number},
                 config,
             )
 

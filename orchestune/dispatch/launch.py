@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING
 
 from orchestune.branch_naming import branch_matches_task, build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
+from orchestune.dispatch.dependency_resolution import (
+    TaskDependencies,
+    resolve_task_dependencies,
+)
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
@@ -35,28 +39,40 @@ if TYPE_CHECKING:
 
 def _is_task_stack_eligible(
     task: Task,
-    tasks_by_issue: dict[int, Task],
-    done_subtask_ids: set[str],
-    ci_passed_pr_subtask_ids: set[str],
-    resolved_grand_deps: set[str],
-) -> tuple[bool, list[str]]:
+    dependency_resolution: dict[int, TaskDependencies],
+    done_issue_numbers: set[int],
+    ci_passed_pr_issue_numbers: set[int],
+    resolved_grand_deps: set[int],
+) -> tuple[bool, list[int]]:
+    """#799: `task.depends_on`（subtask_id文字列）を直接見るのではなく、
+    親Issueでスコープ済みに解決されたIssue番号（`dependency_resolution`）を
+    見る。未解決の依存が1件でもあれば、他の依存がどれだけ揃っていても
+    スタック不可（未解決を「依存なし」として読み飛ばしてはならない）。
+    """
+    deps = dependency_resolution.get(task.issue_number, TaskDependencies())
+    if deps.unresolved:
+        return False, []
+
     all_resolved_or_stackable = True
-    stackable_deps = []
-    for dep in task.depends_on:
-        if dep in done_subtask_ids:
+    stackable_deps: list[int] = []
+    for dep_issue in deps.resolved:
+        if dep_issue in done_issue_numbers:
             continue
-        elif dep in ci_passed_pr_subtask_ids:
-            dep_task = None
-            for t in tasks_by_issue.values():
-                if t.subtask_id == dep:
-                    dep_task = t
-                    break
-            if dep_task and not all(
-                grand_dep in resolved_grand_deps for grand_dep in dep_task.depends_on
+        elif dep_issue in ci_passed_pr_issue_numbers:
+            # 孫依存（依存元タスク自身の依存）も、分かる範囲では検証する
+            # （#799受け入れ基準）。依存元タスクの解決結果が無い場合は
+            # 従来通り検証不能として素通しする。
+            grand_deps = dependency_resolution.get(dep_issue)
+            if grand_deps is not None and (
+                grand_deps.unresolved
+                or not all(
+                    grand_dep in resolved_grand_deps
+                    for grand_dep in grand_deps.resolved
+                )
             ):
                 all_resolved_or_stackable = False
                 break
-            stackable_deps.append(dep)
+            stackable_deps.append(dep_issue)
         else:
             all_resolved_or_stackable = False
             break
@@ -66,35 +82,39 @@ def _is_task_stack_eligible(
 def _get_stack_eligible_tasks(
     blocked_issues: list[IssueRecord],
     tasks_by_issue: dict[int, Task],
-    done_subtask_ids: set[str],
-    ci_passed_pr_subtask_ids: set[str],
-    subtask_branch_map: dict[str, str],
-    completed_subtask_ids: set[str] | None = None,
+    done_issue_numbers: set[int],
+    ci_passed_pr_issue_numbers: set[int],
+    branch_by_issue_number: dict[int, str],
+    dependency_resolution: dict[int, TaskDependencies],
+    completed_issue_numbers: set[int] | None = None,
 ) -> tuple[list[Task], dict[int, str]]:
     stack_eligible_tasks = []
     task_to_base_branch = {}
-    resolved_grand_deps = done_subtask_ids | (completed_subtask_ids or set())
+    resolved_grand_deps = done_issue_numbers | (completed_issue_numbers or set())
 
     for issue in blocked_issues:
         task = tasks_by_issue.get(issue.number) or parse_task_from_issue(issue)
-        if not task.subtask_id or not task.depends_on:
+        if not task.subtask_id:
+            continue
+        deps = dependency_resolution.get(
+            task.issue_number
+        ) or resolve_task_dependencies(task, tasks_by_issue)
+        if deps.is_empty:
             continue
         if StatusLabel.IN_PROGRESS in task.status_labels:
-            continue
-        if issue.blocked_by and len(task.depends_on) < len(issue.blocked_by):
             continue
 
         all_ok, stackable_deps = _is_task_stack_eligible(
             task,
-            tasks_by_issue,
-            done_subtask_ids,
-            ci_passed_pr_subtask_ids,
+            dependency_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
             resolved_grand_deps,
         )
         if all_ok and len(stackable_deps) == 1:
             stack_eligible_tasks.append(task)
-            dep = stackable_deps[0]
-            task_to_base_branch[task.issue_number] = subtask_branch_map[dep]
+            dep_issue = stackable_deps[0]
+            task_to_base_branch[task.issue_number] = branch_by_issue_number[dep_issue]
 
     return stack_eligible_tasks, task_to_base_branch
 

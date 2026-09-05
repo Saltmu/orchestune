@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.launch import (
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
@@ -22,10 +23,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -832,21 +834,23 @@ depends_on:
             progress_partial=False,
             status_labels=("status:blocked",),
             created_at="2026-01-01T00:00:00Z",
-            depends_on=("gh-native-dep",),
+            depends_on=(),
+            # #799: ネイティブblocked_byはIssue番号のまま保持する
+            # （raw YAMLの`depends_on: [yaml-dep]`とは無関係に解決される）。
+            native_depends_on=(1,),
             yaml_error=False,
         )
 
         tasks_by_issue = {1: task1, 2: task2}
-        done_subtask_ids = set()
-        ci_passed_pr_subtask_ids = {"gh-native-dep"}
-        subtask_branch_map = {"gh-native-dep": "claude/issue-1-gh-native-dep"}
+        dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
             blocked_issues=[issue2],
             tasks_by_issue=tasks_by_issue,
-            done_subtask_ids=done_subtask_ids,
-            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-            subtask_branch_map=subtask_branch_map,
+            done_issue_numbers=set(),
+            ci_passed_pr_issue_numbers={1},
+            branch_by_issue_number={1: "claude/issue-1-gh-native-dep"},
+            dependency_resolution=dependency_resolution,
         )
 
         assert eligible_tasks == [task2]
@@ -876,16 +880,20 @@ depends_on:
             progress_partial=False,
             status_labels=("status:blocked", "status:in-progress"),
             created_at="2026-01-01T00:00:00Z",
-            depends_on=("dep-task",),
+            depends_on=(),
+            native_depends_on=(1,),
             yaml_error=False,
         )
+        tasks_by_issue = {1: task1, 2: dual_status_task}
+        dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, _ = _get_stack_eligible_tasks(
             blocked_issues=[issue2],
-            tasks_by_issue={1: task1, 2: dual_status_task},
-            done_subtask_ids=set(),
-            ci_passed_pr_subtask_ids={"dep-task"},
-            subtask_branch_map={"dep-task": "claude/issue-1-dep-task"},
+            tasks_by_issue=tasks_by_issue,
+            done_issue_numbers=set(),
+            ci_passed_pr_issue_numbers={1},
+            branch_by_issue_number={1: "claude/issue-1-dep-task"},
+            dependency_resolution=dependency_resolution,
         )
 
         assert eligible_tasks == []
@@ -908,6 +916,20 @@ depends_on:
         )
 
         task1 = _task(1, subtask_id="gh-unpassed-dep")
+        # #799: 本文の`depends_on`（"yaml-passed-dep"）は自タスクと同じ親配下で
+        # 解決される必要があるため、その依存先タスクも用意する。
+        task_yaml_dep = Task(
+            issue_number=3,
+            subtask_id="yaml-passed-dep",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            parent_number=100,
+        )
         task2 = Task(
             issue_number=2,
             subtask_id="task-2",
@@ -918,24 +940,25 @@ depends_on:
             progress_partial=False,
             status_labels=("status:blocked",),
             created_at="2026-01-01T00:00:00Z",
-            depends_on=("gh-unpassed-dep",),
+            depends_on=("yaml-passed-dep",),
+            native_depends_on=(1,),
             yaml_error=False,
+            parent_number=100,
         )
 
-        tasks_by_issue = {1: task1, 2: task2}
-        done_subtask_ids = set()
-        ci_passed_pr_subtask_ids = {"yaml-passed-dep"}
-        subtask_branch_map = {
-            "yaml-passed-dep": "claude/issue-0-yaml",
-            "gh-unpassed-dep": "claude/issue-1-gh",
-        }
+        tasks_by_issue = {1: task1, 2: task2, 3: task_yaml_dep}
+        dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
             blocked_issues=[issue2],
             tasks_by_issue=tasks_by_issue,
-            done_subtask_ids=done_subtask_ids,
-            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-            subtask_branch_map=subtask_branch_map,
+            done_issue_numbers=set(),
+            ci_passed_pr_issue_numbers={3},
+            branch_by_issue_number={
+                3: "claude/issue-0-yaml",
+                1: "claude/issue-1-gh",
+            },
+            dependency_resolution=dependency_resolution,
         )
 
         assert eligible_tasks == []
@@ -965,22 +988,97 @@ depends_on:
             progress_partial=False,
             status_labels=("status:blocked",),
             created_at="2026-01-01T00:00:00Z",
-            depends_on=("dep-1",),
+            depends_on=(),
+            native_depends_on=(1, 3),
             yaml_error=False,
         )
 
+        # Issue #3 is deliberately absent from tasks_by_issue (not in the
+        # cycle's candidate set), so its state is unknown.
         tasks_by_issue = {1: task1, 2: task2}
-        done_subtask_ids = set()
-        ci_passed_pr_subtask_ids = {"dep-1"}
-        subtask_branch_map = {"dep-1": "claude/issue-1-dep-1"}
+        dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
             blocked_issues=[issue2],
             tasks_by_issue=tasks_by_issue,
-            done_subtask_ids=done_subtask_ids,
-            ci_passed_pr_subtask_ids=ci_passed_pr_subtask_ids,
-            subtask_branch_map=subtask_branch_map,
+            done_issue_numbers=set(),
+            ci_passed_pr_issue_numbers={1},
+            branch_by_issue_number={1: "claude/issue-1-dep-1"},
+            dependency_resolution=dependency_resolution,
         )
 
         assert eligible_tasks == []
         assert base_branches == {}
+
+    def test_same_subtask_id_in_different_epic_does_not_stack_across_epics(self):
+        """#799: 別EPIC（別parent）が同名subtask_idを使っていても、
+        スタッキング起動のbase選定が取り違わない。"""
+        issue2 = IssueRecord(
+            number=2,
+            title="Task 2",
+            body="",
+            labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        # Two different EPICs (parent 100 and parent 200) each have their own
+        # "backend-api" subtask. Only the one under parent 100 is the real
+        # dependency of task2 (also under parent 100).
+        other_epic_upstream = Task(
+            issue_number=900,
+            subtask_id="backend-api",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            parent_number=200,
+        )
+        same_epic_upstream = Task(
+            issue_number=1,
+            subtask_id="backend-api",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            parent_number=100,
+        )
+        task2 = Task(
+            issue_number=2,
+            subtask_id="task-2",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:blocked",),
+            created_at="2026-01-01T00:00:00Z",
+            depends_on=("backend-api",),
+            yaml_error=False,
+            parent_number=100,
+        )
+
+        tasks_by_issue = {900: other_epic_upstream, 1: same_epic_upstream, 2: task2}
+        dependency_resolution = resolve_all_dependencies(tasks_by_issue)
+
+        eligible_tasks, base_branches = _get_stack_eligible_tasks(
+            blocked_issues=[issue2],
+            tasks_by_issue=tasks_by_issue,
+            done_issue_numbers=set(),
+            # Both "backend-api" tasks have a CI-passed PR; if the resolver
+            # mixed them up, task2 could stack onto the wrong EPIC's branch.
+            ci_passed_pr_issue_numbers={900, 1},
+            branch_by_issue_number={
+                900: "claude/issue-900-backend-api",
+                1: "claude/issue-1-backend-api",
+            },
+            dependency_resolution=dependency_resolution,
+        )
+
+        assert eligible_tasks == [task2]
+        assert base_branches == {2: "claude/issue-1-backend-api"}

@@ -384,11 +384,12 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
         issue_number_by_subtask_id={
             task.subtask_id: issue_number for issue_number, task in tasks.items()
         },
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={
-            task.subtask_id: f"codex/issue-{issue_number}"
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={
+            issue_number: f"codex/issue-{issue_number}"
             for issue_number, task in tasks.items()
         },
         prs=[],
@@ -494,10 +495,11 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         run_state=run_state,
         tasks_by_issue={709: task},
         issue_number_by_subtask_id={task.subtask_id: 709},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={task.subtask_id: "codex/issue-709"},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={709: "codex/issue-709"},
         prs=[],
         pr_by_branch={},
         config=config,
@@ -733,7 +735,10 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
             labels=tuple(labels[issue_number]),
             subtask_id="dependency" if issue_number == 758 else "main-merge",
             depends_on=() if issue_number == 758 else ("dependency",),
-            parent=None,
+            # #799: 依存解決は`(parent_number, subtask_id)`でスコープするため、
+            # 依存元(758)・依存先(759)が同じ親を持つ必要がある（`make_issue`の
+            # 既定`{"number": 100}`のままでよい。このテストは758が
+            # `status:done`になった後に759が解決される展開を検証する）。
         )
 
     def list_issues(label, *args, **kwargs):

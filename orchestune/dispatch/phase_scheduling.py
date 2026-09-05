@@ -15,6 +15,10 @@ from orchestune.dispatch.actor_verification import (
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    describe_unresolved_dependency,
+)
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,
@@ -203,18 +207,21 @@ def _dependency_skips(
     `status.blocked-with-resolved-dependencies`が扱う関心事である。
     """
     eligible = {task.issue_number for task in stack_eligible}
-    resolved = ctx.done_subtask_ids
+    done_issue_numbers = ctx.done_issue_numbers
     skips = []
     for issue in issues.blocked:
         task = ctx.tasks_by_issue.get(issue.number)
         if task is None or issue.number in eligible:
             continue
+        deps = ctx.dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
         waiting = [
-            f"#{number}"
-            for dep in task.depends_on
-            if dep not in resolved
-            and (number := ctx.issue_number_by_subtask_id.get(dep)) is not None
+            f"#{dep_issue}"
+            for dep_issue in deps.resolved
+            if dep_issue not in done_issue_numbers
         ]
+        waiting.extend(
+            describe_unresolved_dependency(dependency) for dependency in deps.unresolved
+        )
         if not waiting:
             continue
         skips.append(
@@ -249,7 +256,7 @@ def _determine_candidate_tasks(
     ctx: CycleContext,
     issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
-    completed_subtask_ids: set[str],
+    completed_issue_numbers: set[int],
     any_forced_serial: bool,
     now: float = 0.0,
 ) -> tuple[list[Task], dict[int, str], list[SkipRecord]]:
@@ -264,10 +271,11 @@ def _determine_candidate_tasks(
     stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
         issues.blocked,
         ctx.tasks_by_issue,
-        ctx.done_subtask_ids,
-        ctx.ci_passed_pr_subtask_ids,
-        ctx.subtask_branch_map,
-        completed_subtask_ids=completed_subtask_ids,
+        ctx.done_issue_numbers,
+        ctx.ci_passed_pr_issue_numbers,
+        ctx.branch_by_issue_number,
+        ctx.dependency_resolution,
+        completed_issue_numbers=completed_issue_numbers,
     )
     skips = [
         *_external_lock_skips(ctx, lock_result),
@@ -284,6 +292,7 @@ def _determine_candidate_tasks(
             candidate_tasks,
             ctx.run_state,
             ctx.tasks_by_issue,
+            ctx.dependency_resolution,
         )
         skips.extend(
             _skip_record(task, REASON_FORCED_SERIAL)
@@ -364,7 +373,7 @@ def run_scheduling_phase(
     ctx: CycleContext,
     issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
-    completed_subtask_ids: set[str],
+    completed_issue_numbers: set[int],
     any_forced_serial: bool,
     deviation_events: list[dict],
     now: float,
@@ -376,7 +385,7 @@ def run_scheduling_phase(
     はdispatch_filtersに定義済みのため、ここではそれを呼び出す。
     """
     candidate_tasks, task_to_base_branch, skips = _determine_candidate_tasks(
-        ctx, issues, lock_result, completed_subtask_ids, any_forced_serial, now
+        ctx, issues, lock_result, completed_issue_numbers, any_forced_serial, now
     )
 
     undeviated = _filter_deviation_blocked_candidates(

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
 from orchestune.dispatch.rules import CycleContext
@@ -56,10 +57,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -69,6 +71,10 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
+    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
+        defaults["dependency_resolution"] = resolve_all_dependencies(
+            overrides["tasks_by_issue"]
+        )
     return CycleContext(**defaults)
 
 
@@ -154,11 +160,13 @@ class TestDetermineCandidateTaskSkips:
     def test_blocked_task_with_unresolved_dependencies_reports_what_it_waits_for(
         self, fake_forge
     ):
+        upstream = _task(issue_number=695, subtask_id="task-a", parent_number=100)
         task = _task(
             issue_number=696,
             subtask_id="task-b",
             status_labels=("status:blocked",),
             depends_on=("task-a",),
+            parent_number=100,
         )
         issues = IssuesByStatus(
             queued=[],
@@ -170,10 +178,7 @@ class TestDetermineCandidateTaskSkips:
         )
 
         _, _, skips = _determine_candidate_tasks(
-            _ctx(
-                tasks_by_issue={696: task},
-                issue_number_by_subtask_id={"task-a": 695},
-            ),
+            _ctx(tasks_by_issue={695: upstream, 696: task}),
             issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
@@ -183,6 +188,39 @@ class TestDetermineCandidateTaskSkips:
 
         assert [(r.reason, r.detail) for r in skips] == [
             (REASON_DEPENDENCY, "waiting: #695")
+        ]
+
+    def test_blocked_task_with_unknown_parent_reports_diagnostic_reason(
+        self, fake_forge
+    ):
+        """#799: 親不明の本文依存は「未解決」として、理由付きで診断に残す。"""
+        task = _task(
+            issue_number=696,
+            subtask_id="task-b",
+            status_labels=("status:blocked",),
+            depends_on=("task-a",),
+            parent_number=None,
+        )
+        issues = IssuesByStatus(
+            queued=[],
+            locked=[],
+            in_progress=[],
+            blocked=[_issue(696, labels=("status:blocked",))],
+            done=[],
+            not_needed=[],
+        )
+
+        _, _, skips = _determine_candidate_tasks(
+            _ctx(tasks_by_issue={696: task}),
+            issues,
+            ExternalLockScanResult(to_lock=[], to_unlock=[]),
+            set(),
+            False,
+            now=0.0,
+        )
+
+        assert [(r.reason, r.detail) for r in skips] == [
+            (REASON_DEPENDENCY, "waiting: task-a (unknown-parent)")
         ]
 
 

@@ -2,6 +2,10 @@ import tempfile
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import (
+    TaskDependencies,
+    resolve_all_dependencies,
+)
 from orchestune.dispatch.escalation import (
     _decide_changes_requested_escalation,
     _rule_changes_requested,
@@ -49,10 +53,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -62,6 +67,10 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
+    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
+        defaults["dependency_resolution"] = resolve_all_dependencies(
+            overrides["tasks_by_issue"]
+        )
     return CycleContext(**defaults)
 
 
@@ -127,27 +136,36 @@ class TestApplyHumanReviewEscalation:
 class TestDecideChangesRequestedEscalation:
     def test_false_when_no_depends_on(self):
         assert (
-            _decide_changes_requested_escalation(_task(depends_on=()), set()) is False
+            _decide_changes_requested_escalation(_task(depends_on=()), set(), {})
+            is False
         )
 
     def test_false_when_dependency_not_changes_requested(self):
         task = _task(depends_on=("task-x",))
-        assert _decide_changes_requested_escalation(task, set()) is False
+        deps = {1: TaskDependencies(resolved=(2,))}
+        assert _decide_changes_requested_escalation(task, set(), deps) is False
 
     def test_true_when_dependency_changes_requested(self):
         task = _task(depends_on=("task-x",))
-        assert _decide_changes_requested_escalation(task, {"task-x"}) is True
+        deps = {1: TaskDependencies(resolved=(2,))}
+        assert _decide_changes_requested_escalation(task, {2}, deps) is True
 
 
 class TestRuleChangesRequested:
     def test_none_when_no_dependency_changes_requested(self):
-        task = _task(depends_on=("task-x",))
-        outcome = _rule_changes_requested(_ctx(), "1", _active(), task)
+        task = _task(depends_on=("task-x",), parent_number=100)
+        dep = _task(issue_number=2, subtask_id="task-x", parent_number=100)
+        ctx = _ctx(tasks_by_issue={1: task, 2: dep})
+        outcome = _rule_changes_requested(ctx, "1", _active(), task)
         assert outcome is None
 
     def test_terminal_event_when_dependency_changes_requested(self):
-        task = _task(depends_on=("task-x",))
-        ctx = _ctx(changes_requested_subtask_ids={"task-x"})
+        task = _task(depends_on=("task-x",), parent_number=100)
+        dep = _task(issue_number=2, subtask_id="task-x", parent_number=100)
+        ctx = _ctx(
+            tasks_by_issue={1: task, 2: dep},
+            changes_requested_issue_numbers={2},
+        )
         outcome = _rule_changes_requested(ctx, "1", _active(), task)
         assert outcome is not None
         assert outcome.terminal is True

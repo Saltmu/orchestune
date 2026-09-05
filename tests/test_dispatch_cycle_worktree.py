@@ -16,6 +16,7 @@ import pytest
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_context import _group_by_status
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_reconciliation import _process_active_worktrees
 from orchestune.dispatch.rules import CycleContext
@@ -62,10 +63,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -75,6 +77,10 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
+    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
+        defaults["dependency_resolution"] = resolve_all_dependencies(
+            overrides["tasks_by_issue"]
+        )
     return CycleContext(**defaults)
 
 
@@ -128,13 +134,15 @@ class TestProcessActiveWorktrees:
             subtask_id="task-child",
             footprint=("a.py",),
             depends_on=("task-parent",),
+            parent_number=100,
         )
+        parent_task = _task(issue_number=2, subtask_id="task-parent", parent_number=100)
         run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(
             run_state=run_state,
-            tasks_by_issue={1: task},
-            ci_passed_pr_subtask_ids={"task-parent"},
-            subtask_branch_map={"task-parent": "parent-branch"},
+            tasks_by_issue={1: task, 2: parent_task},
+            ci_passed_pr_issue_numbers={2},
+            branch_by_issue_number={2: "parent-branch"},
         )
 
         with (
@@ -164,7 +172,7 @@ class TestProcessActiveWorktrees:
                 completion_events,
                 deviation_events,
                 any_forced_serial,
-                completed_subtask_ids,
+                completed_issue_numbers,
             ) = _process_active_worktrees(ctx)
 
         assert completion_events == []
@@ -172,7 +180,7 @@ class TestProcessActiveWorktrees:
         assert deviation_events[0]["action"] == "recomputed"
         assert deviation_events[0]["deviated_files"] == ["b.py"]
         assert any_forced_serial is False
-        assert completed_subtask_ids == set()
+        assert completed_issue_numbers == set()
 
     def test_dirty_worktree_skips_completion_and_does_not_fall_through(
         self, fake_forge
@@ -187,13 +195,15 @@ class TestProcessActiveWorktrees:
             subtask_id="task-child",
             footprint=("a.py",),
             depends_on=("task-parent",),
+            parent_number=100,
         )
+        parent_task = _task(issue_number=2, subtask_id="task-parent", parent_number=100)
         run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(
             run_state=run_state,
-            tasks_by_issue={1: task},
-            ci_passed_pr_subtask_ids={"task-parent"},
-            subtask_branch_map={"task-parent": "parent-branch"},
+            tasks_by_issue={1: task, 2: parent_task},
+            ci_passed_pr_issue_numbers={2},
+            branch_by_issue_number={2: "parent-branch"},
         )
 
         fake_forge.list_prs.reset_mock(side_effect=True)
@@ -222,14 +232,14 @@ class TestProcessActiveWorktrees:
                 completion_events,
                 deviation_events,
                 any_forced_serial,
-                completed_subtask_ids,
+                completed_issue_numbers,
             ) = _process_active_worktrees(ctx)
 
         assert len(completion_events) == 1
         assert completion_events[0]["action"] == "completion_skipped_dirty_worktree"
         assert deviation_events == []
         assert any_forced_serial is False
-        assert completed_subtask_ids == set()
+        assert completed_issue_numbers == set()
 
     def test_dirty_worktree_hold_survives_same_cycle_zombie_gc(
         self, tmp_path, fake_forge
@@ -473,13 +483,13 @@ class TestProcessActiveWorktrees:
                 completion_events,
                 deviation_events,
                 any_forced_serial,
-                completed_subtask_ids,
+                completed_issue_numbers,
             ) = _process_active_worktrees(ctx)
 
         assert len(completion_events) == 1
         assert completion_events[0]["action"] == "not_needed"
         assert deviation_events == []
-        assert completed_subtask_ids == {task.subtask_id}
+        assert completed_issue_numbers == {task.issue_number}
         assert "1" not in ctx.run_state.active_worktrees
 
     def test_auto_rebase_failure_discards_active_entry(self, tmp_path, fake_forge):
@@ -492,13 +502,15 @@ class TestProcessActiveWorktrees:
             issue_number=1,
             subtask_id="task-child",
             depends_on=("task-parent",),
+            parent_number=100,
         )
+        parent_task = _task(issue_number=2, subtask_id="task-parent", parent_number=100)
         run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(
             run_state=run_state,
-            tasks_by_issue={1: task},
-            ci_passed_pr_subtask_ids={"task-parent"},
-            subtask_branch_map={"task-parent": "parent-branch"},
+            tasks_by_issue={1: task, 2: parent_task},
+            ci_passed_pr_issue_numbers={2},
+            branch_by_issue_number={2: "parent-branch"},
             config=DispatcherConfig(
                 events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
@@ -539,12 +551,12 @@ class TestProcessActiveWorktrees:
                 completion_events,
                 deviation_events,
                 any_forced_serial,
-                completed_subtask_ids,
+                completed_issue_numbers,
             ) = _process_active_worktrees(ctx)
 
         assert completion_events == []
         assert deviation_events == []
-        assert completed_subtask_ids == set()
+        assert completed_issue_numbers == set()
         assert "1" not in ctx.run_state.active_worktrees
         mock_remove.assert_called_once_with(1, "status:in-progress")
         mock_add.assert_called_once_with(1, "status:manual-merge-required")
@@ -584,13 +596,13 @@ class TestProcessActiveWorktrees:
                 completion_events,
                 deviation_events,
                 any_forced_serial,
-                completed_subtask_ids,
+                completed_issue_numbers,
             ) = _process_active_worktrees(ctx)
 
         assert len(completion_events) == 1
         assert completion_events[0]["action"] == "not_needed"
         assert deviation_events == []
-        assert completed_subtask_ids == {task.subtask_id}
+        assert completed_issue_numbers == {task.issue_number}
         assert any_forced_serial is False
         assert "1" not in ctx.run_state.active_worktrees
 
@@ -635,7 +647,7 @@ class TestProcessActiveWorktrees:
                 completion_events,
                 deviation_events,
                 any_forced_serial,
-                completed_subtask_ids,
+                completed_issue_numbers,
             ) = _process_active_worktrees(ctx_two)
 
         assert any_forced_serial is True

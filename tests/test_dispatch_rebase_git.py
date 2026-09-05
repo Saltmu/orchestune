@@ -55,9 +55,10 @@ def _context(
         active_task=task,
         key="1",
         run_state=run_state,
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        subtask_branch_map={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        branch_by_issue_number={},
+        dependency_resolution={},
         config=config,
     )
 

@@ -565,18 +565,6 @@ def ensure_parent_marker(body: str) -> str:
     return f"{body.rstrip()}\n\n{PARENT_MARKER}\n"
 
 
-def _native_depends_on(
-    issue: IssueRecord, issue_to_subtask_id: dict[int, str] | None
-) -> tuple[str, ...]:
-    if issue_to_subtask_id is None or not issue.blocked_by:
-        return ()
-    return tuple(
-        issue_to_subtask_id[num]
-        for num in issue.blocked_by
-        if num in issue_to_subtask_id
-    )
-
-
 def _body_depends_on(match: re.Match | None, yaml_error: bool) -> tuple[str, ...]:
     if not match or yaml_error:
         return ()
@@ -587,29 +575,6 @@ def _body_depends_on(match: re.Match | None, yaml_error: bool) -> tuple[str, ...
     except Exception:
         pass
     return ()
-
-
-def _resolve_depends_on(
-    issue: IssueRecord,
-    issue_to_subtask_id: dict[int, str] | None,
-    match: re.Match | None,
-    yaml_error: bool,
-) -> tuple[str, ...]:
-    """#485 review (P1): a task can have some dependencies linked via native
-    `blocked_by` and others not (e.g. one `set_blocked_by` call raised
-    `RelationshipUnavailableError` after an earlier one succeeded for the
-    same issue). Treating a non-empty native list as fully authoritative
-    then silently drops the unlinked dependency, letting the task be
-    promoted the moment only the linked one finishes. The body's
-    `depends_on` is always the complete, authoritative list (rendered
-    directly from `subtask.depends_on` at creation time), so union it in
-    rather than discarding it whenever any native entry exists.
-    """
-    depends_on = _native_depends_on(issue, issue_to_subtask_id)
-    for dep in _body_depends_on(match, yaml_error):
-        if dep not in depends_on:
-            depends_on += (dep,)
-    return depends_on
 
 
 _EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
@@ -751,13 +716,27 @@ def _extract_labels_metadata(
 
 
 def _extract_parent_metadata(issue: IssueRecord) -> tuple[int | None, str | None]:
-    if issue.parent:
-        return issue.parent.get("number"), issue.parent.get("state")
-    return parent_issue_number_from_body(issue.body), None
+    """#799: `effective_parent_number`に委譲し、自己親化除外（#802）を含む
+    親判定規則をここでも一貫させる。旧実装は`issue.parent.get("number")`を
+    無条件に採用しており、自己親化（自分自身を親とするIssue）を除外して
+    いなかった。
+    """
+    parent_number = effective_parent_number(issue)
+    if parent_number is None:
+        return None, None
+    native_parent = issue.parent
+    if native_parent is not None and native_parent.get("number") == parent_number:
+        return parent_number, native_parent.get("state")
+    return parent_number, None
 
 
 def parse_task_from_issue(
     issue: IssueRecord,
+    # #799: 依存解決の入力にはもう使わない（ネイティブ依存は
+    # `Task.native_depends_on`としてIssue番号のまま保持し、
+    # `orchestune.dispatch.dependency_resolution`が解決する）。
+    # `integrator`/`recovery`など他モジュールの既存呼び出し互換のため
+    # 引数自体は残す。
     issue_to_subtask_id: dict[int, str] | None = None,
 ) -> Task:
     (
@@ -771,7 +750,7 @@ def parse_task_from_issue(
         yaml_error,
         match,
     ) = _extract_footprint_metadata(issue)
-    depends_on = _resolve_depends_on(issue, issue_to_subtask_id, match, yaml_error)
+    depends_on = _body_depends_on(match, yaml_error)
     priority, risk, progress_partial = _extract_labels_metadata(
         issue.labels, issue.number
     )
@@ -788,6 +767,7 @@ def parse_task_from_issue(
         status_labels=tuple(issue.labels),
         created_at=issue.created_at,
         depends_on=depends_on,
+        native_depends_on=issue.blocked_by,
         yaml_error=yaml_error,
         parent_number=parent_number,
         issue_state=issue.state,

@@ -79,7 +79,7 @@ _MAIN_ACTIVE_WORKTREE_RULES = RuleChain(
 
 def _process_active_worktrees(
     ctx: CycleContext,
-) -> tuple[list[dict], list[dict], bool, set[str]]:
+) -> tuple[list[dict], list[dict], bool, set[int]]:
     """#192/#193/#200: active worktreeごとの完了検知・footprint逸脱処理。
 
     完了と判定したエントリは（apply時）run_state.active_worktreesから
@@ -108,7 +108,7 @@ def _process_active_worktrees(
         aggregates.completion_events,
         aggregates.deviation_events,
         aggregates.any_forced_serial,
-        aggregates.completed_subtask_ids,
+        aggregates.completed_issue_numbers,
     )
 
 
@@ -116,7 +116,7 @@ def run_post_gc_reconciliation(
     issues: Any,
     run_state: Any,
     ctx: CycleContext,
-    completed_subtask_ids: set[str],
+    completed_issue_numbers: set[int],
     config: DispatcherConfig,
 ) -> list[dict]:
     """Maintenance GC Phaseの直後に行う非status自動復帰処理。
@@ -124,7 +124,7 @@ def run_post_gc_reconciliation(
     #212: dirty worktreeの完了保留判定を同一サイクル内のゾンビGCが上書き
     しないよう、GCはこの関数より必ず先に(`_process_active_worktrees`の
     completion_eventsを参照して)実行される。そのため、この関数自体はGCの
-    結果を必要とせず`completed_subtask_ids`のみを参照する。
+    結果を必要とせず`completed_issue_numbers`のみを参照する。
 
     blocked promotionはこの関数より先にConsistencySupervisorが実行する。
     ここではstatus:blocked-recomputeとbase-branch-redの既存復帰処理だけを
@@ -132,12 +132,12 @@ def run_post_gc_reconciliation(
     """
     # 決定論的な自動復帰（ブロック解除）処理
     promotion_events = _handle_blocked_recompute_recovery(
-        issues, run_state, ctx, completed_subtask_ids, config
+        issues, run_state, ctx, completed_issue_numbers, config
     )
 
     # #555: ci:base-branch-red の自動復帰（base_sha前進による再キュー）
     base_branch_red_promoted_events = _handle_base_branch_red_recovery(
-        issues, ctx, completed_subtask_ids, config
+        issues, ctx, completed_issue_numbers, config
     )
     promotion_events.extend(base_branch_red_promoted_events)
 

@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+    resolve_all_dependencies,
+)
 from orchestune.dispatch.scoring import Task
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
@@ -80,9 +85,16 @@ def _collect_branch_footprints(
 
 
 def _direct_dependency_canonical_branches(
-    task: Task, subtask_id_to_task: dict[str, Task]
+    task: Task,
+    tasks_by_issue: dict[int, Task],
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> frozenset[str]:
     """taskの直接の`depends_on`が指す依存元タスクの正規ブランチ名の集合。
+
+    #799: 依存元の同定は`dependency_resolution`が親Issueでスコープして
+    解決したIssue番号で行う。未解決の依存（親不明・曖昧・依存先欠落）は
+    どの依存元も指すか分からないため、ここでは含めない
+    （＝そのぶん通常の衝突判定からは除外されず、fail closedのまま残る）。
 
     #796: スタッキング起動(`orchestune.dispatch.launch._get_stack_eligible_tasks`)
     は依存元ブランチをbaseに積むため、依存元のPR・ブランチとの重複は
@@ -92,7 +104,7 @@ def _direct_dependency_canonical_branches(
 
     Codexレビュー対応(PR#797 P2): `orchestune.branch_naming.branch_matches_task`
     は任意のprefix（`fix/issue-N-x`等）を受理する設計だが、スタッキング
-    起動や`_build_pr_mappings`の`subtask_branch_map`が実際に使うのは
+    起動や`_build_pr_mappings`の`branch_by_issue_number`が実際に使うのは
     `build_task_branch_name`が生成する既定prefixのブランチそのもの。
     見た目が同じ形状でも別prefixのブランチ・PRはスタッキングの取り込み対象
     ではないため、比較は既定prefixの完全一致に限定する。
@@ -121,10 +133,11 @@ def _direct_dependency_canonical_branches(
     """
     if StatusLabel.BLOCKED not in task.status_labels:
         return frozenset()
+    deps = dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
     return frozenset(
         build_task_branch_name(dep_task.issue_number, dep_task.subtask_id)
-        for dep in task.depends_on
-        if (dep_task := subtask_id_to_task.get(dep)) is not None
+        for dep_issue in deps.resolved
+        if (dep_task := tasks_by_issue.get(dep_issue)) is not None
         and StatusLabel.DONE not in dep_task.status_labels
         and StatusLabel.NOT_NEEDED not in dep_task.status_labels
     )
@@ -227,12 +240,14 @@ def scan_external_locks(
     branch_footprints, unknown_branches = _collect_branch_footprints(
         remote_branches, active_set
     )
-    # #796: `depends_on`の解決に使う。呼び出し元(`_decide_external_lock_sync`)は
+    # #796/#799: `depends_on`の解決に使う。呼び出し元(`_decide_external_lock_sync`)は
     # 実際には全タスク（queued/blocked/in-progress/done/not-needed）を渡すため、
-    # 依存元タスクがまだ完了していなくてもここで引ける。
-    subtask_id_to_task = {
-        task.subtask_id: task for task in queued_tasks if task.subtask_id
-    }
+    # 依存元タスクがまだ完了していなくてもここで引ける。依存元の同定は
+    # subtask_idの文字列一致ではなく、親Issueでスコープした
+    # `dependency_resolution`（Issue番号）で行う（#799: 別EPICの同名
+    # subtask_idを取り違えないため）。
+    tasks_by_issue = {task.issue_number: task for task in queued_tasks}
+    dependency_resolution = resolve_all_dependencies(tasks_by_issue)
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
     conflicts_by_issue: dict[int, tuple[ExternalLockConflict, ...]] = {}
@@ -247,7 +262,7 @@ def scan_external_locks(
             continue
 
         dependency_branches = _direct_dependency_canonical_branches(
-            task, subtask_id_to_task
+            task, tasks_by_issue, dependency_resolution
         )
         conflicts = _collect_task_conflicts(
             task,

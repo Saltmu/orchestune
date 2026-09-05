@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
@@ -26,15 +27,26 @@ class CycleContext:
     decide/act関数の引数を位置引数の羅列にせず、新しい判断パターンが追加の
     データを必要とする場合の引数伝播を、このコンテキストへの1フィールド追加に
     閉じ込めることを目的とする（#86）。
+
+    #799: 依存解決に関わるフィールド（`dependency_resolution`
+    `done_issue_numbers` `ci_passed_pr_issue_numbers`
+    `changes_requested_issue_numbers` `branch_by_issue_number`）は、
+    すべてIssue番号をキー・値の同一性とする。`subtask_id`は1つの分解計画
+    （EPIC）内でしか一意性が保証されないため、`--parent-issue`を指定しない
+    複数EPIC横断のサイクルでは同名subtask_idが衝突しうる。
+    `issue_number_by_subtask_id`のみ、footprint逸脱によるConflict Graph
+    再計算通知（`dispatch.rebase.notify_recompute`等）が使う別関心事の
+    表示用マップとして維持する（依存解決には使わない）。
     """
 
     run_state: RunState
     tasks_by_issue: dict[int, Task]
     issue_number_by_subtask_id: dict[str, int]
-    done_subtask_ids: set[str]
-    ci_passed_pr_subtask_ids: set[str]
-    changes_requested_subtask_ids: set[str]
-    subtask_branch_map: dict[str, str]
+    dependency_resolution: dict[int, TaskDependencies]
+    done_issue_numbers: set[int]
+    ci_passed_pr_issue_numbers: set[int]
+    changes_requested_issue_numbers: set[int]
+    branch_by_issue_number: dict[int, str]
     prs: list[PrRecord]
     pr_by_branch: dict[str, PrRecord]
     config: DispatcherConfig
@@ -70,10 +82,19 @@ class _ActiveWorktreeAggregates:
     deviation_events: list[dict] = field(default_factory=list)
     any_forced_serial: bool = False
     completed_subtask_ids: set[str] = field(default_factory=set)
+    # #799: `completed_subtask_ids`は表示・後方互換用に維持しつつ、依存解決
+    # （「このサイクル内で完了したタスクを、他タスクの依存先としてどう扱うか」）
+    # にはこちらのIssue番号集合を使う。`active.issue_number`は個々のRuleが
+    # 常に1つの確定したActiveWorktreeに対して動作した結果すでに分かっている値
+    # なので、`ActiveWorktreeRuleOutcome`自体にIssue番号を持たせ直さなくても
+    # ここで衝突なく集約できる。
+    completed_issue_numbers: set[int] = field(default_factory=set)
 
 
 def _merge_active_worktree_outcome(
-    aggregates: _ActiveWorktreeAggregates, outcome: ActiveWorktreeRuleOutcome
+    aggregates: _ActiveWorktreeAggregates,
+    outcome: ActiveWorktreeRuleOutcome,
+    issue_number: int,
 ) -> None:
     if outcome.completion_event is not None:
         aggregates.completion_events.append(outcome.completion_event)
@@ -81,6 +102,7 @@ def _merge_active_worktree_outcome(
         aggregates.deviation_events.append(outcome.deviation_event)
     if outcome.completed_subtask_id is not None:
         aggregates.completed_subtask_ids.add(outcome.completed_subtask_id)
+        aggregates.completed_issue_numbers.add(issue_number)
     if outcome.forced_serial:
         aggregates.any_forced_serial = True
 
@@ -112,7 +134,7 @@ class RuleChain:
             outcome = rule(ctx, key, active, active_task)
             if outcome is None:
                 continue
-            _merge_active_worktree_outcome(aggregates, outcome)
+            _merge_active_worktree_outcome(aggregates, outcome, active.issue_number)
             if outcome.terminal:
                 return True
         return False

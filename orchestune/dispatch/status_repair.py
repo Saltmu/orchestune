@@ -29,6 +29,7 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import resolve_task_dependencies
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task
 from orchestune.labels import StatusLabel
@@ -144,7 +145,7 @@ def _precondition_holds(
     if precondition == "absent-primary-status":
         return not primary
     if precondition == "dependencies-declared":
-        return bool(task.depends_on)
+        return bool(task.depends_on) or bool(task.native_depends_on)
     if precondition == "dependencies-resolved":
         return dependencies_resolved
     if precondition == "dependencies-unresolved":
@@ -161,21 +162,23 @@ def _precondition_holds(
 def _fresh_dependencies_resolved(
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_subtask_ids: frozenset[str],
+    completed_issue_numbers: frozenset[int],
     config: DispatcherConfig,
 ) -> bool:
-    tasks_by_subtask = {
-        candidate.subtask_id: candidate
-        for candidate in tasks_by_issue.values()
-        if candidate.subtask_id
-    }
-    for dependency in task.depends_on:
-        if dependency not in completed_subtask_ids:
+    """#799: 実行直前に、渡された（fresh な）`tasks_by_issue`からその場で
+    依存解決をやり直す。親Issueでスコープした解決が1件でも未解決なら、
+    このタスクの依存はまだ満たされていないものとして扱う。
+    """
+    deps = resolve_task_dependencies(task, tasks_by_issue)
+    if deps.unresolved:
+        return False
+    for dep_issue in deps.resolved:
+        if dep_issue not in completed_issue_numbers:
             return False
-        dependency_task = tasks_by_subtask.get(dependency)
+        dependency_task = tasks_by_issue.get(dep_issue)
         if dependency_task is None:
             continue
-        labels = config.resolved_forge.get_issue_labels(dependency_task.issue_number)
+        labels = config.resolved_forge.get_issue_labels(dep_issue)
         if not any(
             label in labels for label in (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
         ):
@@ -187,7 +190,7 @@ def _fresh_preconditions_hold(
     command: RepairCommand,
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_subtask_ids: frozenset[str],
+    completed_issue_numbers: frozenset[int],
     config: DispatcherConfig,
 ) -> bool:
     if config.resolved_forge.get_issue_state(task.issue_number).upper() != "OPEN":
@@ -202,7 +205,7 @@ def _fresh_preconditions_hold(
     ) and _fresh_dependencies_resolved(
         task,
         tasks_by_issue,
-        completed_subtask_ids,
+        completed_issue_numbers,
         config,
     )
     return all(
@@ -292,14 +295,14 @@ def _execute(
     command: RepairCommand,
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_subtask_ids: frozenset[str],
+    completed_issue_numbers: frozenset[int],
     config: DispatcherConfig,
     journal: IntentJournal,
     now: datetime,
     intent: TransitionIntent | None = None,
 ) -> bool:
     if not _fresh_preconditions_hold(
-        command, task, tasks_by_issue, completed_subtask_ids, config
+        command, task, tasks_by_issue, completed_issue_numbers, config
     ):
         return False
     current = intent or journal.plan(_new_intent(command, now))
@@ -386,7 +389,7 @@ def _execute_with_pending_intent(
     command: RepairCommand,
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_subtask_ids: Iterable[str],
+    completed_issue_numbers: Iterable[int],
     config: DispatcherConfig,
     observed_at: datetime,
 ) -> RepairResult:
@@ -406,7 +409,7 @@ def _execute_with_pending_intent(
             command,
             task,
             tasks_by_issue,
-            frozenset(completed_subtask_ids),
+            frozenset(completed_issue_numbers),
             config,
             journal,
             observed_at,
@@ -424,7 +427,7 @@ def execute_status_repair_command(
     command: RepairCommand,
     tasks_by_issue: Mapping[int, Task],
     *,
-    completed_subtask_ids: Iterable[str],
+    completed_issue_numbers: Iterable[int],
     config: DispatcherConfig,
     now: datetime | None = None,
 ) -> RepairResult:
@@ -439,7 +442,7 @@ def execute_status_repair_command(
         command,
         task,
         tasks_by_issue,
-        completed_subtask_ids,
+        completed_issue_numbers,
         config,
         observed_at,
     )
