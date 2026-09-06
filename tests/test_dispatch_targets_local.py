@@ -134,12 +134,20 @@ class TestLocalProcessDispatchTarget:
 
     def test_is_complete_true_when_pid_not_alive(self):
         target = LocalProcessDispatchTarget()
-        with patch("orchestune.dispatch.targets._is_pid_alive", return_value=False):
+        with patch(
+            "orchestune.dispatch.targets._is_pid_alive",
+            autospec=True,
+            return_value=False,
+        ):
             assert target.is_complete(DispatchHandle(pid=123)) is True
 
     def test_is_complete_false_when_pid_alive(self):
         target = LocalProcessDispatchTarget()
-        with patch("orchestune.dispatch.targets._is_pid_alive", return_value=True):
+        with patch(
+            "orchestune.dispatch.targets._is_pid_alive",
+            autospec=True,
+            return_value=True,
+        ):
             assert target.is_complete(DispatchHandle(pid=123)) is False
 
     def test_launch_with_local_cmd_templates(self, tmp_path):

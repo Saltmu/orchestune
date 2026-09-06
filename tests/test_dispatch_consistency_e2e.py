@@ -176,7 +176,9 @@ def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
     )
 
     with patch(
-        "orchestune.dispatch.execution_repair.is_process_alive", return_value=True
+        "orchestune.dispatch.execution_repair.is_process_alive",
+        autospec=True,
+        return_value=True,
     ):
         first = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
         restarted = load_run_state(config.run_state_path)
@@ -224,7 +226,9 @@ def test_recovery_counters_use_repository_wide_in_progress_snapshot(
     )
 
     with patch(
-        "orchestune.dispatch.execution_repair.is_process_alive", return_value=True
+        "orchestune.dispatch.execution_repair.is_process_alive",
+        autospec=True,
+        return_value=True,
     ):
         report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
 
@@ -308,6 +312,7 @@ def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> N
 
     with patch(
         "orchestune.dispatch.execution_repair.is_process_alive",
+        autospec=True,
         side_effect=(False, False),
     ):
         outcome = run_gc_phase(run_state, {745: task}, config, [], open_prs=[])
@@ -405,11 +410,24 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
     fake_forge.remove_label.side_effect = remove_label
 
     with (
-        patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-        patch("orchestune.dispatch.cycle._prepare_cycle_issues", return_value=issues),
-        patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
+        patch(
+            "orchestune.dispatch.cycle.load_run_state",
+            autospec=True,
+            return_value=run_state,
+        ),
+        patch(
+            "orchestune.dispatch.cycle._prepare_cycle_issues",
+            autospec=True,
+            return_value=issues,
+        ),
+        patch(
+            "orchestune.dispatch.cycle._build_cycle_context",
+            autospec=True,
+            return_value=ctx,
+        ),
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
+            autospec=True,
             return_value=_pipeline_report(),
         ),
     ):
@@ -513,11 +531,24 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
     fake_forge.remove_label.side_effect = RuntimeError("Forge unavailable")
 
     with (
-        patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-        patch("orchestune.dispatch.cycle._prepare_cycle_issues", return_value=issues),
-        patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
+        patch(
+            "orchestune.dispatch.cycle.load_run_state",
+            autospec=True,
+            return_value=run_state,
+        ),
+        patch(
+            "orchestune.dispatch.cycle._prepare_cycle_issues",
+            autospec=True,
+            return_value=issues,
+        ),
+        patch(
+            "orchestune.dispatch.cycle._build_cycle_context",
+            autospec=True,
+            return_value=ctx,
+        ),
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
+            autospec=True,
             return_value=_pipeline_report(),
         ),
     ):
@@ -597,9 +628,14 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
     )
 
     with (
-        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            autospec=True,
+            return_value=[],
+        ),
         patch(
             "orchestune.dispatch.cycle._sync_external_locks",
+            autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
     ):
@@ -689,9 +725,14 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
     )
 
     with (
-        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            autospec=True,
+            return_value=[],
+        ),
         patch(
             "orchestune.dispatch.cycle._sync_external_locks",
+            autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
     ):
@@ -784,9 +825,14 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
     )
 
     with (
-        patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]),
+        patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            autospec=True,
+            return_value=[],
+        ),
         patch(
             "orchestune.dispatch.cycle._sync_external_locks",
+            autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
     ):

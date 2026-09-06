@@ -70,14 +70,16 @@ class TestDispatchGcCompletionReviewTimeout:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(
@@ -130,14 +132,16 @@ class TestDispatchGcCompletionReviewTimeout:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(
@@ -174,14 +178,16 @@ class TestDispatchGcCompletionReviewTimeout:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(active, task, config)
@@ -221,14 +227,16 @@ class TestDispatchGcCompletionReviewTimeout:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(
@@ -278,14 +286,16 @@ class TestDispatchGcCompletionReviewTimeout:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(
@@ -324,14 +334,16 @@ class TestDispatchGcCompletionReviewTimeout:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             event = _finalize_completed_worktree(active, task, config, run_state=None)

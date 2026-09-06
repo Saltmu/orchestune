@@ -330,7 +330,11 @@ class TestApplyTaskLaunches:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
@@ -384,7 +388,11 @@ class TestApplyTaskLaunches:
         dispatch_boundary_time = 1_050.0
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
@@ -438,7 +446,11 @@ class TestApplyTaskLaunches:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -503,7 +515,11 @@ class TestApplyTaskLaunches:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -574,7 +590,11 @@ class TestApplyTaskLaunches:
             added_labels.append((issue_num, label))
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
@@ -625,7 +645,11 @@ class TestApplyTaskLaunchesLabelOrdering:
         call_order: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
@@ -674,7 +698,11 @@ class TestApplyTaskLaunchesLabelOrdering:
         call_order: list[tuple[str, str]] = []
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "fake_forge_proxy.active_fake_forge.add_label",
                 side_effect=lambda issue, label: call_order.append(("add", label)),
@@ -759,7 +787,11 @@ class TestLaunchSelectedTasks:
         )
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),

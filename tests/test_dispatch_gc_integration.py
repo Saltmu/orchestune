@@ -53,26 +53,38 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive",
+                autospec=True,
+                return_value=False,
             ),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
                 return_value=False,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
-            patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestune.dispatch.gc.zombies.remove_worktree", autospec=True
+            ) as mock_remove_wt,
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -134,26 +146,38 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive",
+                autospec=True,
+                return_value=False,
             ),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
                 return_value=False,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
-            patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestune.dispatch.gc.zombies.remove_worktree", autospec=True
+            ) as mock_remove_wt,
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -205,21 +229,32 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=False),
             patch(
-                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.zombies.is_process_alive",
+                autospec=True,
+                return_value=False,
             ),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
                 return_value=False,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
-            patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestune.dispatch.gc.zombies.remove_worktree", autospec=True
+            ) as mock_remove_wt,
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -274,19 +309,32 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=False),
-            patch("orchestune.dispatch.gc.zombies.is_process_alive", return_value=True),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.zombies.is_process_alive",
+                autospec=True,
+                return_value=True,
+            ),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
                 return_value=True,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
-            patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestune.dispatch.gc.zombies.remove_worktree", autospec=True
+            ) as mock_remove_wt,
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -337,26 +385,38 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=False),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.gc.zombies.is_process_alive", return_value=False
+                "orchestune.dispatch.gc.zombies.is_process_alive",
+                autospec=True,
+                return_value=False,
             ),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
                 return_value=False,
             ),
             patch.object(fake_forge, "add_label") as mock_add_label,
             patch.object(fake_forge, "remove_label") as mock_remove_label,
             patch.object(fake_forge, "add_comment") as mock_add_comment,
-            patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestune.dispatch.gc.zombies.remove_worktree", autospec=True
+            ) as mock_remove_wt,
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_list.side_effect = lambda label, **_: (

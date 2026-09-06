@@ -260,14 +260,18 @@ class TestRecoveredActiveTask:
         fake_forge.get_issue_labels.return_value = ("status:in-progress",)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.infra.git_cli.subprocess.run",
                 return_value=MagicMock(stdout=""),
             ),
             patch(
-                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -338,17 +342,21 @@ class TestRecoveredActiveTask:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.remote_branch_commit_sha_if_ahead",
+                autospec=True,
                 return_value="recovered-commit",
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [issue] if label == "status:in-progress" else []
@@ -387,6 +395,7 @@ class TestDispatcherLocking:
                 with (
                     patch(
                         "orchestune.dispatch.phase_rebase.list_remote_branches",
+                        autospec=True,
                         return_value=[],
                     ),
                 ):
@@ -426,9 +435,15 @@ class TestLaunchOrderingCrashSafety:
         fake_forge.remove_label.reset_mock(side_effect=True)
         fake_forge.remove_label.side_effect = remove_label_side_effect
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
@@ -507,7 +522,9 @@ class TestStaleActiveEntryReconciliation:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -532,7 +549,11 @@ class TestStaleActiveEntryReconciliation:
 
 
 class TestPreventDuplicateSessions:
-    @patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[])
+    @patch(
+        "orchestune.dispatch.phase_rebase.list_remote_branches",
+        autospec=True,
+        return_value=[],
+    )
     @patch("orchestune.dispatch.worktree.subprocess.run")
     @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
@@ -588,7 +609,11 @@ class TestPreventDuplicateSessions:
         mock_add_comment.assert_called_once()
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
-    @patch("orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[])
+    @patch(
+        "orchestune.dispatch.phase_rebase.list_remote_branches",
+        autospec=True,
+        return_value=[],
+    )
     @patch("orchestune.dispatch.worktree.subprocess.run")
     @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
@@ -710,7 +735,9 @@ class TestPreventDuplicateSessions:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.infra.git_cli.subprocess.run",
@@ -796,7 +823,9 @@ class TestPreventDuplicateSessions:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.dispatch.worktree.subprocess.run",
@@ -886,6 +915,7 @@ class TestEmitHumanSummary:
         """要約はベストエフォート。整形に失敗してもサイクルの結果報告は落とさない。"""
         with patch(
             "orchestune.dispatch.dispatcher.render_skipped_text",
+            autospec=True,
             side_effect=RuntimeError("boom"),
         ):
             _emit_dispatcher_report(self._result(self._report()))

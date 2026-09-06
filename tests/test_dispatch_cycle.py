@@ -643,6 +643,7 @@ class TestFinalizeLaunch:
 
         with patch(
             "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+            autospec=True,
             return_value=[],
         ) as mock_launch:
             _finalize_launch([], {}, [], ctx, 1000.0, config)
@@ -674,7 +675,9 @@ class TestRunDispatchCycle:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
@@ -714,9 +717,15 @@ class TestRunDispatchCycle:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
@@ -755,7 +764,9 @@ class TestRunDispatchCycle:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             run_dispatch_cycle(config)
@@ -782,7 +793,9 @@ class TestRunDispatchCycle:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             run_dispatch_cycle(config)
@@ -818,7 +831,9 @@ class TestRunDispatchCycle:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=True),
         ):
@@ -866,7 +881,9 @@ class TestRunDispatchCycle:
         fake_forge.get_issue.return_value = _full_issue(100, labels=(), subtask_id=None)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.return_value = [sub_issue_1]
@@ -907,7 +924,7 @@ class TestRunDispatchCycleParentIssueValidation:
         fake_forge.get_issue.return_value = non_epic_issue
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch"
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError, match="181"):
@@ -921,7 +938,7 @@ class TestRunDispatchCycleParentIssueValidation:
         fake_forge.get_issue.return_value = None
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch"
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError, match="181"):
@@ -936,7 +953,7 @@ class TestRunDispatchCycleParentIssueValidation:
         fake_forge.get_issue.return_value = issue
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch"
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError):
@@ -953,7 +970,7 @@ class TestRunDispatchCycleParentIssueValidation:
         fake_forge.get_issue.return_value = issue
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch"
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ) as mock_ensure,
         ):
             with pytest.raises(RuntimeError):
@@ -976,10 +993,12 @@ class TestRunDispatchCycleParentIssueValidation:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch"
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ) as mock_ensure,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             run_dispatch_cycle(config)
@@ -999,10 +1018,12 @@ class TestRunDispatchCycleParentIssueValidation:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch"
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ) as mock_ensure,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             run_dispatch_cycle(config)
@@ -1046,7 +1067,9 @@ class TestRunDispatchCycleActorVerification:
         fake_forge.get_actor_permission.return_value = "read"
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch("orchestune.dispatch.worktree.subprocess.run"),
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
@@ -1091,7 +1114,9 @@ class TestRunDispatchCycleActorVerification:
         fake_forge.get_actor_permission.return_value = "none"
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.side_effect = lambda label, **_: (

@@ -73,7 +73,11 @@ class TestCreateWorktreeAndLaunch:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -108,7 +112,11 @@ class TestCreateWorktreeAndLaunch:
         )
         dispatch_boundary_time = 12345.0
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch(
                 "orchestune.dispatch.worktree.time.time",
@@ -136,7 +144,11 @@ class TestCreateWorktreeAndLaunch:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -181,7 +193,11 @@ class TestCreateWorktreeAndLaunch:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -211,7 +227,11 @@ class TestCreateWorktreeAndLaunch:
             branch_name="claude/issue-1-task-1",
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -242,7 +262,11 @@ class TestCreateWorktreeAndLaunch:
             "リモートブランチ 'claude/issue-1-task-1' の到達性を検証できませんでした"
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -258,7 +282,9 @@ class TestCreateWorktreeAndLaunch:
         assert result.launched is False
         assert "到達性を検証できませんでした" in result.error_message
 
-    @patch("orchestune.dispatch.worktree._branch_exists", return_value=True)
+    @patch(
+        "orchestune.dispatch.worktree._branch_exists", autospec=True, return_value=True
+    )
     def test_apply_reuses_existing_branch_without_overwriting(
         self, mock_exists, tmp_path
     ):
@@ -300,9 +326,14 @@ class TestCreateWorktreeAndLaunch:
         worktree_path.mkdir(parents=True)
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "orchestune.dispatch.worktree.dispatch_gc.backup_wip_commit",
+                autospec=True,
                 return_value=None,
             ) as mock_backup,
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
@@ -341,9 +372,14 @@ class TestCreateWorktreeAndLaunch:
         marker.write_text("agent work in progress")
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "orchestune.dispatch.worktree.dispatch_gc.backup_wip_commit",
+                autospec=True,
                 return_value="fatal: unable to write new index file",
             ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
@@ -381,7 +417,11 @@ class TestCreateWorktreeAndLaunch:
         marker.write_text("agent work in progress")
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -478,7 +518,11 @@ class TestCreateWorktreeAndLaunch:
         failing_target.launch.side_effect = OSError("launch failed")
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -691,9 +735,12 @@ class TestCleanupExistingWorktree:
         with (
             patch(
                 "orchestune.dispatch.worktree.dispatch_gc.backup_wip_commit",
+                autospec=True,
                 return_value=None,
             ) as mock_backup,
-            patch("orchestune.dispatch.worktree.run_git") as mock_run_git,
+            patch(
+                "orchestune.dispatch.worktree.run_git", autospec=True
+            ) as mock_run_git,
         ):
             err = _cleanup_existing_worktree(worktree_path, issue_number=1)
             assert err is None
@@ -712,6 +759,7 @@ class TestCleanupExistingWorktree:
 
         with patch(
             "orchestune.dispatch.worktree.dispatch_gc.backup_wip_commit",
+            autospec=True,
             return_value="backup error",
         ):
             err = _cleanup_existing_worktree(worktree_path, issue_number=1)
@@ -723,8 +771,14 @@ class TestCreateWorktree:
         worktree_root = tmp_path / "worktrees"
         worktree_path = worktree_root / "feature-1"
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=True),
-            patch("orchestune.dispatch.worktree.run_git") as mock_run_git,
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch.worktree.run_git", autospec=True
+            ) as mock_run_git,
         ):
             _create_worktree(worktree_path, worktree_root, "feature-1")
             assert mock_run_git.call_count == 2
@@ -740,12 +794,19 @@ class TestCreateWorktree:
         worktree_root = tmp_path / "worktrees"
         worktree_path = worktree_root / "feature-1"
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch(
                 "orchestune.dispatch.worktree.resolve_local_or_remote_branch",
+                autospec=True,
                 return_value="origin/parent/issue-10",
             ),
-            patch("orchestune.dispatch.worktree.run_git") as mock_run_git,
+            patch(
+                "orchestune.dispatch.worktree.run_git", autospec=True
+            ) as mock_run_git,
         ):
             _create_worktree(
                 worktree_path,
@@ -860,7 +921,9 @@ class TestCleanupFailedWorktree:
         worktree_path = tmp_path / "worktrees" / "feature-1"
         worktree_path.mkdir(parents=True)
 
-        with patch("orchestune.dispatch.worktree.run_git") as mock_run_git:
+        with patch(
+            "orchestune.dispatch.worktree.run_git", autospec=True
+        ) as mock_run_git:
             _cleanup_failed_worktree(worktree_path)
             assert mock_run_git.call_count == 2
             assert mock_run_git.call_args_list[0].args[0] == [

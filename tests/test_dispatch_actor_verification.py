@@ -142,7 +142,8 @@ class TestApplyActorVerification:
         ]
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
-            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation",
+            autospec=True,
         ) as mock_escalate:
             result = _apply_actor_verification(decisions, config)
         assert result == [task]
@@ -159,7 +160,8 @@ class TestApplyActorVerification:
         ]
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
-            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation",
+            autospec=True,
         ) as mock_escalate:
             result = _apply_actor_verification(decisions, config)
         assert result == []
@@ -183,7 +185,8 @@ class TestApplyActorVerification:
             events_log_path=tmp_path / "events.jsonl", apply=False
         )
         with patch(
-            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation",
+            autospec=True,
         ) as mock_escalate:
             result = _apply_actor_verification(decisions, config)
         assert result == []
@@ -202,7 +205,8 @@ class TestApplyActorVerification:
         ]
         config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
         with patch(
-            "orchestune.dispatch.actor_verification.apply_human_review_escalation"
+            "orchestune.dispatch.actor_verification.apply_human_review_escalation",
+            autospec=True,
         ):
             result = _apply_actor_verification(decisions, config)
         assert result == [task_ok]

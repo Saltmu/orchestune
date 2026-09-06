@@ -143,10 +143,12 @@ class TestCompletedWorktreeDecisionCarriesForgeError:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=True,
             ),
         ):
@@ -211,7 +213,11 @@ class TestOpenPrCommentFailures:
         ctx = SimpleNamespace(config=config)
         active = _active(tmp_path)
 
-        with patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True):
+        with patch(
+            "orchestune.dispatch.gc._is_worktree_complete",
+            autospec=True,
+            return_value=True,
+        ):
             resolution = _resolve_local_completion(ctx, "702", active, None)
 
         event = resolution.rule_outcome.completion_event

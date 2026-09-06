@@ -67,7 +67,7 @@ class TestRunBootstrap:
 class TestMain:
     def test_exits_with_run_bootstrap_return_code(self):
         with (
-            patch("orchestune.bootstrap.run_bootstrap", return_value=1),
+            patch("orchestune.bootstrap.run_bootstrap", autospec=True, return_value=1),
             patch("sys.argv", ["orchestune-bootstrap"]),
         ):
             with pytest.raises(SystemExit) as exc_info:

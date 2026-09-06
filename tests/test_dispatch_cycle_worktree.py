@@ -148,19 +148,23 @@ class TestProcessActiveWorktrees:
         with (
             patch(
                 "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
                 return_value=False,
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch.rebase._decide_rebase_needed",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
                 return_value=["b.py"],
             ),
             patch(
                 "orchestune.dispatch.rebase._handle_footprint_deviation",
+                autospec=True,
                 return_value={
                     "action": "recomputed",
                     "issue_number": 1,
@@ -211,20 +215,24 @@ class TestProcessActiveWorktrees:
         with (
             patch(
                 "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
                 return_value=True,
             ),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
                 return_value={"action": "completion_skipped_dirty_worktree"},
             ),
             patch(
                 "orchestune.dispatch.rebase._try_auto_rebase",
+                autospec=True,
                 side_effect=AssertionError("Should not call auto rebase"),
             ),
             patch(
                 "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
                 side_effect=AssertionError("Should not call check footprint deviation"),
             ),
         ):
@@ -266,38 +274,58 @@ class TestProcessActiveWorktrees:
         fake_forge.list_prs.reset_mock(side_effect=True)
         fake_forge.list_prs.return_value = []
         with (
-            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch(
+                "orchestune.dispatch.cycle.load_run_state",
+                autospec=True,
+                return_value=run_state,
+            ),
             patch(
                 "orchestune.dispatch.cycle._fetch_issues",
+                autospec=True,
                 return_value=_group_by_status([]),
             ),
-            patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch.cycle._build_cycle_context",
+                autospec=True,
+                return_value=ctx,
+            ),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=True,
             ),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch(
                 "orchestune.dispatch.cycle._run_status_repair_boundary",
+                autospec=True,
                 return_value=[],
             ),
             patch(
                 "orchestune.dispatch.phase_reconciliation._handle_blocked_recompute_recovery",
+                autospec=True,
                 return_value=[],
             ),
             patch(
                 "orchestune.dispatch.cycle._sync_external_locks",
+                autospec=True,
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                autospec=True,
                 return_value=([], {}, []),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling._finalize_launch", return_value=[]
+                "orchestune.dispatch.phase_scheduling._finalize_launch",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report = run_dispatch_cycle(config)
@@ -337,40 +365,61 @@ class TestProcessActiveWorktrees:
         ctx = _ctx(run_state=run_state, tasks_by_issue={1: task}, config=config)
 
         with (
-            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
+            patch(
+                "orchestune.dispatch.cycle.load_run_state",
+                autospec=True,
+                return_value=run_state,
+            ),
             patch(
                 "orchestune.dispatch.cycle._fetch_issues",
+                autospec=True,
                 return_value=_group_by_status([]),
             ),
-            patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch.cycle._build_cycle_context",
+                autospec=True,
+                return_value=ctx,
+            ),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=True,
             ),
             patch(
                 "orchestune.dispatch.cycle._run_status_repair_boundary",
+                autospec=True,
                 return_value=[],
             ),
             patch(
                 "orchestune.dispatch.phase_reconciliation._handle_blocked_recompute_recovery",
+                autospec=True,
                 return_value=[],
             ),
             patch(
                 "orchestune.dispatch.cycle._sync_external_locks",
+                autospec=True,
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                autospec=True,
                 return_value=([], {}, []),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling._finalize_launch", return_value=[]
+                "orchestune.dispatch.phase_scheduling._finalize_launch",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report = run_dispatch_cycle(config)
@@ -476,6 +525,7 @@ class TestProcessActiveWorktrees:
         with (
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
+                autospec=True,
                 return_value={"action": "not_needed"},
             ),
         ):
@@ -535,11 +585,13 @@ class TestProcessActiveWorktrees:
         with (
             patch(
                 "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
                 return_value=False,
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch.rebase._decide_rebase_needed",
+                autospec=True,
                 return_value=True,
             ),
             patch(
@@ -589,6 +641,7 @@ class TestProcessActiveWorktrees:
         with (
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
+                autospec=True,
                 return_value={"action": "not_needed"},
             ),
         ):
@@ -627,19 +680,23 @@ class TestProcessActiveWorktrees:
         with (
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
+                autospec=True,
                 return_value={"action": "not_needed"},
             ),
             patch(
                 "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
                 return_value=False,
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch.rebase._decide_rebase_needed",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
                 return_value=[],
             ),
         ):

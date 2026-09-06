@@ -255,7 +255,9 @@ class TestConflictGraphConfig:
         )
 
         with patch(
-            "orchestune.provisioning.flow.build_dag", wraps=lambda *a, **kw: MagicMock()
+            "orchestune.provisioning.flow.build_dag",
+            autospec=True,
+            wraps=lambda *a, **kw: MagicMock(),
         ) as mock_build_dag:
             provision_issues(
                 plan_path,
@@ -275,7 +277,9 @@ class TestConflictGraphConfig:
         plan_path.write_text(self._plan(), encoding="utf-8")
 
         with patch(
-            "orchestune.provisioning.flow.build_dag", wraps=lambda *a, **kw: MagicMock()
+            "orchestune.provisioning.flow.build_dag",
+            autospec=True,
+            wraps=lambda *a, **kw: MagicMock(),
         ) as mock_build_dag:
             provision_issues(
                 plan_path,

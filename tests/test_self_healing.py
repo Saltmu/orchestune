@@ -66,6 +66,7 @@ def test_restart_retries_when_crash_happens_before_bookkeeping_persistence(
 
     with patch(
         "orchestune.dispatch.recovery.save_run_state",
+        autospec=True,
         side_effect=RuntimeError("crash before persistence"),
     ):
         failed = _run_recovery_bookkeeping_boundary(interrupted, config, now=1_000.0)
@@ -96,6 +97,7 @@ def test_restart_does_not_duplicate_when_crash_happens_after_persistence(
 
     with patch(
         "orchestune.dispatch.recovery.save_run_state",
+        autospec=True,
         side_effect=persist_then_crash,
     ):
         failed = _run_recovery_bookkeeping_boundary(interrupted, config, now=1_000.0)

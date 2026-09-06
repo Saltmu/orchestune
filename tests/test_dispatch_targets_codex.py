@@ -323,7 +323,9 @@ class TestCodexCloudDispatchTarget:
         )
         with (
             patch.object(self.forge, "list_prs", return_value=[]),
-            patch.object(target, "_fetch_task_status", return_value="failed"),
+            patch.object(
+                target, "_fetch_task_status", autospec=True, return_value="failed"
+            ),
         ):
             assert target.completion_status(handle, forge=self.forge) == "abandoned"
             assert target.is_complete(handle, forge=self.forge) is False
@@ -337,7 +339,9 @@ class TestCodexCloudDispatchTarget:
         )
         with (
             patch.object(self.forge, "list_prs", return_value=[]),
-            patch.object(target, "_fetch_task_status", return_value="cancelled"),
+            patch.object(
+                target, "_fetch_task_status", autospec=True, return_value="cancelled"
+            ),
         ):
             assert target.completion_status(handle, forge=self.forge) == "abandoned"
             assert target.is_complete(handle, forge=self.forge) is False
@@ -351,7 +355,9 @@ class TestCodexCloudDispatchTarget:
         )
         with (
             patch.object(self.forge, "list_prs", return_value=[]),
-            patch.object(target, "_fetch_task_status", return_value="running"),
+            patch.object(
+                target, "_fetch_task_status", autospec=True, return_value="running"
+            ),
         ):
             assert target.completion_status(handle, forge=self.forge) == "pending"
             assert target.is_complete(handle, forge=self.forge) is False
@@ -372,7 +378,7 @@ class TestCodexCloudDispatchTarget:
                 side_effect=RuntimeError("GitHub API outage"),
             ),
             patch.object(
-                target, "_fetch_task_status", return_value="failed"
+                target, "_fetch_task_status", autospec=True, return_value="failed"
             ) as mock_fetch,
         ):
             assert target.completion_status(handle, forge=self.forge) == "pending"
@@ -407,7 +413,7 @@ class TestCodexCloudDispatchTarget:
                 side_effect=RuntimeError("GitHub comments outage"),
             ),
             patch.object(
-                target, "_fetch_task_status", return_value="failed"
+                target, "_fetch_task_status", autospec=True, return_value="failed"
             ) as mock_fetch,
         ):
             assert target.completion_status(handle, forge=self.forge) == "pending"

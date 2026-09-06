@@ -52,7 +52,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_launch_fires_routine_and_returns_session_handle(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 return_value=self._response(),
@@ -85,7 +85,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_launch_instructs_base_branch(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 return_value=self._response(),
@@ -116,7 +116,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             reason="test",
         )
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 return_value=self._response(),
@@ -150,7 +150,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         with (
             caplog.at_level(logging.WARNING),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 return_value=self._response(),
@@ -357,7 +357,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         transient = urllib.error.HTTPError("url", 503, "unavailable", {}, None)
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 side_effect=[transient, self._response()],
@@ -375,7 +375,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         transient = urllib.error.HTTPError("url", 500, "error", {}, None)
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 side_effect=[transient, transient, transient],
@@ -391,7 +391,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         auth_error = urllib.error.HTTPError("url", 401, "unauthorized", {}, None)
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 side_effect=[auth_error, self._response()],

@@ -10,7 +10,7 @@ def test_cli_delegates_to_dag():
     test_args = ["orchestune", "dag", "--plan", "plan.md"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.dag.cli.main") as mock_dag_main,
+        patch("orchestune.dag.cli.main", autospec=True) as mock_dag_main,
     ):
         main()
         mock_dag_main.assert_called_once()
@@ -23,7 +23,9 @@ def test_cli_delegates_to_dispatch():
     test_args = ["orchestune", "dispatch", "--apply"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.dispatch.dispatcher.main") as mock_dispatch_main,
+        patch(
+            "orchestune.dispatch.dispatcher.main", autospec=True
+        ) as mock_dispatch_main,
     ):
         main()
         mock_dispatch_main.assert_called_once()
@@ -36,7 +38,7 @@ def test_cli_delegates_to_bootstrap():
     test_args = ["orchestune", "bootstrap"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.bootstrap.main") as mock_bootstrap_main,
+        patch("orchestune.bootstrap.main", autospec=True) as mock_bootstrap_main,
     ):
         main()
         mock_bootstrap_main.assert_called_once()
@@ -48,7 +50,9 @@ def test_cli_delegates_to_replan():
 
     with (
         patch("sys.argv", ["orchestune", "replan", "--plan", "plan.md"]),
-        patch("orchestune.replan.cli.main", return_value=0) as mock_replan_main,
+        patch(
+            "orchestune.replan.cli.main", autospec=True, return_value=0
+        ) as mock_replan_main,
         pytest.raises(SystemExit) as exc_info,
     ):
         main()
@@ -63,7 +67,7 @@ def test_cli_delegates_to_status():
     test_args = ["orchestune", "status", "--watch"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.monitor.main") as mock_monitor_main,
+        patch("orchestune.monitor.main", autospec=True) as mock_monitor_main,
     ):
         main()
         mock_monitor_main.assert_called_once()
@@ -76,7 +80,7 @@ def test_cli_setup_exits_0_on_success():
     test_args = ["orchestune", "setup"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.setup_skills.setup_skills", return_value=0),
+        patch("orchestune.setup_skills.setup_skills", autospec=True, return_value=0),
         pytest.raises(SystemExit) as exc_info,
     ):
         main()
@@ -90,7 +94,7 @@ def test_cli_setup_exits_1_when_setup_skills_fails():
     test_args = ["orchestune", "setup"]
     with (
         patch("sys.argv", test_args),
-        patch("orchestune.setup_skills.setup_skills", return_value=1),
+        patch("orchestune.setup_skills.setup_skills", autospec=True, return_value=1),
         pytest.raises(SystemExit) as exc_info,
     ):
         main()
@@ -106,7 +110,7 @@ def test_cli_setup_with_workflow_skill_flag_passed_through():
     with (
         patch("sys.argv", test_args),
         patch(
-            "orchestune.setup_skills.setup_skills", return_value=0
+            "orchestune.setup_skills.setup_skills", autospec=True, return_value=0
         ) as mock_setup_skills,
         pytest.raises(SystemExit) as exc_info,
     ):
@@ -124,7 +128,7 @@ def test_cli_setup_without_flag_defaults_to_false():
     with (
         patch("sys.argv", test_args),
         patch(
-            "orchestune.setup_skills.setup_skills", return_value=0
+            "orchestune.setup_skills.setup_skills", autospec=True, return_value=0
         ) as mock_setup_skills,
         pytest.raises(SystemExit),
     ):

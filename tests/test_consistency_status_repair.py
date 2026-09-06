@@ -404,7 +404,9 @@ def test_intent_write_failure_prevents_first_forge_mutation(tmp_path, in_memory_
     command = _plan({708: task})[1][0]
     config = _config(tmp_path, in_memory_forge)
 
-    with patch.object(IntentJournal, "plan", side_effect=OSError("journal full")):
+    with patch.object(
+        IntentJournal, "plan", autospec=True, side_effect=OSError("journal full")
+    ):
         result = execute_status_repair_command(
             command, {708: task}, completed_issue_numbers=(), config=config, now=NOW
         )

@@ -134,9 +134,10 @@ def test_moved_child_tip_is_not_labeled_or_closed(fake_forge, tmp_path: Path):
     )
 
     with (
-        patch("orchestune.integrator.steps.run_git"),
+        patch("orchestune.integrator.steps.run_git", autospec=True),
         patch(
             "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
             return_value=ConditionalBranchDeletionResult.TIP_MISMATCH,
         ) as conditional_delete,
     ):
@@ -177,6 +178,7 @@ def test_receipt_recovers_after_delete_before_label(fake_forge, tmp_path: Path):
 
     with patch(
         "orchestune.integrator.steps.delete_remote_branch_if_matches",
+        autospec=True,
         return_value=ConditionalBranchDeletionResult.ALREADY_ABSENT,
     ):
         result = RetryChildIssueCloseStep().execute(ctx)
@@ -218,6 +220,7 @@ def test_receipt_label_failure_does_not_return_task_to_integration(
 
     with patch(
         "orchestune.integrator.steps.delete_remote_branch_if_matches",
+        autospec=True,
         return_value=ConditionalBranchDeletionResult.ALREADY_ABSENT,
     ):
         result = RetryChildIssueCloseStep().execute(ctx)

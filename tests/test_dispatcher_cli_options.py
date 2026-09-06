@@ -499,9 +499,12 @@ class TestMainDispatchTargetAutoDetection:
     def test_defaults_to_auto_outside_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
         ):
@@ -521,9 +524,12 @@ class TestMainDispatchTargetAutoDetection:
     def test_defaults_to_cloud_routine_in_github_actions(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
         ):
@@ -545,9 +551,12 @@ class TestMainDispatchTargetAutoDetection:
     ):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
         ):
@@ -568,9 +577,12 @@ class TestMainDispatchTargetAutoDetection:
 
     def test_explicit_reviewer_bot_is_forwarded_to_target_builder(self, tmp_path):
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
         ):
@@ -594,6 +606,7 @@ class TestMainDispatchTargetAutoDetection:
     ):
         with patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            autospec=True,
             return_value=self._empty_report(),
         ) as mock_cycle:
             main(
@@ -620,6 +633,7 @@ class TestMainDispatchTargetAutoDetection:
     def test_cli_reasoning_effort_alias_forwarded_to_dispatcher_config(self, tmp_path):
         with patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            autospec=True,
             return_value=self._empty_report(),
         ) as mock_cycle:
             main(

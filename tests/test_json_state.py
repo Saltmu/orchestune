@@ -37,7 +37,9 @@ class TestWriteJsonAtomic:
         write_json_atomic(path, {"version": "old"})
 
         with patch(
-            "orchestune.infra.json_state.os.replace", side_effect=OSError("boom")
+            "orchestune.infra.json_state.os.replace",
+            autospec=True,
+            side_effect=OSError("boom"),
         ):
             with pytest.raises(OSError):
                 write_json_atomic(path, {"version": "new"})
@@ -53,7 +55,9 @@ class TestWriteJsonAtomic:
         write_json_atomic(path, {"version": "old"})
 
         with patch(
-            "orchestune.infra.json_state.json.dumps", side_effect=ValueError("boom")
+            "orchestune.infra.json_state.json.dumps",
+            autospec=True,
+            side_effect=ValueError("boom"),
         ):
             with pytest.raises(ValueError):
                 write_json_atomic(path, {"version": "new"})
@@ -138,6 +142,7 @@ class TestReadJsonWithRecovery:
 
         with patch(
             "orchestune.infra.json_state.Path.read_text",
+            autospec=True,
             side_effect=OSError("transient I/O error"),
         ):
             with pytest.raises(OSError):
@@ -154,7 +159,9 @@ class TestReadJsonWithRecovery:
         path.write_text("{not valid json", encoding="utf-8")
 
         with patch(
-            "orchestune.infra.json_state.os.replace", side_effect=OSError("cannot move")
+            "orchestune.infra.json_state.os.replace",
+            autospec=True,
+            side_effect=OSError("cannot move"),
         ):
             with pytest.raises(OSError):
                 read_json_with_recovery(path, label="state.json")

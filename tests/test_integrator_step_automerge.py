@@ -344,6 +344,7 @@ class TestAutoMergeChildIntegration:
 
         with patch(
             "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
             return_value=ConditionalBranchDeletionResult.DELETED,
         ) as conditional_delete:
             res = Integrator(_child_config()).run()
@@ -365,6 +366,7 @@ class TestAutoMergeChildIntegration:
         integrator_env.set_done_issues(issue)
         with patch(
             "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
             return_value=ConditionalBranchDeletionResult.FAILED,
         ):
             res = Integrator(_child_config()).run()

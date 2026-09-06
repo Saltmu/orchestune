@@ -86,6 +86,27 @@ Coverage instrumentation is intentionally left out of the default `pytest` run t
 poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
+### Mocking Internal Symbols
+
+When `unittest.mock.patch(...)` / `patch.object(...)` targets an `orchestune.` or `scripts.` symbol (as opposed to a process/OS boundary such as `subprocess`, `time.time`, or `os.kill`, or a test double such as `FakeForge`), pass `autospec=True` ([#829](https://github.com/Saltmu/orchestune/issues/829)). Without it, `patch(...)` still catches a *renamed or removed* symbol (`AttributeError`), but not a *changed signature*: a mock silently accepts whatever arguments the caller passes, so a positional argument added to, removed from, or reordered on the real function does not fail the test.
+
+```python
+# Catches a rename, but not a changed argument count/order:
+with patch("orchestune.dispatch.worktree._branch_exists") as mock_exists:
+    ...
+
+# Also catches a changed signature, since the mock is built from the real
+# function's signature and rejects calls the real function would reject:
+with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock_exists:
+    ...
+```
+
+`autospec=True` does not apply, and should be omitted, when:
+- the target is a process/OS/library boundary already covered by a different exclusion (`subprocess`, `os.kill`/`environ`/`getpid`, `time.time`/`sleep`/`monotonic`, `shutil`, `urllib`, `fcntl`, `msvcrt`, `pathlib.Path.cwd`/`home`) or a test double (`FakeForge`, `fake_forge_proxy.*`, a `MagicMock`-backed fixture) — these are boundaries or fakes by design, not internal contracts to verify;
+- the call supplies its own replacement via `new=`/`new_callable=` (there is no real signature for autospec to derive, since the caller controls the substitute object directly);
+- the target is a non-callable attribute (e.g. `__file__`) — autospec is for callables;
+- `create=True` is required because the target is a builtin or a platform-conditional attribute not always present on the module (e.g. `open`, a Windows-only `ctypes` handle) — autospec would need the attribute to exist to introspect it.
+
 ## Local CI Script
 
 Before committing or pushing your changes, run the local CI script to verify formatting, types, and tests:

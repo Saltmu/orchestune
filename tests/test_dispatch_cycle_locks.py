@@ -153,6 +153,7 @@ class TestDecideExternalLockSync:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=[],
             ),
         ):
@@ -166,6 +167,7 @@ class TestDecideExternalLockSync:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/feature/foo@bar"],
             ),
         ):
@@ -186,10 +188,12 @@ class TestDecideExternalLockSync:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/feat/x"],
             ),
             patch(
                 "orchestune.dispatch.phase_rebase.branch_changed_files",
+                autospec=True,
                 return_value=None,
             ),
         ):
@@ -214,10 +218,11 @@ class TestDecideExternalLockSync:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/parent/issue-181"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files"
+                "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
             result = _decide_external_lock_sync({2: queued_task}, [], run_state, config)
@@ -315,15 +320,19 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/claude/issue-1-task-a"],
             ),
             patch(
                 "orchestune.dispatch.phase_rebase.branch_changed_files",
+                autospec=True,
                 return_value=["src/shared.py"],
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -355,10 +364,11 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/feature/foo"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files"
+                "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
             run_dispatch_cycle(config)
@@ -396,10 +406,11 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/parent/issue-181"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files"
+                "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -433,10 +444,12 @@ class TestRunDispatchCycleBranchNormalization:
         with (
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
                 return_value=["origin/someone-elses-branch"],
             ),
             patch(
                 "orchestune.dispatch.phase_rebase.branch_changed_files",
+                autospec=True,
                 return_value=["src/shared.py"],
             ),
         ):

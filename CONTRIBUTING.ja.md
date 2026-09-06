@@ -69,6 +69,26 @@ poetry run pytest
 poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
+### 内部シンボルのモック化
+
+`unittest.mock.patch(...)` / `patch.object(...)` の対象が `orchestune.` または `scripts.` 配下のシンボルである場合（`subprocess` や `time.time`、`os.kill` のようなプロセス・OS境界、あるいは `FakeForge` のようなテストダブルは対象外）、`autospec=True` を指定してください（[#829](https://github.com/Saltmu/orchestune/issues/829)）。指定しない場合でも、対象シンボルの**改名・削除**は `patch(...)` の既定動作（`AttributeError`）で検知できますが、**シグネチャの変更**（引数の追加・削除・並び替え）は検知できません。モックは呼び出し方に関わらず何でも受け付けてしまうため、実体側の引数が変わってもテストは無反応で通過します。
+
+```python
+# 改名は検知できるが、引数の変更は検知できない:
+with patch("orchestune.dispatch.worktree._branch_exists") as mock_exists:
+    ...
+
+# 実シグネチャから生成されたモックのため、引数の変更も検知できる:
+with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock_exists:
+    ...
+```
+
+以下の場合は `autospec=True` は適用対象外であり、付けない:
+- 対象が既存の除外基準に該当するプロセス・OS・ライブラリ境界（`subprocess`、`os.kill`/`environ`/`getpid`、`time.time`/`sleep`/`monotonic`、`shutil`、`urllib`、`fcntl`、`msvcrt`、`pathlib.Path.cwd`/`home`）またはテストダブル（`FakeForge`、`fake_forge_proxy.*`、`MagicMock` ベースのフィクスチャ）である場合 — これらは設計上の境界・フェイクであり、検証すべき内部契約ではない。
+- `new=`/`new_callable=` で呼び出し側が自前の差し替えオブジェクトを渡している場合（autospecが参照する「実シグネチャ」が存在しない）。
+- 対象が非callable属性（例: `__file__`）である場合 — autospecはcallable向け。
+- 対象がbuiltinやプラットフォーム条件付き属性（例: `open`、Windows限定の`ctypes`ハンドル）でモジュール上に常時存在するとは限らず `create=True` が必要な場合 — autospecは属性の実在を前提に内省するため適用できない。
+
 ## ローカルCIスクリプト
 
 コミットまたはプッシュする前に、ローカルCIスクリプトを実行してフォーマット、型チェック、およびテストを確認します。

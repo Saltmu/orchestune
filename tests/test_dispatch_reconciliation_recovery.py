@@ -277,6 +277,7 @@ class TestBaseBranchRedRecovery:
 
         with patch(
             "orchestune.dispatch.reconciliation._get_branch_commit_sha",
+            autospec=True,
             return_value="2222222222222222222222222222222222222222",
         ):
             events = _handle_base_branch_red_recovery(issues_mock, ctx, set(), config)

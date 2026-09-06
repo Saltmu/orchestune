@@ -161,19 +161,23 @@ class TestRunDispatchCycleCompletion:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -236,21 +240,26 @@ class TestRunDispatchCycleCompletion:
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ) as mock_local_commits,
             patch(
                 "orchestune.dispatch.gc.completion.remote_branch_commit_sha_if_ahead",
+                autospec=True,
                 return_value="remote-commit",
             ) as mock_remote_commits,
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -288,20 +297,25 @@ class TestRunDispatchCycleCompletion:
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.remote_branch_commit_sha_if_ahead",
+                autospec=True,
                 return_value=None,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation",
+                autospec=True,
             ) as mock_escalate,
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             mock_list.side_effect = lambda label, **_: (
                 [in_progress_issue] if label == "status:in-progress" else []
@@ -339,20 +353,25 @@ class TestRunDispatchCycleCompletion:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation",
+                autospec=True,
             ) as mock_escalate,
         ):
             report = run_dispatch_cycle(config)
@@ -390,20 +409,25 @@ class TestRunDispatchCycleCompletion:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation",
+                autospec=True,
             ) as mock_escalate,
         ):
             report = run_dispatch_cycle(config)
@@ -453,18 +477,22 @@ class TestRunDispatchCycleCompletion:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             report = run_dispatch_cycle(config)
 
@@ -519,20 +547,25 @@ class TestRunDispatchCycleCompletion:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.gc.completion.apply_human_review_escalation"
+                "orchestune.dispatch.gc.completion.apply_human_review_escalation",
+                autospec=True,
             ) as mock_escalate,
         ):
             report = run_dispatch_cycle(config)
@@ -559,18 +592,23 @@ class TestRunDispatchCycleCompletion:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
             patch(
-                "orchestune.dispatch.rebase.check_footprint_deviation", return_value=[]
+                "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -614,19 +652,23 @@ class TestRunDispatchCycleCompletion:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -674,19 +716,23 @@ class TestRunDispatchCycleCompletion:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -737,20 +783,28 @@ class TestRunDispatchCycleCompletion:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=False),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -833,16 +887,19 @@ class TestRunDispatchCycleNotNeeded:
         mock_close_issue = fake_forge.close_issue
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             # プロセスは生きたまま・PRも存在しない、という「対応不要」の典型状態
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -886,15 +943,18 @@ class TestRunDispatchCycleNotNeeded:
         mock_close_issue = fake_forge.close_issue
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree"
+                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
             ) as mock_remove_worktree,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -941,7 +1001,9 @@ class TestRunDispatchCycleNotNeeded:
         )
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
 

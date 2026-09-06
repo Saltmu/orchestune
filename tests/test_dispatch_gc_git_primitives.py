@@ -76,7 +76,7 @@ class TestPruneStaleIntegrationTempBranches:
     def test_deletes_only_old_temp_branches_without_open_pr(self, fake_forge):
         # #435: クラッシュ等で残ったtemp branchだけを回収し、レビュー中の
         # 統合PRのheadや作成直後の並行ランを誤って削除してはならない。
-        with patch("orchestune.dispatch.gc.git.run_git") as run_git:
+        with patch("orchestune.dispatch.gc.git.run_git", autospec=True) as run_git:
             run_git.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -216,6 +216,7 @@ class TestRemoteBranchCommitChecks:
         with (
             patch(
                 "orchestune.dispatch.gc.git.fetch_remote_branch",
+                autospec=True,
                 side_effect=("origin/claude/issue-177-task-a", "origin/main"),
             ) as mock_fetch,
             patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
@@ -242,6 +243,7 @@ class TestRemoteBranchCommitChecks:
         with (
             patch(
                 "orchestune.dispatch.gc.git.fetch_remote_branch",
+                autospec=True,
                 side_effect=("origin/claude/issue-177-task-a", "origin/main"),
             ) as mock_fetch,
             patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run,
