@@ -647,7 +647,11 @@ def test_link_one_skill_reports_copy_success_message(tmp_path, capsys):
     src_skill.mkdir()
     dest_skill = tmp_path / "dest"
 
-    with patch("orchestune.setup_skills._create_skill_link", return_value="copied"):
+    with patch(
+        "orchestune.setup_skills._create_skill_link",
+        autospec=True,
+        return_value="copied",
+    ):
         result = _link_one_skill(src_skill, dest_skill, "orchestune")
 
     captured = capsys.readouterr()

@@ -461,13 +461,15 @@ class TestTaskTokenLimitEscalation:
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                autospec=True,
                 return_value=(True, "abcdef123456"),
             ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             outcome = _rule_completed(ctx, "42", active, task)
 

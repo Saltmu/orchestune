@@ -66,7 +66,7 @@ def _context(
 class TestWaitForProcessTerminate:
     """#274レビュー対応(P1): is_process_alive経由でポーリングする(os.killは直接呼ばない)。"""
 
-    @patch("orchestune.dispatch.rebase.is_process_alive")
+    @patch("orchestune.dispatch.rebase.is_process_alive", autospec=True)
     @patch("orchestune.dispatch.rebase.time.sleep")
     def test_wait_immediate_exit(self, mock_sleep, mock_is_alive):
         mock_is_alive.return_value = False
@@ -78,7 +78,7 @@ class TestWaitForProcessTerminate:
         mock_is_alive.assert_called_once_with(12345)
         mock_sleep.assert_not_called()
 
-    @patch("orchestune.dispatch.rebase.is_process_alive")
+    @patch("orchestune.dispatch.rebase.is_process_alive", autospec=True)
     @patch("orchestune.dispatch.rebase.time.sleep")
     def test_wait_exit_after_polling(self, mock_sleep, mock_is_alive):
         # 1, 2回目は生存、3回目に非生存で終了
@@ -93,7 +93,7 @@ class TestWaitForProcessTerminate:
         assert mock_sleep.call_count == 2
         mock_sleep.assert_has_calls([call(0.1), call(0.1)])
 
-    @patch("orchestune.dispatch.rebase.is_process_alive")
+    @patch("orchestune.dispatch.rebase.is_process_alive", autospec=True)
     @patch("orchestune.dispatch.rebase.time.sleep")
     def test_wait_timeout(self, mock_sleep, mock_is_alive):
         # ずっとプロセスが存在している場合、タイムアウト時間経過で抜ける
@@ -113,7 +113,9 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_updates_base_branch_on_success(
         self, mock_resolve, mock_run, mock_kill, tmp_path
@@ -160,7 +162,9 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_push_failure_after_successful_rebase_is_reported_distinctly(
         self, mock_resolve, mock_run, mock_kill, tmp_path
@@ -217,7 +221,9 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_keeps_original_base_branch_on_failure(
         self, mock_resolve, mock_run, mock_kill, tmp_path
@@ -259,7 +265,9 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_failure_adds_manual_merge_before_removing_in_progress(
         self, mock_resolve, mock_run, mock_kill, tmp_path
@@ -310,6 +318,7 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
         "orchestune.dispatch.rebase.default_ci_command",
+        autospec=True,
         return_value=[
             "powershell",
             "-NoProfile",
@@ -320,7 +329,9 @@ class TestApplyAutoRebase:
         ],
     )
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_ci_failure_after_successful_rebase_is_reported_distinctly_windows(
         self, mock_resolve, mock_ci_command, mock_run, mock_kill, tmp_path
@@ -384,10 +395,13 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
         "orchestune.dispatch.rebase.default_ci_command",
+        autospec=True,
         return_value=["./scripts/local-ci.sh"],
     )
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_ci_failure_after_successful_rebase_is_reported_distinctly_posix(
         self, mock_resolve, mock_ci_command, mock_run, mock_kill, tmp_path
@@ -448,10 +462,13 @@ class TestApplyAutoRebase:
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
         "orchestune.dispatch.rebase.default_ci_command",
+        autospec=True,
         return_value=["./scripts/local-ci.sh"],
     )
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_rebase_conflict_against_branch_named_like_ci_command_is_not_misclassified(
         self, mock_resolve, mock_ci_command, mock_run, mock_kill, tmp_path
@@ -505,10 +522,12 @@ class TestApplyAutoRebase:
         assert "自動リベース後のローカルCI実行に失敗しました" not in posted_message
 
     @patch("orchestune.dispatch.rebase.os.kill")
-    @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit")
+    @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit", autospec=True)
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
-        "orchestune.dispatch.rebase.resolve_local_or_remote_branch", return_value="main"
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
     )
     def test_backs_up_wip_before_rebase_when_dirty(
         self, mock_resolve, mock_run, mock_backup, mock_kill, tmp_path
@@ -552,7 +571,7 @@ class TestApplyAutoRebase:
         assert active.base_branch == "parent-branch"
 
     @patch("orchestune.dispatch.rebase.os.kill")
-    @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit")
+    @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit", autospec=True)
     @patch("orchestune.dispatch.rebase.subprocess.run")
     def test_backup_failure_skips_rebase_and_escalates_to_manual_merge(
         self, mock_run, mock_backup, mock_kill, tmp_path
@@ -604,7 +623,7 @@ class TestApplyAutoRebase:
         assert active.base_branch == "origin/main"
 
     @patch("orchestune.dispatch.rebase.os.kill")
-    @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit")
+    @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit", autospec=True)
     @patch("orchestune.dispatch.rebase.subprocess.run")
     def test_backup_failure_adds_manual_merge_before_removing_in_progress(
         self, mock_run, mock_backup, mock_kill, tmp_path

@@ -393,10 +393,12 @@ class TestFetchTaskBranch:
         with (
             patch(
                 "orchestune.integrator.git_ops.fetch_remote_branch",
+                autospec=True,
                 return_value="origin/feature",
             ),
             patch(
                 "orchestune.integrator.git_ops.resolve_commit_sha",
+                autospec=True,
                 return_value="a" * 40,
             ),
         ):
@@ -418,6 +420,7 @@ class TestFetchTaskBranch:
             ),
             patch(
                 "orchestune.integrator.git_ops.fetch_remote_branch",
+                autospec=True,
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
                 ),
@@ -437,11 +440,12 @@ class TestFetchTaskBranch:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         task = _task(issue_number=42, subtask_id="task-42")
         with (
-            patch.object(merger, "ensure_git_identity"),
-            patch.object(merger, "ensure_full_history"),
+            patch.object(merger, "ensure_git_identity", autospec=True),
+            patch.object(merger, "ensure_full_history", autospec=True),
             patch.object(
                 merger,
                 "_fetch_task_branch",
+                autospec=True,
                 return_value=(True, True, "a" * 40, ""),
             ),
         ):
@@ -459,6 +463,7 @@ class TestFetchTaskBranch:
             ),
             patch(
                 "orchestune.integrator.git_ops.fetch_remote_branch",
+                autospec=True,
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
                 ),
@@ -476,7 +481,7 @@ class TestFetchTaskBranch:
 class TestMergeTaskBranch:
     def test_merge_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator.git_ops.run_git") as mock_git:
+        with patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git:
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 _ok(["merge"]),
@@ -489,7 +494,7 @@ class TestMergeTaskBranch:
 
     def test_merge_conflict_aborts(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator.git_ops.run_git") as mock_git:
+        with patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git:
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 subprocess.CalledProcessError(1, ["merge"], stderr=b"CONFLICT"),
@@ -504,6 +509,7 @@ class TestMergeTaskBranch:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with patch(
             "orchestune.integrator.git_ops.run_git",
+            autospec=True,
             side_effect=subprocess.CalledProcessError(
                 1, ["rev-parse", "HEAD"], stderr=b"HEAD error"
             ),
@@ -515,7 +521,7 @@ class TestMergeTaskBranch:
 
     def test_merge_oserror_aborts_and_fails(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator.git_ops.run_git") as mock_git:
+        with patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git:
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 OSError("git process failed to start"),
@@ -530,7 +536,9 @@ class TestMergeTaskBranch:
 class TestVerifyCiAndRollback:
     def test_ci_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch.object(merger, "run_ci_in_worktree", return_value=(True, "")):
+        with patch.object(
+            merger, "run_ci_in_worktree", autospec=True, return_value=(True, "")
+        ):
             success, reason, out = merger._verify_ci_and_rollback("sha123")
         assert success is True
         assert reason == ""
@@ -540,9 +548,14 @@ class TestVerifyCiAndRollback:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with (
             patch.object(
-                merger, "run_ci_in_worktree", return_value=(False, "ci failed")
+                merger,
+                "run_ci_in_worktree",
+                autospec=True,
+                return_value=(False, "ci failed"),
             ),
-            patch.object(merger, "rollback_to", return_value=True) as mock_rollback,
+            patch.object(
+                merger, "rollback_to", autospec=True, return_value=True
+            ) as mock_rollback,
         ):
             success, reason, out = merger._verify_ci_and_rollback("sha123")
         assert success is False

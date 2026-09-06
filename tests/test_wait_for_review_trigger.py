@@ -218,7 +218,7 @@ def test_ensure_review_trigger_mention():
     )
 
 
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post):
     data = {
         "issue_comments": [
@@ -249,7 +249,7 @@ def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post
     mock_post.assert_not_called()
 
 
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_post):
     data = {
         "issue_comments": [

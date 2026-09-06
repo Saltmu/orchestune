@@ -271,6 +271,7 @@ def test_dead_local_is_reclaimed_but_cloud_pid_none_is_not(tmp_path, fake_forge)
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             return_value=False,
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
@@ -315,6 +316,7 @@ def test_elapsed_timeout_is_a_kernel_finding_and_typed_plan(tmp_path, fake_forge
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             return_value=True,
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
@@ -370,6 +372,7 @@ def test_missing_and_stale_run_state_use_bookkeeping_commands(tmp_path, fake_for
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             return_value=True,
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
@@ -394,6 +397,7 @@ def test_completion_hold_filters_destructive_commands(tmp_path, fake_forge):
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             return_value=False,
         ),
         patch.object(fake_forge, "branch_exists", return_value=True),
@@ -418,6 +422,7 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             side_effect=(False, True, True),
         ) as process_probe,
         patch.object(fake_forge, "branch_exists", return_value=True),
@@ -445,6 +450,7 @@ def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forg
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             side_effect=lambda pid: pid == 708,
         ) as process_probe,
         patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
@@ -478,6 +484,7 @@ def test_dispatch_cycle_uses_supervisor_for_execution_consistency(tmp_path, fake
     with (
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
             return_value=False,
         ),
         patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),

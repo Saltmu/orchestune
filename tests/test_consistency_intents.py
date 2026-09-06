@@ -200,6 +200,7 @@ def test_atomic_write_failure_leaves_last_complete_lifecycle_state(tmp_path) -> 
 
     with patch(
         "orchestune.consistency.intents.write_json_atomic",
+        autospec=True,
         side_effect=OSError("disk full"),
     ):
         with pytest.raises(OSError, match="disk full"):

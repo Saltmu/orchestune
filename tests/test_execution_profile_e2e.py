@@ -256,11 +256,15 @@ Testing full lifecycle of execution profiles.
 
         # 5. Run Dispatch Cycle 1: Launch all 3 tasks
         with (
-            patch("orchestune.dispatch.worktree._create_worktree"),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
-            patch("orchestune.dispatch.phase_rebase.ensure_parent_branch"),
+            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report = run_dispatch_cycle(config)
@@ -368,17 +372,22 @@ Testing full lifecycle of execution profiles.
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree"),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
-            patch("orchestune.dispatch.phase_rebase.ensure_parent_branch"),
+            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+            ),
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
             patch(
                 "orchestune.dispatch.gc.completion.remote_branch_commit_sha_if_ahead",
+                autospec=True,
                 return_value="abc1234",
             ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree"),
+            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             report2 = run_dispatch_cycle(config)
 
@@ -493,10 +502,12 @@ Testing full lifecycle of execution profiles.
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree"),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report = run_dispatch_cycle(config)
@@ -571,10 +582,12 @@ Testing full lifecycle of execution profiles.
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree"),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report = run_dispatch_cycle(config)
@@ -701,10 +714,12 @@ model_tier: strong
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree"),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report = run_dispatch_cycle(config)
@@ -738,10 +753,12 @@ model_tier: strong
         in_memory_forge.set_label_actor(num, "status:queued", "bot")
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree"),
-            patch("orchestune.dispatch.targets._push_branch_and_verify"),
+            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             report_override = run_dispatch_cycle(config_override)

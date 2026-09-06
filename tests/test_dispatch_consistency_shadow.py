@@ -73,11 +73,24 @@ def _run_patched_cycle(
     issues = _issues(issue)
     ctx = _ctx(config, run_state, task)
     with (
-        patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-        patch("orchestune.dispatch.cycle._prepare_cycle_issues", return_value=issues),
-        patch("orchestune.dispatch.cycle._build_cycle_context", return_value=ctx),
+        patch(
+            "orchestune.dispatch.cycle.load_run_state",
+            autospec=True,
+            return_value=run_state,
+        ),
+        patch(
+            "orchestune.dispatch.cycle._prepare_cycle_issues",
+            autospec=True,
+            return_value=issues,
+        ),
+        patch(
+            "orchestune.dispatch.cycle._build_cycle_context",
+            autospec=True,
+            return_value=ctx,
+        ),
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
+            autospec=True,
             return_value=pipeline_report,
         ),
     ):
@@ -113,7 +126,9 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
         return _report(applied=False)
 
     with patch(
-        "orchestune.dispatch.dispatcher.run_dispatch_cycle", side_effect=capture
+        "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+        autospec=True,
+        side_effect=capture,
     ):
         assert (
             main(

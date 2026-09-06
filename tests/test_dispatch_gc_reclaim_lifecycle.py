@@ -112,9 +112,14 @@ class TestReclaimCounterLifecycle:
         )
         task = _task(status_labels=("status:in-progress",))
         with (
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
                 return_value={"action": action, "commit_sha": "abc123d"},
             ),
         ):
@@ -159,6 +164,7 @@ class TestReclaimCounterLifecycle:
 
         with patch(
             "orchestune.dispatch.gc._finalize_not_needed_worktree",
+            autospec=True,
             return_value={"action": "not_needed", "issue_number": 280},
         ):
             outcome = _rule_not_needed(ctx, "1", active, task)
@@ -177,9 +183,14 @@ class TestDirtyWorktreeHoldLimit:
 
     def _hold_cycle(self, ctx, active, task):
         with (
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
@@ -258,9 +269,14 @@ class TestDirtyWorktreeHoldLimit:
         task = _task(status_labels=("status:in-progress",))
 
         with (
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
@@ -294,9 +310,14 @@ class TestDirtyWorktreeHoldLimit:
         task = _task(status_labels=("status:in-progress",))
 
         with (
-            patch("orchestune.dispatch.gc._is_worktree_complete", return_value=True),
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,

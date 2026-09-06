@@ -26,7 +26,9 @@ def test_main_cli_success():
     from scripts.wait_for_review import main
 
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
-        with patch("scripts.wait_for_review.wait_for_review") as mock_wait:
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
             mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
             with pytest.raises(SystemExit) as exc:
                 main()
@@ -37,7 +39,9 @@ def test_main_cli_findings():
     from scripts.wait_for_review import main
 
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
-        with patch("scripts.wait_for_review.wait_for_review") as mock_wait:
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
             mock_wait.return_value = {
                 "review_body": "### Findings\n🔴 blocking bug",
                 "inline_comments": [],
@@ -51,7 +55,9 @@ def test_main_cli_undetermined():
     from scripts.wait_for_review import main
 
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
-        with patch("scripts.wait_for_review.wait_for_review") as mock_wait:
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
             mock_wait.return_value = {
                 "review_body": "### Note\nAmbiguous comment",
                 "inline_comments": [],
@@ -67,6 +73,7 @@ def test_main_cli_timeout():
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
         with patch(
             "scripts.wait_for_review.wait_for_review",
+            autospec=True,
             side_effect=TimeoutError("Timed out"),
         ):
             with pytest.raises(SystemExit) as exc:
@@ -80,6 +87,7 @@ def test_main_cli_max_rounds():
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
         with patch(
             "scripts.wait_for_review.wait_for_review",
+            autospec=True,
             side_effect=MaxRoundsExceededError("Max rounds reached"),
         ):
             with pytest.raises(SystemExit) as exc:
@@ -92,7 +100,9 @@ def test_main_cli_unexpected_error():
 
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
         with patch(
-            "scripts.wait_for_review.wait_for_review", side_effect=ValueError("Boom")
+            "scripts.wait_for_review.wait_for_review",
+            autospec=True,
+            side_effect=ValueError("Boom"),
         ):
             with pytest.raises(SystemExit) as exc:
                 main()
@@ -116,7 +126,9 @@ def test_main_cli_arguments_parsing():
             "2",
         ],
     ):
-        with patch("scripts.wait_for_review.wait_for_review") as mock_wait:
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
             mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
             with pytest.raises(SystemExit) as exc:
                 main()
@@ -235,8 +247,8 @@ def test_post_review_trigger_includes_round_marker(mock_run):
     assert "<!-- orchestune:review-round 3 -->" in cmd[-1]
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_idempotent_skips_post_if_same_round_exists(
     mock_post, mock_get_data
 ):
@@ -279,7 +291,7 @@ def test_wait_for_review_idempotent_skips_post_if_same_round_exists(
     assert "### Review complete" in result["review_body"]
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_max_rounds_exceeded(mock_get_data):
     data = {
         "issue_comments": [
@@ -412,7 +424,7 @@ def test_evaluate_verdict_layer2_claude_no_major_blocking_issues():
     assert evaluate_review_verdict(body2, [], "claude") == EXIT_NO_FINDINGS
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_round_number_immediate_no_post(mock_get_data):
     trigger = {
         "id": 100,
@@ -442,7 +454,7 @@ def test_wait_for_review_round_number_immediate_no_post(mock_get_data):
     assert result["round"] == 1
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_max_retries_exceeded_polling(mock_get_data):
     mock_get_data.side_effect = [
         {"issue_comments": [], "reviews": [], "inline_comments": []},
@@ -468,6 +480,7 @@ def test_get_initial_pr_data_max_retries_exceeded():
     with ThreadPoolExecutor(max_workers=1) as executor:
         with patch(
             "scripts.wait_for_review._get_pr_data",
+            autospec=True,
             side_effect=RuntimeError("API down"),
         ):
             with pytest.raises(TimeoutError, match="retry attempts"):
@@ -480,8 +493,8 @@ def test_get_initial_pr_data_max_retries_exceeded():
                 )
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_does_not_self_trigger_if_poster_is_bot(
     mock_post, mock_get_data
 ):

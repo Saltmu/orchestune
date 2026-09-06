@@ -358,8 +358,8 @@ def test_run_gh_converts_subprocess_timeout_to_bounded_error():
     assert mock_run.call_args.kwargs["timeout"] == 30
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_detects_new_comment(mock_post, mock_get_data):
     mock_post.return_value = {
         "id": 100,
@@ -395,7 +395,7 @@ def test_wait_for_review_detects_new_comment(mock_post, mock_get_data):
     assert result["timestamp"] == "2026-08-20T07:45:00Z"
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_detects_updated_comment_inplace(mock_get_data):
     # Initial state: in-progress comment
     initial_comment = {
@@ -430,8 +430,8 @@ def test_wait_for_review_detects_updated_comment_inplace(mock_get_data):
     assert result["timestamp"] == "2026-08-20T07:48:00Z"
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_keeps_waiting_past_in_progress_activity(
     mock_post, mock_get_data
 ):
@@ -470,8 +470,8 @@ def test_wait_for_review_keeps_waiting_past_in_progress_activity(
     assert result["timestamp"] == "2026-08-20T07:48:00Z"
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_does_not_return_old_summary_after_new_inline_activity(
     mock_post, mock_get_data
 ):
@@ -525,7 +525,7 @@ def test_wait_for_review_does_not_return_old_summary_after_new_inline_activity(
     assert result["review_body"] == "### Review complete\nCurrent round result."
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_no_post_returns_completed_reply_after_latest_trigger(
     mock_get_data,
 ):
@@ -563,7 +563,7 @@ def test_wait_for_review_no_post_returns_completed_reply_after_latest_trigger(
     assert result["timestamp"] == "2026-08-20T07:48:00Z"
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_no_post_returns_reply_created_in_trigger_second(mock_get_data):
     completed_data = {
         "issue_comments": [
@@ -596,7 +596,7 @@ def test_wait_for_review_no_post_returns_reply_created_in_trigger_second(mock_ge
     assert "### Review complete" in result["review_body"]
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_no_post_does_not_return_reply_older_than_latest_trigger(
     mock_get_data,
 ):
@@ -632,7 +632,7 @@ def test_wait_for_review_no_post_does_not_return_reply_older_than_latest_trigger
         )
 
 
-@patch("scripts.wait_for_review._get_pr_data")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_no_post_does_not_use_late_edit_of_old_reply(
     mock_get_data,
 ):
@@ -667,8 +667,8 @@ def test_wait_for_review_no_post_does_not_use_late_edit_of_old_reply(
         )
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_detects_codex_review_and_inlines(mock_post, mock_get_data):
     mock_post.return_value = {"id": 200, "created_at": "2026-08-18T07:00:00Z"}
     mock_get_data.side_effect = [
@@ -708,8 +708,8 @@ def test_wait_for_review_detects_codex_review_and_inlines(mock_post, mock_get_da
     assert result["inline_comments"][0]["path"] == "test.py"
 
 
-@patch("scripts.wait_for_review._get_pr_data")
-@patch("scripts.wait_for_review.post_review_trigger")
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_times_out(mock_post, mock_get_data):
     mock_post.return_value = {"id": 300, "created_at": "2026-08-20T07:00:00Z"}
     mock_get_data.return_value = {
@@ -728,7 +728,7 @@ def test_wait_for_review_times_out(mock_post, mock_get_data):
 
 
 def test_wait_for_review_polling_catches_exception_and_continues():
-    with patch("scripts.wait_for_review._get_pr_data") as mock_get_data:
+    with patch("scripts.wait_for_review._get_pr_data", autospec=True) as mock_get_data:
         mock_get_data.side_effect = [
             {"issue_comments": [], "reviews": [], "inline_comments": []},
             RuntimeError("Network hiccup"),
@@ -776,7 +776,7 @@ def test_wait_for_review_retries_initial_fetch_failure():
         "inline_comments": [],
     }
 
-    with patch("scripts.wait_for_review._get_pr_data") as mock_get_data:
+    with patch("scripts.wait_for_review._get_pr_data", autospec=True) as mock_get_data:
         mock_get_data.side_effect = [RuntimeError("Network hiccup"), completed_data]
 
         result = wait_for_review(
@@ -793,7 +793,7 @@ def test_wait_for_review_retries_initial_fetch_failure():
 def test_get_pr_data_does_not_return_partial_data_when_an_endpoint_fails():
     from scripts.wait_for_review import _get_pr_data
 
-    with patch("scripts.wait_for_review._run_gh_api") as mock_api:
+    with patch("scripts.wait_for_review._run_gh_api", autospec=True) as mock_api:
 
         def side_effect(endpoint, *args):
             if "issues" in endpoint:
@@ -817,6 +817,7 @@ def test_get_initial_pr_data_times_out():
     with ThreadPoolExecutor(max_workers=1) as executor:
         with patch(
             "scripts.wait_for_review._get_pr_data",
+            autospec=True,
             side_effect=RuntimeError("API error"),
         ):
             with pytest.raises(TimeoutError, match="Timed out capturing initial PR"):

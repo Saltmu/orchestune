@@ -170,6 +170,7 @@ def test_user_allowlisted_execution_requeue_uses_a_bound_handler(
     # boundary so this test proves that the former has its own real handler.
     with patch(
         "orchestune.dispatch.cycle._run_recovery_bookkeeping_boundary",
+        autospec=True,
         return_value=ConsistencyCycleReport(mode=ConsistencyMode.REPAIR),
     ):
         report = run_dispatch_cycle(config)

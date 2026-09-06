@@ -128,7 +128,9 @@ class TestDispatcherConfigErrorNotAffectedByChange:
         _write_invalid_orchestune_toml(tmp_path)
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             pytest.raises(SystemExit) as excinfo,
         ):
             dispatcher_main(["--no-apply"], cwd=tmp_path)

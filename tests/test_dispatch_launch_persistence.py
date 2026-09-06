@@ -95,7 +95,11 @@ class TestApplyTaskLaunchesRunStatePersistence:
         run_state = load_run_state(run_state_path)
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
@@ -138,7 +142,11 @@ class TestApplyTaskLaunchesRunStatePersistence:
         )
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
@@ -187,7 +195,11 @@ class TestApplyTaskLaunchesRunStatePersistence:
         ]
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
@@ -239,7 +251,11 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
             forge=forge,
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -344,7 +360,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             forge=forge,
         )
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
@@ -385,11 +405,16 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             return real_launch(*args, **kwargs)
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
                 "orchestune.dispatch.launch.create_worktree_and_launch",
+                autospec=True,
                 side_effect=_record_launch,
             ),
         ):
@@ -427,11 +452,15 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         run_state = RunState(active_worktrees={})
 
         with (
-            patch("orchestune.dispatch.worktree._branch_exists", return_value=False),
+            patch(
+                "orchestune.dispatch.worktree._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
-                "orchestune.dispatch.launch.create_worktree_and_launch"
+                "orchestune.dispatch.launch.create_worktree_and_launch", autospec=True
             ) as mock_launch,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -482,6 +511,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         with patch(
             "orchestune.dispatch.launch.create_worktree_and_launch",
+            autospec=True,
             return_value=LaunchResult(
                 issue_number=1,
                 branch="claude/issue-1-task-1",
@@ -533,6 +563,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         with patch(
             "orchestune.dispatch.launch.create_worktree_and_launch",
+            autospec=True,
             return_value=LaunchResult(
                 issue_number=1,
                 branch="claude/issue-1-task-1",
@@ -579,6 +610,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         with patch(
             "orchestune.dispatch.launch.create_worktree_and_launch",
+            autospec=True,
             side_effect=RuntimeError("unexpected crash during worktree creation"),
         ):
             with pytest.raises(

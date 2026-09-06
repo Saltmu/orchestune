@@ -170,24 +170,36 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch.cycle.load_run_state",
+                autospec=True,
+                return_value=run_state,
+            ),
+            patch(
+                "orchestune.dispatch.cycle._fetch_issues",
+                autospec=True,
+                return_value=MockIssues(),
+            ),
             patch(
                 "orchestune.dispatch.cycle._process_active_worktrees",
+                autospec=True,
                 return_value=([], deviation_events, False, set()),
             ),
             patch(
                 "orchestune.dispatch.cycle._run_status_repair_boundary",
+                autospec=True,
                 return_value=[],
             ),
-            patch("orchestune.dispatch.cycle._sync_external_locks"),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.cycle._sync_external_locks", autospec=True),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                autospec=True,
                 return_value=([blocked_task, normal_task], {}, []),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling.select_tasks_with_decisions"
+                "orchestune.dispatch.phase_scheduling.select_tasks_with_decisions",
+                autospec=True,
             ) as mock_select,
         ):
             run_dispatch_cycle(config)
@@ -256,11 +268,20 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
+            patch(
+                "orchestune.dispatch.cycle.load_run_state",
+                autospec=True,
+                return_value=run_state,
+            ),
+            patch(
+                "orchestune.dispatch.cycle._fetch_issues",
+                autospec=True,
+                return_value=MockIssues(),
+            ),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                autospec=True,
                 return_value=([], {}, []),
             ),
         ):
@@ -355,19 +376,31 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch.cycle.load_run_state",
+                autospec=True,
+                return_value=run_state,
+            ),
+            patch(
+                "orchestune.dispatch.cycle._fetch_issues",
+                autospec=True,
+                return_value=MockIssues(),
+            ),
             patch(
                 "orchestune.dispatch.cycle._process_active_worktrees",
+                autospec=True,
                 return_value=([], [], False, set()),
             ),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                autospec=True,
                 return_value=([], {}, []),
             ),
             patch(
-                "orchestune.dispatch.locks.check_footprint_deviation", return_value=None
+                "orchestune.dispatch.locks.check_footprint_deviation",
+                autospec=True,
+                return_value=None,
             ),  # エラー発生を模す
         ):
             run_dispatch_cycle(config)
@@ -459,23 +492,35 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.reset_mock(side_effect=True)
         fake_forge.get_actor_permission.return_value = "write"
         with (
-            patch("orchestune.dispatch.cycle.load_run_state", return_value=run_state),
-            patch("orchestune.dispatch.cycle._fetch_issues", return_value=MockIssues()),
+            patch(
+                "orchestune.dispatch.cycle.load_run_state",
+                autospec=True,
+                return_value=run_state,
+            ),
+            patch(
+                "orchestune.dispatch.cycle._fetch_issues",
+                autospec=True,
+                return_value=MockIssues(),
+            ),
             patch(
                 "orchestune.dispatch.cycle._process_active_worktrees",
+                autospec=True,
                 return_value=([], [], False, set()),
             ),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                autospec=True,
                 return_value=([], {}, []),
             ),
             patch(
                 "orchestune.dispatch.locks.check_footprint_deviation",
+                autospec=True,
                 return_value=["src/unexpected.py"],
             ),  # 逸脱ありとする
             patch(
                 "orchestune.dispatch.reconciliation.recompute_dag_for_footprint_change",
+                autospec=True,
                 side_effect=ValueError("DAG error"),
             ),  # DAG計算エラー
         ):

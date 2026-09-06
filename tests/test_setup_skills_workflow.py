@@ -321,6 +321,7 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
         patch("pathlib.Path.cwd", return_value=mock_project),
         patch(
             "orchestune.setup_skills.get_skills_source_dir",
+            autospec=True,
             return_value=real_skills_dir,
         ),
     ):

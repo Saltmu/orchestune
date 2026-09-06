@@ -113,9 +113,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -148,9 +151,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -181,9 +187,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -215,9 +224,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -244,9 +256,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -261,9 +276,12 @@ class TestDispatcherConfigLoading:
         from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -310,9 +328,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -350,9 +371,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -372,9 +396,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -401,9 +428,12 @@ class TestDispatcherConfigLoading:
         """#394: `--ci-command`はshlex構文の文字列として受け取り、
         `DispatcherConfig.ci_command`にはargvリストとして渡ること。"""
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -425,9 +455,12 @@ class TestDispatcherConfigLoading:
         """#394: `--ci-command`未指定時は`DispatcherConfig.ci_command`が
         `None`のままで、Integrator側の既定値フォールバックに委ねる（後方互換）。"""
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -452,9 +485,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
@@ -529,9 +565,12 @@ class TestDispatcherConfigLoading:
         )
 
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target") as mock_build,
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ) as mock_build,
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
         ):
@@ -560,22 +599,27 @@ class TestDispatcherConfigLoading:
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                autospec=True,
                 return_value=r1,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                autospec=True,
                 return_value=r2,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._process_parent_completion",
+                autospec=True,
                 return_value=r3,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._post_event_log_comment",
+                autospec=True,
                 return_value=r4,
             ),
         ):
@@ -600,22 +644,27 @@ class TestDispatcherConfigLoading:
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                autospec=True,
                 return_value=r1,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                autospec=True,
                 return_value=r2_retryable,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._process_parent_completion",
+                autospec=True,
                 return_value=r3,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._post_event_log_comment",
+                autospec=True,
                 return_value=r4,
             ),
         ):
@@ -639,22 +688,27 @@ class TestDispatcherConfigLoading:
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                autospec=True,
                 return_value=r1,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                autospec=True,
                 return_value=r2_fatal,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._process_parent_completion",
+                autospec=True,
                 return_value=r3,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._post_event_log_comment",
+                autospec=True,
                 return_value=r4,
             ),
         ):
@@ -679,6 +733,7 @@ class TestDispatcherConfigLoading:
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
         ):
@@ -707,22 +762,25 @@ class TestDispatcherConfigLoading:
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                autospec=True,
                 return_value=PhaseResult(
                     "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                autospec=True,
                 return_value=PhaseResult(
                     "run_semantic_integrator", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._post_event_log_comment"
+                "orchestune.dispatch.dispatcher._post_event_log_comment", autospec=True
             ) as mock_post,
         ):
             code = main(
@@ -745,28 +803,33 @@ class TestDispatcherConfigLoading:
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=cycle_report,
             ),
             patch(
                 "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                autospec=True,
                 return_value=PhaseResult(
                     "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                autospec=True,
                 return_value=PhaseResult(
                     "run_semantic_integrator", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._process_parent_completion",
+                autospec=True,
                 return_value=PhaseResult(
                     "process_parent_completion", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
                 "orchestune.dispatch.dispatcher._post_event_log_comment",
+                autospec=True,
                 return_value=PhaseResult("post_event_log_comment", PhaseStatus.SUCCESS),
             ) as mock_post,
         ):
@@ -824,7 +887,9 @@ class TestDispatcherConfigLoading:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches", return_value=[]
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
             ),
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -847,6 +912,7 @@ class TestDispatcherConfigLoading:
     def test_unsafe_cli_with_allow_unsafe_option_in_main_succeeds(self, tmp_path):
         with patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            autospec=True,
             return_value=self._empty_report(),
         ):
             code = main(
@@ -871,6 +937,7 @@ class TestDispatcherConfigLoading:
         )
         with patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            autospec=True,
             return_value=self._empty_report(),
         ):
             code = main(
@@ -903,9 +970,12 @@ reasoning_effort = "low"
             encoding="utf-8",
         )
         with (
-            patch("orchestune.dispatch.dispatcher.build_dispatch_target"),
+            patch(
+                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
+            ),
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
                 return_value=self._empty_report(),
             ) as mock_run,
         ):

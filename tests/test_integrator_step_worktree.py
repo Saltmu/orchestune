@@ -130,7 +130,11 @@ class TestWorktreeSafety:
             return acquired_lock
 
         with (
-            patch("orchestune.integrator.steps.file_lock", side_effect=lock_for),
+            patch(
+                "orchestune.integrator.steps.file_lock",
+                autospec=True,
+                side_effect=lock_for,
+            ),
             patch("orchestune.integrator.steps.time.sleep") as sleep,
         ):
             res = Integrator(
