@@ -166,6 +166,12 @@ class GitHubPullRequestMixin:
         return True
 
     def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool:
+        return self.get_current_branch_tip_sha_if_merged_into(head, base) is not None
+
+    def get_current_branch_tip_sha_if_merged_into(
+        self, head: str, base: str
+    ) -> str | None:
+        """Return the observed tip only when that exact commit is in ``base``."""
         validate_ref_name(head)
         validate_ref_name(base)
         encoded_head = quote(head, safe="")
@@ -189,7 +195,7 @@ class GitHubPullRequestMixin:
                 ".status",
             ]
         ).strip()
-        return status in {"ahead", "identical"}
+        return tip_sha if status in {"ahead", "identical"} else None
 
     def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
         """Whether a historical PR merge commit remains in the current base tip."""

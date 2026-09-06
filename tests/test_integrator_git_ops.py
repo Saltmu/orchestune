@@ -82,8 +82,10 @@ class TestEnsureFullHistoryFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
         def handler(args):
-            if args[:2] == ["git", "rev-parse"]:
+            if args[:3] == ["git", "rev-parse", "--is-shallow-repository"]:
                 return _ok(args, "true\n")
+            if args[:3] == ["git", "rev-parse", "--verify"]:
+                return _ok(args, "a" * 40 + "\n")
             if "--unshallow" in args:
                 raise subprocess.CalledProcessError(
                     returncode=1, cmd=args, stderr=b"fatal: unshallow failed"
@@ -388,20 +390,31 @@ class TestCheckTaskBlocking:
 class TestFetchTaskBranch:
     def test_fetch_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch(
-            "orchestune.integrator.git_ops.fetch_remote_branch",
-            return_value="origin/feature",
+        with (
+            patch(
+                "orchestune.integrator.git_ops.fetch_remote_branch",
+                return_value="origin/feature",
+            ),
+            patch(
+                "orchestune.integrator.git_ops.resolve_commit_sha",
+                return_value="a" * 40,
+            ),
         ):
-            success, already_merged, err = merger._fetch_task_branch("feature", "main")
+            success, already_merged, source_sha, err = merger._fetch_task_branch(
+                "feature", "main"
+            )
         assert success is True
         assert already_merged is False
+        assert source_sha == "a" * 40
         assert err == ""
 
     def test_fetch_failure_already_merged(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with (
             patch.object(
-                merger.forge, "is_current_branch_tip_merged_into", return_value=True
+                merger.forge,
+                "get_current_branch_tip_sha_if_merged_into",
+                return_value="a" * 40,
             ),
             patch(
                 "orchestune.integrator.git_ops.fetch_remote_branch",
@@ -410,10 +423,33 @@ class TestFetchTaskBranch:
                 ),
             ),
         ):
-            success, already_merged, err = merger._fetch_task_branch("feature", "main")
+            success, already_merged, source_sha, err = merger._fetch_task_branch(
+                "feature", "main"
+            )
         assert success is True
         assert already_merged is True
+        assert source_sha == "a" * 40
         assert err == ""
+
+    def test_already_merged_fallback_records_proof_for_finalization(
+        self, tmp_path: Path
+    ):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        task = _task(issue_number=42, subtask_id="task-42")
+        with (
+            patch.object(merger, "ensure_git_identity"),
+            patch.object(merger, "ensure_full_history"),
+            patch.object(
+                merger,
+                "_fetch_task_branch",
+                return_value=(True, True, "a" * 40, ""),
+            ),
+        ):
+            merged, failed, *_ = merger.merge_and_test_tasks([task], "main", apply=True)
+
+        assert merged == ["task-42"]
+        assert failed == []
+        assert merger.merged_task_proofs["task-42"].source_sha == "a" * 40
 
     def test_fetch_failure_not_merged(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
@@ -428,9 +464,12 @@ class TestFetchTaskBranch:
                 ),
             ),
         ):
-            success, already_merged, err = merger._fetch_task_branch("feature", "main")
+            success, already_merged, source_sha, err = merger._fetch_task_branch(
+                "feature", "main"
+            )
         assert success is False
         assert already_merged is False
+        assert source_sha is None
         assert "fetch error" in err
 
 
@@ -442,10 +481,11 @@ class TestMergeTaskBranch:
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 _ok(["merge"]),
             ]
-            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+            success, pre_merge_sha, err = merger._merge_task_branch("feature", "a" * 40)
         assert success is True
         assert pre_merge_sha == "sha123"
         assert err == ""
+        assert mock_git.call_args.args[0][-1] == "a" * 40
 
     def test_merge_conflict_aborts(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
@@ -455,7 +495,7 @@ class TestMergeTaskBranch:
                 subprocess.CalledProcessError(1, ["merge"], stderr=b"CONFLICT"),
                 _ok(["merge", "--abort"]),
             ]
-            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+            success, pre_merge_sha, err = merger._merge_task_branch("feature", "a" * 40)
         assert success is False
         assert pre_merge_sha == "sha123"
         assert "Merge conflict" in err
@@ -468,7 +508,7 @@ class TestMergeTaskBranch:
                 1, ["rev-parse", "HEAD"], stderr=b"HEAD error"
             ),
         ):
-            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+            success, pre_merge_sha, err = merger._merge_task_branch("feature", "a" * 40)
         assert success is False
         assert pre_merge_sha is None
         assert "Failed to capture pre-merge HEAD" in err
@@ -481,7 +521,7 @@ class TestMergeTaskBranch:
                 OSError("git process failed to start"),
                 _ok(["merge", "--abort"]),
             ]
-            success, pre_merge_sha, err = merger._merge_task_branch("feature")
+            success, pre_merge_sha, err = merger._merge_task_branch("feature", "a" * 40)
         assert success is False
         assert pre_merge_sha == "sha123"
         assert "Merge conflict" in err

@@ -319,6 +319,9 @@ class FakeForge:
         num = int(issue_number)
         return list(self.comments.get(num, []))
 
+    def get_authenticated_user(self) -> str:
+        return "bot"
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
@@ -529,6 +532,11 @@ class FakeForge:
     def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool:
         return self.is_branch_merged_into(head, base)
 
+    def get_current_branch_tip_sha_if_merged_into(
+        self, head: str, base: str
+    ) -> str | None:
+        return "0" * 40 if self.is_current_branch_tip_merged_into(head, base) else None
+
     def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
         return bool(commit_oid) and self.branch_exists(base)
 
@@ -599,6 +607,7 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     forge.get_label_actor.return_value = ""
     forge.get_actor_permission.return_value = "none"
     forge.list_comments.return_value = []
+    forge.get_authenticated_user.return_value = "bot"
     forge.find_open_issues_by_exact_title.return_value = []
     forge.find_issues_by_parent_metadata.return_value = []
     forge.create_issue.return_value = 1
@@ -609,6 +618,7 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     forge.branch_exists.return_value = True
     forge.is_branch_merged_into.return_value = False
     forge.is_current_branch_tip_merged_into.return_value = False
+    forge.get_current_branch_tip_sha_if_merged_into.return_value = None
     forge.get_merged_pr_timestamp.return_value = None
     forge.is_merge_commit_reachable_from.return_value = True
     forge.list_merged_prs_for_base.return_value = []
@@ -676,6 +686,21 @@ def _completed(args: Sequence[str] | None = None, stdout: Any = "") -> Any:
     )
 
 
+def _default_git_completed(args: Sequence[str]) -> Any:
+    """Default successful git output used by integration doubles.
+
+    Child integration now resolves the fetched remote ref to an immutable SHA,
+    so the generic fake must provide a valid result for that plumbing command.
+    """
+    if (
+        len(args) >= 4
+        and args[:3] == ["git", "rev-parse", "--verify"]
+        and str(args[3]).startswith("origin/")
+    ):
+        return _completed(args, stdout="a" * 40 + "\n")
+    return _completed(args)
+
+
 @dataclass
 class IntegratorEnv:
     """All external edges of an `Integrator.run()` replaced by doubles.
@@ -695,6 +720,7 @@ class IntegratorEnv:
     remove_label: MagicMock
     add_comment: MagicMock
     is_current_branch_tip_merged_into: MagicMock
+    current_branch_tip_sha_if_merged_into: MagicMock
     delete_branch: MagicMock
     branch_exists: MagicMock
     get_issue_labels: MagicMock
@@ -723,8 +749,14 @@ class IntegratorEnv:
         """
 
         def side_effect(args: list[str], **kwargs: Any) -> Any:
+            if (
+                len(args) >= 4
+                and args[:3] == ["git", "rev-parse", "--verify"]
+                and str(args[3]).startswith("origin/")
+            ):
+                return _default_git_completed(args)
             result = handler(args)
-            return _completed(args) if result is None else result
+            return _default_git_completed(args) if result is None else result
 
         self.run.side_effect = side_effect
 
@@ -763,6 +795,8 @@ class IntegratorEnv:
 def integrator_env(
     fake_forge: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[IntegratorEnv]:
+    from orchestune.infra.git_cli import ConditionalBranchDeletionResult
+
     original_init = IntegratorConfig.__init__
 
     def init_with_fake_forge(
@@ -772,6 +806,10 @@ def integrator_env(
         original_init(config, *args, **kwargs)
 
     monkeypatch.setattr(IntegratorConfig, "__init__", init_with_fake_forge)
+    monkeypatch.setattr(
+        "orchestune.integrator.steps.delete_remote_branch_if_matches",
+        lambda *args: ConditionalBranchDeletionResult.DELETED,
+    )
     with patch("orchestune.integrator.subprocess.run") as run:
         list_issues = fake_forge.list_issues_by_label
         list_open_prs = fake_forge.list_open_prs
@@ -782,15 +820,17 @@ def integrator_env(
         remove_label = fake_forge.remove_label
         add_comment = fake_forge.add_comment
         tip = fake_forge.is_current_branch_tip_merged_into
+        tip_sha = fake_forge.get_current_branch_tip_sha_if_merged_into
         delete_branch = fake_forge.delete_branch
         branch_exists = fake_forge.branch_exists
         get_issue_labels = fake_forge.get_issue_labels
         ensure_labels = fake_forge.ensure_labels
-        run.return_value = _completed(stdout=b"")
+        run.side_effect = lambda args, **kwargs: _default_git_completed(args)
         list_issues.side_effect = lambda label, *a, **k: []
         list_open_prs.return_value = []
         create_pr.return_value = 999
         tip.return_value = False
+        tip_sha.return_value = None
         branch_exists.return_value = True
         get_issue_labels.return_value = ()
         ensure_labels.return_value = BootstrapResult((), ())
@@ -805,6 +845,7 @@ def integrator_env(
             remove_label=remove_label,
             add_comment=add_comment,
             is_current_branch_tip_merged_into=tip,
+            current_branch_tip_sha_if_merged_into=tip_sha,
             delete_branch=delete_branch,
             branch_exists=branch_exists,
             get_issue_labels=get_issue_labels,

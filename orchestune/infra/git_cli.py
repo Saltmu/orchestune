@@ -13,11 +13,13 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 # git CLIのadapter境界でrefを検証し、不正な値をsubprocessへ渡さない。
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
+_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # Git hooksや外部環境からリークして意図しないリポジトリを操作する危険な環境変数一覧 (Issue #507)
 DANGEROUS_GIT_ENV_VARS: tuple[str, ...] = (
@@ -57,6 +59,15 @@ class GitResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+class ConditionalBranchDeletionResult(StrEnum):
+    """Outcome of an explicit-SHA remote branch deletion attempt."""
+
+    DELETED = "deleted"
+    ALREADY_ABSENT = "already_absent"
+    TIP_MISMATCH = "tip_mismatch"
+    FAILED = "failed"
 
 
 def run_git(
@@ -278,6 +289,84 @@ def fetch_remote_branch(repository_root: str | Path, branch: str) -> str:
         cwd=repository_root,
     )
     return f"origin/{branch}"
+
+
+def resolve_commit_sha(repository_root: str | Path, ref: str) -> str:
+    """Resolve ``ref`` to a full commit SHA after it has been fetched."""
+    _validate_ref_name(ref)
+    result = run_git(
+        ["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=repository_root
+    )
+    sha = result.stdout.strip()
+    if not _COMMIT_SHA_PATTERN.fullmatch(sha):
+        raise ValueError(f"参照 {ref!r} を完全なcommit SHAへ解決できませんでした")
+    return sha.lower()
+
+
+def delete_remote_branch_if_matches(
+    repository_root: str | Path, branch: str, expected_sha: str
+) -> ConditionalBranchDeletionResult:
+    """Delete a remote branch only if its current tip still equals ``expected_sha``.
+
+    ``git push --force-with-lease=<ref>:<sha>`` performs the compare-and-swap
+    at the remote; an observation followed by an unconditional delete would
+    leave a race window.  Callers must distinguish a moved tip from a deletion
+    error and never finalize the related Issue after either result.
+    """
+    branch = _validate_ref_name(branch)
+    if not _COMMIT_SHA_PATTERN.fullmatch(expected_sha):
+        raise ValueError(f"期待commit SHAが不正です: {expected_sha!r}")
+    ref = f"refs/heads/{branch}"
+    try:
+        run_git(
+            [
+                "push",
+                "--porcelain",
+                f"--force-with-lease={ref}:{expected_sha.lower()}",
+                "origin",
+                f":{ref}",
+            ],
+            cwd=repository_root,
+        )
+    except (subprocess.CalledProcessError, OSError) as error:
+        detail = _git_error_detail(error).lower()
+        if any(marker in detail for marker in ("stale info", "[rejected]")):
+            return _classify_lease_rejection(repository_root, ref)
+        if "remote ref does not exist" in detail:
+            return ConditionalBranchDeletionResult.ALREADY_ABSENT
+        return ConditionalBranchDeletionResult.FAILED
+    return ConditionalBranchDeletionResult.DELETED
+
+
+def _git_error_detail(error: subprocess.CalledProcessError | OSError) -> str:
+    if isinstance(error, OSError):
+        return str(error)
+    values = (error.stdout, error.stderr, error.output)
+    return " ".join(
+        value.decode("utf-8", errors="replace")
+        if isinstance(value, bytes)
+        else str(value or "")
+        for value in values
+    )
+
+
+def _classify_lease_rejection(
+    repository_root: str | Path, ref: str
+) -> ConditionalBranchDeletionResult:
+    """Tell a moved tip from a ref already deleted before recovery resumed."""
+    try:
+        result = run_git(
+            ["ls-remote", "--exit-code", "--heads", "origin", ref],
+            cwd=repository_root,
+            check=False,
+        )
+    except OSError:
+        return ConditionalBranchDeletionResult.FAILED
+    if result.returncode == 2:
+        return ConditionalBranchDeletionResult.ALREADY_ABSENT
+    if result.returncode == 0:
+        return ConditionalBranchDeletionResult.TIP_MISMATCH
+    return ConditionalBranchDeletionResult.FAILED
 
 
 def normalize_remote_branch_name(branch: str) -> str:

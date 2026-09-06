@@ -337,7 +337,7 @@ class TestFetchFailure:
         assert integrator_env.calls_with("merge", "--no-ff") == []
         integrator_env.remove_label.assert_called_with(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
-        integrator_env.is_current_branch_tip_merged_into.assert_called_once_with(
+        integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
             _TASK_1_BRANCH, "main"
         )
 
@@ -358,7 +358,7 @@ class TestFetchFailure:
         integrator_env.remove_label.assert_called_once_with(1, "status:done")
         integrator_env.add_label.assert_called_once_with(1, "status:queued")
         integrator_env.add_comment.assert_called_once()
-        integrator_env.is_current_branch_tip_merged_into.assert_called_once_with(
+        integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
             _TASK_1_BRANCH, "main"
         )
 
@@ -366,14 +366,14 @@ class TestFetchFailure:
         self, integrator_env: IntegratorEnv
     ):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
-        integrator_env.is_current_branch_tip_merged_into.return_value = True
+        integrator_env.current_branch_tip_sha_if_merged_into.return_value = "a" * 40
         self._fail_fetch(integrator_env, b"fatal: couldn't find remote ref")
 
         res = Integrator(IntegratorConfig(apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
-        integrator_env.is_current_branch_tip_merged_into.assert_called_once_with(
+        integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
             _TASK_1_BRANCH, "main"
         )
         # 差し戻し（status:done剥がし・status:queued付与・失敗コメント）は行われず、
@@ -386,7 +386,7 @@ class TestFetchFailure:
         self, integrator_env: IntegratorEnv
     ):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
-        integrator_env.is_current_branch_tip_merged_into.side_effect = RuntimeError(
+        integrator_env.current_branch_tip_sha_if_merged_into.side_effect = RuntimeError(
             "GitHub API unavailable"
         )
         self._fail_fetch(integrator_env, b"temporary network failure")
@@ -395,7 +395,7 @@ class TestFetchFailure:
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
-        integrator_env.is_current_branch_tip_merged_into.assert_called_once_with(
+        integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
             _TASK_1_BRANCH, "main"
         )
 

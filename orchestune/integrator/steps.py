@@ -12,16 +12,26 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import StrEnum
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.dispatch.worktree import file_lock
 from orchestune.forge import REQUIRED_LABELS
-from orchestune.infra.git_cli import run_git
+from orchestune.infra.git_cli import (
+    ConditionalBranchDeletionResult,
+    delete_remote_branch_if_matches,
+    run_git,
+)
 from orchestune.infra.process_utils import default_ci_command
+from orchestune.integrator.finalization import (
+    ensure_integration_receipt,
+    find_integration_receipt,
+)
 from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.integrator.pr import ensure_integration_pr
+from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.integrator.tasks import get_sorted_done_tasks
 from orchestune.integrator.types import (
     IntegrationComponent,
@@ -30,6 +40,7 @@ from orchestune.integrator.types import (
     IntegrationStatus,
 )
 from orchestune.integrator.worktree import IntegrationWorktree
+from orchestune.models import Task
 from orchestune.pr_link_notice import (
     ensure_pr_merged_notice,
     render_merged_notice,
@@ -130,8 +141,12 @@ class RetryChildIssueCloseStep(IntegrationComponent):
         retried_closed: list[int] = []
         for task in ctx.active_done_tasks:
             if "integration:included" not in task.status_labels:
-                remaining_tasks.append(task)
-                continue
+                recovery = self._restore_label_from_receipt(ctx, task)
+                if recovery is _ReceiptRecovery.UNRECOVERED:
+                    remaining_tasks.append(task)
+                    continue
+                if recovery is _ReceiptRecovery.RETRY_FINALIZATION:
+                    continue
             try:
                 ctx.forge.close_issue(
                     task.issue_number,
@@ -148,7 +163,6 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                     f"#{task.issue_number}: {error}",
                     file=sys.stderr,
                 )
-                remaining_tasks.append(task)
 
         ctx.active_done_tasks = remaining_tasks
         if not ctx.active_done_tasks:
@@ -160,6 +174,59 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             "status": IntegrationStatus.SUCCESS,
             "retried_closed_issues": retried_closed,
         }
+
+    def _restore_label_from_receipt(
+        self, ctx: IntegrationContext, task: Task
+    ) -> _ReceiptRecovery:
+        proof = find_integration_receipt(
+            ctx.forge,
+            task.issue_number,
+            task.subtask_id,
+            build_task_branch_name(task.issue_number, task.subtask_id),
+            ctx.base_branch,
+        )
+        if proof is None or not self._proof_reaches_parent(ctx, proof):
+            return _ReceiptRecovery.UNRECOVERED
+        deletion = delete_remote_branch_if_matches(
+            ctx.original_root, proof.branch_name, proof.source_sha
+        )
+        if deletion not in {
+            ConditionalBranchDeletionResult.DELETED,
+            ConditionalBranchDeletionResult.ALREADY_ABSENT,
+        }:
+            return _ReceiptRecovery.UNRECOVERED
+        try:
+            ctx.forge.add_label(task.issue_number, "integration:included")
+        except Exception as error:
+            print(
+                "Warning: Failed to label receipt-recovered issue "
+                f"#{task.issue_number}: {error}",
+                file=sys.stderr,
+            )
+            return _ReceiptRecovery.RETRY_FINALIZATION
+        return _ReceiptRecovery.READY_TO_CLOSE
+
+    @staticmethod
+    def _proof_reaches_parent(
+        ctx: IntegrationContext, proof: TaskIntegrationProof
+    ) -> bool:
+        try:
+            return ctx.forge.is_merge_commit_reachable_from(
+                proof.source_sha, ctx.base_branch.removeprefix("origin/")
+            )
+        except Exception as error:
+            print(
+                "Warning: Failed to validate receipt proof for "
+                f"#{proof.issue_number}: {error}",
+                file=sys.stderr,
+            )
+            return False
+
+
+class _ReceiptRecovery(StrEnum):
+    UNRECOVERED = "unrecovered"
+    RETRY_FINALIZATION = "retry_finalization"
+    READY_TO_CLOSE = "ready_to_close"
 
 
 class SetupWorktreeStep(IntegrationComponent):
@@ -236,7 +303,7 @@ class MergeAndTestStep(IntegrationComponent):
             results = merger.merge_and_test_tasks(
                 ctx.active_done_tasks, ctx.base_branch, ctx.config.apply
             )
-            return self._record_merge_results(ctx, results)
+            return self._record_merge_results(ctx, results, merger.merged_task_proofs)
         except Exception as error:
             return {
                 "status": IntegrationStatus.FAILURE,
@@ -256,6 +323,7 @@ class MergeAndTestStep(IntegrationComponent):
     def _record_merge_results(
         ctx: IntegrationContext,
         results: tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]],
+        proofs: dict[str, TaskIntegrationProof],
     ) -> IntegrationReport:
         merged, failed, blocked, failed_reasons, blocked_reasons = results
         ctx.merged_tasks.extend(merged)
@@ -263,6 +331,7 @@ class MergeAndTestStep(IntegrationComponent):
         ctx.blocked_tasks.extend(blocked)
         ctx.failed_reasons.update(failed_reasons)
         ctx.blocked_reasons.update(blocked_reasons)
+        ctx.merged_task_proofs.update(proofs)
         if not failed and merged:
             return {"status": IntegrationStatus.SUCCESS}
         return {
@@ -388,13 +457,17 @@ class LabelIncludedStep(IntegrationComponent):
         }
 
 
-def _mark_tasks_included(ctx: IntegrationContext) -> list[str]:
+def _mark_tasks_included(
+    ctx: IntegrationContext, subtask_ids: set[str] | None = None
+) -> list[str]:
     """Label merged tasks that have not already been marked as included."""
     newly_included: list[str] = []
     task_by_subtask_id = {
         task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
     }
     for subtask_id in ctx.merged_tasks:
+        if subtask_ids is not None and subtask_id not in subtask_ids:
+            continue
         task = task_by_subtask_id.get(subtask_id)
         if task is None or "integration:included" in task.status_labels:
             continue
@@ -519,13 +592,14 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         failure = self._update_parent_branch(ctx)
         if failure is not None:
             return failure
-        self._delete_merged_branches(ctx)
-        newly_included = _mark_tasks_included(ctx)
+        finalized_task_ids = self._finalize_merged_child_tasks(ctx)
+        self._delete_temp_branch(ctx)
+        newly_included = _mark_tasks_included(ctx, finalized_task_ids)
         ctx.newly_included = newly_included
         return {
             "status": IntegrationStatus.SUCCESS,
             "auto_merged": ctx.integration_pr_number is not None,
-            "closed_issues": self._close_merged_child_issues(ctx),
+            "closed_issues": self._close_merged_child_issues(ctx, finalized_task_ids),
             "newly_included": newly_included,
         }
 
@@ -559,28 +633,47 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 "auto_merged": False,
             }
 
-    @staticmethod
-    def _merged_branch_names(ctx: IntegrationContext) -> list[str]:
-        tasks = {
-            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
-        }
-        names = [
-            build_task_branch_name(tasks[task_id].issue_number, task_id)
-            for task_id in ctx.merged_tasks
-            if task_id in tasks
-        ]
-        return names + ([ctx.temp_branch] if ctx.temp_branch else [])
-
-    def _delete_merged_branches(self, ctx: IntegrationContext) -> None:
-        for branch_name in self._merged_branch_names(ctx):
-            try:
-                if ctx.forge.branch_exists(branch_name):
-                    ctx.forge.delete_branch(branch_name)
-            except Exception as error:
+    def _finalize_merged_child_tasks(self, ctx: IntegrationContext) -> set[str]:
+        """Finalize only children whose proven branch tip was safely removed."""
+        finalized: set[str] = set()
+        for subtask_id in ctx.merged_tasks:
+            proof = ctx.merged_task_proofs.get(subtask_id)
+            if proof is None:
+                continue
+            if not ensure_integration_receipt(ctx.forge, proof, ctx.base_branch):
                 print(
-                    f"Warning: Failed to delete remote branch '{branch_name}': {error}",
+                    f"Warning: Failed to persist integration receipt for #{proof.issue_number}",
                     file=sys.stderr,
                 )
+                continue
+            result = delete_remote_branch_if_matches(
+                ctx.repository_root, proof.branch_name, proof.source_sha
+            )
+            if result in {
+                ConditionalBranchDeletionResult.DELETED,
+                ConditionalBranchDeletionResult.ALREADY_ABSENT,
+            }:
+                finalized.add(subtask_id)
+                continue
+            print(
+                "Warning: Deferred child finalization for "
+                f"#{proof.issue_number}; branch deletion result={result}",
+                file=sys.stderr,
+            )
+        return finalized
+
+    @staticmethod
+    def _delete_temp_branch(ctx: IntegrationContext) -> None:
+        if not ctx.temp_branch:
+            return
+        try:
+            if ctx.forge.branch_exists(ctx.temp_branch):
+                ctx.forge.delete_branch(ctx.temp_branch)
+        except Exception as error:
+            print(
+                f"Warning: Failed to delete remote branch '{ctx.temp_branch}': {error}",
+                file=sys.stderr,
+            )
 
     def _verify_already_integrated(self, ctx: IntegrationContext) -> bool:
         """`ctx.merged_tasks`の全ブランチが実際に`base_branch`へ含まれている
@@ -765,12 +858,16 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 file=sys.stderr,
             )
 
-    def _close_merged_child_issues(self, ctx: IntegrationContext) -> list[int]:
+    def _close_merged_child_issues(
+        self, ctx: IntegrationContext, subtask_ids: set[str] | None = None
+    ) -> list[int]:
         closed_issues: list[int] = []
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         for subtask_id in ctx.merged_tasks:
+            if subtask_ids is not None and subtask_id not in subtask_ids:
+                continue
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
                 continue

@@ -857,6 +857,12 @@ class TestListComments:
 
         assert forge.list_comments(42) == []
 
+    def test_returns_the_authenticated_write_actor(self, forge: GitHubForge, gh_run):
+        gh_run.stdout("github-actions[bot]\n")
+
+        assert forge.get_authenticated_user() == "github-actions[bot]"
+        assert gh_run.call_args.args[0] == ["gh", "api", "user", "--jq", ".login"]
+
     def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
         with pytest.raises(ValueError):
             forge.list_comments("invalid; injection")
