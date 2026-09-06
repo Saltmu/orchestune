@@ -9,9 +9,10 @@ from pathlib import Path
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
-from orchestune.infra.git_cli import fetch_remote_branch, run_git
+from orchestune.infra.git_cli import fetch_remote_branch, resolve_commit_sha, run_git
 from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator.pr import handle_merge_failure
+from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.models import Task
 
 
@@ -29,6 +30,7 @@ class IntegrationMerger:
         self.original_root = original_root
         self.ci_command = ci_command
         self.forge = forge or GitHubForge()
+        self.merged_task_proofs: dict[str, TaskIntegrationProof] = {}
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
@@ -246,18 +248,18 @@ class IntegrationMerger:
 
     def _fetch_task_branch(
         self, branch_name: str, base_branch: str
-    ) -> tuple[bool, bool, str]:
+    ) -> tuple[bool, bool, str | None, str]:
         """Fetch remote task branch into remote-tracking ref.
 
-        Returns `(success, already_merged, error_message)`.
+        Returns `(success, already_merged, source_sha, error_message)`.
         """
         # actions/checkout のデフォルト（単一ブランチの浅いclone）では
         # `origin/{branch_name}` のremote-trackingブランチが存在しないため、
         # refspecを明示してfetchしないと後続のmergeが常に
         # 「not something we can merge」で失敗する（内容衝突ではない）。
         try:
-            fetch_remote_branch(self.repository_root, branch_name)
-            return True, False, ""
+            remote_ref = fetch_remote_branch(self.repository_root, branch_name)
+            return True, False, resolve_commit_sha(self.repository_root, remote_ref), ""
         except (subprocess.CalledProcessError, ValueError, OSError) as e:
             # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
             # 場合だけ統合済みとして扱う。同名branchの過去PRだけでは、
@@ -284,13 +286,15 @@ class IntegrationMerger:
                     f"in {base_branch_name}. "
                     "Skipping integration merge."
                 )
-                return True, True, ""
+                return True, True, None, ""
 
             fetch_error = getattr(e, "stderr", None) or str(e)
-            return False, False, f"Failed to fetch branch: {fetch_error}"
+            return False, False, None, f"Failed to fetch branch: {fetch_error}"
 
-    def _merge_task_branch(self, branch_name: str) -> tuple[bool, str | None, str]:
-        """Attempt to merge `origin/{branch_name}` into current temporary branch.
+    def _merge_task_branch(
+        self, branch_name: str, source_sha: str
+    ) -> tuple[bool, str | None, str]:
+        """Merge the fetched, immutable ``source_sha`` into the temporary branch.
 
         Returns `(success, pre_merge_sha, error_message)`.
         """
@@ -313,7 +317,7 @@ class IntegrationMerger:
                     "--no-ff",
                     "-m",
                     f"Temp merge {branch_name}",
-                    f"origin/{branch_name}",
+                    source_sha,
                 ],
                 cwd=self.repository_root,
                 check=True,
@@ -378,6 +382,7 @@ class IntegrationMerger:
     def merge_and_test_tasks(
         self, sorted_done_tasks: list[Task], base_branch: str, apply: bool
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]]:
+        self.merged_task_proofs = {}
         merged_tasks: list[str] = []
         failed_tasks: list[str] = []
         blocked_tasks: list[str] = []
@@ -484,7 +489,7 @@ class IntegrationMerger:
             merged.append(task.subtask_id)
             return None
         branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
-        fetched, already_merged, reason = self._fetch_task_branch(
+        fetched, already_merged, source_sha, reason = self._fetch_task_branch(
             branch_name, base_branch
         )
         if not fetched:
@@ -495,7 +500,41 @@ class IntegrationMerger:
         if already_merged:
             merged.append(task.subtask_id)
             return None
-        merged_ok, pre_merge_sha, reason = self._merge_task_branch(branch_name)
+        if source_sha is None:
+            self._record_failure(
+                task,
+                "Fetched branch has no immutable source SHA",
+                apply,
+                failed,
+                failed_reasons,
+                unavailable,
+            )
+            return None
+        return self._merge_verified_task(
+            task,
+            branch_name,
+            source_sha,
+            apply,
+            merged,
+            failed,
+            failed_reasons,
+            unavailable,
+        )
+
+    def _merge_verified_task(
+        self,
+        task: Task,
+        branch_name: str,
+        source_sha: str,
+        apply: bool,
+        merged: list[str],
+        failed: list[str],
+        failed_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> str | None:
+        merged_ok, pre_merge_sha, reason = self._merge_task_branch(
+            branch_name, source_sha
+        )
         if not merged_ok or pre_merge_sha is None:
             self._record_failure(
                 task, reason, apply, failed, failed_reasons, unavailable
@@ -513,6 +552,12 @@ class IntegrationMerger:
             )
             return pre_merge_sha
         merged.append(task.subtask_id)
+        self.merged_task_proofs[task.subtask_id] = TaskIntegrationProof(
+            issue_number=task.issue_number,
+            subtask_id=task.subtask_id,
+            branch_name=branch_name,
+            source_sha=source_sha,
+        )
         return pre_merge_sha
 
     def _record_failure(

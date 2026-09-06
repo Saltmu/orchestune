@@ -676,6 +676,21 @@ def _completed(args: Sequence[str] | None = None, stdout: Any = "") -> Any:
     )
 
 
+def _default_git_completed(args: Sequence[str]) -> Any:
+    """Default successful git output used by integration doubles.
+
+    Child integration now resolves the fetched remote ref to an immutable SHA,
+    so the generic fake must provide a valid result for that plumbing command.
+    """
+    if (
+        len(args) >= 4
+        and args[:3] == ["git", "rev-parse", "--verify"]
+        and str(args[3]).startswith("origin/")
+    ):
+        return _completed(args, stdout="a" * 40 + "\n")
+    return _completed(args)
+
+
 @dataclass
 class IntegratorEnv:
     """All external edges of an `Integrator.run()` replaced by doubles.
@@ -723,8 +738,14 @@ class IntegratorEnv:
         """
 
         def side_effect(args: list[str], **kwargs: Any) -> Any:
+            if (
+                len(args) >= 4
+                and args[:3] == ["git", "rev-parse", "--verify"]
+                and str(args[3]).startswith("origin/")
+            ):
+                return _default_git_completed(args)
             result = handler(args)
-            return _completed(args) if result is None else result
+            return _default_git_completed(args) if result is None else result
 
         self.run.side_effect = side_effect
 
@@ -763,6 +784,8 @@ class IntegratorEnv:
 def integrator_env(
     fake_forge: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[IntegratorEnv]:
+    from orchestune.infra.git_cli import ConditionalBranchDeletionResult
+
     original_init = IntegratorConfig.__init__
 
     def init_with_fake_forge(
@@ -772,6 +795,10 @@ def integrator_env(
         original_init(config, *args, **kwargs)
 
     monkeypatch.setattr(IntegratorConfig, "__init__", init_with_fake_forge)
+    monkeypatch.setattr(
+        "orchestune.integrator.steps.delete_remote_branch_if_matches",
+        lambda *args: ConditionalBranchDeletionResult.DELETED,
+    )
     with patch("orchestune.integrator.subprocess.run") as run:
         list_issues = fake_forge.list_issues_by_label
         list_open_prs = fake_forge.list_open_prs
@@ -786,7 +813,7 @@ def integrator_env(
         branch_exists = fake_forge.branch_exists
         get_issue_labels = fake_forge.get_issue_labels
         ensure_labels = fake_forge.ensure_labels
-        run.return_value = _completed(stdout=b"")
+        run.side_effect = lambda args, **kwargs: _default_git_completed(args)
         list_issues.side_effect = lambda label, *a, **k: []
         list_open_prs.return_value = []
         create_pr.return_value = 999

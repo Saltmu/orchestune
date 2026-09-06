@@ -16,6 +16,7 @@ from unittest.mock import ANY, patch
 
 import pytest
 
+from orchestune.infra.git_cli import ConditionalBranchDeletionResult
 from orchestune.integrator import (
     AutoMergeChildIntegrationStep,
     IntegrationContext,
@@ -341,30 +342,38 @@ class TestAutoMergeChildIntegration:
         issue = make_done_issue(1, subtask_id="task-1")
         integrator_env.set_done_issues(issue)
 
-        res = Integrator(_child_config()).run()
+        with patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            return_value=ConditionalBranchDeletionResult.DELETED,
+        ) as conditional_delete:
+            res = Integrator(_child_config()).run()
 
         assert res["status"] == "success"
-        # 子ブランチと一時ブランチの削除が呼び出されていることを検証
-        integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+        conditional_delete.assert_called_once()
+        assert "claude/issue-1-task-1" in conditional_delete.call_args.args[1]
+        assert conditional_delete.call_args.args[2] == "a" * 40
+        # 一時ブランチだけは従来のForge削除経路を使う。
         integrator_env.delete_branch.assert_any_call(
             "integration/temp-parent-issue-100-test-run"
         )
-        assert integrator_env.delete_branch.call_count == 2
+        assert integrator_env.delete_branch.call_count == 1
 
-    def test_continues_even_if_branch_deletion_raises_exception(
+    def test_defers_completion_when_verified_child_deletion_fails(
         self, integrator_env: IntegratorEnv
     ):
         issue = make_done_issue(1, subtask_id="task-1")
         integrator_env.set_done_issues(issue)
-        # 削除処理で例外が発生するように設定
-        integrator_env.delete_branch.side_effect = RuntimeError("API error")
+        with patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            return_value=ConditionalBranchDeletionResult.FAILED,
+        ):
+            res = Integrator(_child_config()).run()
 
-        res = Integrator(_child_config()).run()
-
-        # 削除失敗時も全体のステータスは成功すること
+        # 一時的な削除失敗は全体を止めないが、Issue完了を確定してはならない。
         assert res["status"] == "success"
-        assert res["closed_issues"] == [1]
-        integrator_env.delete_branch.assert_any_call("claude/issue-1-task-1")
+        assert res["closed_issues"] == []
+        integrator_env.add_label.assert_not_called()
+        integrator_env.close_issue.assert_not_called()
 
 
 class TestParentBranchStaleRetryEscalation:
@@ -848,7 +857,7 @@ class TestChildIssueCloseNotice:
         res = Integrator(_child_config()).run()
 
         assert res["closed_issues"] == [1]
-        assert call_order == ["add_comment", "close_issue"]
+        assert call_order == ["add_comment", "add_comment", "close_issue"]
         issue_number, body = integrator_env.add_comment.call_args.args
         assert issue_number == 1
         assert notice_marker(KIND_MERGED, 999) in body
@@ -873,7 +882,8 @@ class TestChildIssueCloseNotice:
         res = Integrator(_child_config()).run()
 
         assert res["closed_issues"] == [1]
-        integrator_env.add_comment.assert_not_called()
+        assert integrator_env.add_comment.call_count == 1
+        assert "task-integration-proof" in integrator_env.add_comment.call_args.args[1]
         integrator_env.close_issue.assert_called_once_with(1, "completed", comment=None)
 
     def test_falls_back_to_the_close_comment_when_the_notice_cannot_be_posted(
@@ -882,7 +892,7 @@ class TestChildIssueCloseNotice:
         # 独立コメントの投稿に失敗した場合の最後の手段として、クローズコメント
         # そのものに通知を載せる。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
-        integrator_env.add_comment.side_effect = RuntimeError("API unavailable")
+        integrator_env.add_comment.side_effect = [None, RuntimeError("API unavailable")]
 
         res = Integrator(_child_config()).run()
 

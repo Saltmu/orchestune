@@ -14,6 +14,7 @@ from typing import TypedDict
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
 from orchestune.integrator.coordinator import IntegrationCoordinator
+from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.models import Task
 
 
@@ -99,6 +100,7 @@ class IntegrationContext:
     base_branch: str
     temp_branch: str
     merged_tasks: list[str] = field(default_factory=list)
+    merged_task_proofs: dict[str, TaskIntegrationProof] = field(default_factory=dict)
     failed_tasks: list[str] = field(default_factory=list)
     blocked_tasks: list[str] = field(default_factory=list)
     failed_reasons: dict[str, str] = field(default_factory=dict)
@@ -136,4 +138,5 @@ __all__ = [
     "IntegrationReport",
     "IntegrationStatus",
     "IntegratorConfig",
+    "TaskIntegrationProof",
 ]
