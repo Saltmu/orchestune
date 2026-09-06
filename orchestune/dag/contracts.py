@@ -46,7 +46,7 @@ _SHARED_CONTRACT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "dependency-manifest",
         re.compile(
-            r"(^|/)(pyproject\.toml|package\.json|poetry\.lock|"
+            r"(^|/)(pyproject\.toml|package\.json|poetry\.lock|uv\.lock|"
             r"package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|go\.mod)$"
         ),
     ),
