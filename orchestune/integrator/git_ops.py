@@ -11,6 +11,7 @@ from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import fetch_remote_branch, resolve_commit_sha, run_git
 from orchestune.infra.process_utils import default_ci_command
+from orchestune.infra.python_env import install_dependencies, resolve_virtualenv_path
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.models import Task
@@ -114,81 +115,24 @@ class IntegrationMerger:
         except (subprocess.CalledProcessError, OSError):
             pass
 
-    @staticmethod
-    def _find_ancestor_venv(start: Path) -> Path | None:
-        """#376: `start`の祖先ディレクトリを遡り、`.venv`を持つ最初の祖先を
-        返す。monorepo内でこのパッケージがネストして配置されている場合でも、
-        固定の文字列一致やネストの深さに依存せず実際のvenvを見つけられる。"""
-        for ancestor in start.parents:
-            candidate = ancestor / ".venv"
-            if candidate.exists():
-                return candidate
-        return None
-
     def _prepare_ci_environment(self) -> tuple[dict[str, str], str | None]:
         env = os.environ.copy()
         env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
-        pyproject_path = self.repository_root / "pyproject.toml"
-        error = self._install_poetry_dependencies(pyproject_path, env)
+        error = install_dependencies(self.repository_root, env)
         if error:
             return env, error
-        self._configure_virtualenv(pyproject_path, env)
+        self._configure_virtualenv(env)
         return env, None
 
-    def _install_poetry_dependencies(
-        self, pyproject_path: Path, env: dict[str, str]
-    ) -> str | None:
-        if not pyproject_path.exists():
-            return None
-        try:
-            subprocess.run(
-                ["poetry", "install"],
-                cwd=str(self.repository_root),
-                check=True,
-                capture_output=True,
-                env=env,
-            )
-        except (subprocess.CalledProcessError, OSError) as exc:
-            return f"Failed to install Poetry dependencies: {exc}"
-        return None
-
-    def _configure_virtualenv(self, pyproject_path: Path, env: dict[str, str]) -> None:
-        venv_path = (
-            self._poetry_virtualenv_path(pyproject_path, env)
-            or self._fallback_venv_path()
+    def _configure_virtualenv(self, env: dict[str, str]) -> None:
+        venv_path = resolve_virtualenv_path(
+            self.repository_root, self.original_root, env
         )
         if venv_path and venv_path.exists():
             env["VIRTUAL_ENV"] = str(venv_path.resolve())
             bin_path = venv_path / "bin"
             if bin_path.exists():
                 env["PATH"] = f"{bin_path.resolve()}{os.pathsep}{env.get('PATH', '')}"
-
-    def _poetry_virtualenv_path(
-        self, pyproject_path: Path, env: dict[str, str]
-    ) -> Path | None:
-        if not pyproject_path.exists():
-            return None
-        try:
-            result = subprocess.run(
-                ["poetry", "env", "info", "--path"],
-                cwd=str(self.repository_root),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=True,
-                env=env,
-            )
-            path = Path(result.stdout.strip())
-            return path if path.exists() else None
-        except (subprocess.CalledProcessError, OSError):
-            return None
-
-    def _fallback_venv_path(self) -> Path | None:
-        for path in (self.repository_root / ".venv", self.original_root / ".venv"):
-            if path.exists():
-                return path
-        return self._find_ancestor_venv(self.original_root)
 
     def _execute_ci_command(self, env: dict[str, str]) -> tuple[bool, str]:
         ci_cmd = self.ci_command or default_ci_command()
