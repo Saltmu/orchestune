@@ -12,6 +12,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import StrEnum
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.escalation import apply_human_review_escalation
@@ -139,12 +140,13 @@ class RetryChildIssueCloseStep(IntegrationComponent):
         remaining_tasks = []
         retried_closed: list[int] = []
         for task in ctx.active_done_tasks:
-            if (
-                "integration:included" not in task.status_labels
-                and not self._restore_label_from_receipt(ctx, task)
-            ):
-                remaining_tasks.append(task)
-                continue
+            if "integration:included" not in task.status_labels:
+                recovery = self._restore_label_from_receipt(ctx, task)
+                if recovery is _ReceiptRecovery.UNRECOVERED:
+                    remaining_tasks.append(task)
+                    continue
+                if recovery is _ReceiptRecovery.RETRY_FINALIZATION:
+                    continue
             try:
                 ctx.forge.close_issue(
                     task.issue_number,
@@ -173,7 +175,9 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             "retried_closed_issues": retried_closed,
         }
 
-    def _restore_label_from_receipt(self, ctx: IntegrationContext, task: Task) -> bool:
+    def _restore_label_from_receipt(
+        self, ctx: IntegrationContext, task: Task
+    ) -> _ReceiptRecovery:
         proof = find_integration_receipt(
             ctx.forge,
             task.issue_number,
@@ -182,7 +186,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             ctx.base_branch,
         )
         if proof is None or not self._proof_reaches_parent(ctx, proof):
-            return False
+            return _ReceiptRecovery.UNRECOVERED
         deletion = delete_remote_branch_if_matches(
             ctx.original_root, proof.branch_name, proof.source_sha
         )
@@ -190,7 +194,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             ConditionalBranchDeletionResult.DELETED,
             ConditionalBranchDeletionResult.ALREADY_ABSENT,
         }:
-            return False
+            return _ReceiptRecovery.UNRECOVERED
         try:
             ctx.forge.add_label(task.issue_number, "integration:included")
         except Exception as error:
@@ -199,8 +203,8 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                 f"#{task.issue_number}: {error}",
                 file=sys.stderr,
             )
-            return False
-        return True
+            return _ReceiptRecovery.RETRY_FINALIZATION
+        return _ReceiptRecovery.READY_TO_CLOSE
 
     @staticmethod
     def _proof_reaches_parent(
@@ -217,6 +221,12 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                 file=sys.stderr,
             )
             return False
+
+
+class _ReceiptRecovery(StrEnum):
+    UNRECOVERED = "unrecovered"
+    RETRY_FINALIZATION = "retry_finalization"
+    READY_TO_CLOSE = "ready_to_close"
 
 
 class SetupWorktreeStep(IntegrationComponent):

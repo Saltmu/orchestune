@@ -189,6 +189,44 @@ def test_receipt_recovers_after_delete_before_label(fake_forge, tmp_path: Path):
     fake_forge.close_issue.assert_called_once()
 
 
+def test_receipt_label_failure_does_not_return_task_to_integration(
+    fake_forge, tmp_path: Path
+):
+    task = make_task(1, subtask_id="task-1", status_labels=("status:done",))
+    proof = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="claude/issue-1-task-1",
+        source_sha="a" * 40,
+    )
+    fake_forge.list_comments.return_value = [
+        {
+            "body": render_integration_receipt(proof, "parent/issue-100"),
+            "author": "bot",
+        }
+    ]
+    fake_forge.add_label.side_effect = RuntimeError("temporary API failure")
+    config = IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
+    ctx = IntegrationContext(
+        config=config,
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="origin/parent/issue-100",
+        temp_branch="integration/temp-parent-issue-100-test",
+        active_done_tasks=[task],
+    )
+
+    with patch(
+        "orchestune.integrator.steps.delete_remote_branch_if_matches",
+        return_value=ConditionalBranchDeletionResult.ALREADY_ABSENT,
+    ):
+        result = RetryChildIssueCloseStep().execute(ctx)
+
+    assert result["status"] == "no_done_tasks"
+    assert ctx.active_done_tasks == []
+    fake_forge.close_issue.assert_not_called()
+
+
 def test_receipt_from_a_different_author_is_not_accepted(fake_forge):
     proof = TaskIntegrationProof(
         issue_number=1,
