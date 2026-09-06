@@ -20,7 +20,7 @@ assignees: ''
 
 ### 実行したコマンド
 ```bash
-# 例: poetry run pytest tests/test_xxxx.py
+# 例: uv run pytest tests/test_xxxx.py
 ```
 
 ## 期待される挙動
