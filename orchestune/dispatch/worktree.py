@@ -45,7 +45,15 @@ class LaunchResult:
 
 
 def _branch_exists(branch_name: str) -> bool:
-    """指定されたブランチがローカルまたはリモート追跡ブランチとして存在するか確認する。"""
+    """指定されたブランチがローカルまたはリモート追跡ブランチとして存在するか確認する。
+
+    #830: 本関数はテストから`patch("orchestune.dispatch.worktree._branch_exists")`
+    で直接差し替えられることを許容された注入境界である（呼び出し側の分岐選択を
+    検証するための正当な手段。`CONTRIBUTING.md`/`CONTRIBUTING.ja.md`の
+    `autospec=True`解説サンプルとしても掲載済み）。local/remote判定ロジック
+    自体の検証は、本関数が実際に経由する`run_git`境界のpatchのみで完結する
+    `tests/test_dispatch_worktree.py::TestBranchExists`に一本化している。
+    """
     res_local = run_git(
         ["show-ref", "--verify", f"refs/heads/{branch_name}"], cwd=None, check=False
     )

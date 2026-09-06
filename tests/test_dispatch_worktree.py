@@ -21,6 +21,7 @@ from orchestune.dispatch.worktree import (
     create_worktree_and_launch,
     file_lock,
 )
+from orchestune.infra.git_cli import GitResult
 
 
 def _task(
@@ -548,32 +549,47 @@ class TestCreateWorktreeAndLaunch:
 
 
 class TestBranchExists:
-    @patch("orchestune.dispatch.worktree.subprocess.run")
-    def test_branch_exists_local(self, mock_run):
-        # 1回目の subprocess.run が returncode=0 を返せば True
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        assert _branch_exists("my-branch") is True
-        mock_run.assert_called_once()
+    """#830: `_branch_exists`のlocal/remote判定ロジック自体を、本関数が実際に
+    経由する境界である`run_git`（`orchestune.infra.git_cli`）のpatchのみで
+    検証する。以前は`orchestune.dispatch.worktree.subprocess.run`をpatchして
+    いたが、`worktree.subprocess`はstdlibの`subprocess`モジュールそのもの
+    であるため、これはプロセス全体の`subprocess.run`を差し替えて`run_git`の
+    内部呼び出しを偶然横取りしているに過ぎず、`_branch_exists`が別のgit
+    adapterへ乗り換えても追随しない誤った境界だった。"""
 
-    @patch("orchestune.dispatch.worktree.subprocess.run")
-    def test_branch_exists_remote(self, mock_run):
-        # 1回目が returncode=1（ローカル存在せず）、2回目が returncode=0（リモート存在）
-        mock_run.side_effect = [
-            subprocess.CompletedProcess(args=[], returncode=1),
-            subprocess.CompletedProcess(args=[], returncode=0),
+    @patch("orchestune.dispatch.worktree.run_git", autospec=True)
+    def test_branch_exists_local(self, mock_run_git):
+        # localのshow-refがreturncode=0を返せば、remoteを問い合わせず短絡してTrue
+        mock_run_git.return_value = GitResult(returncode=0, stdout="", stderr="")
+        assert _branch_exists("my-branch") is True
+        mock_run_git.assert_called_once_with(
+            ["show-ref", "--verify", "refs/heads/my-branch"], cwd=None, check=False
+        )
+
+    @patch("orchestune.dispatch.worktree.run_git", autospec=True)
+    def test_branch_exists_remote(self, mock_run_git):
+        # 1回目(local)がreturncode=1（存在せず）、2回目(remote)がreturncode=0（存在）
+        mock_run_git.side_effect = [
+            GitResult(returncode=1, stdout="", stderr=""),
+            GitResult(returncode=0, stdout="", stderr=""),
         ]
         assert _branch_exists("my-branch") is True
-        assert mock_run.call_count == 2
+        assert mock_run_git.call_count == 2
+        mock_run_git.assert_called_with(
+            ["show-ref", "--verify", "refs/remotes/origin/my-branch"],
+            cwd=None,
+            check=False,
+        )
 
-    @patch("orchestune.dispatch.worktree.subprocess.run")
-    def test_branch_does_not_exist(self, mock_run):
-        # 1回目も2回目も returncode=1（存在せず）
-        mock_run.side_effect = [
-            subprocess.CompletedProcess(args=[], returncode=1),
-            subprocess.CompletedProcess(args=[], returncode=1),
+    @patch("orchestune.dispatch.worktree.run_git", autospec=True)
+    def test_branch_does_not_exist(self, mock_run_git):
+        # local・remoteとも1回目からreturncode=1（存在せず）
+        mock_run_git.side_effect = [
+            GitResult(returncode=1, stdout="", stderr=""),
+            GitResult(returncode=1, stdout="", stderr=""),
         ]
         assert _branch_exists("my-branch") is False
-        assert mock_run.call_count == 2
+        assert mock_run_git.call_count == 2
 
 
 class TestFileLock:
