@@ -24,6 +24,9 @@ decomposition_plan.md
 # Agent-local CI baseline state (never commit)
 .orchestune/baseline.json
 
+# Code analysis tool local state: symbol index, LSP cache, memories (never commit)
+.serena/
+
 # OS / IDE
 .DS_Store
 .vscode/
