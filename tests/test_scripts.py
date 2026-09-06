@@ -15,10 +15,10 @@ def test_powershell_local_ci_contract():
     local_ci_ps1 = PROJECT_ROOT / "scripts" / "local-ci.ps1"
     content = local_ci_ps1.read_text(encoding="utf-8")
 
-    assert "poetry run ruff format --check" in content
-    assert "poetry run ruff check" in content
-    assert "poetry run mypy orchestune tests" in content
-    assert "poetry run pytest" in content
+    assert "uv run ruff format --check" in content
+    assert "uv run ruff check" in content
+    assert "uv run mypy orchestune tests" in content
+    assert "uv run pytest" in content
     assert "gitleaks detect" in content
 
 
@@ -66,7 +66,7 @@ def test_local_ci_auto_installs_gitleaks_when_missing():
         "gitleaks is not installed locally and automatic installation failed" in content
     )
     assert "--baseline .orchestune/bloat-baseline.json" in content
-    assert "command -v poetry" in content
+    assert "command -v uv" in content
 
 
 def test_powershell_local_ci_auto_installs_gitleaks_when_missing():
@@ -78,7 +78,7 @@ def test_powershell_local_ci_auto_installs_gitleaks_when_missing():
         "gitleaks is not installed locally and automatic installation failed" in content
     )
     assert "--baseline .orchestune/bloat-baseline.json" in content
-    assert "Get-Command poetry" in content
+    assert "Get-Command uv" in content
     assert "exit 2" in content
 
 
@@ -107,13 +107,13 @@ def test_local_ci_auto_installs_dependencies_when_missing():
     local_ci_sh = PROJECT_ROOT / "scripts" / "local-ci.sh"
     content = local_ci_sh.read_text(encoding="utf-8")
 
-    assert "poetry install" in content
-    assert "poetry run python -c" in content
+    assert "uv sync" in content
+    assert "uv run python -c" in content
 
 
 def test_powershell_local_ci_auto_installs_dependencies_when_missing():
     local_ci_ps1 = PROJECT_ROOT / "scripts" / "local-ci.ps1"
     content = local_ci_ps1.read_text(encoding="utf-8")
 
-    assert "poetry install" in content
-    assert "poetry run python -c" in content
+    assert "uv sync" in content
+    assert "uv run python -c" in content

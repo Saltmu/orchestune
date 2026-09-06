@@ -238,3 +238,10 @@ def test_check_stops_when_formatting_fails(
 
     assert ci_baseline.main(["check", "--ci-command", "run-ci"]) == 23
     assert commands == [ci_baseline.RUFF_FORMAT_COMMANDS[0]]
+
+
+def test_formatting_uses_uv_run(ci_baseline: Any) -> None:
+    assert ci_baseline.RUFF_FORMAT_COMMANDS == (
+        ("uv", "run", "ruff", "format"),
+        ("uv", "run", "ruff", "check", "--fix"),
+    )
