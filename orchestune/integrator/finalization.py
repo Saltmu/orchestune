@@ -107,6 +107,8 @@ def _parse_receipt(
             body.split(RECEIPT_MARKER, 1)[1].split("```json", 1)[1].split("```", 1)[0]
         )
         parsed = json.loads(payload)
-        return parsed if isinstance(parsed, dict) else None
+        if not isinstance(parsed, dict) or body != _render_receipt(parsed):
+            return None
+        return parsed
     except (IndexError, json.JSONDecodeError):
         return None

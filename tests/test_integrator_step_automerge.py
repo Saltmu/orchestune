@@ -775,22 +775,21 @@ class TestRetryChildIssueCloseStep:
         assert integrator_env.close_issue.call_count == 2
         integrator_env.merge_pull_request.assert_not_called()
 
-    def test_retry_failure_falls_back_to_normal_reprocessing(
+    def test_retry_close_failure_does_not_reprocess_an_included_task(
         self, integrator_env: IntegratorEnv
     ):
         integrator_env.set_done_issues(self._included(1, "task-1"))
-        integrator_env.close_issue.side_effect = [
-            subprocess.CalledProcessError(1, ["gh", "issue", "close"]),
-            None,
-        ]
+        integrator_env.close_issue.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "issue", "close"]
+        )
 
         res = Integrator(_child_config()).run()
 
-        assert res["status"] == "success"
+        assert res["status"] == "no_done_tasks"
         assert res["retried_closed_issues"] == []
-        assert res["merged"] == ["task-1"]
-        assert res["closed_issues"] == [1]
-        assert integrator_env.close_issue.call_count == 2
+        assert not res.get("merged")
+        assert not res.get("closed_issues")
+        integrator_env.close_issue.assert_called_once()
 
     def test_no_retry_when_parent_issue_number_is_none(
         self, integrator_env: IntegratorEnv

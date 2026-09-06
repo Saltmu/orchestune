@@ -161,7 +161,6 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                     f"#{task.issue_number}: {error}",
                     file=sys.stderr,
                 )
-                remaining_tasks.append(task)
 
         ctx.active_done_tasks = remaining_tasks
         if not ctx.active_done_tasks:

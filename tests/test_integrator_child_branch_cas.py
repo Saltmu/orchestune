@@ -213,3 +213,29 @@ def test_receipt_from_a_different_author_is_not_accepted(fake_forge):
     )
 
     assert recovered is None
+
+
+def test_receipt_embedded_in_a_trusted_comment_is_not_accepted(fake_forge):
+    proof = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="claude/issue-1-task-1",
+        source_sha="a" * 40,
+    )
+    fake_forge.list_comments.return_value = [
+        {
+            "body": "CI output follows:\n"
+            + render_integration_receipt(proof, "parent/issue-100"),
+            "author": "bot",
+        }
+    ]
+
+    recovered = find_integration_receipt(
+        fake_forge,
+        proof.issue_number,
+        proof.subtask_id,
+        proof.branch_name,
+        "parent/issue-100",
+    )
+
+    assert recovered is None
