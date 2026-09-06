@@ -25,6 +25,38 @@ Then install the local Git pre-commit hook to prevent force-added `.gitignore` f
 
 `setup-git-hooks` also installs [gitleaks](https://github.com/gitleaks/gitleaks#installing) to `~/.local/bin` if it isn't already on your `PATH` (see `scripts/install-gitleaks.sh` / `.ps1`). `local-ci.sh` / `.ps1` retry this automatically too, so a missing `gitleaks` binary shouldn't block local CI execution in a fresh environment. If automatic installation fails (e.g. no network access, unsupported OS/architecture), install it manually from the link above.
 
+## Code Analysis Tool (Serena MCP)
+
+We use [Serena](https://github.com/oraios/serena) as an MCP server for pre-implementation impact analysis ([#822](https://github.com/Saltmu/orchestune/issues/822)). It provides type-aware symbol and reference search through a Python language server, so a field such as `depends_on` — which exists on several distinct types in this repository — can be tracked per type rather than as one undifferentiated text match.
+
+The connection settings live in the repository at [`.mcp.json`](.mcp.json), pinned to `serena-agent==1.7.0`. Adoption is **optional**; every other development task works without it.
+
+### Prerequisite
+
+[uv](https://docs.astral.sh/uv/getting-started/installation/) is required, since `.mcp.json` launches Serena through `uvx`.
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Afterwards, restart your agent session inside the repository (or inside a worktree under it) and the project-scoped MCP server is picked up. MCP servers are loaded only at session start, so a change to `.mcp.json` requires a session restart.
+
+### Worktrees and the index
+
+Because `--project-from-cwd` is set, Serena walks up from the current directory and resolves the project root to the nearest ancestor holding either `.serena/project.yml` or `.git` (**including a git worktree pointer file**). A session started in `worktree/<BRANCH_SLUG>/` therefore roots at that worktree itself, and indexes are never shared between worktrees.
+
+The symbol cache is stored under `<project root>/.serena/cache/<language>/` and keyed as `relative file path → (content hash, symbols)`. Entries whose hash no longer matches are discarded and re-requested from the language server, so switching branches cannot serve symbols from an older commit. No manual re-index step is needed; only if results look plainly wrong, delete that worktree's `.serena/cache/`.
+
+`.serena/` (index, cache, memories) is git-ignored. Do not commit it.
+
+### Fallback and opt-out
+
+If the MCP server fails to start or the language server stops responding, fall back to the existing text search (`rg` / ripgrep, `grep`), record that in `implementation_plan.md`, and keep working. Text search cannot separate identically named symbols by type, so widen your review accordingly. Never stall a task on tooling trouble.
+
+To opt out permanently, disable the MCP server on the client side (in Claude Code, via `claude mcp` configuration or by disconnecting from `/mcp`).
+
+For how to enumerate, classify, and reconcile the impacted sites, see [`skills/local-ci-developer/references/impact-scope.md`](skills/local-ci-developer/references/impact-scope.md).
+
 ## Running Tests
 
 Execute the full test suite using `pytest`:
