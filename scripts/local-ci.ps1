@@ -26,43 +26,43 @@ Write-Host "========================================="
 Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="
 
-if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
-    Write-Host "ERROR: Poetry is required for local CI. Install the version specified by poetry.lock." -ForegroundColor Red
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." -ForegroundColor Red
     exit 2
 }
 
 # Ensure virtual environment and dependencies are installed
-& poetry run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
+& uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Virtual environment or dependencies not found; running poetry install..." -ForegroundColor Cyan
-    poetry install --no-interaction
+    Write-Host "Virtual environment or dependencies not found; running uv sync..." -ForegroundColor Cyan
+    uv sync
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: poetry install failed." -ForegroundColor Red
+        Write-Host "ERROR: uv sync failed." -ForegroundColor Red
         exit $LASTEXITCODE
     }
 }
 
 Write-Host "[1/6] Checking code format (ruff format)..."
-poetry run ruff format --check
+uv run ruff format --check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[2/6] Running lint (ruff check)..."
-poetry run ruff check
+uv run ruff check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[3/6] Checking types (mypy)..."
-poetry run mypy orchestune tests
+uv run mypy orchestune tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[4/6] Running tests with coverage (pytest)..."
 # Note: On Windows subshell environments (e.g. agy CLI / ConPTY), pytest-xdist (-n auto) spawns multiple worker
 # processes that inherit pipe handles, which can cause pipe destruction crashes when workers exit.
 # We default to single-process execution (-n 0) for safe Windows execution. Override via PYTEST_ADDOPTS if needed.
-poetry run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+uv run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[5/6] Detecting new or worsened code and skill bloat..."
-poetry run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
+uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[6/6] Scanning for secrets and local paths (gitleaks)..."

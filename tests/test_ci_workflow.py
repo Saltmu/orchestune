@@ -59,10 +59,8 @@ def test_local_ci_sh_does_not_bypass_pytest_worker_cap():
     with open(local_ci_path, encoding="utf-8") as f:
         content = f.read()
 
-    pytest_lines = [
-        line for line in content.splitlines() if "poetry run pytest" in line
-    ]
-    assert pytest_lines, "expected a `poetry run pytest` invocation in local-ci.sh"
+    pytest_lines = [line for line in content.splitlines() if "uv run pytest" in line]
+    assert pytest_lines, "expected a `uv run pytest` invocation in local-ci.sh"
     for line in pytest_lines:
         assert "-n " not in line and not line.rstrip().endswith("-n"), (
             f"local-ci.sh must not pass -n directly (bypasses the "
