@@ -13,9 +13,9 @@
   },
   "permissions": {
     "allow": [
-      "Bash(poetry run pytest *)",
-      "Bash(poetry run ruff *)",
-      "Bash(poetry run mypy *)",
+      "Bash(uv run pytest *)",
+      "Bash(uv run ruff *)",
+      "Bash(uv run mypy *)",
       "Bash(./scripts/local-ci.sh)",
       "Bash(git checkout -b *)",
       "Bash(git add *)",

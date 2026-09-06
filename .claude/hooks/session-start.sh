@@ -11,11 +11,8 @@ fi
 cd "$CLAUDE_PROJECT_DIR"
 
 # --- Python deps (pyproject.toml requires Python 3.12+) ---
-if command -v poetry >/dev/null 2>&1; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    poetry env use python3.12 >/dev/null
-  fi
-  poetry install
+if command -v uv >/dev/null 2>&1; then
+  uv sync
 fi
 
 # --- Git hooks + gitleaks (idempotent) ---
