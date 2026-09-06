@@ -789,9 +789,7 @@ def _pyproject() -> dict[str, Any]:
 
 
 def _hatch_skill_force_includes(target: str) -> dict[str, str]:
-    pyproject = tomllib.loads(
-        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    pyproject = _pyproject()
     return {
         source: destination
         for source, destination in pyproject["tool"]["hatch"]["build"]["targets"][
