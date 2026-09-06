@@ -134,6 +134,32 @@ class TestRunCiVenvDetection:
             ci_command=["./scripts/local-ci.sh"],
         )
 
+    def test_delegates_environment_setup_to_l1_python_env(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        original_root = tmp_path / "original"
+        original_root.mkdir()
+        venv_path = tmp_path / "venv"
+        (venv_path / "bin").mkdir(parents=True)
+        merger = self._merger(repo_root, original_root)
+
+        with (
+            patch(
+                "orchestune.integrator.git_ops.install_dependencies",
+                return_value=None,
+            ) as install,
+            patch(
+                "orchestune.integrator.git_ops.resolve_virtualenv_path",
+                return_value=venv_path,
+            ) as resolve,
+        ):
+            env, error = merger._prepare_ci_environment()
+
+        assert error is None
+        install.assert_called_once_with(repo_root, env)
+        resolve.assert_called_once_with(repo_root, original_root, env)
+        assert env["VIRTUAL_ENV"] == str(venv_path.resolve())
+
     def test_prefers_repository_root_venv_when_present(self, tmp_path):
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -270,59 +296,6 @@ class TestRunCiVenvDetection:
         ]
         env = ci_calls[0].kwargs["env"]
         assert env.get("VIRTUAL_ENV") == original_virtual_env
-
-    def test_falls_back_when_poetry_env_info_raises(self, tmp_path):
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
-        orig_root = tmp_path / "orig"
-        (orig_root / ".venv" / "bin").mkdir(parents=True)
-
-        merger = self._merger(repo_root, orig_root)
-
-        def mock_run_impl(args, **kwargs):
-            if "poetry" in args and "info" in args and "--path" in args:
-                raise subprocess.CalledProcessError(returncode=1, cmd=args)
-            return _ok(args)
-
-        with patch("subprocess.run", side_effect=mock_run_impl) as run:
-            passed, _ = merger.run_ci_in_worktree()
-
-        assert passed
-        ci_calls = [
-            c for c in run.call_args_list if "./scripts/local-ci.sh" in c.args[0]
-        ]
-        env = ci_calls[0].kwargs["env"]
-        # poetry env info自体が例外を送出しても、original_root/.venvへの
-        # フォールバックで復旧できることを確認する。
-        assert env["VIRTUAL_ENV"] == str((orig_root / ".venv").resolve())
-
-    def test_falls_back_when_poetry_env_info_path_does_not_exist(self, tmp_path):
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
-        orig_root = tmp_path / "orig"
-        (orig_root / ".venv" / "bin").mkdir(parents=True)
-        bogus_venv = tmp_path / "no-such-venv"
-
-        merger = self._merger(repo_root, orig_root)
-
-        def mock_run_impl(args, **kwargs):
-            if "poetry" in args and "info" in args and "--path" in args:
-                return _ok(args, f"{bogus_venv}\n")
-            return _ok(args)
-
-        with patch("subprocess.run", side_effect=mock_run_impl) as run:
-            passed, _ = merger.run_ci_in_worktree()
-
-        assert passed
-        ci_calls = [
-            c for c in run.call_args_list if "./scripts/local-ci.sh" in c.args[0]
-        ]
-        env = ci_calls[0].kwargs["env"]
-        # `poetry env info --path`が存在しないパスを返した場合は無視され、
-        # original_root/.venvへフォールバックする。
-        assert env["VIRTUAL_ENV"] == str((orig_root / ".venv").resolve())
 
 
 def _task(
