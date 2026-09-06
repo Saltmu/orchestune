@@ -102,6 +102,10 @@ def test_conditional_delete_removes_an_unchanged_proven_tip(tmp_path: Path):
         is ConditionalBranchDeletionResult.DELETED
     )
     assert _git(integrator, "ls-remote", "origin", "refs/heads/child") == ""
+    assert (
+        delete_remote_branch_if_matches(integrator, "child", commit_a)
+        is ConditionalBranchDeletionResult.ALREADY_ABSENT
+    )
 
 
 def test_moved_child_tip_is_not_labeled_or_closed(fake_forge, tmp_path: Path):

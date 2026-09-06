@@ -331,7 +331,7 @@ def delete_remote_branch_if_matches(
     except (subprocess.CalledProcessError, OSError) as error:
         detail = _git_error_detail(error).lower()
         if any(marker in detail for marker in ("stale info", "[rejected]")):
-            return ConditionalBranchDeletionResult.TIP_MISMATCH
+            return _classify_lease_rejection(repository_root, ref)
         if "remote ref does not exist" in detail:
             return ConditionalBranchDeletionResult.ALREADY_ABSENT
         return ConditionalBranchDeletionResult.FAILED
@@ -348,6 +348,25 @@ def _git_error_detail(error: subprocess.CalledProcessError | OSError) -> str:
         else str(value or "")
         for value in values
     )
+
+
+def _classify_lease_rejection(
+    repository_root: str | Path, ref: str
+) -> ConditionalBranchDeletionResult:
+    """Tell a moved tip from a ref already deleted before recovery resumed."""
+    try:
+        result = run_git(
+            ["ls-remote", "--exit-code", "--heads", "origin", ref],
+            cwd=repository_root,
+            check=False,
+        )
+    except OSError:
+        return ConditionalBranchDeletionResult.FAILED
+    if result.returncode == 2:
+        return ConditionalBranchDeletionResult.ALREADY_ABSENT
+    if result.returncode == 0:
+        return ConditionalBranchDeletionResult.TIP_MISMATCH
+    return ConditionalBranchDeletionResult.FAILED
 
 
 def normalize_remote_branch_name(branch: str) -> str:
