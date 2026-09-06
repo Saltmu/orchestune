@@ -1,62 +1,56 @@
-# Issue #834 Implementation Plan
+# Implementation Plan: Issue #835 (github-actions: setup-uv & uv cache 移行)
 
-## Preflight
+## 0. Preflight & Execution Environment
+- Tooling:
+  - `uv`: 0.12.10
+  - `gitleaks`: 8.30.1
+  - GitHub CLI (`gh`): Authenticated (Saltmu, scopes: gist, read:org, repo, workflow)
+- GitHub Backend: `gh` CLI (authenticated)
+- Target Issue: #835
+- Parent Issue: #825
+- Base Branch: `parent/issue-825` (`c5b98e7`)
+- Task Branch: `feat/issue-835-github-actions`
+- Worktree Path: `worktree/feat-issue-835-github-actions`
+- Reviewer Bot: `claude` (resolved for agy agent / issue configuration)
 
-- Worktree: `worktree/parent-issue-834` on the user-specified branch
-  `parent/issue-834`, based on `origin/parent/issue-825` because #834 depends
-  on the packaging migration in #833.
-- GitHub backend: authenticated `gh` CLI (fixed for this task).
-- Reviewer: Claude, resolved for a Codex-dispatched task.
-- `poetry --version` and `gitleaks version` succeeded. `poetry check --lock`
-  could not be retained after the #833 dependency migration because this base
-  intentionally has no `poetry.lock`; `uv --version` succeeded instead.
-- Serena MCP is unavailable in this session, so impact enumeration used `rg`,
-  including searches for dynamic access, mock patch strings, configuration and
-  documentation references.
+## 1. Impact Scope Determination (Step 2.6)
 
-## Design
+Serena MCP サーバーが利用できない環境のため、`grep` / `git grep` によるテキスト検索にフォールバックして影響範囲を網羅的に列挙しました。
 
-Replace Poetry command invocations at the local execution boundary with `uv`.
-The local CI scripts will require `uv`, run `uv sync` to make the worktree
-environment current, and run every quality gate through `uv run`. The baseline
-formatter will use the same runner. The integrator boundary will use `uv sync`
-and resolve the repository-local `.venv`, preserving existing nearby `.venv`
-fallback behavior for worktree execution.
+### Symbol & Footprint Classification Table
 
-## Impact scope
+| Reference / File | Decision | Status | Rationale |
+| :--- | :--- | :--- | :--- |
+| `.github/workflows/ci.yml` | in scope | done | Poetry の導入（pipx install poetry）、setup-python の poetry キャッシュ設定、poetry install を setup-uv（enable-cache: true）および uv sync --frozen に移行 |
+| `.github/workflows/claude-code-review.yml` | out of scope | still out of scope | Poetry や setup-python、依存解決を使用しておらず変更不要（検査・確認済み） |
+| `.github/workflows/claude.yml` | out of scope | still out of scope | Poetry や setup-python、依存解決を使用しておらず変更不要（検査・確認済み） |
+| `.github/workflows/deploy-pages.yml` | out of scope | still out of scope | Poetry や setup-python、依存解決を使用しておらず変更不要（検査・確認済み） |
+| `tests/test_ci_workflow.py:test_ci_workflow_has_explicit_permissions` | in scope | done | ci.yml の検証テスト。permissions の検証を維持しつつ、setup-uv と uv sync --frozen の検証テスト `test_ci_workflow_uses_setup_uv_and_frozen_sync` を追加 |
+| `tests/test_skill_commands.py` | out of scope | still out of scope | Issue #836 (skills-docs-and-command-contracts) の担当領域であり本タスクの Footprint 外 |
 
-| Reference | Decision | Rationale |
-| :--- | :--- | :--- |
-| `scripts/local-ci.sh` | in scope | Owns Linux CI tool detection, dependency preparation, and all quality-gate commands. |
-| `scripts/local-ci.ps1` | in scope | Owns the equivalent Windows CI tool detection, preparation, and gates. |
-| `scripts/ci_baseline.py:RUFF_FORMAT_COMMANDS` | in scope | Supplies the formatter commands executed by the baseline wrapper. |
-| `tests/test_ci_baseline.py` | in scope | Asserts the formatter command contract and execution order. |
-| `orchestune/infra/python_env.py:install_dependencies` | in scope | Integrator's worktree dependency-installation boundary. |
-| `orchestune/infra/python_env.py:resolve_virtualenv_path` | in scope | Resolves the environment made by `uv sync` before the integrator runs CI. |
-| `orchestune/integrator/git_ops.py:_prepare_ci_environment` | out of scope | Delegates to the two changed L1 functions without embedding Poetry or virtualenv semantics. |
-| `tests/test_python_env.py` | in scope | Verifies installation errors and virtualenv resolution at the changed boundary. |
-| `tests/test_integrator_git_ops.py:TestRunCiVenvDetection` | out of scope | Mocks the L1 functions and asserts delegation, which remains unchanged. |
-| `tests/test_integrator_step_merge.py:TestCiEnvironment` | in scope | Full-suite reconciliation found it asserted the replaced Poetry subprocess and its managed-venv lookup; it now verifies `uv sync` and the repository `.venv`. |
-| `tests/test_scripts.py` | in scope | Statically enforces the shell and PowerShell CI command contracts. |
-| `tests/test_ci_workflow.py:test_local_ci_sh_does_not_bypass_pytest_worker_cap` | in scope | Inspects the CI pytest invocation and must recognize `uv run pytest`. |
-| `pyproject.toml`, `uv.lock` | out of scope | #833 already supplies the uv metadata and lockfile; #834 consumes them only. |
-| documentation and skills containing `poetry` | out of scope | The Issue footprint is execution and worktree behavior; these instructions are not executed by the affected runtime paths. |
+## 2. Changes Design
 
-Supplementary searches covered `getattr`/`setattr`, `**kwargs`, patch strings,
-serialized/configuration names, and all textual `poetry`/`uv` command
-references. No dynamic access or string-addressed mock targets reference the
-changed `python_env` functions beyond the listed tests.
+### 2.1 `.github/workflows/ci.yml`
+- `Install Poetry` ステップ（`pipx install poetry`）を削除。
+- `astral-sh/setup-uv@v5` ステップを追加（`enable-cache: true`）。
+- `actions/setup-python@v5` の `cache: 'poetry'` を削除。
+- `Install dependencies` ステップを `uv sync --frozen` に変更。
+- permissions（`contents: read`）および OS マトリクス（ubuntu-latest, windows-latest）は維持。
 
-The `tests/test_integrator_step_merge.py` reference was an enumeration miss: it
-was discovered by the full-suite run, then added as in scope before its contract
-test was updated.
+### 2.2 `tests/test_ci_workflow.py`
+- `test_ci_workflow_uses_setup_uv_and_frozen_sync` を追加：
+  - `astral-sh/setup-uv` を使用するステップが存在すること
+  - `enable-cache: true` が設定されていること
+  - `uv sync --frozen` が実行されていること
+  - `poetry` 関連のコマンドやキャッシュ指定がステップ内に存在しないこと
 
-## TDD and verification
+## 3. TDD Results
+1. **Red**: `tests/test_ci_workflow.py` に `test_ci_workflow_uses_setup_uv_and_frozen_sync` を追加し、失敗することを確認。
+2. **Green**: `.github/workflows/ci.yml` を修正し、テストがパスすることを確認。
+3. **Verify**: `./scripts/local-ci.sh` を実行し、全3315テストパス、カバレッジ95.08%、Ruff/Mypy/Gitleaks/Bloat検出すべてエラーゼロを確認。
 
-1. Add expectations for `uv sync`, `uv run`, and `.venv` resolution, then run
-   the focused tests to demonstrate the pre-change failure.
-2. Implement the minimal command and resolver changes.
-3. Run the focused Issue verification, then `uv run pytest` with coverage and
-   `./scripts/local-ci.sh` via the baseline wrapper.
-4. Reconcile this table, create a PR against `parent/issue-825`, run the
-   automated Claude review loop, and post the required outcome record.
+## 4. Acceptance Criteria
+- [x] GitHub Actions CI が Poetry の導入・キャッシュに依存しない
+- [x] `astral-sh/setup-uv` のキャッシュ有効化（`enable-cache: true`）と `uv.lock` に基づく同期（`uv sync --frozen`）を行う
+- [x] `pytest tests/test_ci_workflow.py` が成功する
+- [x] `./scripts/local-ci.sh` の全チェックがパスする
