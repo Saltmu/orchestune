@@ -122,6 +122,10 @@ class PullRequestForge(Protocol):
 
     def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool: ...
 
+    def get_current_branch_tip_sha_if_merged_into(
+        self, head: str, base: str
+    ) -> str | None: ...
+
     def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool: ...
 
     def list_prs(

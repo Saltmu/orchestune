@@ -267,11 +267,11 @@ class IntegrationMerger:
             # branch削除/API障害を含む不確実なケースはfail closedにする。
             base_branch_name = base_branch.removeprefix("origin/")
             try:
-                already_merged = self.forge.is_current_branch_tip_merged_into(
+                source_sha = self.forge.get_current_branch_tip_sha_if_merged_into(
                     branch_name, base_branch_name
                 )
             except Exception as lookup_error:
-                already_merged = False
+                source_sha = None
                 print(
                     "Warning: Failed to verify whether "
                     f"{branch_name} was merged into {base_branch_name}: "
@@ -279,14 +279,14 @@ class IntegrationMerger:
                     file=sys.stderr,
                 )
 
-            if already_merged:
+            if source_sha is not None:
                 print(
                     f"[Integrator] Branch {branch_name} could not be "
                     "fetched, but its current remote tip is contained "
                     f"in {base_branch_name}. "
                     "Skipping integration merge."
                 )
-                return True, True, None, ""
+                return True, True, source_sha, ""
 
             fetch_error = getattr(e, "stderr", None) or str(e)
             return False, False, None, f"Failed to fetch branch: {fetch_error}"
@@ -493,21 +493,25 @@ class IntegrationMerger:
             branch_name, base_branch
         )
         if not fetched:
-            self._record_failure(
+            self._record_fetch_failure(
                 task, reason, apply, failed, failed_reasons, unavailable
             )
             return None
         if already_merged:
-            merged.append(task.subtask_id)
-            return None
-        if source_sha is None:
-            self._record_failure(
+            self._record_already_merged_task(
                 task,
-                "Fetched branch has no immutable source SHA",
+                branch_name,
+                source_sha,
                 apply,
+                merged,
                 failed,
                 failed_reasons,
                 unavailable,
+            )
+            return None
+        if source_sha is None:
+            self._record_missing_source_sha(
+                task, apply, failed, failed_reasons, unavailable
             )
             return None
         return self._merge_verified_task(
@@ -519,6 +523,63 @@ class IntegrationMerger:
             failed,
             failed_reasons,
             unavailable,
+        )
+
+    def _record_fetch_failure(
+        self,
+        task: Task,
+        reason: str,
+        apply: bool,
+        failed: list[str],
+        failed_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> None:
+        self._record_failure(task, reason, apply, failed, failed_reasons, unavailable)
+
+    def _record_missing_source_sha(
+        self,
+        task: Task,
+        apply: bool,
+        failed: list[str],
+        failed_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> None:
+        self._record_failure(
+            task,
+            "Fetched branch has no immutable source SHA",
+            apply,
+            failed,
+            failed_reasons,
+            unavailable,
+        )
+
+    def _record_already_merged_task(
+        self,
+        task: Task,
+        branch_name: str,
+        source_sha: str | None,
+        apply: bool,
+        merged: list[str],
+        failed: list[str],
+        failed_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> None:
+        if source_sha is None:
+            self._record_failure(
+                task,
+                "Already-merged branch has no immutable source SHA",
+                apply,
+                failed,
+                failed_reasons,
+                unavailable,
+            )
+            return
+        merged.append(task.subtask_id)
+        self.merged_task_proofs[task.subtask_id] = TaskIntegrationProof(
+            issue_number=task.issue_number,
+            subtask_id=task.subtask_id,
+            branch_name=branch_name,
+            source_sha=source_sha,
         )
 
     def _merge_verified_task(

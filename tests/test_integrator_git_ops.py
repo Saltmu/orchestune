@@ -412,7 +412,9 @@ class TestFetchTaskBranch:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with (
             patch.object(
-                merger.forge, "is_current_branch_tip_merged_into", return_value=True
+                merger.forge,
+                "get_current_branch_tip_sha_if_merged_into",
+                return_value="a" * 40,
             ),
             patch(
                 "orchestune.integrator.git_ops.fetch_remote_branch",
@@ -426,8 +428,28 @@ class TestFetchTaskBranch:
             )
         assert success is True
         assert already_merged is True
-        assert source_sha is None
+        assert source_sha == "a" * 40
         assert err == ""
+
+    def test_already_merged_fallback_records_proof_for_finalization(
+        self, tmp_path: Path
+    ):
+        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        task = _task(issue_number=42, subtask_id="task-42")
+        with (
+            patch.object(merger, "ensure_git_identity"),
+            patch.object(merger, "ensure_full_history"),
+            patch.object(
+                merger,
+                "_fetch_task_branch",
+                return_value=(True, True, "a" * 40, ""),
+            ),
+        ):
+            merged, failed, *_ = merger.merge_and_test_tasks([task], "main", apply=True)
+
+        assert merged == ["task-42"]
+        assert failed == []
+        assert merger.merged_task_proofs["task-42"].source_sha == "a" * 40
 
     def test_fetch_failure_not_merged(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])

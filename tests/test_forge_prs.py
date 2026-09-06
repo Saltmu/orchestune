@@ -92,6 +92,18 @@ class TestIsCurrentBranchTipMergedInto:
             ".status",
         ]
 
+    def test_returns_observed_tip_sha_when_current_remote_tip_is_in_base(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout_sequence(f"{'a' * 40}\n", "ahead\n")
+
+        assert (
+            forge.get_current_branch_tip_sha_if_merged_into(
+                "claude/issue-1-task-1", "main"
+            )
+            == "a" * 40
+        )
+
     @pytest.mark.parametrize("status", ["behind", "diverged"])
     def test_returns_false_when_current_tip_is_not_in_base(
         self, forge: GitHubForge, gh_run, status
@@ -101,6 +113,18 @@ class TestIsCurrentBranchTipMergedInto:
         assert (
             forge.is_current_branch_tip_merged_into("claude/issue-1-task-1", "main")
             is False
+        )
+
+    def test_returns_no_sha_when_current_tip_is_not_in_base(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout_sequence(f"{'b' * 40}\n", "behind\n")
+
+        assert (
+            forge.get_current_branch_tip_sha_if_merged_into(
+                "claude/issue-1-task-1", "main"
+            )
+            is None
         )
 
     @pytest.mark.parametrize("head,base", [("--evil", "main"), ("feat/x", "bad..base")])

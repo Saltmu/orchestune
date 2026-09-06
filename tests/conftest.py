@@ -529,6 +529,11 @@ class FakeForge:
     def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool:
         return self.is_branch_merged_into(head, base)
 
+    def get_current_branch_tip_sha_if_merged_into(
+        self, head: str, base: str
+    ) -> str | None:
+        return "0" * 40 if self.is_current_branch_tip_merged_into(head, base) else None
+
     def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
         return bool(commit_oid) and self.branch_exists(base)
 
@@ -609,6 +614,7 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     forge.branch_exists.return_value = True
     forge.is_branch_merged_into.return_value = False
     forge.is_current_branch_tip_merged_into.return_value = False
+    forge.get_current_branch_tip_sha_if_merged_into.return_value = None
     forge.get_merged_pr_timestamp.return_value = None
     forge.is_merge_commit_reachable_from.return_value = True
     forge.list_merged_prs_for_base.return_value = []
@@ -710,6 +716,7 @@ class IntegratorEnv:
     remove_label: MagicMock
     add_comment: MagicMock
     is_current_branch_tip_merged_into: MagicMock
+    current_branch_tip_sha_if_merged_into: MagicMock
     delete_branch: MagicMock
     branch_exists: MagicMock
     get_issue_labels: MagicMock
@@ -809,6 +816,7 @@ def integrator_env(
         remove_label = fake_forge.remove_label
         add_comment = fake_forge.add_comment
         tip = fake_forge.is_current_branch_tip_merged_into
+        tip_sha = fake_forge.get_current_branch_tip_sha_if_merged_into
         delete_branch = fake_forge.delete_branch
         branch_exists = fake_forge.branch_exists
         get_issue_labels = fake_forge.get_issue_labels
@@ -818,6 +826,7 @@ def integrator_env(
         list_open_prs.return_value = []
         create_pr.return_value = 999
         tip.return_value = False
+        tip_sha.return_value = None
         branch_exists.return_value = True
         get_issue_labels.return_value = ()
         ensure_labels.return_value = BootstrapResult((), ())
@@ -832,6 +841,7 @@ def integrator_env(
             remove_label=remove_label,
             add_comment=add_comment,
             is_current_branch_tip_merged_into=tip,
+            current_branch_tip_sha_if_merged_into=tip_sha,
             delete_branch=delete_branch,
             branch_exists=branch_exists,
             get_issue_labels=get_issue_labels,
