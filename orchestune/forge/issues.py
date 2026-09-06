@@ -213,6 +213,13 @@ class GitHubIssueMixin:
             if isinstance(c, dict)
         ]
 
+    def get_authenticated_user(self) -> str:
+        """Return the GitHub identity that will author Forge writes."""
+        login = self._run(["gh", "api", "user", "--jq", ".login"]).strip()
+        if not login:
+            raise ValueError("GitHub returned an empty authenticated user")
+        return login
+
     def get_issue_state(self, issue_number: int | str) -> str:
         number = validate_issue_number(issue_number)
         stdout = self._run(["gh", "issue", "view", str(number), "--json", "state"])

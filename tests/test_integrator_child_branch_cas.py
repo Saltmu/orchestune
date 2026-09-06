@@ -11,7 +11,10 @@ from orchestune.infra.git_cli import (
     delete_remote_branch_if_matches,
     fetch_remote_branch,
 )
-from orchestune.integrator.finalization import render_integration_receipt
+from orchestune.integrator.finalization import (
+    find_integration_receipt,
+    render_integration_receipt,
+)
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.integrator.steps import (
     AutoMergeChildIntegrationStep,
@@ -157,7 +160,10 @@ def test_receipt_recovers_after_delete_before_label(fake_forge, tmp_path: Path):
         source_sha="a" * 40,
     )
     fake_forge.list_comments.return_value = [
-        {"body": render_integration_receipt(proof, "parent/issue-100")}
+        {
+            "body": render_integration_receipt(proof, "parent/issue-100"),
+            "author": "bot",
+        }
     ]
     config = IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
     ctx = IntegrationContext(
@@ -181,3 +187,29 @@ def test_receipt_recovers_after_delete_before_label(fake_forge, tmp_path: Path):
     )
     fake_forge.add_label.assert_called_once_with(1, "integration:included")
     fake_forge.close_issue.assert_called_once()
+
+
+def test_receipt_from_a_different_author_is_not_accepted(fake_forge):
+    proof = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="claude/issue-1-task-1",
+        source_sha="a" * 40,
+    )
+    fake_forge.get_authenticated_user.return_value = "orchestune-integrator[bot]"
+    fake_forge.list_comments.return_value = [
+        {
+            "body": render_integration_receipt(proof, "parent/issue-100"),
+            "author": "untrusted-user",
+        }
+    ]
+
+    recovered = find_integration_receipt(
+        fake_forge,
+        proof.issue_number,
+        proof.subtask_id,
+        proof.branch_name,
+        "parent/issue-100",
+    )
+
+    assert recovered is None

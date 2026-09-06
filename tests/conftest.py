@@ -319,6 +319,9 @@ class FakeForge:
         num = int(issue_number)
         return list(self.comments.get(num, []))
 
+    def get_authenticated_user(self) -> str:
+        return "bot"
+
     def add_sub_issue(
         self, parent_issue_number: int | str, child_issue_number: int | str
     ) -> None:
@@ -604,6 +607,7 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     forge.get_label_actor.return_value = ""
     forge.get_actor_permission.return_value = "none"
     forge.list_comments.return_value = []
+    forge.get_authenticated_user.return_value = "bot"
     forge.find_open_issues_by_exact_title.return_value = []
     forge.find_issues_by_parent_metadata.return_value = []
     forge.create_issue.return_value = 1

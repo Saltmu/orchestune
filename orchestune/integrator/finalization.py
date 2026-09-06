@@ -19,10 +19,11 @@ def ensure_integration_receipt(
     """Persist the proof before attempting branch deletion, without duplicates."""
     receipt = _receipt_payload(proof, base_branch)
     try:
+        trusted_author = forge.get_authenticated_user()
         comments = forge.list_comments(proof.issue_number)
     except Exception:
         return False
-    if any(_matches_receipt(comment, receipt) for comment in comments):
+    if any(_matches_receipt(comment, receipt, trusted_author) for comment in comments):
         return True
     try:
         forge.add_comment(
@@ -61,11 +62,12 @@ def find_integration_receipt(
 ) -> TaskIntegrationProof | None:
     """Return an exact, syntactically valid proof receipt for a child Issue."""
     try:
+        trusted_author = forge.get_authenticated_user()
         comments = forge.list_comments(issue_number)
     except Exception:
         return None
     for comment in comments:
-        payload = _parse_receipt(comment)
+        payload = _parse_receipt(comment, trusted_author)
         if not isinstance(payload, dict):
             continue
         if (
@@ -86,11 +88,17 @@ def find_integration_receipt(
     return None
 
 
-def _matches_receipt(comment: dict[str, Any], receipt: dict[str, Any]) -> bool:
-    return _parse_receipt(comment) == receipt
+def _matches_receipt(
+    comment: dict[str, Any], receipt: dict[str, Any], trusted_author: str
+) -> bool:
+    return _parse_receipt(comment, trusted_author) == receipt
 
 
-def _parse_receipt(comment: dict[str, Any]) -> dict[str, Any] | None:
+def _parse_receipt(
+    comment: dict[str, Any], trusted_author: str
+) -> dict[str, Any] | None:
+    if comment.get("author") != trusted_author:
+        return None
     body = comment.get("body")
     if not isinstance(body, str) or RECEIPT_MARKER not in body:
         return None
