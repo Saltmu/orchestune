@@ -1,6 +1,6 @@
 #!/bin/bash
 # SessionStart hook for Claude Code on the web.
-# Installs the toolchain CONTRIBUTING.md expects (Poetry deps on Python 3.12,
+# Installs the toolchain CONTRIBUTING.md expects (uv deps on Python 3.12,
 # git hooks + gitleaks, GitHub CLI) so tests/lint/gh work from the first turn.
 set -euo pipefail
 
