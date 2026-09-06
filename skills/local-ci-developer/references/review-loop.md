@@ -37,11 +37,11 @@ When findings are returned (Exit 10):
 Loop (up to 5 rounds):
   1. Acquire review state and execute the shared verdict evaluator:
      - CLI/gh, initial round:
-       poetry run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
+       uv run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
      - CLI/gh, subsequent rounds: attach --body-file /tmp/review_reply.md (must include commit hash and fix summary).
      - GitHub MCP / GitHub App: retrieve `issue_comments`, `reviews`, and
        `inline_comments`, write the normalized JSON snapshot, then run:
-       poetry run python scripts/wait_for_review.py --bot-name <bot> --review-state-file <STATE.json>
+       uv run python scripts/wait_for_review.py --bot-name <bot> --review-state-file <STATE.json>
   2. Evaluate exit code, then carefully read the entire result:
      - Exit 10: actionable findings are present. This includes **any Codex inline
        comment**, even with a boilerplate summary such as "Here are some automated

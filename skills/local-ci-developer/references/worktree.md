@@ -15,7 +15,7 @@ the worktree path stays flat and filesystem-safe.
 git fetch origin main
 git worktree add -b <BRANCH> worktree/<BRANCH_SLUG> origin/main
 cd worktree/<BRANCH_SLUG>
-poetry install
+uv sync
 ```
 
 Write `implementation_plan.md`, implement, test, run local CI, commit, push,

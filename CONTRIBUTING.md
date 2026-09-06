@@ -6,10 +6,10 @@ This document covers how to set up a local development environment for Orchestun
 
 ## Setup
 
-Ensure you have Python 3.12+, Poetry, and the GitHub CLI (`gh auth status`) installed, then install dependencies:
+Ensure you have Python 3.12+, uv, and the GitHub CLI (`gh auth status`) installed, then install dependencies:
 
 ```bash
-poetry install
+uv sync
 ```
 
 Then install the local Git pre-commit hook to prevent force-added `.gitignore` files from being committed accidentally (this also cleans up any legacy `pre-push` hook):
@@ -61,7 +61,7 @@ For how to enumerate, classify, and reconcile the impacted sites, see [`skills/l
 
 Execute the full test suite using `pytest`:
 ```bash
-poetry run pytest
+uv run pytest
 ```
 
 ### Test suite markers
@@ -76,14 +76,14 @@ Tests without a more specific marker default to `unit`. The collection guard rej
 
 Run a selected suite with strict marker validation:
 ```bash
-poetry run pytest --strict-markers -m unit
-poetry run pytest --strict-markers -m integration
-poetry run pytest --strict-markers -m e2e
+uv run pytest --strict-markers -m unit
+uv run pytest --strict-markers -m integration
+uv run pytest --strict-markers -m e2e
 ```
 
 Coverage instrumentation is intentionally left out of the default `pytest` run to keep the local dev loop fast. To check coverage, pass the flags explicitly (this is also what `local-ci.sh` runs):
 ```bash
-poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
+uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
 ### Mocking Internal Symbols

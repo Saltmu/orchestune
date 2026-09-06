@@ -30,7 +30,7 @@ ci-command = "make ci"
 
 ## 1. インストール方法
 
-OrchestuneはPython 3.12以上、Poetry、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。
+OrchestuneはPython 3.12以上、uv、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。
 
 ### 別のプロジェクトでOrchestuneを利用する場合
 `orchestune-dag` / `orchestune-dispatch` を別のプロジェクト（例: `manuscriptune` というプロジェクト）内でエージェントに実行させたい場合は、以下の2ステップでセットアップを行います。
@@ -41,8 +41,8 @@ OrchestuneはPython 3.12以上、Poetry、およびGitHub CLI（`gh auth status`
 # グローバルにインストール（推奨・pipx使用）
 pipx install git+https://github.com/Saltmu/orchestune.git
 
-# または導入先プロジェクトの開発依存として追加（Poetry）
-poetry add --group dev git+https://github.com/Saltmu/orchestune.git
+# または導入先プロジェクトの開発依存として追加（uv）
+uv add --dev git+https://github.com/Saltmu/orchestune.git
 ```
 
 これにより、導入先プロジェクトのディレクトリから、統一された `orchestune` コマンド、および個別の `orchestune-dag` / `orchestune-dispatch` コマンドを実行できるようになります。
@@ -73,7 +73,7 @@ orchestune setup
 orchestune setup --with-workflow-skill
 ```
 
-- `skills/workflow-template/SKILL.md`（`local-ci-developer` からPython/Poetry固有のコマンドを一般化したテンプレート）を、検出されたアシスタントごとに**プロジェクトローカル**な `.claude/skills/`・`.codex/skills/`・`.gemini/config/skills/` 配下へ**実体コピー**します（シンボリックリンクではありません。コピー元はOrchestuneパッケージ内にしか存在せず、対象プロジェクト内には存在しないため）。
+- `skills/workflow-template/SKILL.md`（`local-ci-developer` からPython/uv固有のコマンドを一般化したテンプレート）を、検出されたアシスタントごとに**プロジェクトローカル**な `.claude/skills/`・`.codex/skills/`・`.gemini/config/skills/` 配下へ**実体コピー**します（シンボリックリンクではありません。コピー元はOrchestuneパッケージ内にしか存在せず、対象プロジェクト内には存在しないため）。
 - `workflow-template` は `local-ci-developer` と同様、この規律がプロジェクト固有であるべきという理由からグローバル自動リンクの対象外です。オプションを付けない通常の `orchestune setup` の挙動には影響しません。
 - 配置後、テンプレート内の `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` プレースホルダーを、対象プロジェクトの実際のコマンドに置き換えてから使用してください（`<CI_ENTRYPOINT>` は上記(c)の `ci_command` 設定と一致させることを推奨します）。フォルダ名・スキル名も自由に変更できます。
 
