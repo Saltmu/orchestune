@@ -9,6 +9,7 @@ import re
 import tomllib
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 TESTS_ROOT = Path(__file__).parent
@@ -783,14 +784,20 @@ def test_documented_subprocess_partition_matches_the_enforced_one() -> None:
         assert _documented_subprocess_partition(lang) == expected, lang
 
 
-def _pyproject_included_skill_paths() -> set[str]:
+def _pyproject() -> dict[str, Any]:
+    return tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def _hatch_skill_force_includes(target: str) -> dict[str, str]:
     pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
     return {
-        entry["path"]
-        for entry in pyproject["tool"]["poetry"]["include"]
-        if entry["path"].startswith("skills/")
+        source: destination
+        for source, destination in pyproject["tool"]["hatch"]["build"]["targets"][
+            target
+        ]["force-include"].items()
+        if source.startswith("skills/")
     }
 
 
@@ -804,12 +811,53 @@ def _distributable_skill_dirs() -> set[str]:
     }
 
 
-def test_pyproject_include_lists_every_distributable_skill() -> None:
-    """#408: a skill missing from `[tool.poetry].include` is silently absent
+def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
+    pyproject = _pyproject()
+
+    assert pyproject["project"] == {
+        "name": "orchestune",
+        "version": "0.5.0",
+        "description": (
+            "Multi-agent implementation orchestrator "
+            "(DAG construction, dispatch cycles, self-healing)"
+        ),
+        "authors": [{"name": "Saltmu"}],
+        "requires-python": ">=3.12,<4.0",
+        "dependencies": ["pyyaml>=6.0.3,<7.0.0"],
+        "scripts": {
+            "orchestune": "orchestune.cli:main",
+            "orchestune-dispatch": "orchestune.dispatch.dispatcher:main",
+            "orchestune-dag": "orchestune.dag.cli:main",
+        },
+    }
+    assert "poetry" not in pyproject.get("tool", {})
+    assert pyproject["build-system"] == {
+        "requires": ["hatchling>=1.27,<2"],
+        "build-backend": "hatchling.build",
+    }
+    assert set(pyproject["dependency-groups"]["dev"]) == {
+        "pytest>=8.2.2,<10.0.0",
+        "pytest-cov>=5.0.0,<6.0.0",
+        "ruff>=0.4.10,<0.5.0",
+        "mypy>=1.10.1,<2.0.0",
+        "types-pyyaml>=6.0.12.20240311,<7.0.0",
+        "pytest-xdist>=3.8.0,<4.0.0",
+    }
+
+
+def test_hatch_targets_include_every_distributable_skill() -> None:
+    """#408: a skill missing from Hatch's force-include is silently absent
     from the built wheel/sdist, so `setup_skills(with_workflow_skill=True)`
     finds no source to copy under a pipx-style install even though the repo
     checkout has it under `skills/`."""
-    assert _pyproject_included_skill_paths() == _distributable_skill_dirs()
+    expected = _distributable_skill_dirs()
+    expected_mappings = {path: path for path in expected}
+    targets = _pyproject()["tool"]["hatch"]["build"]["targets"]
+
+    assert _hatch_skill_force_includes("wheel") == expected_mappings
+    assert _hatch_skill_force_includes("sdist") == expected_mappings
+    assert targets["wheel"]["packages"] == ["orchestune"]
+    assert targets["sdist"]["only-include"] == ["orchestune"]
 
 
 def test_package_root_declares_a_public_api_without_entrypoints() -> None:

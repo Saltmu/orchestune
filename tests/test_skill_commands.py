@@ -35,9 +35,9 @@ _PYTHON_OPTIONS_WITH_OPERAND = frozenset({"-W", "-X", "--check-hash-based-pycs"}
 _PYTHON_OPTIONS_WITHOUT_SCRIPT_TARGET = frozenset({"-m", "-c"})
 
 
-def _poetry_script_names() -> frozenset[str]:
+def _project_script_names() -> frozenset[str]:
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return frozenset(data["tool"]["poetry"].get("scripts", {}))
+    return frozenset(data["project"].get("scripts", {}))
 
 
 # `orchestune-dispatch --parent-issue ...` や `orchestune provision ...` の
@@ -49,7 +49,7 @@ def _poetry_script_names() -> frozenset[str]:
 # 削除されたエントリポイントが検出されない）。そのため認識自体は
 # `pyproject.toml` の現状に依存しない命名規約（`orchestune` または
 # `orchestune-<name>`）で行い、実在確認は `_command_exists` に委ねる。
-_POETRY_SCRIPT_NAMES = _poetry_script_names()
+_PROJECT_SCRIPT_NAMES = _project_script_names()
 _BARE_ENTRY_POINT_PATTERN = re.compile(r"^orchestune(-[a-z0-9]+)*$")
 
 
@@ -65,7 +65,7 @@ def _known_poetry_commands() -> set[str]:
     `Scripts/`）ディレクトリを走査し、そこに存在する実行可能ファイルの
     名前を正とする。
     """
-    names = set(_POETRY_SCRIPT_NAMES)
+    names = set(_PROJECT_SCRIPT_NAMES)
 
     venv_bin = Path(sys.executable).parent
     for candidate in venv_bin.iterdir():

@@ -43,6 +43,8 @@ class TestCategorize:
     def test_dependency_manifest_pattern(self):
         assert _categorize("pyproject.toml") == "dependency-manifest"
         assert _categorize("package.json") == "dependency-manifest"
+        assert _categorize("uv.lock") == "dependency-manifest"
+        assert _categorize("poetry.lock") == "dependency-manifest"
 
     def test_no_match_returns_none(self):
         assert _categorize("src/adapters/csv_adapter.py") is None
