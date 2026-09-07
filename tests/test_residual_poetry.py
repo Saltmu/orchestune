@@ -61,19 +61,21 @@ def check_text_for_unexpected_poetry(text: str, rel_path: str) -> list[tuple[int
     if rel_path in exempt_files:
         return []
 
-    allowed_token_removals: dict[str, list[re.Pattern[str]]] = {
+    allowed_context_removals: dict[str, list[re.Pattern[str]]] = {
         "docs/en/usage.md": [
-            re.compile(r"`poetry\.lock`(?![A-Za-z0-9_./\\~:?=-])"),
+            re.compile(r"`package\.json` / `poetry\.lock` / `package-lock\.json`"),
+            re.compile(r"\(`pyproject\.toml`, `poetry\.lock`, `logging\.py`"),
         ],
         "docs/ja/usage.md": [
-            re.compile(r"`poetry\.lock`(?![A-Za-z0-9_./\\~:?=-])"),
+            re.compile(r"`package\.json` / `poetry\.lock` / `package-lock\.json`"),
+            re.compile(r"（`pyproject\.toml`、`poetry\.lock`、`logging\.py`"),
         ],
     }
 
     violations: list[tuple[int, str]] = []
     for lineno, line in enumerate(text.splitlines(), 1):
         cleaned_line = line
-        for pattern in allowed_token_removals.get(rel_path, []):
+        for pattern in allowed_context_removals.get(rel_path, []):
             cleaned_line = pattern.sub("", cleaned_line)
 
         if "poetry" in cleaned_line.lower():
@@ -109,27 +111,32 @@ def test_no_unexpected_poetry_references_in_docs_and_templates() -> None:
 
 def test_allowlist_catches_residual_command_on_same_line_as_permitted_token() -> None:
     """同一行に許可された `poetry.lock` が含まれていても、不要な poetry 記述があれば検知すること。"""
-    mixed_line = "Run `poetry install` to generate `poetry.lock` file."
+    mixed_line = (
+        "Run `poetry install` with `package.json` / `poetry.lock` / `package-lock.json`"
+    )
     violations = check_text_for_unexpected_poetry(mixed_line, "docs/en/usage.md")
     assert len(violations) == 1
     assert violations[0][1] == mixed_line
 
-    pure_line = "Supports `poetry.lock` and other dependency manifests."
+    pure_line = "Supported: `package.json` / `poetry.lock` / `package-lock.json`"
     assert check_text_for_unexpected_poetry(pure_line, "docs/en/usage.md") == []
 
-    # 大文字小文字の不一致、バッククォート内・外の任意のサフィックス付きトークンは厳密に拒否されること
+    # 許可された完全な文脈と一致しない任意の変形・サフィックス・URL・フラグメントは厳密に拒否されること
     for invalid in (
         "Supports `Poetry.LOCK` file.",
         "Backup file `poetry.lock.bak` is ignored.",
         "Backup file `poetry.lock~` is ignored.",
         "Reference `poetry.lock:backup` is invalid.",
         "URL `poetry.lock?raw=1` is invalid.",
+        "URL `poetry.lock`#fragment is invalid.",
+        "URL `poetry.lock`%2Fsubfile is invalid.",
         "Path `poetry.lock/subfile` is unsupported.",
         "Path `poetry.lock`/subfile is unsupported.",
         "File `poetry.lock`.bak is unsupported.",
         "File `poetry.lock`~ is unsupported.",
         "URL `poetry.lock`?raw=1 is unsupported.",
         "Unquoted poetry.lock is not an exact code token.",
+        "Standalone `poetry.lock` without expected manifest list context is invalid.",
     ):
         assert (
             len(check_text_for_unexpected_poetry(invalid, "docs/en/usage.md")) == 1
