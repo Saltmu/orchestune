@@ -1,5 +1,7 @@
 import sys
 
+from orchestune.version import get_version
+
 
 def main() -> None:
     if len(sys.argv) < 2:
@@ -15,6 +17,11 @@ def main() -> None:
         sys.exit(1)
 
     cmd = sys.argv[1]
+
+    if cmd in {"--version", "-V"}:
+        print(f"orchestune {get_version()}")
+        return
+
     sys.argv = [sys.argv[0]] + sys.argv[2:]
 
     if cmd == "dag":

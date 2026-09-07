@@ -160,3 +160,14 @@ def test_cli_invalid_command_exits(capsys):
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Unknown command: invalid_cmd" in captured.out
+
+
+@pytest.mark.parametrize("flag", ["--version", "-V"])
+def test_cli_prints_version(flag, capsys):
+    from orchestune.cli import main
+
+    with patch("sys.argv", ["orchestune", flag]):
+        main()
+
+    captured = capsys.readouterr()
+    assert captured.out == "orchestune 0.5.0\n"
