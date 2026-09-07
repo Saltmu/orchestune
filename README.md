@@ -46,7 +46,7 @@ The pipeline itself is advanced by deterministic Python. An LLM call is a scarce
 
 👉 Before adopting Orchestune, check the prerequisites your target repository must satisfy (agent discipline definition, CI thoroughness, `ci_command` setting) in [Setup Guide § 0. Prerequisites](docs/en/setup.md#0-prerequisites).
 
-Ensure you have Python 3.12+, Poetry, and the GitHub CLI installed.
+Ensure you have Python 3.12+, uv, and the GitHub CLI installed.
 
 ```bash
 # Install globally using pipx (recommended)

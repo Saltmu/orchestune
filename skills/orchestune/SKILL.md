@@ -34,7 +34,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 
 ## Prerequisites
 
-* The `poetry run orchestune-dag` or `orchestune-dag` command must be installed on the system.
+* The `uv run orchestune-dag` or `orchestune-dag` command must be installed on the system.
 
 ## Workflow
 
@@ -92,7 +92,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 1. Delegate consistency validation of the `decomposition_plan.md` to the `orchestune-dag` CLI (this is the "ask orchestune-dag to decompose/validate" step — `orchestune` never re-implements DAG validation itself):
 
    ```bash
-   poetry run orchestune-dag --plan decomposition_plan.md
+   uv run orchestune-dag --plan decomposition_plan.md
    ```
 
    * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `decomposition_plan.md` and re-run this command until it passes.

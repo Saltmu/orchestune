@@ -31,7 +31,7 @@ subtasks:
     proposed_changes:
       - "Add get_connection to src/db/connection.py"
     verification_plan:
-      - "poetry run pytest tests/test_connection.py"
+      - "uv run pytest tests/test_connection.py"
     shared_contract: db-connection
     writes_shared_contract: true
     issue_number: null  # filled in by `orchestune provision` once this subtask's issue exists
