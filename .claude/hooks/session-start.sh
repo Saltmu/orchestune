@@ -1,6 +1,6 @@
 #!/bin/bash
 # SessionStart hook for Claude Code on the web.
-# Installs the toolchain CONTRIBUTING.md expects (Poetry deps on Python 3.12,
+# Installs the toolchain CONTRIBUTING.md expects (uv deps on Python 3.12,
 # git hooks + gitleaks, GitHub CLI) so tests/lint/gh work from the first turn.
 set -euo pipefail
 
@@ -11,11 +11,8 @@ fi
 cd "$CLAUDE_PROJECT_DIR"
 
 # --- Python deps (pyproject.toml requires Python 3.12+) ---
-if command -v poetry >/dev/null 2>&1; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    poetry env use python3.12 >/dev/null
-  fi
-  poetry install
+if command -v uv >/dev/null 2>&1; then
+  uv sync
 fi
 
 # --- Git hooks + gitleaks (idempotent) ---

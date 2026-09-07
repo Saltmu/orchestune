@@ -23,7 +23,8 @@ from orchestune.pr_link_notice import pr_matches_issue
 
 _HOTSPOT_PATTERNS = (
     re.compile(
-        r"(^|/)(package\.json|poetry\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$"
+        r"(^|/)(package\.json|poetry\.lock|uv\.lock|package-lock\.json|"
+        r"yarn\.lock|pnpm-lock\.yaml)$"
     ),
     re.compile(r"(^|/)src/routes\.py$"),
     re.compile(r"(^|/)src/routes/.*"),

@@ -30,7 +30,7 @@ ci-command = "make ci"
 
 ## 1. Installation
 
-Orchestune requires Python 3.12+, Poetry, and the GitHub CLI (`gh auth status` must be authenticated).
+Orchestune requires Python 3.12+, uv, and the GitHub CLI (`gh auth status` must be authenticated).
 
 ### Using Orchestune in a Separate Project
 To run `orchestune-dag` / `orchestune-dispatch` via an agent inside a separate project (e.g., a project named `manuscriptune`), follow these setup steps:
@@ -41,8 +41,8 @@ To run `orchestune-dag` / `orchestune-dispatch` via an agent inside a separate p
 # Install globally using pipx (recommended)
 pipx install git+https://github.com/Saltmu/orchestune.git
 
-# Or add as a development dependency of the target project (Poetry)
-poetry add --group dev git+https://github.com/Saltmu/orchestune.git
+# Or add as a development dependency of the target project (uv)
+uv add --dev git+https://github.com/Saltmu/orchestune.git
 ```
 
 This makes the core `orchestune` command, as well as `orchestune-dag` and `orchestune-dispatch`, executable directly from that project's directory.
@@ -73,7 +73,7 @@ If you need to create the agent discipline file required by Prerequisite (a) abo
 orchestune setup --with-workflow-skill
 ```
 
-- This **copies** (not symlinks) `skills/workflow-template/SKILL.md` — a template derived from `local-ci-developer` with its Python/Poetry-specific commands generalized — into each detected assistant's **project-local** skill directory (`.claude/skills/`, `.codex/skills/`, `.gemini/config/skills/`). It is a real copy because the source only exists inside the Orchestune package, not inside the target project.
+- This **copies** (not symlinks) `skills/workflow-template/SKILL.md` — a template derived from `local-ci-developer` with its Python/uv-specific commands generalized — into each detected assistant's **project-local** skill directory (`.claude/skills/`, `.codex/skills/`, `.gemini/config/skills/`). It is a real copy because the source only exists inside the Orchestune package, not inside the target project.
 - Like `local-ci-developer`, `workflow-template` is excluded from automatic global linking, since this discipline should be project-specific. Running `orchestune setup` without the flag is unaffected.
 - After it's copied, replace the `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` placeholders in the template with your project's actual commands (`<CI_ENTRYPOINT>` should match the `ci_command` setting from Prerequisite (c) above). Feel free to rename the folder or skill as you like.
 

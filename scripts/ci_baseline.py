@@ -26,8 +26,8 @@ BASELINE_PATH = PROJECT_ROOT / ".orchestune" / "baseline.json"
 DEFAULT_BASE_BRANCH = "origin/main"
 DEFAULT_CI_COMMAND = "./scripts/local-ci.sh"
 RUFF_FORMAT_COMMANDS = (
-    ("poetry", "run", "ruff", "format"),
-    ("poetry", "run", "ruff", "check", "--fix"),
+    ("uv", "run", "ruff", "format"),
+    ("uv", "run", "ruff", "check", "--fix"),
 )
 EXIT_BASE_BRANCH_RED = 2
 EXIT_STATE_ERROR = 70

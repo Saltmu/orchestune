@@ -31,7 +31,7 @@ subtasks:
     proposed_changes:
       - "src/db/connection.py に get_connection を追加"
     verification_plan:
-      - "poetry run pytest tests/test_connection.py"
+      - "uv run pytest tests/test_connection.py"
     shared_contract: db-connection
     writes_shared_contract: true
     issue_number: null  # orchestune provision がこのサブタスクのIssue作成後に書き戻す

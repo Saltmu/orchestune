@@ -6,10 +6,10 @@
 
 ## セットアップ
 
-Python 3.12以上、Poetry、GitHub CLI（`gh auth status`）がインストールされていることを確認し、依存関係をインストールします。
+Python 3.12以上、uv、GitHub CLI（`gh auth status`）がインストールされていることを確認し、依存関係をインストールします。
 
 ```bash
-poetry install
+uv sync
 ```
 
 続けて、以下を実行してGit pre-commitフックをローカルにインストールしてください。これにより `.gitignore` 対象ファイルの誤コミットが自動的にブロックされます（また、過去にインストールされた古い `pre-push` フックがあれば自動的に削除されます）。
@@ -61,12 +61,12 @@ MCPサーバが起動しない、または言語サーバが応答しない場�
 
 `pytest`を使用して、ユニットテストを実行します。
 ```bash
-poetry run pytest
+uv run pytest
 ```
 
 ローカルの開発ループを軽くするため、デフォルトの`pytest`実行にはカバレッジ計装を含めていません。カバレッジを確認する場合は、以下のように明示的にオプションを指定してください（`local-ci.sh`もこのオプション付きで実行します）。
 ```bash
-poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
+uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
 ### 内部シンボルのモック化

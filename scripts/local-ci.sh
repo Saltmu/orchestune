@@ -11,31 +11,31 @@ echo "========================================="
 echo "Running Orchestune Local CI Check..."
 echo "========================================="
 
-if ! command -v poetry >/dev/null 2>&1; then
-  echo "ERROR: Poetry is required for local CI. Install the version specified by poetry.lock." >&2
+if ! command -v uv >/dev/null 2>&1; then
+  echo "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." >&2
   exit 2
 fi
 
 # Ensure virtual environment and dependencies are installed
-if ! poetry run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev/null 2>&1; then
-  echo "Virtual environment or dependencies not found; running poetry install..."
-  poetry install --no-interaction
+if ! uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev/null 2>&1; then
+  echo "Virtual environment or dependencies not found; running uv sync..."
+  uv sync
 fi
 
 echo "[1/6] Checking code format (ruff format)..."
-poetry run ruff format --check
+uv run ruff format --check
 
 echo "[2/6] Running lint (ruff check)..."
-poetry run ruff check
+uv run ruff check
 
 echo "[3/6] Checking types (mypy)..."
-poetry run mypy orchestune tests
+uv run mypy orchestune tests
 
 echo "[4/6] Running tests with coverage (pytest)..."
-poetry run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+uv run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 
 echo "[5/6] Detecting new or worsened code and skill bloat..."
-poetry run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
+uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
 
 echo "[6/6] Scanning for secrets and local paths (gitleaks)..."
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"

@@ -13,25 +13,25 @@ test, commit, or push from the primary checkout.
 
 ## 4. Baseline Recording (Baseline Record)
 - **Prerequisites**: Confirm that the worktree environment is ready before recording the baseline:
-  - Run `poetry check --lock` to verify lockfile consistency.
-  - Run `poetry install` to ensure all dependencies and virtual environment scripts are available.
+  - Run `uv lock --check` to verify lockfile consistency.
+  - Run `uv sync` to ensure all dependencies and virtual environment scripts are available.
 - Record the baseline status on unmodified code (select command based on your OS):
 ```bash
 # Linux / macOS
-poetry run python scripts/ci_baseline.py record
+uv run python scripts/ci_baseline.py record
 
 # Windows PowerShell
-poetry run python scripts/ci_baseline.py record --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
+uv run python scripts/ci_baseline.py record --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
 ```
 - This record enables Step 9 to automatically distinguish between new regressions and pre-existing failures on the base branch.
 
 ## 5. Pre-Implementation Test Creation (Test-First)
 - Write tests under `tests/` covering new features or revised specifications (happy path and major scenarios).
-- Run `poetry run pytest` and verify that newly added tests fail as expected (Red).
+- Run `uv run pytest` and verify that newly added tests fail as expected (Red).
 
 ## 6. Feature Implementation & Test Passing
 - Implement the minimal code necessary to make the tests pass.
-- Run `poetry run pytest` and verify that all tests pass (Green).
+- Run `uv run pytest` and verify that all tests pass (Green).
 
 ## 7. Failure Analyst (Root Cause Analysis on Repeated Failures)
 - When the same test failure persists across 2 or more consecutive attempts, stop making uninformed changes and analyze:
@@ -43,34 +43,34 @@ poetry run python scripts/ci_baseline.py record --ci-command "powershell -Execut
 ## 8. Edge Case & Error Handling Coverage
 - Strengthen test coverage by adding tests for boundary values, error conditions, and exception handling:
 ```bash
-poetry run pytest --cov=orchestune --cov-branch --cov-report=term-missing
+uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
 ## 9. Comprehensive Local CI Verification & Error Resolution
 - Execute baseline-aware CI verification (select command based on your OS):
 ```bash
 # Linux / macOS
-poetry run python scripts/ci_baseline.py check
+uv run python scripts/ci_baseline.py check
 
 # Windows PowerShell
-poetry run python scripts/ci_baseline.py check --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
+uv run python scripts/ci_baseline.py check --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
 ```
 - Alternatively, run standard OS CI scripts (Linux/macOS: `./scripts/local-ci.sh`, Windows: `.\\scripts\\local-ci.ps1`).
 
 ### Error Resolution Procedures
 1. **Ruff Format/Lint**:
    ```bash
-   poetry run ruff format
-   poetry run ruff check --fix
+   uv run ruff format
+   uv run ruff check --fix
    ```
 2. **Mypy Type Checking**:
    ```bash
-   poetry run mypy orchestune tests
+   uv run mypy orchestune tests
    ```
 3. **Pytest Test Failures**:
    - `scripts/ci_baseline.py check` automatically categorizes new failures vs. baseline failures.
 4. **Detect Bloat Warnings**:
    ```bash
-   poetry run python scripts/detect_bloat.py --warn-only
+   uv run python scripts/detect_bloat.py --warn-only
    ```
    - If warnings for file size (code: 1000 lines, skill total: 500 lines) or function length (50 lines) are detected, **do not pause for user approval**; autonomously execute modular or prompt split refactoring to eliminate new or worsened bloat warnings before proceeding (if unresolved after 3 attempts, pause work and escalate). After refactoring, re-run verification procedures (steps 1–3) to ensure no regressions were introduced.

@@ -151,7 +151,7 @@ class TestScanExternalLocks:
     def test_ignores_truncated_pr_for_hotspot_or_empty_footprint_task(self):
         """#250: truncated状態のPRが存在しても、taskのfootprintが空またはhotspotのみの場合は外部ロックしない。"""
         queued = [
-            _task(1, footprint=("poetry.lock",)),
+            _task(1, footprint=("uv.lock",)),
             _task(2, footprint=()),
         ]
         prs = [
@@ -295,13 +295,12 @@ class TestScanExternalLocks:
         )
         assert result.to_lock == []
 
-    def test_does_not_lock_on_hotspot_file_overlap_only(self):
-        """#209: poetry.lock等のホットスポットファイルだけが重複していても、
+    @pytest.mark.parametrize("lockfile", ["uv.lock", "poetry.lock"])
+    def test_does_not_lock_on_hotspot_file_overlap_only(self, lockfile):
+        """#209: lockfile等のホットスポットファイルだけが重複していても、
         実質的な直列化(外部ロック)を引き起こさない。"""
-        queued = [_task(1, footprint=("poetry.lock",))]
-        prs = [
-            PrRecord(number=99, head_ref="feat/other", changed_files=("poetry.lock",))
-        ]
+        queued = [_task(1, footprint=(lockfile,))]
+        prs = [PrRecord(number=99, head_ref="feat/other", changed_files=(lockfile,))]
         result = scan_external_locks(
             queued, remote_branches=[], prs=prs, active_branches=[]
         )
@@ -310,12 +309,12 @@ class TestScanExternalLocks:
     def test_still_locks_when_non_hotspot_overlap_remains(self):
         """ホットスポット除外は重複ファイル集合の一部にのみ適用され、
         非ホットスポットな重複が残っていれば従来通りロックする。"""
-        queued = [_task(1, footprint=("poetry.lock", "src/shared.py"))]
+        queued = [_task(1, footprint=("uv.lock", "src/shared.py"))]
         prs = [
             PrRecord(
                 number=99,
                 head_ref="feat/other",
-                changed_files=("poetry.lock", "src/shared.py"),
+                changed_files=("uv.lock", "src/shared.py"),
             )
         ]
         result = scan_external_locks(
@@ -327,7 +326,7 @@ class TestScanExternalLocks:
         locked_task = Task(
             issue_number=1,
             subtask_id="task-1",
-            footprint=("poetry.lock",),
+            footprint=("uv.lock",),
             symbols=(),
             risk=False,
             priority="medium",
@@ -335,9 +334,7 @@ class TestScanExternalLocks:
             status_labels=("status:external-lock",),
             created_at="2026-01-01T00:00:00+00:00",
         )
-        prs = [
-            PrRecord(number=99, head_ref="feat/other", changed_files=("poetry.lock",))
-        ]
+        prs = [PrRecord(number=99, head_ref="feat/other", changed_files=("uv.lock",))]
         result = scan_external_locks(
             [locked_task], remote_branches=[], prs=prs, active_branches=[]
         )
@@ -425,7 +422,7 @@ class TestScanExternalLocksWithUnknownFootprint:
         assert result.to_lock == []
 
     def test_does_not_lock_task_with_hotspot_only_footprint(self):
-        queued = [_task(1, footprint=("poetry.lock",))]
+        queued = [_task(1, footprint=("uv.lock",))]
         result = scan_external_locks(
             queued,
             remote_branches=[("feat/x", None)],
@@ -552,7 +549,7 @@ class TestCheckFootprintDeviation:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
-                stdout="10\t0\tpoetry.lock\n10\t0\tsrc/routes.py\n10\t0\tsrc/unexpected.py\n",
+                stdout="10\t0\tuv.lock\n10\t0\tsrc/routes.py\n10\t0\tsrc/unexpected.py\n",
                 stderr="",
             )
             deviated = check_footprint_deviation(
@@ -864,10 +861,10 @@ class TestExternalLockConflicts:
 
     def test_conflict_files_exclude_hotspot_paths(self):
         """hotspotファイルはロック判定から除外されるため、理由にも現れない。"""
-        queued = [_task(1, footprint=("poetry.lock", "src/shared.py"))]
+        queued = [_task(1, footprint=("uv.lock", "src/shared.py"))]
         result = scan_external_locks(
             queued,
-            remote_branches=[("feat/other", ("poetry.lock", "src/shared.py"))],
+            remote_branches=[("feat/other", ("uv.lock", "src/shared.py"))],
             prs=[],
             active_branches=[],
         )

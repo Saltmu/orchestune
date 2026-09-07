@@ -205,9 +205,9 @@ table above cannot silently drift from the code:
 
    Target is VCS and GitHub client surface only. Other external process launches
    are deliberately outside it and are not guarded: `dispatch.targets` launches
-   the agent CLIs and `dispatch.rebase` shell out to CI scripts. Poetry
-   dependency and virtualenv operations are encapsulated by the L1
-   `infra.python_env` adapter.
+   the agent CLIs and `dispatch.rebase` shell out to CI scripts. uv
+   dependency synchronization and repository-local `.venv` virtualenv operations
+   are encapsulated by the L1 `infra.python_env` adapter.
 
    **Scope of the check**:
    The guard reads the command out of the source, so it sees a literal list — passed inline, or through a variable that some assignment in scope binds to one. It models Python's scoping rules well enough to be trusted on ordinary code: it follows branches and loops, keeps class bodies out of their methods, honours `global`/`nonlocal`, and reads the `args=` keyword as well as the first positional argument.

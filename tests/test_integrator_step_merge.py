@@ -1,6 +1,6 @@
 """`MergeAndTestStep`: 対象ブランチのfetch・マージ・CI検証・ロールバック。
 
-CI実行そのものを担う`IntegrationMerger`のPoetry環境検出も併せて検証する。
+CI実行そのものを担う`IntegrationMerger`のuv依存同期・仮想環境解決も併せて検証する。
 """
 
 from __future__ import annotations
@@ -526,12 +526,12 @@ class TestCiEnvironment:
         assert env["VIRTUAL_ENV"] == str(expected_venv.resolve())
         assert env["PATH"].startswith(str(expected_venv / "bin"))
 
-    def test_run_ci_installs_poetry_deps_and_detects_venv(self, tmp_path):
+    def test_run_ci_syncs_uv_deps_and_detects_repository_venv(self, tmp_path):
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         orig_root = tmp_path / "orig"
         orig_root.mkdir()
-        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
+        (repo_root / "pyproject.toml").write_text("[project]\nname = 'repo'\n")
 
         merger = IntegrationMerger(
             repository_root=repo_root,
@@ -539,24 +539,19 @@ class TestCiEnvironment:
             ci_command=["./scripts/local-ci.sh"],
         )
 
-        dummy_venv_path = tmp_path / "dummy_venv"
+        dummy_venv_path = repo_root / ".venv"
         (dummy_venv_path / "bin").mkdir(parents=True)
 
-        def mock_run_impl(args, **kwargs):
-            if "poetry" in args and "info" in args and "--path" in args:
-                return _ok(args, f"{dummy_venv_path}\n")
-            return _ok(args)
-
-        with patch("subprocess.run", side_effect=mock_run_impl) as mock_run:
+        with patch(
+            "subprocess.run", side_effect=lambda args, **kwargs: _ok(args)
+        ) as mock_run:
             passed, _ = merger.run_ci_in_worktree()
 
         assert passed
         calls = mock_run.call_args_list
-        assert len(calls) >= 3
+        assert len(calls) == 2
 
-        install_calls = [
-            c for c in calls if "poetry" in c.args[0] and "install" in c.args[0]
-        ]
+        install_calls = [c for c in calls if "uv" in c.args[0] and "sync" in c.args[0]]
         assert len(install_calls) == 1
         assert install_calls[0].kwargs.get("cwd") == str(repo_root)
 
@@ -566,12 +561,12 @@ class TestCiEnvironment:
         assert ci_env.get("VIRTUAL_ENV") == str(dummy_venv_path.resolve())
         assert str(dummy_venv_path / "bin") in ci_env.get("PATH", "")
 
-    def test_run_ci_reports_missing_poetry(self, tmp_path):
+    def test_run_ci_reports_missing_uv(self, tmp_path):
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         orig_root = tmp_path / "orig"
         orig_root.mkdir()
-        (repo_root / "pyproject.toml").write_text("[tool.poetry]\n")
+        (repo_root / "pyproject.toml").write_text("[project]\nname = 'repo'\n")
 
         merger = IntegrationMerger(
             repository_root=repo_root,
@@ -579,8 +574,8 @@ class TestCiEnvironment:
             ci_command=["./scripts/local-ci.sh"],
         )
 
-        with patch("subprocess.run", side_effect=FileNotFoundError("poetry")):
+        with patch("subprocess.run", side_effect=FileNotFoundError("uv")):
             ok, output = merger.run_ci_in_worktree()
 
         assert ok is False
-        assert "poetry" in output
+        assert "uv" in output

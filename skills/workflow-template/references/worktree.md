@@ -19,7 +19,7 @@ cd worktree/<BRANCH_SLUG>
 ```
 
 Replace `<INSTALL_COMMAND>` with the project's dependency/bootstrap command
-(for example, `poetry install`). Then write `implementation_plan.md`, implement,
+(for example, `uv sync`). Then write `implementation_plan.md`, implement,
 test, run local CI, commit, push, create the PR, and handle review feedback from
 this directory. If the worktree cannot be created because the target or branch
 already exists, inspect it with `git worktree list` and choose a new slug; do not

@@ -20,7 +20,7 @@ assignees: ''
 
 ### 実行したコマンド
 ```bash
-# 例: poetry run pytest tests/test_xxxx.py
+# 例: uv run pytest tests/test_xxxx.py
 ```
 
 ## 期待される挙動
@@ -37,7 +37,7 @@ assignees: ''
 ## 環境情報
 - OS: <!-- 例: Ubuntu 22.04, macOS Sonoma -->
 - Python version: <!-- 例: 3.12.3 -->
-- Poetry version: <!-- 例: 1.8.2 -->
+- uv version: <!-- 例: 0.5.0 -->
 
 ## 補足情報
 <!-- その他、原因特定に役立つ情報（関連するPRやIssueなど）があれば記述してください。 -->
