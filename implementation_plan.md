@@ -1,51 +1,73 @@
-# Implementation Plan: Issue #842 (`orchestune --version`)
+# Implementation Plan: Issue #844
 
-## 0. Preflight & Execution Environment
+## Preflight (Step 0)
+- Tooling: `uv 0.12.10` available; `uv sync` succeeded in the task worktree.
+- GitHub backend: `gh` CLI authenticated (`gh auth status` OK) → use `gh` for Issue/PR operations.
+- gitleaks 8.30.1 available.
 
-- Target Issue: #842
-- Parent Issue: #825
-- Base Branch: `parent/issue-825` (`253bac4`)
-- Task Branch: `feat/issue-842-cli-version`
-- GitHub backend: `gh` CLI (authenticated; no GitHub MCP used)
-- Serena: symbol lookup and reference enumeration available after activating the task worktree
-- OS: Linux
-- Planned verification: focused pytest, isolated CLI smoke test, then `./scripts/local-ci.sh`
+## Branch base
+This worktree branches from `origin/parent/issue-825` (not `main`), because
+issue #844 is a follow-up defect discovered *after* the Poetry→uv migration
+(#825) landed on that parent branch. On `main`, the migration has not landed
+yet (`poetry.lock` still present, no `uv.lock`), so the bug does not exist
+there yet. `orchestune/dag/contracts.py` (`_SHARED_CONTRACT_PATTERNS`,
+`dependency-manifest` category) and `orchestune/dispatch/locks.py`
+(`_HOTSPOT_PATTERNS`) already list `uv.lock` symmetrically with `poetry.lock`
+on `parent/issue-825` — confirmed by reading both files on that branch. Only
+`orchestune/dag/models.py`'s `_IGNORED_FOOTPRINT_PATTERNS` was missed, exactly
+as the issue body states.
+PR base: `parent/issue-825` (Parent Issue Mode, per pr.md precedence rules).
 
-## 1. Impact Scope Determination
+## Root cause
+`orchestune/dag/models.py:13-20` (`_IGNORED_FOOTPRINT_PATTERNS`), consumed by
+`is_ignored_footprint()` / `SubTask.touch_set()`, ignores `poetry.lock` but
+not `uv.lock` when computing the touch-set used for similarity Conflict Edge
+scoring and heuristic shared-contract-hotspot conflicts. Two tasks sharing
+only `uv.lock` therefore produce a conflict where two tasks sharing only
+`poetry.lock` do not — reproduced directly:
 
-The changed production symbol is `orchestune.cli.main`. Serena symbol lookup and reference
-enumeration were used; supplementary `rg` searches covered dynamic argv handling, string-based
-patches, entry points, version references, and documentation.
+```
+is_ignored_footprint('poetry.lock') -> True
+is_ignored_footprint('uv.lock')     -> False
+```
+
+## Fix
+Add `re.compile(r"(^|/)uv\.lock$")` to `_IGNORED_FOOTPRINT_PATTERNS` in
+`orchestune/dag/models.py`, keeping `poetry.lock` for backward compatibility.
+
+## Impact scope (Step 2.6)
+
+Serena MCP was unavailable in this environment for this quick, single-symbol
+change; falling back to text search (`rg`) across the repo, per the fallback
+procedure in impact-scope.md.
 
 | Reference | Decision | Rationale |
-| --- | --- | --- |
-| `orchestune/cli.py:main` | in scope | Must recognize `--version` before subcommand delegation. |
-| `orchestune/version.py:get_version` | out of scope | Existing single version source is consumed read-only; no behavior change required. |
-| `orchestune/__init__.py:__version__` | out of scope | Existing public API already delegates to `get_version`; changing it would duplicate the fix. |
-| `pyproject.toml:[project.scripts]` | out of scope | The `orchestune = orchestune.cli:main` entry point is correct and needs no metadata change. |
-| `tests/test_cli.py` | in scope | Add regression coverage for the new top-level option while preserving delegation tests. |
-| `tests/test_placeholder.py:get_version` | out of scope | Covers the version source itself, not CLI argument dispatch. |
-| `tests/test_skill_commands.py` | out of scope | Its `--version` references concern interpreter command parsing, not the `orchestune` entry point. |
-| `docs/en/setup.md`, `docs/ja/setup.md` | out of scope | Existing `claude --version` text documents another CLI and is unrelated to this entry point. |
-| `scripts/`, `.github/workflows/` | out of scope | No script or workflow command contract changes are needed for a top-level read-only flag. |
+| :--- | :--- | :--- |
+| `orchestune/dag/models.py:_IGNORED_FOOTPRINT_PATTERNS` | in scope | the tuple being fixed |
+| `orchestune/dag/models.py:is_ignored_footprint` / `SubTask.touch_set` | out of scope | consumes the tuple generically; no change needed, only the data it reads changes |
+| `orchestune/dag/contracts.py:_SHARED_CONTRACT_PATTERNS` (dependency-manifest) | out of scope | already includes `uv.lock` on this branch (verified by reading the file); different purpose (writer-category detection, not conflict-ignore), docstring explicitly says the two lists are intentionally separate |
+| `orchestune/dispatch/locks.py:_HOTSPOT_PATTERNS` | out of scope | already includes `uv.lock` on this branch (verified by reading the file); different purpose (dispatch-time churn suppression), docstring explicitly says it does not share patterns with the DAG module |
+| `tests/test_dag_contracts.py::TestCategorize` | out of scope | already asserts `_categorize("uv.lock") == "dependency-manifest"` |
+| `tests/test_dispatch_locks.py` | out of scope | already has extensive `uv.lock` hotspot coverage |
+| `tests/test_dag_graph.py` | in scope | no existing regression test pins `_IGNORED_FOOTPRINT_PATTERNS` symmetry; add one |
+| `docs/en/usage.md:80,180`, `docs/ja/usage.md:80,180` | in scope | both list the built-in ignore list / dependency-manifest list in prose; line 80 (dependency-manifest) already matches code (`contracts.py` includes uv.lock) but doc text omits it; line 180 (built-in ignore list) omits `uv.lock` entirely, matching the code bug |
+| `orchestune/dag/similarity.py`, `orchestune/dag/graph.py` | out of scope | consume `touch_set()` output generically; no literal `poetry.lock`/`uv.lock` reference (confirmed via `rg`) |
 
-## 2. Design
+Supplementary text search run: `rg -n "poetry\.lock|uv\.lock" orchestune tests docs` across the worktree (see below), plus explicit `git show` reads of `orchestune/dag/contracts.py` and `orchestune/dispatch/locks.py` on this branch to confirm their current state before excluding them.
 
-1. Import `get_version` directly from `orchestune.version` in the L4 CLI module.
-2. Handle `--version` and the conventional `-V` alias before rewriting `sys.argv` for delegated subcommands.
-3. Print `orchestune <version>` and return successfully.
-4. Add focused unit tests for both supported flags and retain the existing unknown/no-argument behavior.
+## Tests to add
+- `tests/test_dag_graph.py`: a new test class asserting `SubTask.touch_set()`
+  excludes `uv.lock` the same way it excludes `poetry.lock` (parametrized),
+  plus a `build_dag`-level symmetry test: two tasks sharing only `uv.lock`
+  produce the same (no-conflict) result as two tasks sharing only
+  `poetry.lock`, and an explicit `shared_contract` writer conflict on
+  `uv.lock` is unaffected (still conflicts).
 
-## 3. TDD / Verification Plan
+## Verification
+```bash
+uv run pytest tests/test_dag_graph.py tests/test_dag_contracts.py tests/test_dispatch_locks.py
+./scripts/local-ci.sh
+```
 
-- Red: add the CLI flag tests and verify they fail on the current implementation.
-- Green: implement the minimal dispatch branch and rerun the focused tests.
-- Smoke: build/install the wheel into an isolated uv environment and run `orchestune --version` and `orchestune-dispatch --help`.
-- Full: run `uv lock --check`, `uv sync`, and `./scripts/local-ci.sh`.
-
-## 4. TDD Results
-
-- Red: `uv run pytest tests/test_cli.py -q` — 1 failed, 11 passed (`--version` was unknown).
-- Green: `uv run pytest tests/test_cli.py -q` — 13 passed.
-- Smoke: `uv build` succeeded; an isolated wheel install printed `orchestune 0.5.0`, and `orchestune-dispatch --help` exited successfully.
-- Impact scope: all in-scope references are addressed; out-of-scope rationales remain valid.
+## Reviewer bot
+Claude-authored task → Codex reviewer (per Step 1 default resolution).

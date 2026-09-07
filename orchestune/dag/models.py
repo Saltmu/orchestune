@@ -13,6 +13,9 @@ from typing import Any, cast
 _IGNORED_FOOTPRINT_PATTERNS = (
     re.compile(r"(^|/)pyproject\.toml$"),
     re.compile(r"(^|/)poetry\.lock$"),
+    # #844: uv移行後もPoetry時代のfootprint除外挙動と対称にするため、
+    # poetry.lockと同様にuv.lockも組み込み除外へ含める。
+    re.compile(r"(^|/)uv\.lock$"),
     re.compile(r"(^|/)logging\.py$"),
     re.compile(r"(^|/)logger\.py$"),
     re.compile(r"(^|/)config\.py$"),

@@ -494,3 +494,48 @@ def test_dag_conflict_edge_generated_for_unnormalized_equivalent_paths(tmp_path)
     edge = res.conflict_graph.edges[0]
     assert edge.reason == "similarity"
     assert {edge.left, edge.right} == {"task-a", "task-b"}
+
+
+class TestIgnoredFootprintLockfileSymmetry:
+    """#844: uv移行後もpoetry.lockとuv.lockの組み込みfootprint除外が対称であること
+    (両者だけを共有する2タスクが同じ競合結果になること)を固定する回帰テスト。"""
+
+    @pytest.mark.parametrize("lockfile", ["poetry.lock", "uv.lock"])
+    def test_touch_set_excludes_builtin_lockfiles(self, lockfile):
+        subtask = _subtask("a", ["src/a.py", lockfile], [])
+        assert subtask.touch_set() == frozenset({"src/a.py"})
+
+    @pytest.mark.parametrize("lockfile", ["poetry.lock", "uv.lock"])
+    def test_sharing_only_a_builtin_lockfile_creates_no_conflict_edge(self, lockfile):
+        subtasks = [
+            _subtask("a", [lockfile, "src/a.py"], []),
+            _subtask("b", [lockfile, "src/b.py"], []),
+        ]
+        dag = build_dag(subtasks, threshold=0.1)
+        assert dag.conflict_graph.edges == ()
+
+    def test_explicit_shared_contract_writer_conflict_on_uv_lock_is_unaffected(self):
+        # 組み込みfootprint除外はsimilarity/heuristicなshared-contract-hotspot
+        # 検出にのみ作用し、明示的な shared_contract writer 競合
+        # (build_shared_contract_conflicts) には影響しないこと。
+        subtasks = [
+            _subtask("a", ["uv.lock"], [], priority="medium"),
+            _subtask("b", ["uv.lock"], [], priority="medium"),
+        ]
+        subtasks = [
+            SubTask(
+                id=s.id,
+                description=s.description,
+                footprint=s.footprint,
+                symbols=s.symbols,
+                depends_on=s.depends_on,
+                risk=s.risk,
+                risk_reasons=s.risk_reasons,
+                shared_contract="deps",
+                writes_shared_contract=True,
+            )
+            for s in subtasks
+        ]
+        dag = build_dag(subtasks, threshold=0.1)
+        reasons = {(e.left, e.right): e.reason for e in dag.conflict_graph.edges}
+        assert reasons.get(("a", "b")) == "shared-contract"

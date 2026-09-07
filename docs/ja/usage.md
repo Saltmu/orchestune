@@ -77,7 +77,7 @@ subtasks:
     * `registry`: `registry` / `registration` / `registrar` を含むファイル名（例: `src/format_registry.py`）
     * `cli-wiring`: `cli.*` / `__main__.*` / `main.*`
     * `public-api`: `__init__.py` / `index.ts` / `index.js` / `index.tsx` / `index.jsx`
-    * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
+    * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `uv.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
 * **`execution_profile`** (文字列または`null`, 任意, 既定値 `null`): サブタスクを実行するエージェントの抽象実行プロファイル名（例: `fast-code`、`deep-reasoning`）。英小文字・数字・ハイフン・アンダースコアで構成され、32文字以内である必要があります。
@@ -177,7 +177,7 @@ orchestune dag --plan decomposition_plan.md
 
 | 設定項目 | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチし、`symbols`は常に類似度スコアの入力に残る。マッチしたパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度Conflict Edgeのスコア入力とヒューリスティックなshared-contract hotspot競合から除外される。ただし、別の非除外パスや共有`symbols`があればsimilarity競合は残り、明示的な`shared_contract` writer競合と独立したwriter警告もこの設定では消えない。Precedence DAGは明示的な`depends_on`だけから成るため、`DagCycleError`にも影響しない。空文字列は全パスに一致するため拒否される。 |
+| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチし、`symbols`は常に類似度スコアの入力に残る。マッチしたパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`uv.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度Conflict Edgeのスコア入力とヒューリスティックなshared-contract hotspot競合から除外される。ただし、別の非除外パスや共有`symbols`があればsimilarity競合は残り、明示的な`shared_contract` writer競合と独立したwriter警告もこの設定では消えない。Precedence DAGは明示的な`depends_on`だけから成るため、`DagCycleError`にも影響しない。空文字列は全パスに一致するため拒否される。 |
 | `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のConflict Graph計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `orchestune-dag`と`orchestune provision`はいずれも共通の`resolve_repo_root()`関数を使ってリポジトリルートを解決しており、これは上位へ`.git`を探索してリポジトリルートを特定する。そのため`--plan`がリポジトリルートより下のネストしたファイルを指す場合でも、両ツールは一貫して同じリポジトリルートの設定を参照する。 |
 
 #### 設定ファイルの記述例 (`orchestune.toml`)

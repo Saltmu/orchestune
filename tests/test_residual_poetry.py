@@ -63,12 +63,20 @@ def check_text_for_unexpected_poetry(text: str, rel_path: str) -> list[tuple[int
 
     allowed_context_removals: dict[str, list[re.Pattern[str]]] = {
         "docs/en/usage.md": [
-            re.compile(r"`package\.json` / `poetry\.lock` / `package-lock\.json`"),
-            re.compile(r"\(`pyproject\.toml`, `poetry\.lock`, `logging\.py`"),
+            re.compile(
+                r"`package\.json` / `poetry\.lock` / `uv\.lock` / `package-lock\.json`"
+            ),
+            re.compile(
+                r"\(`pyproject\.toml`, `poetry\.lock`, `uv\.lock`, `logging\.py`"
+            ),
         ],
         "docs/ja/usage.md": [
-            re.compile(r"`package\.json` / `poetry\.lock` / `package-lock\.json`"),
-            re.compile(r"（`pyproject\.toml`、`poetry\.lock`、`logging\.py`"),
+            re.compile(
+                r"`package\.json` / `poetry\.lock` / `uv\.lock` / `package-lock\.json`"
+            ),
+            re.compile(
+                r"（`pyproject\.toml`、`poetry\.lock`、`uv\.lock`、`logging\.py`"
+            ),
         ],
     }
 
@@ -111,14 +119,14 @@ def test_no_unexpected_poetry_references_in_docs_and_templates() -> None:
 
 def test_allowlist_catches_residual_command_on_same_line_as_permitted_token() -> None:
     """同一行に許可された `poetry.lock` が含まれていても、不要な poetry 記述があれば検知すること。"""
-    mixed_line = (
-        "Run `poetry install` with `package.json` / `poetry.lock` / `package-lock.json`"
-    )
+    mixed_line = "Run `poetry install` with `package.json` / `poetry.lock` / `uv.lock` / `package-lock.json`"
     violations = check_text_for_unexpected_poetry(mixed_line, "docs/en/usage.md")
     assert len(violations) == 1
     assert violations[0][1] == mixed_line
 
-    pure_line = "Supported: `package.json` / `poetry.lock` / `package-lock.json`"
+    pure_line = (
+        "Supported: `package.json` / `poetry.lock` / `uv.lock` / `package-lock.json`"
+    )
     assert check_text_for_unexpected_poetry(pure_line, "docs/en/usage.md") == []
 
     # 許可された完全な文脈と一致しない任意の変形・サフィックス・URL・フラグメントは厳密に拒否されること
