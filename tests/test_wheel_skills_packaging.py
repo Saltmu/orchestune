@@ -27,6 +27,18 @@ EXPECTED_ENTRY_POINTS = {
 }
 
 
+def _expected_distributable_skill_files() -> set[str]:
+    """Return relative POSIX paths of all files in distributable skills."""
+    skills_dir = REPO_ROOT / "skills"
+    result: set[str] = set()
+    for skill in DISTRIBUTABLE_SKILLS:
+        skill_dir = skills_dir / skill
+        for path in skill_dir.rglob("*"):
+            if path.is_file():
+                result.add(path.relative_to(REPO_ROOT).as_posix())
+    return result
+
+
 @pytest.fixture(scope="module")
 def built_artifacts(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     out_dir = tmp_path_factory.mktemp("dist")
@@ -57,12 +69,10 @@ def test_wheel_contains_distributable_skills(
     with zipfile.ZipFile(wheel_path) as zf:
         namelist = set(zf.namelist())
 
-    for skill in DISTRIBUTABLE_SKILLS:
-        skill_entry = f"skills/{skill}/SKILL.md"
-        assert skill_entry in namelist, (
-            f"Expected {skill_entry} in wheel, but it was missing. "
-            f"Matching entries: {[n for n in namelist if skill in n]}"
-        )
+    expected_files = _expected_distributable_skill_files()
+    assert expected_files, "Expected distributable skill files to be non-empty"
+    missing = expected_files - namelist
+    assert not missing, f"Missing distributable skill files in wheel: {sorted(missing)}"
 
 
 def test_sdist_contains_distributable_skills(
@@ -72,12 +82,12 @@ def test_sdist_contains_distributable_skills(
     with tarfile.open(sdist_path) as tf:
         names = set(tf.getnames())
 
-    for skill in DISTRIBUTABLE_SKILLS:
-        matching = [n for n in names if f"skills/{skill}/SKILL.md" in n]
-        assert matching, (
-            f"Expected skills/{skill}/SKILL.md in sdist, but no matching entry was found. "
-            f"Sample entries: {sorted(names)[:10]}"
-        )
+    expected_files = _expected_distributable_skill_files()
+    assert expected_files, "Expected distributable skill files to be non-empty"
+    # sdist entries have a top-level directory prefix (e.g. orchestune-0.5.0/skills/...)
+    stripped_names = {name.split("/", 1)[1] for name in names if "/" in name}
+    missing = expected_files - stripped_names
+    assert not missing, f"Missing distributable skill files in sdist: {sorted(missing)}"
 
 
 def test_wheel_and_sdist_exclude_local_ci_developer(
@@ -132,7 +142,8 @@ def test_wheel_contains_package_and_entry_points(
     assert scripts == EXPECTED_ENTRY_POINTS
 
 
-def test_build_does_not_pollute_repo() -> None:
+def test_build_does_not_pollute_repo(built_artifacts: tuple[Path, Path]) -> None:
+    _wheel_path, _sdist_path = built_artifacts
     dist_dir = REPO_ROOT / "dist"
     assert (
         not dist_dir.exists()
