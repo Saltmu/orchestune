@@ -63,10 +63,10 @@ def check_text_for_unexpected_poetry(text: str, rel_path: str) -> list[tuple[int
 
     allowed_token_removals: dict[str, list[re.Pattern[str]]] = {
         "docs/en/usage.md": [
-            re.compile(r"`poetry\.lock`"),
+            re.compile(r"`poetry\.lock`(?![A-Za-z0-9_./\\~:?=-])"),
         ],
         "docs/ja/usage.md": [
-            re.compile(r"`poetry\.lock`"),
+            re.compile(r"`poetry\.lock`(?![A-Za-z0-9_./\\~:?=-])"),
         ],
     }
 
@@ -117,7 +117,7 @@ def test_allowlist_catches_residual_command_on_same_line_as_permitted_token() ->
     pure_line = "Supports `poetry.lock` and other dependency manifests."
     assert check_text_for_unexpected_poetry(pure_line, "docs/en/usage.md") == []
 
-    # 大文字小文字の不一致や任意のファイルサフィックス付きトークンは厳密に拒否されること
+    # 大文字小文字の不一致、バッククォート内・外の任意のサフィックス付きトークンは厳密に拒否されること
     for invalid in (
         "Supports `Poetry.LOCK` file.",
         "Backup file `poetry.lock.bak` is ignored.",
@@ -125,6 +125,10 @@ def test_allowlist_catches_residual_command_on_same_line_as_permitted_token() ->
         "Reference `poetry.lock:backup` is invalid.",
         "URL `poetry.lock?raw=1` is invalid.",
         "Path `poetry.lock/subfile` is unsupported.",
+        "Path `poetry.lock`/subfile is unsupported.",
+        "File `poetry.lock`.bak is unsupported.",
+        "File `poetry.lock`~ is unsupported.",
+        "URL `poetry.lock`?raw=1 is unsupported.",
         "Unquoted poetry.lock is not an exact code token.",
     ):
         assert (
