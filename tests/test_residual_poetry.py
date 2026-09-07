@@ -51,6 +51,36 @@ def test_test_integrator_step_merge_docstring_matches_uv() -> None:
     assert "uv" in header.lower()
 
 
+def check_text_for_unexpected_poetry(text: str, rel_path: str) -> list[tuple[int, str]]:
+    """指定されたテキスト内から未許可のPoetry参照を検出する。
+
+    行全体を免除するのではなく、許可されたトークン（例: `poetry.lock`）のみを除去した
+    残りの文字列に `poetry` が含まれていないかを判定する。
+    """
+    exempt_files = {"docs/refactoring-plan.md"}
+    if rel_path in exempt_files:
+        return []
+
+    allowed_token_removals: dict[str, list[re.Pattern[str]]] = {
+        "docs/en/usage.md": [
+            re.compile(r"poetry\.lock", re.IGNORECASE),
+        ],
+        "docs/ja/usage.md": [
+            re.compile(r"poetry\.lock", re.IGNORECASE),
+        ],
+    }
+
+    violations: list[tuple[int, str]] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        cleaned_line = line
+        for pattern in allowed_token_removals.get(rel_path, []):
+            cleaned_line = pattern.sub("", cleaned_line)
+
+        if "poetry" in cleaned_line.lower():
+            violations.append((lineno, line.strip()))
+    return violations
+
+
 def test_no_unexpected_poetry_references_in_docs_and_templates() -> None:
     """ドキュメントおよびIssueテンプレートに未許可のPoetry参照が存在しないこと。
 
@@ -58,18 +88,6 @@ def test_no_unexpected_poetry_references_in_docs_and_templates() -> None:
     - docs/en/usage.md, docs/ja/usage.md: ターゲットリポジトリの `poetry.lock` サポート
     - docs/refactoring-plan.md: 過去のリファクタリング計画・履歴記録
     """
-    allowed_files_patterns: dict[str, list[re.Pattern[str]]] = {
-        "docs/en/usage.md": [
-            re.compile(r"poetry\.lock"),
-        ],
-        "docs/ja/usage.md": [
-            re.compile(r"poetry\.lock"),
-        ],
-        "docs/refactoring-plan.md": [
-            re.compile(r".*"),  # 歴史的記録のため全行許容
-        ],
-    }
-
     scan_targets: list[Path] = []
     if ISSUE_TEMPLATES_ROOT.is_dir():
         scan_targets.extend(ISSUE_TEMPLATES_ROOT.glob("*.md"))
@@ -79,17 +97,22 @@ def test_no_unexpected_poetry_references_in_docs_and_templates() -> None:
     violations: list[str] = []
     for path in sorted(scan_targets):
         rel_path = path.relative_to(REPO_ROOT).as_posix()
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for lineno, line in enumerate(lines, 1):
-            if "poetry" not in line.lower():
-                continue
-
-            patterns = allowed_files_patterns.get(rel_path)
-            if patterns is not None and any(p.search(line) for p in patterns):
-                continue
-
-            violations.append(f"{rel_path}:{lineno}: {line.strip()}")
+        content = path.read_text(encoding="utf-8")
+        file_violations = check_text_for_unexpected_poetry(content, rel_path)
+        for lineno, line in file_violations:
+            violations.append(f"{rel_path}:{lineno}: {line}")
 
     assert violations == [], (
         "Unexpected residual poetry references found:\n" + "\n".join(violations)
     )
+
+
+def test_allowlist_catches_residual_command_on_same_line_as_permitted_token() -> None:
+    """同一行に許可された `poetry.lock` が含まれていても、不要な poetry 記述があれば検知すること。"""
+    mixed_line = "Run `poetry install` to generate `poetry.lock` file."
+    violations = check_text_for_unexpected_poetry(mixed_line, "docs/en/usage.md")
+    assert len(violations) == 1
+    assert violations[0][1] == mixed_line
+
+    pure_line = "Supports `poetry.lock` and other dependency manifests."
+    assert check_text_for_unexpected_poetry(pure_line, "docs/en/usage.md") == []
