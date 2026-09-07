@@ -63,10 +63,10 @@ def check_text_for_unexpected_poetry(text: str, rel_path: str) -> list[tuple[int
 
     allowed_token_removals: dict[str, list[re.Pattern[str]]] = {
         "docs/en/usage.md": [
-            re.compile(r"(?<![A-Za-z0-9_.-])poetry\.lock(?![A-Za-z0-9_./\\-])"),
+            re.compile(r"`poetry\.lock`"),
         ],
         "docs/ja/usage.md": [
-            re.compile(r"(?<![A-Za-z0-9_.-])poetry\.lock(?![A-Za-z0-9_./\\-])"),
+            re.compile(r"`poetry\.lock`"),
         ],
     }
 
@@ -117,14 +117,16 @@ def test_allowlist_catches_residual_command_on_same_line_as_permitted_token() ->
     pure_line = "Supports `poetry.lock` and other dependency manifests."
     assert check_text_for_unexpected_poetry(pure_line, "docs/en/usage.md") == []
 
-    # 大文字小文字やサフィックス付きの未サポートトークンは拒否されること
-    casing_line = "Supports `Poetry.LOCK` file."
-    assert len(check_text_for_unexpected_poetry(casing_line, "docs/en/usage.md")) == 1
-
-    suffix_line = "Backup file `poetry.lock.bak` is ignored."
-    assert len(check_text_for_unexpected_poetry(suffix_line, "docs/en/usage.md")) == 1
-
-    path_suffix_line = "Path `poetry.lock/subfile` is unsupported."
-    assert (
-        len(check_text_for_unexpected_poetry(path_suffix_line, "docs/en/usage.md")) == 1
-    )
+    # 大文字小文字の不一致や任意のファイルサフィックス付きトークンは厳密に拒否されること
+    for invalid in (
+        "Supports `Poetry.LOCK` file.",
+        "Backup file `poetry.lock.bak` is ignored.",
+        "Backup file `poetry.lock~` is ignored.",
+        "Reference `poetry.lock:backup` is invalid.",
+        "URL `poetry.lock?raw=1` is invalid.",
+        "Path `poetry.lock/subfile` is unsupported.",
+        "Unquoted poetry.lock is not an exact code token.",
+    ):
+        assert (
+            len(check_text_for_unexpected_poetry(invalid, "docs/en/usage.md")) == 1
+        ), invalid
