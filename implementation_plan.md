@@ -1,77 +1,51 @@
-# Implementation Plan: Issue #836 (skills-docs-and-command-contracts: uv 統一)
+# Implementation Plan: Issue #842 (`orchestune --version`)
 
 ## 0. Preflight & Execution Environment
-- Tooling:
-  - `uv`: 0.12.10
-  - `gitleaks`: 8.30.1
-  - GitHub CLI (`gh`): Authenticated (Saltmu, scopes: gist, read:org, repo, workflow)
-- GitHub Backend: `gh` CLI (authenticated)
-- Target Issue: #836
+
+- Target Issue: #842
 - Parent Issue: #825
-- Base Branch: `parent/issue-825` (`6782e03`)
-- Task Branch: `feat/issue-836-skills-docs-and-command-contracts`
-- Worktree Path: `worktree/feat-issue-836-skills-docs-and-command-contracts`
-- Reviewer Bot: `claude` (resolved for agy agent / issue configuration)
+- Base Branch: `parent/issue-825` (`253bac4`)
+- Task Branch: `feat/issue-842-cli-version`
+- GitHub backend: `gh` CLI (authenticated; no GitHub MCP used)
+- Serena: symbol lookup and reference enumeration available after activating the task worktree
+- OS: Linux
+- Planned verification: focused pytest, isolated CLI smoke test, then `./scripts/local-ci.sh`
 
-## 1. Impact Scope Determination (Step 2.6)
+## 1. Impact Scope Determination
 
-Serena MCP サーバーが利用できない環境のため、`grep` / `git grep` によるテキスト検索にフォールバックして影響範囲を網羅的に列挙しました。
+The changed production symbol is `orchestune.cli.main`. Serena symbol lookup and reference
+enumeration were used; supplementary `rg` searches covered dynamic argv handling, string-based
+patches, entry points, version references, and documentation.
 
-### Symbol & Footprint Classification Table
+| Reference | Decision | Rationale |
+| --- | --- | --- |
+| `orchestune/cli.py:main` | in scope | Must recognize `--version` before subcommand delegation. |
+| `orchestune/version.py:get_version` | out of scope | Existing single version source is consumed read-only; no behavior change required. |
+| `orchestune/__init__.py:__version__` | out of scope | Existing public API already delegates to `get_version`; changing it would duplicate the fix. |
+| `pyproject.toml:[project.scripts]` | out of scope | The `orchestune = orchestune.cli:main` entry point is correct and needs no metadata change. |
+| `tests/test_cli.py` | in scope | Add regression coverage for the new top-level option while preserving delegation tests. |
+| `tests/test_placeholder.py:get_version` | out of scope | Covers the version source itself, not CLI argument dispatch. |
+| `tests/test_skill_commands.py` | out of scope | Its `--version` references concern interpreter command parsing, not the `orchestune` entry point. |
+| `docs/en/setup.md`, `docs/ja/setup.md` | out of scope | Existing `claude --version` text documents another CLI and is unrelated to this entry point. |
+| `scripts/`, `.github/workflows/` | out of scope | No script or workflow command contract changes are needed for a top-level read-only flag. |
 
-| Reference / File | Decision | Status | Rationale |
-| :--- | :--- | :--- | :--- |
-| `tests/test_skill_commands.py` | in scope | done | `_POETRY_RUN`, `_known_poetry_commands` を `uv run` および `_known_uv_commands` に更新し、PEP 621/uv 契約を検証 |
-| `skills/local-ci-developer/SKILL.md` | in scope | done | Preflight チェックの `poetry --version` / `poetry check --lock` を `uv --version` / `uv lock --check` に更新 |
-| `skills/local-ci-developer/references/tdd.md` | in scope | done | `poetry check --lock` / `poetry install` / `poetry run` コマンド群を `uv lock --check` / `uv sync` / `uv run` に更新 |
-| `skills/local-ci-developer/references/worktree.md` | in scope | done | `poetry install` を `uv sync` に更新 |
-| `skills/local-ci-developer/references/review-loop.md` | in scope | done | `poetry run python scripts/wait_for_review.py` を `uv run python scripts/wait_for_review.py` に更新 |
-| `skills/local-ci-developer/references/impact-scope.md` | in scope | still out of scope | Poetry 固有記述が存在しないことを確認済み（修正不要） |
-| `skills/local-ci-developer/references/pr.md` | in scope | still out of scope | Poetry 固有記述が存在しないことを確認済み（修正不要） |
-| `skills/workflow-template/SKILL.md` | in scope | still out of scope | プレースホルダー形式であり Poetry 固有記述が存在しないことを確認済み（修正不要） |
-| `skills/workflow-template/references/worktree.md` | in scope | done | 例示の `poetry install` を `uv sync` に更新 |
-| `skills/workflow-template/references/tdd.md` | in scope | done | `poetry run` コマンド例を `uv run` に更新 |
-| `skills/workflow-template/references/review-loop.md` | in scope | done | `poetry run python scripts/wait_for_review.py` を `uv run python scripts/wait_for_review.py` に更新 |
-| `skills/workflow-template/references/pr.md` | in scope | still out of scope | Poetry 固有記述が存在しないことを確認済み（修正不要） |
-| `skills/orchestune/SKILL.md` | in scope | done | `poetry run orchestune-dag` を `uv run orchestune-dag` に更新 |
-| `docs/en/setup.md` | in scope | done | セットアップ要件・開発依存インストール手順を Poetry から uv に更新 |
-| `docs/en/usage.md` | in scope | done | コマンド例の `poetry run` を `uv run` に更新 |
-| `docs/ja/setup.md` | in scope | done | セットアップ要件・開発依存インストール手順を Poetry から uv に更新 |
-| `docs/ja/usage.md` | in scope | done | コマンド例の `poetry run` を `uv run` に更新 |
-| `README.md` | in scope | done | 前提条件（Poetry → uv）を更新 |
-| `CONTRIBUTING.md` | in scope | done | 開発セットアップ・テストコマンド（`poetry install` → `uv sync`、`poetry run` → `uv run` 等）を更新 |
-| `CONTRIBUTING.ja.md` | in scope | done | 開発セットアップ・テストコマンドを uv に更新 |
-| `docs/en/architecture.md` / `docs/ja/architecture.md` | out of scope | still out of scope | アーキテクチャ解説文書（L1アダプタの説明など）。本Issueの受け入れ条件・Footprintに含まれず、概念説明のため変更不要 |
+## 2. Design
 
-## 2. Changes Design
+1. Import `get_version` directly from `orchestune.version` in the L4 CLI module.
+2. Handle `--version` and the conventional `-V` alias before rewriting `sys.argv` for delegated subcommands.
+3. Print `orchestune <version>` and return successfully.
+4. Add focused unit tests for both supported flags and retain the existing unknown/no-argument behavior.
 
-### 2.1 `tests/test_skill_commands.py`
-- `_POETRY_RUN` 正規表現を `_UV_RUN = re.compile(r"^uv run (.+)$")` に変更。
-- `_known_poetry_commands()` を `_known_uv_commands()` にリネーム。
-- 関連する各テスト関数内の `poetry run` を `uv run` に更新。
-- `test_workflow_skills_document_isolated_worktree_operations` 内の `assert "poetry install" in worktree_content` を `assert "uv sync" in worktree_content` に変更。
-- `test_local_ci_developer_preflight_and_backend_selection` 内の `assert "poetry" in ...` を `assert "uv" in ...` に変更。
+## 3. TDD / Verification Plan
 
-### 2.2 Skills & References
-- `skills/local-ci-developer/` 配下の `poetry` コマンド参照をすべて `uv` に移行。
-- `skills/workflow-template/` 配下の `poetry` コマンド参照をすべて `uv` に移行。
-- `skills/orchestune/SKILL.md` の `poetry run orchestune-dag` を `uv run orchestune-dag` に更新。
+- Red: add the CLI flag tests and verify they fail on the current implementation.
+- Green: implement the minimal dispatch branch and rerun the focused tests.
+- Smoke: build/install the wheel into an isolated uv environment and run `orchestune --version` and `orchestune-dispatch --help`.
+- Full: run `uv lock --check`, `uv sync`, and `./scripts/local-ci.sh`.
 
-### 2.3 Documentation (Docs & README & CONTRIBUTING)
-- `README.md`: `Poetry` → `uv`
-- `CONTRIBUTING.md`, `CONTRIBUTING.ja.md`: `poetry install` → `uv sync`、`poetry run pytest` → `uv run pytest`
-- `docs/en/setup.md`, `docs/ja/setup.md`: `poetry add` → `uv add` 等
-- `docs/en/usage.md`, `docs/ja/usage.md`: `poetry run pytest` → `uv run pytest` 等
+## 4. TDD Results
 
-## 3. TDD Results
-1. **Red**: `tests/test_skill_commands.py` を uv 用に更新し、スキル内の古い poetry 参照によりテストが失敗することを確認。
-2. **Green**: スキル群およびドキュメント群を uv に一括更新し、`tests/test_skill_commands.py` が全82件パスすることを確認。
-3. **Verify**:
-   - `git grep -E 'poetry run|poetry install|poetry-core' -- skills docs README.md CONTRIBUTING.md CONTRIBUTING.ja.md` でヒットゼロを確認。
-   - `./scripts/local-ci.sh` を実行して全3315テスト・Bloat・Mypy・Ruff・Gitleaks の合格を確認。
-
-## 4. Acceptance Criteria
-- [x] 対象スキルとドキュメントに実行不能な Poetry コマンド例が残らない
-- [x] コマンド契約テストが PEP 621 の entry points と uv run を検証する
-- [x] `pytest tests/test_skill_commands.py` が成功する
-- [x] `./scripts/local-ci.sh` の全チェックがパスする
+- Red: `uv run pytest tests/test_cli.py -q` — 1 failed, 11 passed (`--version` was unknown).
+- Green: `uv run pytest tests/test_cli.py -q` — 13 passed.
+- Smoke: `uv build` succeeded; an isolated wheel install printed `orchestune 0.5.0`, and `orchestune-dispatch --help` exited successfully.
+- Impact scope: all in-scope references are addressed; out-of-scope rationales remain valid.
