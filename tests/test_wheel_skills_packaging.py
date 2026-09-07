@@ -69,6 +69,12 @@ def test_wheel_contains_distributable_skills(
     with zipfile.ZipFile(wheel_path) as zf:
         namelist = set(zf.namelist())
 
+    for skill in DISTRIBUTABLE_SKILLS:
+        skill_manifest = f"skills/{skill}/SKILL.md"
+        assert (
+            skill_manifest in namelist
+        ), f"Expected skill manifest {skill_manifest} in wheel, but it was missing."
+
     expected_files = _expected_distributable_skill_files()
     assert expected_files, "Expected distributable skill files to be non-empty"
     missing = expected_files - namelist
@@ -82,10 +88,17 @@ def test_sdist_contains_distributable_skills(
     with tarfile.open(sdist_path) as tf:
         names = set(tf.getnames())
 
-    expected_files = _expected_distributable_skill_files()
-    assert expected_files, "Expected distributable skill files to be non-empty"
     # sdist entries have a top-level directory prefix (e.g. orchestune-0.5.0/skills/...)
     stripped_names = {name.split("/", 1)[1] for name in names if "/" in name}
+
+    for skill in DISTRIBUTABLE_SKILLS:
+        skill_manifest = f"skills/{skill}/SKILL.md"
+        assert (
+            skill_manifest in stripped_names
+        ), f"Expected skill manifest {skill_manifest} in sdist, but it was missing."
+
+    expected_files = _expected_distributable_skill_files()
+    assert expected_files, "Expected distributable skill files to be non-empty"
     missing = expected_files - stripped_names
     assert not missing, f"Missing distributable skill files in sdist: {sorted(missing)}"
 
@@ -142,9 +155,24 @@ def test_wheel_contains_package_and_entry_points(
     assert scripts == EXPECTED_ENTRY_POINTS
 
 
-def test_build_does_not_pollute_repo(built_artifacts: tuple[Path, Path]) -> None:
-    _wheel_path, _sdist_path = built_artifacts
+def test_build_does_not_pollute_repo(tmp_path: Path) -> None:
     dist_dir = REPO_ROOT / "dist"
     assert (
         not dist_dir.exists()
-    ), f"Repository root polluted with dist directory: {dist_dir}"
+    ), f"Repository root polluted with dist directory prior to build: {dist_dir}"
+
+    out_dir = tmp_path / "dist"
+    result = subprocess.run(
+        ["uv", "build", "--out-dir", str(out_dir)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (
+        result.returncode == 0
+    ), f"uv build failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+
+    assert (
+        not dist_dir.exists()
+    ), f"Repository root polluted with dist directory after build: {dist_dir}"
