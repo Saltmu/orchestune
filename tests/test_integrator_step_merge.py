@@ -1,6 +1,6 @@
 """`MergeAndTestStep`: 対象ブランチのfetch・マージ・CI検証・ロールバック。
 
-CI実行そのものを担う`IntegrationMerger`のPoetry環境検出も併せて検証する。
+CI実行そのものを担う`IntegrationMerger`のuv依存同期・仮想環境解決も併せて検証する。
 """
 
 from __future__ import annotations
