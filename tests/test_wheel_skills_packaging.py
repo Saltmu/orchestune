@@ -133,7 +133,12 @@ def test_wheel_contains_package_and_entry_points(
         namelist = set(zf.namelist())
 
         assert "orchestune/__init__.py" in namelist
-        assert "orchestune/cli.py" in namelist
+        for script_name, target in EXPECTED_ENTRY_POINTS.items():
+            module_name = target.split(":")[0]
+            module_file = module_name.replace(".", "/") + ".py"
+            assert (
+                module_file in namelist
+            ), f"Expected console script '{script_name}' target module '{module_file}' in wheel."
 
         entry_point_files = [
             n for n in namelist if n.endswith(".dist-info/entry_points.txt")
