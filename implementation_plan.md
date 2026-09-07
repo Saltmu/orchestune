@@ -1,67 +1,51 @@
-# Implementation Plan: Issue #846 (Poetryからuv移行後の残存記述を更新する)
+# Implementation Plan: Issue #842 (`orchestune --version`)
 
 ## 0. Preflight & Execution Environment
-- Tooling:
-  - `uv`: 0.12.10
-  - `gitleaks`: 8.30.1
-  - GitHub CLI (`gh`): Authenticated (Saltmu, scopes: gist, read:org, repo, workflow)
-- GitHub Backend: `gh` CLI (authenticated)
-- Target Issue: #846
+
+- Target Issue: #842
 - Parent Issue: #825
 - Base Branch: `parent/issue-825` (`253bac4`)
-- Task Branch: `docs/issue-846-update-poetry-uv-residual-docs`
-- Worktree Path: `worktree/docs-issue-846-update-poetry-uv-residual-docs`
-- Reviewer Bot: `codex` (specified by user)
+- Task Branch: `feat/issue-842-cli-version`
+- GitHub backend: `gh` CLI (authenticated; no GitHub MCP used)
+- Serena: symbol lookup and reference enumeration available after activating the task worktree
+- OS: Linux
+- Planned verification: focused pytest, isolated CLI smoke test, then `./scripts/local-ci.sh`
 
-## 1. Impact Scope Determination (Step 2.6)
+## 1. Impact Scope Determination
 
-Serena MCP サーバーが利用できない環境のため、`grep` / `git grep` によるテキスト検索にフォールバックして影響範囲を網羅的に列挙しました。
+The changed production symbol is `orchestune.cli.main`. Serena symbol lookup and reference
+enumeration were used; supplementary `rg` searches covered dynamic argv handling, string-based
+patches, entry points, version references, and documentation.
 
-### Symbol & Footprint Classification Table
+| Reference | Decision | Rationale |
+| --- | --- | --- |
+| `orchestune/cli.py:main` | in scope | Must recognize `--version` before subcommand delegation. |
+| `orchestune/version.py:get_version` | out of scope | Existing single version source is consumed read-only; no behavior change required. |
+| `orchestune/__init__.py:__version__` | out of scope | Existing public API already delegates to `get_version`; changing it would duplicate the fix. |
+| `pyproject.toml:[project.scripts]` | out of scope | The `orchestune = orchestune.cli:main` entry point is correct and needs no metadata change. |
+| `tests/test_cli.py` | in scope | Add regression coverage for the new top-level option while preserving delegation tests. |
+| `tests/test_placeholder.py:get_version` | out of scope | Covers the version source itself, not CLI argument dispatch. |
+| `tests/test_skill_commands.py` | out of scope | Its `--version` references concern interpreter command parsing, not the `orchestune` entry point. |
+| `docs/en/setup.md`, `docs/ja/setup.md` | out of scope | Existing `claude --version` text documents another CLI and is unrelated to this entry point. |
+| `scripts/`, `.github/workflows/` | out of scope | No script or workflow command contract changes are needed for a top-level read-only flag. |
 
-| Reference / File | Decision | Status | Rationale |
-| :--- | :--- | :--- | :--- |
-| `.github/ISSUE_TEMPLATE/bug_report.md` | in scope | done | バグ報告テンプレートの環境情報で `Poetry version` を要求している箇所を `uv version` に更新 |
-| `docs/en/architecture.md` | in scope | done | L1 `infra.python_env` の説明文を Poetry から uv 依存同期およびリポジトリローカル `.venv` の仮想環境解決に更新 |
-| `docs/ja/architecture.md` | in scope | done | 同上（日本語版） |
-| `tests/test_integrator_step_merge.py` | in scope | done | モジュール docstring 内の「Poetry環境検出」を「uv依存同期・仮想環境解決」に更新 |
-| `tests/test_residual_poetry.py` | in scope | done | ドキュメントおよびIssueテンプレートに残存するPoetry記述を検出し、互換性維持のための意図的な参照のみを許可する回帰検査テストを追加 |
-| `docs/en/usage.md` | out of scope | still out of scope | ターゲットリポジトリの `poetry.lock` 互換性（dependency-manifest, dag_ignore_patterns）に関する説明であり、Orchestune 本体の環境説明ではないため維持 |
-| `docs/ja/usage.md` | out of scope | still out of scope | 同上（日本語版） |
-| `docs/refactoring-plan.md` | out of scope | still out of scope | 歴史的なリファクタリング計画の記録であり、Issue #846 の概要で明記されている通り対象外 |
-| `orchestune/dag/contracts.py` | out of scope | still out of scope | ターゲットリポジトリの `poetry.lock` 検出コード（互換性維持のため必須） |
-| `orchestune/dag/models.py` | out of scope | still out of scope | ターゲットリポジトリの `poetry.lock` ignore パターン（互換性維持のため必須） |
-| `orchestune/dispatch/locks.py` | out of scope | still out of scope | ターゲットリポジトリの `poetry.lock` 競合検出コード（互換性維持のため必須） |
-| `tests/test_dag_contracts.py` | out of scope | still out of scope | ターゲットリポジトリの `poetry.lock` 分類テスト（互換性維持のため必須） |
-| `tests/test_dispatch_locks.py` | out of scope | still out of scope | ターゲットリポジトリの `poetry.lock` 競合検出テスト（互換性維持のため必須） |
-| `tests/test_ci_workflow.py` | out of scope | still out of scope | ci.yml に poetry が含まれないことの検証テスト（すでに uv 移行済みであることを担保するテスト） |
+## 2. Design
 
-## 2. Changes Design
+1. Import `get_version` directly from `orchestune.version` in the L4 CLI module.
+2. Handle `--version` and the conventional `-V` alias before rewriting `sys.argv` for delegated subcommands.
+3. Print `orchestune <version>` and return successfully.
+4. Add focused unit tests for both supported flags and retain the existing unknown/no-argument behavior.
 
-### 2.1 `.github/ISSUE_TEMPLATE/bug_report.md`
-- `- Poetry version: <!-- 例: 1.8.2 -->` を `- uv version: <!-- 例: 0.5.0 -->` に更新。
+## 3. TDD / Verification Plan
 
-### 2.2 `docs/en/architecture.md` & `docs/ja/architecture.md`
-- `docs/en/architecture.md`: L1 `infra.python_env` の記述において、Poetry による依存関係と仮想環境の操作と記載されていた部分を、uv による依存同期およびリポジトリローカルな `.venv` の仮想環境操作の説明に更新。
-- `docs/ja/architecture.md`: 同様に「Poetryによる依存関係と仮想環境の操作は、L1アダプタの `infra.python_env` にカプセル化しています。」を「uvによる依存関係の同期やリポジトリローカルな `.venv` の仮想環境操作は、L1アダプタの `infra.python_env` にカプセル化しています。」に更新。
+- Red: add the CLI flag tests and verify they fail on the current implementation.
+- Green: implement the minimal dispatch branch and rerun the focused tests.
+- Smoke: build/install the wheel into an isolated uv environment and run `orchestune --version` and `orchestune-dispatch --help`.
+- Full: run `uv lock --check`, `uv sync`, and `./scripts/local-ci.sh`.
 
-### 2.3 `tests/test_integrator_step_merge.py`
-- モジュール docstring 内の「CI実行そのものを担う`IntegrationMerger`のPoetry環境検出も併せて検証する。」を「CI実行そのものを担う`IntegrationMerger`のuv依存同期・仮想環境解決も併せて検証する。」に更新。
+## 4. TDD Results
 
-### 2.4 Regression Test (`tests/test_residual_poetry.py`)
-- 回帰テストを追加し、`.github/ISSUE_TEMPLATE`、`docs/`、`tests/test_integrator_step_merge.py` などの対象パスにおいて、意図的に残す allowlist（`usage.md` のロックファイル互換性記述、`refactoring-plan.md` の歴史的記録など）以外の不要な Poetry 参照が存在しないことを機械的に検査。
-
-## 3. TDD Results
-1. **Red**: 回帰テスト `tests/test_residual_poetry.py` を追加し、4件すべて失敗（Red）することを確認。
-2. **Green**: 対象ファイルを更新し、`tests/test_residual_poetry.py` の全4件がパス（Green）することを確認。
-3. **Verify**:
-   - `git grep -n -i 'poetry' -- .github/ISSUE_TEMPLATE docs tests/test_integrator_step_merge.py` で不要な記述が消え、意図的な allowlist のみ残存していることを確認。
-   - `tests/test_integrator_step_merge.py`, `tests/test_skill_commands.py`, `tests/test_architecture.py` も全件パスすることを確認。
-
-## 4. Acceptance Criteria
-- [x] バグ報告テンプレートがuvのバージョン情報を要求する
-- [x] 日英architecture文書が orchestune.infra.python_env の現行uv実装と一致する
-- [x] テストdocstringに存在しないPoetry環境検出の説明が残らない
-- [x] Poetry互換性のため意図的に残すコード参照は削除しない
-- [x] 対象スキル・README・CONTRIBUTING・setup/usage文書の既存uvコマンドを維持する
-- [x] LinuxローカルCIが全件成功する
+- Red: `uv run pytest tests/test_cli.py -q` — 1 failed, 11 passed (`--version` was unknown).
+- Green: `uv run pytest tests/test_cli.py -q` — 13 passed.
+- Smoke: `uv build` succeeded; an isolated wheel install printed `orchestune 0.5.0`, and `orchestune-dispatch --help` exited successfully.
+- Impact scope: all in-scope references are addressed; out-of-scope rationales remain valid.
