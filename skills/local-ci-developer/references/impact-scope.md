@@ -8,7 +8,7 @@ and review discoveries separately rather than rewriting the original decisions.
 
 ## 1. Enumerate
 
-List changed functions, classes, fields, constants, config keys and CLI options.
+List the functions, classes, fields, constants, config keys and CLI options you intend to change.
 Collect references with Serena (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`),
 which distinguishes same-named fields on different types. If unavailable, use `rg` / `grep`,
 record the fallback and manually distinguish same-named symbols; never skip investigation.

@@ -9,7 +9,7 @@ fallback, zero-finding, and unsuccessful PRs. Log exclusion reasons; count only 
 PRs toward the 5/20 milestones. Missing reviews are not zero findings.
 
 Keep the record in implementation_plan.md, then the PR body under `#822 observation`.
-The #822 ledger links each PR once with status; update the entry on retries.
+The #822 ledger links each PR once with status and a link to its detailed record; update the entry on retries.
 External writes require task authorization, which this protocol does not grant.
 If unavailable or unauthorized, retain the record locally and hand off the pending update.
 
@@ -30,7 +30,7 @@ If unavailable or unauthorized, retain the record locally and hand off the pendi
   A requested SHA is not proof of the SHA actually reviewed; mark uncertainty explicitly.
 
 ## Findings and attribution
-Count independent reported fixes, not confirmed bugs. Assign one primary category:
+Count independent reported findings, not confirmed bugs or only applied fixes. Assign one primary category:
 A = direct propagation omission at a consumer/alternate path; B = contract/spec mismatch
 between related processing; C = state/order/recovery; D = local value/input/environment.
 Exclude pure readability, reuse or performance suggestions. Retain an exclusion reason.
