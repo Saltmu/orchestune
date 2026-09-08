@@ -579,3 +579,55 @@ class TestCiEnvironment:
 
         assert ok is False
         assert "uv" in output
+
+
+class TestNoOpMergeSkipsCi:
+    """#827: 削除が恒久的にブロックされたfinalizationの再試行サイクルで、
+    子ブランチの内容が既に統合先HEADへ到達している(=マージがno-opになる)場合に、
+    毎サイクルCIを再実行し続けないこと。"""
+
+    def test_skips_merge_and_ci_when_branch_tip_already_reached_head(
+        self, integrator_env: IntegratorEnv
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        integrator_env.stub_git(
+            lambda args: (
+                _ok(args)
+                if args[:3] == ["git", "merge-base", "--is-ancestor"]
+                else None
+            )
+        )
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-1"]
+        assert integrator_env.calls_with("merge", "--no-ff") == []
+        assert [
+            call for call in integrator_env.run.call_args_list if _is_ci(call.args[0])
+        ] == []
+
+        ancestor_calls = integrator_env.calls_with("merge-base", "--is-ancestor")
+        assert len(ancestor_calls) == 1
+        assert ancestor_calls[0].args[0] == [
+            "git",
+            "merge-base",
+            "--is-ancestor",
+            "a" * 40,
+            "HEAD",
+        ]
+
+    def test_runs_merge_and_ci_when_branch_tip_is_not_yet_an_ancestor(
+        self, integrator_env: IntegratorEnv
+    ):
+        # デフォルトのfakeは "祖先でない" を返すため、通常のfetch→merge→CIが
+        # 変わらず実行されることを確認する（回帰防止）。
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        res = Integrator(IntegratorConfig(apply=True)).run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-1"]
+        assert len(integrator_env.calls_with("merge", "--no-ff")) == 1
+        ci_calls = integrator_env.calls_with(*default_ci_command())
+        assert len(ci_calls) == 1

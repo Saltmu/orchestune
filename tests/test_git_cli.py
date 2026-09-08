@@ -8,6 +8,7 @@ from orchestune.infra.git_cli import (
     GitResult,
     branch_changed_files,
     ensure_parent_branch,
+    is_ancestor_commit,
     list_remote_branches,
     resolve_local_or_remote_branch,
     run_git,
@@ -794,3 +795,90 @@ class TestResolveLocalOrRemoteBranch:
             )
             == "origin/parent/issue-129"
         )
+
+
+class TestIsAncestorCommit:
+    def test_invokes_merge_base_is_ancestor(self, tmp_path):
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            result = is_ancestor_commit(tmp_path, "a" * 40, ref="HEAD")
+        assert result is True
+        assert mock_run.call_args.args[0] == [
+            "git",
+            "merge-base",
+            "--is-ancestor",
+            "a" * 40,
+            "HEAD",
+        ]
+        # `check`は明示的にFalseで渡し、「祖先でない」(returncode=1)を
+        # 例外ではなく通常の判定結果として扱う。
+        assert mock_run.call_args.kwargs["check"] is False
+
+    def test_returns_false_when_not_an_ancestor(self, tmp_path):
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr=""
+            )
+            assert is_ancestor_commit(tmp_path, "a" * 40) is False
+
+    def test_rejects_invalid_sha(self, tmp_path):
+        with pytest.raises(ValueError):
+            is_ancestor_commit(tmp_path, "not-a-sha")
+
+    @pytest.mark.integration
+    def test_detects_real_ancestry(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=str(repo), check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(repo),
+            check=True,
+        )
+        (repo / "a.txt").write_text("a")
+        subprocess.run(["git", "add", "a.txt"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=str(repo), check=True)
+        first_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo),
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+        (repo / "b.txt").write_text("b")
+        subprocess.run(["git", "add", "b.txt"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-m", "second"], cwd=str(repo), check=True)
+        second_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo),
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+        # 過去のcommitはHEADの祖先である
+        assert is_ancestor_commit(repo, first_sha) is True
+        # 自分自身も"祖先"として扱われる(--is-ancestorのセマンティクス通り)
+        assert is_ancestor_commit(repo, second_sha) is True
+
+        # まだmainに含まれない別系統のcommitは祖先ではない
+        subprocess.run(["git", "checkout", first_sha], cwd=str(repo), check=True)
+        (repo / "c.txt").write_text("c")
+        subprocess.run(["git", "add", "c.txt"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-m", "diverged"], cwd=str(repo), check=True)
+        diverged_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo),
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        subprocess.run(["git", "checkout", "main"], cwd=str(repo), check=True)
+
+        assert is_ancestor_commit(repo, diverged_sha) is False
