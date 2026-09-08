@@ -1,26 +1,23 @@
 # Code-analysis observation (#822)
 
 ## Applicability and storage
-This protocol supports [#822](https://github.com/Saltmu/orchestune/issues/822) while its
-observation phase is active. Before collecting a cohort, record its start date, developer
-environment, inclusion criteria, and ledger location in #822. If none exists, propose
-these explicitly in the current record; do not silently infer historical coverage.
+During [#822](https://github.com/Saltmu/orchestune/issues/822) observation, record the cohort's start date,
+developer environment, inclusion criteria and ledger location in #822 before collecting data.
+If absent, propose these in the current record; do not silently infer historical coverage.
 Include every PR in that environment and period, including docs-only, tool-unused,
 fallback, zero-finding, and unsuccessful PRs. Log exclusion reasons; count only reviewed
 PRs toward the 5/20 milestones. Missing reviews are not zero findings.
 
-Keep the working record in implementation_plan.md, then add it to the PR body under
-`#822 observation`. The #822 ledger links each PR once with its status and record link.
-Update an existing entry on retries. Posting or editing external records requires the
-user's task authorization; this protocol does not grant it. When unavailable or outside
-authorization, retain the record locally and identify the pending ledger update in handoff.
+Keep the record in implementation_plan.md, then the PR body under `#822 observation`.
+The #822 ledger links each PR once with status; update the entry on retries.
+External writes require task authorization, which this protocol does not grant.
+If unavailable or unauthorized, retain the record locally and hand off the pending update.
 
 ## Capture at the time of work
 - Before preparation/search: record environment, tool/version and intended use; measure
   preparation, index updates, and impact investigation separately with start/end times,
   elapsed duration and method. Separate waiting from active work if measurable.
-- Preserve the pre-implementation scope table with a commit permalink or durable snapshot;
-  retain original decisions. Append later discoveries and reconciliation separately.
+- Preserve original scope decisions with a commit permalink/durable snapshot; append discoveries and reconciliation separately.
 - Record actual tool calls/use and fallback reason, branch/base SHA and index correspondence
   evidence. Tokens need an available counter, source and scope; unavailable values stay
   `unavailable (reason)`, never estimates or zero. Shared setup costs are recorded once

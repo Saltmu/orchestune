@@ -14,6 +14,10 @@ Copy `.github/pull_request_template.md` to a temporary body file and complete:
 During #822 observation, add the [measurement record](measurement.md) and capture initial
 review conditions before requesting review. Preserve initial values after later pushes.
 
+## Pre-PR verification (MCP writes)
+Re-fetch each file and blob SHA; reconcile against the verified worktree.
+Check the cumulative diff across commits for missing content, escape errors, and partial/duplicate/unrelated writes before PR creation.
+
 ## Base selection and submission
 Use the selected GitHub backend from Step 0. Base precedence:
 1. Unmerged stacked dependency: its actual branch, even with a parent Issue.
@@ -24,8 +28,6 @@ For CLI, run `gh pr create --base <resolved-base> --title "PR Title" --body-file
 For MCP, pass the same head/base/title/body via `create_pull_request`; Web UI is a fallback.
 See [worktree.md](worktree.md) for branch naming; never assume a prefix.
 
-## Verify remote content
-For MCP writes, re-fetch each file and blob SHA; reconcile against the verified worktree.
-Check the cumulative diff across commits for missing content, escape errors, and partial/duplicate/unrelated writes before PR creation.
+## Post-creation verification
 After PR creation on either backend, compare head diff and changed files with the worktree
 and CI target. Record the PR number and proceed to Step 11 only after they match.

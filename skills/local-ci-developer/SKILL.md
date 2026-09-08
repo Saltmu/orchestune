@@ -53,21 +53,26 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 ### Outcome Record Format
 Upon task completion, satisfaction, or escalation, post the appropriate machine-readable outcome marker and JSON payload in a comment. Field values for `issue` and `pr` must be unquoted numbers (e.g. `123`).
 
-Replace the placeholder below with the matching row's JSON; never post the placeholder. Replace example IDs and values with actual task data.
-
-| Result | Destination | JSON payload |
-| :--- | :--- | :--- |
-| Successful completion | PR comments (or Issue comments) | `{"result": "done", "issue": 123, "pr": 456}` |
-| Requirement already satisfied; no commit/PR | Issue comments | `{"result": "not-needed", "issue": 123}` |
-| Blocked | Issue comments | `{"result": "blocked", "issue": 123, "reason": "base-branch-red", "base_sha": "abc1234", "attempt": 1}` |
-
-For blocked outcomes, use the current base commit SHA and increment the prior attempt
-(1 on first failure; escalates at 3). Preserve reason-specific fields and thresholds
-from the review reference when applicable.
-
+Select only the matching outcome below; replace example IDs/values with actual task data.
+**Successful completion** — PR comments (or Issue comments):
 ````markdown
 <!-- orchestune:outcome -->
 ```json
-<JSON payload from the matching outcome row above>
+{"result": "done", "issue": 123, "pr": 456}
+```
+````
+**Already satisfied; no commit/PR** — Issue comments:
+````markdown
+<!-- orchestune:outcome -->
+```json
+{"result": "not-needed", "issue": 123}
+```
+````
+**Blocked** — Issue comments; use current base SHA and increment the prior attempt
+(1 initially; escalates at 3). Review-specific fields and thresholds take precedence.
+````markdown
+<!-- orchestune:outcome -->
+```json
+{"result": "blocked", "issue": 123, "reason": "base-branch-red", "base_sha": "abc1234", "attempt": 1}
 ```
 ````
