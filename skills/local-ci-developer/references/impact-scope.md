@@ -3,6 +3,10 @@
 Run this **inside the task worktree, before writing any production code**. The goal is to
 decide *what to change* from evidence rather than from memory of the codebase.
 
+During #822 observation, start the [measurement record](measurement.md) before preparation
+or searches. Preserve the original table before implementation; append reconciliation
+and review discoveries separately rather than rewriting the original decisions.
+
 ## 1. Enumerate
 
 List every symbol you intend to change: functions, classes, dataclass fields, constants,
