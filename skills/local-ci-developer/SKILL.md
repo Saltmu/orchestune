@@ -53,7 +53,7 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 ### Outcome Record Format
 Upon task completion, satisfaction, or escalation, post the appropriate machine-readable outcome marker and JSON payload in a comment. Field values for `issue` and `pr` must be unquoted numbers (e.g. `123`).
 
-Use the marker and fenced JSON below with the payload for the actual outcome:
+Replace the placeholder below with the matching row's JSON; never post the placeholder. Replace example IDs and values with actual task data.
 
 | Result | Destination | JSON payload |
 | :--- | :--- | :--- |
@@ -68,6 +68,6 @@ from the review reference when applicable.
 ````markdown
 <!-- orchestune:outcome -->
 ```json
-{"result": "done", "issue": 123, "pr": 456}
+<JSON payload from the matching outcome row above>
 ```
 ````
