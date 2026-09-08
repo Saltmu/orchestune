@@ -60,8 +60,10 @@ record whether the tool was used and whether static or supplementary search appl
 | Test results / post-integration defects or not yet observed | |
 
 ## Evaluation and completion
-At 5 reviewed PRs, record an interim assessment in #822; at least 20 is the guide for a
-continuation decision. Report new A findings/PR and fraction of PRs with A; aggregate B
+Prepare an interim assessment at 5 reviewed PRs and a continuation decision at at least 20 as a guide.
+Both follow the storage/authorization rule above: publish in #822 when authorized and available;
+otherwise retain the assessment locally and hand off the pending publication; never skip preparation.
+Report new A findings/PR and fraction of PRs with A; aggregate B
 separately and distinguish initial from fix-induced findings. Compare similar reviewer,
 provider, size, type and actual-use conditions against #822's baseline, showing missing
 data and denominators. Do not equate one finding with one review round saved.
