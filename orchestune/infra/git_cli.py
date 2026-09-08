@@ -303,6 +303,28 @@ def resolve_commit_sha(repository_root: str | Path, ref: str) -> str:
     return sha.lower()
 
 
+def is_ancestor_commit(
+    repository_root: str | Path, ancestor_sha: str, ref: str = "HEAD"
+) -> bool:
+    """Return whether ``ancestor_sha`` is already reachable from ``ref``.
+
+    Used to detect a no-op ``git merge --no-ff`` before it runs: when the
+    candidate tip already contributes nothing new to ``ref``, the merge
+    would create no commit and re-running CI against it would only
+    re-verify a tree state that already reached ``ref`` (and therefore
+    already passed CI as part of a prior cycle) — Issue #827.
+    """
+    if not _COMMIT_SHA_PATTERN.fullmatch(ancestor_sha):
+        raise ValueError(f"期待commit SHAが不正です: {ancestor_sha!r}")
+    _validate_ref_name(ref)
+    result = run_git(
+        ["merge-base", "--is-ancestor", ancestor_sha.lower(), ref],
+        cwd=repository_root,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def delete_remote_branch_if_matches(
     repository_root: str | Path, branch: str, expected_sha: str
 ) -> ConditionalBranchDeletionResult:

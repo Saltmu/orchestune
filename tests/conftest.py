@@ -698,6 +698,14 @@ def _default_git_completed(args: Sequence[str]) -> Any:
         and str(args[3]).startswith("origin/")
     ):
         return _completed(args, stdout="a" * 40 + "\n")
+    if args[:3] == ["git", "merge-base", "--is-ancestor"]:
+        # #827: default to "not yet an ancestor" (git's exit code 1) so the
+        # normal fetch->merge->CI path still runs by default; a test that
+        # wants to exercise the already-integrated no-op-merge short-circuit
+        # stubs this command explicitly.
+        return subprocess.CompletedProcess(
+            args=list(args), returncode=1, stdout="", stderr=""
+        )
     return _completed(args)
 
 

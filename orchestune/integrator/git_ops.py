@@ -9,7 +9,12 @@ from pathlib import Path
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
-from orchestune.infra.git_cli import fetch_remote_branch, resolve_commit_sha, run_git
+from orchestune.infra.git_cli import (
+    fetch_remote_branch,
+    is_ancestor_commit,
+    resolve_commit_sha,
+    run_git,
+)
 from orchestune.infra.process_utils import default_ci_command
 from orchestune.infra.python_env import install_dependencies, resolve_virtualenv_path
 from orchestune.integrator.pr import handle_merge_failure
@@ -453,9 +458,50 @@ class IntegrationMerger:
                 unavailable,
             )
             return None
+        return self._merge_fetched_task(
+            task,
+            branch_name,
+            source_sha,
+            apply,
+            merged,
+            failed,
+            failed_reasons,
+            unavailable,
+        )
+
+    def _merge_fetched_task(
+        self,
+        task: Task,
+        branch_name: str,
+        source_sha: str | None,
+        apply: bool,
+        merged: list[str],
+        failed: list[str],
+        failed_reasons: dict[str, str],
+        unavailable: set[str],
+    ) -> str | None:
+        """Merge a fetched branch, skipping a no-op merge+CI re-run when its
+        tip already reached the current integration HEAD (#827): e.g. the
+        branch survived a prior cycle whose finalization deletion was
+        blocked. `git merge --no-ff` there would be an "Already up to date"
+        no-op, so re-verifying CI would only repeat a check that already
+        passed as part of the cycle that put this commit on HEAD.
+        """
         if source_sha is None:
             self._record_missing_source_sha(
                 task, apply, failed, failed_reasons, unavailable
+            )
+            return None
+        if is_ancestor_commit(self.repository_root, source_sha):
+            self._record_already_merged_task(
+                task,
+                branch_name,
+                source_sha,
+                apply,
+                merged,
+                failed,
+                failed_reasons,
+                unavailable,
             )
             return None
         return self._merge_verified_task(
