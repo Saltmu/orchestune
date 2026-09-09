@@ -34,7 +34,7 @@ from orchestune.dispatch.state import (
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command as execute_status_repair_command_real,
 )
-from orchestune.models import IssueRecord
+from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from tests.conftest import make_issue
 
@@ -438,6 +438,80 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label.assert_any_call(2, "status:queued")
         assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
 
+    def test_promotes_when_dependency_completes_via_prior_parent_merge(
+        self, tmp_path, fake_forge
+    ):
+        """依存先が検証済み先行マージで完了確定した場合も同一サイクルで昇格させる。
+
+        #859: 先行マージ完了は`ctx.done_issue_numbers`へ事前合流されるだけで、
+        `status_repair`系が組み立て直す完了集合（`_completed_issue_numbers`）
+        には入っていなかった。`ctx.tasks_by_issue`は先行マージが`status:done`を
+        付与する前のIssueから構築されるためラベル経由でも観測できず、依存元は
+        次サイクルまで`status:blocked`のまま据え置かれていた。
+        """
+        config = self._config(tmp_path)
+        dependency_issue = _full_issue(
+            1, labels=("status:blocked",), subtask_id="task-a", parent_number=100
+        )
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+            parent_number=100,
+        )
+        merged_pr = PrRecord(
+            number=300,
+            head_ref="claude/issue-1-task-a",
+            changed_files=(),
+            state="MERGED",
+            base_ref="parent/issue-100",
+            is_cross_repository=False,
+            closes_issue_numbers=(1,),
+            merged_at="2026-09-01T12:00:00Z",
+            merge_commit_oid="a" * 40,
+        )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_merged_prs_for_base.reset_mock(side_effect=True)
+        fake_forge.list_merged_prs_for_base.side_effect = (
+            lambda base, **_: [merged_pr] if base == "parent/issue-100" else []
+        )
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.side_effect = lambda number: {
+            1: dependency_issue,
+            2: blocked_issue,
+        }.get(int(number))
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        _track_forge_labels(fake_forge, dependency_issue, blocked_issue)
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
+            ),
+        ):
+
+            def _list(label, **_):
+                if label == "status:blocked":
+                    return [dependency_issue, blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        # 先行マージの検証済み修復自体は従来どおり成立している。
+        mock_add_label.assert_any_call(1, "status:done")
+        # #859: その完了が同一サイクル内の依存判定へ届き、依存元が昇格する。
+        mock_remove_label.assert_any_call(2, "status:blocked")
+        mock_add_label.assert_any_call(2, "status:queued")
+        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
+
     def test_dry_run_promotion_does_not_call_github(self, tmp_path, fake_forge):
         config = self._config(tmp_path, apply=False)
         done_issue = _full_issue(1, labels=("status:done",), subtask_id="task-a")
@@ -476,6 +550,77 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
         assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+
+    def test_prior_parent_merge_promotion_is_previewed_without_github_writes(
+        self, tmp_path, fake_forge
+    ):
+        """#859: `--no-apply`では先行マージ由来の昇格も予告に留める。
+
+        ドライランでは先行マージの修復自体が適用されないため、昇格を実施済みと
+        してGitHubへ書き込んではならない。予告として`promotion_events`へ現れる
+        のは`status:done`依存の既存ドライラン挙動と同じである。
+        """
+        config = self._config(tmp_path, apply=False)
+        dependency_issue = _full_issue(
+            1, labels=("status:blocked",), subtask_id="task-a", parent_number=100
+        )
+        blocked_issue = _full_issue(
+            2,
+            labels=("status:blocked",),
+            subtask_id="task-b",
+            depends_on=("task-a",),
+            parent_number=100,
+        )
+        merged_pr = PrRecord(
+            number=300,
+            head_ref="claude/issue-1-task-a",
+            changed_files=(),
+            state="MERGED",
+            base_ref="parent/issue-100",
+            is_cross_repository=False,
+            closes_issue_numbers=(1,),
+            merged_at="2026-09-01T12:00:00Z",
+            merge_commit_oid="a" * 40,
+        )
+        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
+        mock_list = fake_forge.list_issues_by_label
+        fake_forge.list_open_prs.reset_mock(side_effect=True)
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_merged_prs_for_base.reset_mock(side_effect=True)
+        fake_forge.list_merged_prs_for_base.side_effect = (
+            lambda base, **_: [merged_pr] if base == "parent/issue-100" else []
+        )
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.side_effect = lambda number: {
+            1: dependency_issue,
+            2: blocked_issue,
+        }.get(int(number))
+        fake_forge.add_label.reset_mock(side_effect=True)
+        mock_add_label = fake_forge.add_label
+        fake_forge.remove_label.reset_mock(side_effect=True)
+        mock_remove_label = fake_forge.remove_label
+        fake_forge.close_issue.reset_mock(side_effect=True)
+        mock_close_issue = fake_forge.close_issue
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
+            ),
+        ):
+
+            def _list(label, **_):
+                if label == "status:blocked":
+                    return [dependency_issue, blocked_issue]
+                return []
+
+            mock_list.side_effect = _list
+            report = run_dispatch_cycle(config)
+
+        mock_add_label.assert_not_called()
+        mock_remove_label.assert_not_called()
+        mock_close_issue.assert_not_called()
+        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
 
     def test_status_repairs_use_typed_executor_once_at_ordered_boundaries(
         self, tmp_path, fake_forge
