@@ -1,20 +1,17 @@
 # Impact Scope Determination (Step 2.6)
 
-Run this **inside the task worktree, before writing any production code**. The goal is to
-decide *what to change* from evidence rather than from memory of the codebase.
+Run this **inside the task worktree, before writing any production code** to decide scope from evidence.
+
+During #822 observation, start the [measurement record](measurement.md) before preparation
+or searches. Preserve the original table before implementation; append reconciliation
+and review discoveries separately rather than rewriting the original decisions.
 
 ## 1. Enumerate
 
-List every symbol you intend to change: functions, classes, dataclass fields, constants,
-config keys, CLI options.
-
-For each one, collect its references with the Serena MCP tools (`find_symbol`,
-`find_referencing_symbols`, `get_symbols_overview`). They are type-aware, so a field named
-`depends_on` on one dataclass is not confused with an identically named field on another.
-
-If the MCP server is unavailable, fall back to `rg` / `grep` and say so in the plan. A
-text search over-reports across same-named symbols on different types, so widen the
-manual review accordingly. Never silently skip this step.
+List the functions, classes, fields, constants, config keys and CLI options you intend to change.
+Collect references with Serena (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`),
+which distinguishes same-named fields on different types. If unavailable, use `rg` / `grep`,
+record the fallback and manually distinguish same-named symbols; never skip investigation.
 
 ## 2. Cover what an index cannot see
 

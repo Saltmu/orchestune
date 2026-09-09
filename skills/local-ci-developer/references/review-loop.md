@@ -5,6 +5,10 @@ This document provides detailed procedures for automated LLM PR reviews and feed
 Keep the review loop in the same worktree used to create the PR. Apply feedback,
 run CI, commit, and push only from that worktree.
 
+During #822 observation, apply [measurement.md](measurement.md) to every round: capture
+the reviewed SHA, deduplicate and classify findings, and record re-review reasons.
+Before Step 12, finalize the record even for zero findings, timeout, or blocked work.
+
 ---
 
 ## 11. Automated LLM PR Review Loop (Review Cycle)
@@ -59,21 +63,10 @@ Loop (up to 5 rounds):
      - Exit 0: terminate the loop and proceed to Step 12 (Outcome).
 ```
 
-### Creating Review Reply File (`/tmp/review_reply.md`)
-After addressing feedback and committing fixes, write a summary reply file explicitly detailing the modifications, commit hashes, and any out-of-scope follow-up Issues:
-```markdown
-## Addressing Review Feedback (Round 2/5)
-
-### Changes & Resolutions
-- [Addressed] Fixed bug in Finding A and added regression tests (commit: abc1234)
-- [Declined - Out of Scope] Refactoring module X is out of scope for this Issue; filed follow-up Issue #123 (reason: ...)
-- [Declined - YAGNI] Speculative recovery mechanism for Edge Case Y exceeds PR acceptance criteria (reason: ...)
-- [Declined] Preserved Finding B behavior as it conforms to intended specification (reason: ...)
-
-@claude review
-```
-
-After writing the reply file, run `wait_for_review.py` with `--body-file /tmp/review_reply.md` to trigger and wait for re-review.
+### Review reply
+Use `/tmp/review_reply.md` with `Round X/5`, addressed findings and commit hashes,
+declined findings and reasons, and any follow-up Issue links. Pass it with `--body-file`
+to `wait_for_review.py`; do not post a separate trigger comment.
 
 ### Diagnosing Exit 20 vs Exit 30 (Bot-Authored Trigger Failures)
 
@@ -106,4 +99,3 @@ finds the run, then `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq '.ac
 shows the triggering actor (neither `gh run list --json` nor `gh run view --json`
 exposes an actor field) and `gh run view <run-id> --json jobs` shows each job's
 conclusion.
-

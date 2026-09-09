@@ -35,6 +35,9 @@ At session start, inspect and record the execution environment:
 
 ## Development Steps
 
+During the #822 observation period, read [measurement.md](references/measurement.md)
+before Step 2.6 and maintain its record through Steps 10–12, including zero-finding PRs.
+
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
 | **0** | **Preflight & Requirement Check** | Verify uv, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
@@ -50,39 +53,26 @@ At session start, inspect and record the execution environment:
 ### Outcome Record Format
 Upon task completion, satisfaction, or escalation, post the appropriate machine-readable outcome marker and JSON payload in a comment. Field values for `issue` and `pr` must be unquoted numbers (e.g. `123`).
 
-1. **Successful Completion (`result: "done"`)** — Post to **PR comments** (or Issue comments):
+Select only the matching outcome below; replace example IDs/values with actual task data.
+**Successful completion** — PR comments (or Issue comments):
 ````markdown
 <!-- orchestune:outcome -->
 ```json
-{
-  "result": "done",
-  "issue": 123,
-  "pr": 456
-}
+{"result": "done", "issue": 123, "pr": 456}
 ```
 ````
-
-2. **Requirement Already Satisfied (`result: "not-needed"`)** — Post to **Issue comments** (no commit/PR created):
+**Already satisfied; no commit/PR** — Issue comments:
 ````markdown
 <!-- orchestune:outcome -->
 ```json
-{
-  "result": "not-needed",
-  "issue": 123
-}
+{"result": "not-needed", "issue": 123}
 ```
 ````
-
-3. **Escalation / Blocked (`result: "blocked"`)** — Post to **Issue comments**. Set `base_sha` to current base commit SHA and increment `attempt` from prior outcome (1 on first failure; escalates at 3):
+**Blocked** — Issue comments; use current base SHA and increment the prior attempt
+(1 initially; escalates at 3). Review-specific fields and thresholds take precedence.
 ````markdown
 <!-- orchestune:outcome -->
 ```json
-{
-  "result": "blocked",
-  "issue": 123,
-  "reason": "base-branch-red",
-  "base_sha": "abc1234",
-  "attempt": 1
-}
+{"result": "blocked", "issue": 123, "reason": "base-branch-red", "base_sha": "abc1234", "attempt": 1}
 ```
 ````
