@@ -169,12 +169,52 @@ class DispatchHandle:
     branch_name: str | None = None
     issue_number: int | None = None
     started_at: float | None = None
+    launch_attempt_id: str | None = None
+
+
+@dataclass(frozen=True)
+class LaunchCapabilities:
+    """Attempt lookup must identify one execution by ID, not by branch similarity.
+
+    Idempotent targets override launch_attempt to pass the ID as the provider key.
+    A None lookup result is inconclusive, not proof that a launch did not happen.
+    """
+
+    durable_attempt: bool = False
+    idempotent_launch: bool = False
+    lookup_by_attempt: bool = False
 
 
 class DispatchTarget(ABC):
     """タスクを実際にどこへディスパッチするかを表す戦略インターフェース。"""
 
     target_name: str | None = None
+    launch_capabilities = LaunchCapabilities()
+
+    def lookup_launch_attempt(self, attempt_id: str) -> DispatchHandle | None:
+        """Return a uniquely matched handle, or None when reconciliation is unavailable."""
+        return None
+
+    def launch_attempt(
+        self,
+        attempt_id: str,
+        task: Task,
+        branch_name: str,
+        worktree_path: Path,
+        *,
+        force_push: bool = False,
+        execution_selection: ExecutionSelection | None = None,
+        base_branch: str | None = None,
+    ) -> DispatchHandle:
+        """Launch once; idempotent providers override this to use attempt_id as a key."""
+        return self.launch(
+            task,
+            branch_name,
+            worktree_path,
+            force_push=force_push,
+            execution_selection=execution_selection,
+            base_branch=base_branch,
+        )
 
     @abstractmethod
     def launch(
@@ -590,6 +630,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
     ANTHROPIC_VERSION = "2023-06-01"
     _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
     target_name = "cloud-routine"
+    launch_capabilities = LaunchCapabilities(durable_attempt=True)
 
     def __init__(
         self,
@@ -627,7 +668,9 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             f"{_noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
-    def _fire(self, text: str, model: str | None = None) -> dict[str, Any]:
+    def _fire(
+        self, text: str, model: str | None = None, *, retry: bool = True
+    ) -> dict[str, Any]:
         """任意のテキスト指示でルーチンをfireし、生のレスポンスペイロードを返す。"""
         payload_dict: dict[str, Any] = {"text": text}
         if model is not None:
@@ -644,7 +687,11 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
                 "Content-Type": "application/json",
             },
         )
-        return self._fire_with_retry(request)
+        if retry:
+            return self._fire_with_retry(request)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+            return result
 
     def launch(
         self,
@@ -670,6 +717,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         payload = self._fire(
             self._build_text(task, branch_name, base_branch=base_branch),
             model=model,
+            retry=False,
         )
         return DispatchHandle(
             external_id=payload.get("claude_code_session_id"),
@@ -840,6 +888,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
     """
 
     target_name = "codex-cloud"
+    launch_capabilities = LaunchCapabilities(durable_attempt=True)
 
     def __init__(
         self,

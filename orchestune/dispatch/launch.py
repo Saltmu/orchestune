@@ -20,6 +20,7 @@ from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
 from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.launch_attempts import prepare_journaled_target
 from orchestune.dispatch.scoring import Task, parse_task_from_issue
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.worktree import create_worktree_and_launch
@@ -429,6 +430,8 @@ def _build_active_worktree_from_launch(
         model=model,
         reasoning_effort=reasoning_effort,
         selection_reason=selection_reason,
+        launch_attempt_id=launch.launch_attempt_id,
+        launch_phase="launched" if launch.launch_attempt_id else None,
     )
 
 
@@ -487,11 +490,17 @@ def _apply_task_launches(
             if commit_reservation is None:
                 continue
 
+            target = prepare_journaled_target(
+                plan, run_state, now, config, commit_reservation
+            )
+            if target is None:
+                continue
+
             launch = create_worktree_and_launch(
                 task,
                 plan.branch_name,
                 config.worktree_root,
-                config.dispatch_target,
+                target,
                 apply=True,
                 base_branch=plan.base_branch_for_launch,
                 execution_selection=plan.execution_selection,

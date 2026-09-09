@@ -317,6 +317,7 @@ class TestBranchStacking:
                 else []
             )
             mock_launch.return_value = MagicMock(
+                launch_attempt_id=None,
                 launched=True,
                 pid=123,
                 branch="claude/issue-2-task-2",
@@ -411,6 +412,7 @@ class TestBranchStacking:
                 else []
             )
             mock_launch.return_value = MagicMock(
+                launch_attempt_id=None,
                 launched=True,
                 pid=123,
                 branch="claude/issue-2-task-2",
@@ -817,6 +819,7 @@ class TestBranchStacking:
                 else []
             )
             mock_launch.return_value = MagicMock(
+                launch_attempt_id=None,
                 launched=True,
                 pid=456,
                 branch="claude/issue-3-task-3",

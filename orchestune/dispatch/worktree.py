@@ -42,6 +42,7 @@ class LaunchResult:
     # 誤認する窓を最小化する。launchが行われなかった場合はNone。
     dispatch_started_at: float | None = None
     execution_selection: ExecutionSelection | None = None
+    launch_attempt_id: str | None = None
 
 
 def _branch_exists(branch_name: str) -> bool:
@@ -236,6 +237,7 @@ def _prepare_and_launch(
             external_id=handle.external_id,
             external_url=handle.external_url,
             dispatch_started_at=dispatch_started_at,
+            launch_attempt_id=handle.launch_attempt_id,
             execution_selection=execution_selection,
         )
     except (subprocess.CalledProcessError, OSError, BranchReachabilityError) as e:

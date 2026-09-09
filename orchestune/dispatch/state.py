@@ -36,6 +36,8 @@ class ActiveWorktree:
     model: str | None = None
     reasoning_effort: str | None = None
     selection_reason: str | None = None
+    launch_attempt_id: str | None = None
+    launch_phase: str | None = None
 
 
 @dataclass
@@ -238,6 +240,8 @@ def _parse_active_worktrees(data: dict) -> dict[str, ActiveWorktree]:
             model=value.get("model"),
             reasoning_effort=value.get("reasoning_effort"),
             selection_reason=value.get("selection_reason"),
+            launch_attempt_id=value.get("launch_attempt_id"),
+            launch_phase=value.get("launch_phase"),
         )
         for key, value in data.get("active_worktrees", {}).items()
     }
