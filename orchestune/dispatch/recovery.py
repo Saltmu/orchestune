@@ -591,8 +591,8 @@ class RecoveryBookkeepingAdapter:
 
     def _refresh_snapshot(self) -> RecoveryBookkeepingSnapshot:
         forge = self._config.resolved_forge
-        issues = tuple(forge.list_issues_by_label(StatusLabel.IN_PROGRESS))
-        issues = _include_queued_attempts(issues, self._config)
+        in_progress = tuple(forge.list_issues_by_label(StatusLabel.IN_PROGRESS))
+        issues = _include_queued_attempts(in_progress, self._config)
         open_prs = tuple(forge.list_open_prs())
         parent_issue = (
             forge.get_issue(self._config.parent_issue_number)
@@ -603,7 +603,7 @@ class RecoveryBookkeepingAdapter:
             tasks_by_issue=_tasks_from_issues(issues),
             open_prs=open_prs,
             restorations=_restoration_candidates(issues, open_prs, self._config),
-            counter_targets=_counter_targets(self._run_state, issues),
+            counter_targets=_counter_targets(self._run_state, in_progress),
             launch_history=_merged_launch_history(
                 self._run_state,
                 parent_issue,

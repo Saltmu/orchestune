@@ -17,7 +17,11 @@ from orchestune.dispatch.attempt_record import (
 )
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import resolve_task_execution_selection
-from orchestune.dispatch.labels import PRIMARY_STATUS_LABELS, transition_status_label
+from orchestune.dispatch.labels import (
+    PRIMARY_STATUS_LABELS,
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
 from orchestune.issue_parsing import recovery_counters_from_body
@@ -38,6 +42,16 @@ class LaunchPlan(Protocol):
     task: Task
     branch_name: str
     base_branch_for_state: str
+
+
+def _recovery_allowed(task: Task, config: DispatcherConfig) -> bool:
+    issue = config.resolved_forge.get_issue(task.issue_number)
+    terminal = (*TERMINAL_ESCALATION_LABELS, StatusLabel.DONE, StatusLabel.NOT_NEEDED)
+    return (
+        issue is not None
+        and issue.state == "OPEN"
+        and not any(label in issue.labels for label in terminal)
+    )
 
 
 def active_from_attempt(
@@ -110,6 +124,8 @@ def reconcile_attempt(
     attempt: LaunchAttempt, task: Task, state: RunState, config: DispatcherConfig
 ) -> bool:
     """True means the journal consumed the task; never launch it as queued."""
+    if not _recovery_allowed(task, config):
+        return True
     target = config.dispatch_target
     if target is None or attempt.target != target.target_name:
         _hold(task, config, f"attempt {attempt.attempt_id}: provider changed")
@@ -215,6 +231,8 @@ def prepare_journaled_target(
     assert target is not None
     if not target.launch_capabilities.durable_attempt:
         return target
+    if not _recovery_allowed(plan.task, config):
+        return None
     try:
         attempt = read_attempt(config.resolved_forge, plan.task.issue_number)
     except ValueError as exc:

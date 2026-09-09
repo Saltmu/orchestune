@@ -6,7 +6,6 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
-from orchestune.dispatch.launch_attempts import LaunchOutcomeUnknown
 from orchestune.dispatch.state import RunState, load_run_state
 from orchestune.dispatch.targets import CodexCloudDispatchTarget, DispatchHandle
 from tests.conftest import FakeForge, make_issue, make_task
@@ -69,8 +68,7 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
 def test_unknown_launch_is_not_retried_after_state_loss(launch_env):
     forge, config, plan, launch = launch_env
     launch.side_effect = OSError("response lost after acceptance")
-    with pytest.raises(LaunchOutcomeUnknown, match="response lost"):
-        _apply_task_launches([plan], RunState(), 100.0, config)
+    assert _apply_task_launches([plan], RunState(), 100.0, config) == []
     _apply_task_launches([plan], RunState(), 110.0, config)
     assert launch.call_count == 1
     assert "status:blocked-human-review" in forge.get_issue_labels(1)
@@ -98,10 +96,11 @@ def test_remote_write_response_loss_is_safe(launch_env, phase):
             raise OSError("journal response lost")
 
     with patch.object(forge, "update_issue_body", side_effect=lose_response):
-        with pytest.raises(
-            (OSError, LaunchOutcomeUnknown), match="journal response lost"
-        ):
-            _apply_task_launches([plan], RunState(), 100.0, config)
+        if phase == "prepared":
+            with pytest.raises(OSError, match="journal response lost"):
+                _apply_task_launches([plan], RunState(), 100.0, config)
+        else:
+            assert _apply_task_launches([plan], RunState(), 100.0, config) == []
     original = attempt_from_body(forge.issues[1].body)
     _apply_task_launches([plan], RunState(), 110.0, config)
     assert launch.call_count == (0 if phase == "unknown" else 1)
@@ -128,7 +127,6 @@ def test_handle_save_failure_holds_and_preserves_quota_and_worktree(launch_env):
         patch(
             "orchestune.dispatch.worktree._cleanup_failed_worktree", autospec=True
         ) as cleanup,
-        pytest.raises(LaunchOutcomeUnknown, match="handle write failed"),
     ):
         _apply_task_launches([plan], RunState(), 100.0, config)
     cleanup.assert_not_called()
@@ -149,8 +147,7 @@ def test_startup_recovery_without_pr_never_requeues_a_possible_launch(
         _apply_task_launches([plan], RunState(), 100.0, config)
     else:
         launch.side_effect = OSError("response lost")
-        with pytest.raises(LaunchOutcomeUnknown):
-            _apply_task_launches([plan], RunState(), 100.0, config)
+        _apply_task_launches([plan], RunState(), 100.0, config)
     forge.remove_label(1, "status:in-progress")
     forge.remove_label(1, "status:queued")
     forge.add_label(1, status)
@@ -170,8 +167,7 @@ def test_lookup_never_implies_permission_to_relaunch(launch_env, result):
 
     forge, config, plan, launch = launch_env
     launch.side_effect = OSError("response lost")
-    with pytest.raises(LaunchOutcomeUnknown):
-        _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches([plan], RunState(), 100.0, config)
     config.dispatch_target.launch_capabilities = LaunchCapabilities(
         durable_attempt=True, lookup_by_attempt=True
     )
@@ -230,8 +226,7 @@ def test_hard_stop_before_provider_resumes_same_prepared_attempt(launch_env):
 def test_ambiguous_provider_result_is_reported_only_once(launch_env):
     forge, config, plan, launch = launch_env
     launch.return_value = DispatchHandle()
-    with pytest.raises(LaunchOutcomeUnknown, match="no execution handle"):
-        _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches([plan], RunState(), 100.0, config)
     for _ in range(3):
         _apply_task_launches([plan], RunState(), 110.0, config)
     assert len(forge.comments[1]) == 1
@@ -261,6 +256,66 @@ def test_journal_does_not_override_recovery_counter_bookkeeping(launch_env):
         "subtask_id: task-1\nrecompute_count: 3\nforced_serial: true",
     )
     forge.update_issue_body(1, body)
+    _run_recovery_bookkeeping_boundary(state, config, now=110.0)
+    assert state.active_worktrees["1"].recompute_count == 3
+    assert state.active_worktrees["1"].forced_serial
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "status:done",
+        "status:not-needed",
+        "status:manual-merge-required",
+        "status:blocked-human-review",
+    ],
+)
+def test_stale_launch_plan_does_not_override_terminal_status(launch_env, status):
+    forge, config, plan, launch = launch_env
+    _apply_task_launches([plan], RunState(), 100.0, config)
+    forge.remove_label(1, "status:in-progress")
+    forge.add_label(1, status)
+    fresh = RunState()
+    _apply_task_launches([plan], fresh, 110.0, config)
+    assert fresh.active_worktrees == {}
+    assert forge.get_issue_labels(1) == (status,)
+    assert launch.call_count == 1
+
+
+def test_unknown_launch_does_not_abort_other_selected_tasks(launch_env):
+    from orchestune.dispatch.attempt_record import read_attempt
+
+    forge, config, plan, launch = launch_env
+    forge.issues[2] = make_issue(2)
+    second = TaskLaunchPlan(make_task(2), "claude/issue-2-task-2", None, "origin/main")
+    launch.side_effect = [
+        OSError("response lost"),
+        DispatchHandle(external_id="task_second"),
+    ]
+    state = RunState()
+    selected = _apply_task_launches([plan, second], state, 100.0, config)
+    assert selected == [second.task]
+    assert read_attempt(forge, 1).phase == "unknown"
+    assert state.active_worktrees["2"].external_id == "task_second"
+    assert state.launch_history == [100.0, 100.0]
+    assert launch.call_count == 2
+
+
+def test_other_parent_counters_remain_monotonic(launch_env):
+    from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+
+    forge, config, plan, launch = launch_env
+    state = RunState()
+    _apply_task_launches([plan], state, 100.0, config)
+    config.parent_issue_number = 200
+    forge.issues[200] = make_issue(200, body="Other parent")
+    forge.update_issue_body(
+        1,
+        forge.issues[1].body.replace(
+            "subtask_id: task-1",
+            "subtask_id: task-1\nrecompute_count: 3\nforced_serial: true",
+        ),
+    )
     _run_recovery_bookkeeping_boundary(state, config, now=110.0)
     assert state.active_worktrees["1"].recompute_count == 3
     assert state.active_worktrees["1"].forced_serial
