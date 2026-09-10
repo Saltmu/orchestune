@@ -55,6 +55,12 @@ class CycleContext:
     # #791: verified historical merges and indeterminate evidence are both
     # excluded from launch; only the former is a same-cycle dependency result.
     prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset()
+    # #859: 検証済み先行マージによる同一サイクル完了。`done_issue_numbers`へ
+    # 事前合流させたものと同じ集合を、合流前の形でも保持する。完了集合を
+    # 組み立て直す消費側（`cycle._same_cycle_completions`）は`tasks_by_issue`の
+    # ラベルを見るが、`tasks_by_issue`は先行マージが`status:done`を付与する前の
+    # Issueから構築されるため、この集合が無いと同一サイクル内では観測できない。
+    prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset()
 
 
 @dataclass

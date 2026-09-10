@@ -428,7 +428,7 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
             autospec=True,
-            return_value=_pipeline_report(),
+            return_value=(_pipeline_report(), frozenset()),
         ),
     ):
         report = run_dispatch_cycle(config)
@@ -549,7 +549,7 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
             autospec=True,
-            return_value=_pipeline_report(),
+            return_value=(_pipeline_report(), frozenset()),
         ),
     ):
         report = run_dispatch_cycle(config)

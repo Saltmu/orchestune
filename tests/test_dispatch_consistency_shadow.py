@@ -91,7 +91,7 @@ def _run_patched_cycle(
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
             autospec=True,
-            return_value=pipeline_report,
+            return_value=(pipeline_report, frozenset()),
         ),
     ):
         return run_dispatch_cycle(config)

@@ -326,4 +326,7 @@ def _build_cycle_context(
         not_needed_review_dispatcher=_dispatch_not_needed_review,
         issue_records_by_number={issue.number: issue for issue in all_issues},
         prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
+        prior_parent_merge_completed_issue_numbers=(
+            prior_parent_merge_completed_issue_numbers
+        ),
     )

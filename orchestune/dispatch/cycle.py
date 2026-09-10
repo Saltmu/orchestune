@@ -709,6 +709,46 @@ def _pipeline_state_changes(
     return tuple(changes)
 
 
+def _run_final_repair_pass(
+    runtime: _ConsistencyRuntime,
+    final_scan,
+    report: CycleReport,
+    ctx,
+    now: float,
+    config: DispatcherConfig,
+    repair_cycle: _RepairCycleState,
+    same_cycle_completions: frozenset[int],
+) -> None:
+    """サイクル終端のconsistency修復パスを実行する。
+
+    #859: `done_issue_numbers`は検証済み先行マージを含むが、active worktreeの
+    同一サイクル完了は含まない。最終境界の修復も、パイプライン内の各フェーズと
+    同じ実効完了を見る。
+    """
+    final_allowlist = (
+        config.consistency_repair_allowlist - repair_cycle.claimed_repair_codes
+        if config.apply
+        else frozenset()
+    )
+    runtime.supervisor.repair_until_stable(
+        final_scan,
+        observer=runtime.fresh_adapter,
+        deriver=runtime.fresh_adapter,
+        executor=_DispatchRepairExecutor(
+            config=config,
+            adapter=runtime.fresh_adapter,
+            completed_issue_numbers=(
+                frozenset(ctx.done_issue_numbers) | same_cycle_completions
+            ),
+            execution_handlers=_final_execution_repair_handlers(
+                runtime, report, ctx, config, now=now
+            ),
+        ),
+        allowlist=final_allowlist,
+        max_passes=config.consistency_max_repair_passes,
+    )
+
+
 def _finish_consistency_runtime(
     runtime: _ConsistencyRuntime | None,
     report: CycleReport,
@@ -716,6 +756,7 @@ def _finish_consistency_runtime(
     now: float,
     config: DispatcherConfig,
     repair_cycle: _RepairCycleState,
+    same_cycle_completions: frozenset[int],
 ) -> None:
     if runtime is None:
         report.consistency = _merge_consistency_reports(
@@ -732,29 +773,15 @@ def _finish_consistency_runtime(
         "end", observer=runtime.fresh_adapter, deriver=runtime.fresh_adapter
     )
     if config.consistency_mode is ConsistencyMode.REPAIR:
-        final_allowlist = (
-            config.consistency_repair_allowlist - repair_cycle.claimed_repair_codes
-            if config.apply
-            else frozenset()
-        )
-        runtime.supervisor.repair_until_stable(
+        _run_final_repair_pass(
+            runtime,
             final_scan,
-            observer=runtime.fresh_adapter,
-            deriver=runtime.fresh_adapter,
-            executor=_DispatchRepairExecutor(
-                config=config,
-                adapter=runtime.fresh_adapter,
-                completed_issue_numbers=frozenset(ctx.done_issue_numbers),
-                execution_handlers=_final_execution_repair_handlers(
-                    runtime,
-                    report,
-                    ctx,
-                    config,
-                    now=now,
-                ),
-            ),
-            allowlist=final_allowlist,
-            max_passes=config.consistency_max_repair_passes,
+            report,
+            ctx,
+            now,
+            config,
+            repair_cycle,
+            same_cycle_completions,
         )
     main_report = runtime.supervisor.cycle_report(mode=config.consistency_mode)
     report.consistency = _merge_consistency_reports(main_report, repair_cycle.reports)
@@ -884,6 +911,22 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
         )
 
 
+def _same_cycle_completions(ctx, completed_in_cycle: Iterable[int]) -> frozenset[int]:
+    """同一サイクル内で確定した完了を1か所で組み立てる（#859）。
+
+    確定経路は2つある。active worktreeの完了検知（`completed_in_cycle`）と、
+    検証済み先行マージ（`ctx.prior_parent_merge_completed_issue_numbers`）である。
+    後者は`_build_cycle_context`が`done_issue_numbers`へ事前合流させるが、
+    完了集合を組み立て直す消費側はそれを見ないため、両経路をここで合流させて
+    唯一の入口にする。個別の消費側で`| completed_in_cycle`を書き足す形にすると、
+    片方の経路だけを合流し忘れる余地が残る。
+    """
+    prior_merge_completions: frozenset[int] = (
+        ctx.prior_parent_merge_completed_issue_numbers
+    )
+    return frozenset(completed_in_cycle) | prior_merge_completions
+
+
 def _completed_issue_numbers(ctx, completed_in_cycle: Iterable[int]) -> set[int]:
     terminal = {
         TaskLifecycle.DONE,
@@ -894,7 +937,7 @@ def _completed_issue_numbers(ctx, completed_in_cycle: Iterable[int]) -> set[int]
         for task in ctx.tasks_by_issue.values()
         if task.subtask_id and task_lifecycle(task.status_labels) in terminal
     }
-    return persisted | set(completed_in_cycle)
+    return persisted | _same_cycle_completions(ctx, completed_in_cycle)
 
 
 def _run_pre_scheduling_reconciliation(
@@ -991,7 +1034,8 @@ def _execute_cycle_pipeline(
     now: float,
     repair_cycle: _RepairCycleState,
     prior_parent_merge_events: tuple[dict[str, object], ...] = (),
-) -> CycleReport:
+) -> tuple[CycleReport, frozenset[int]]:
+    """1サイクル分のフェーズを実行し、レポートと同一サイクル完了を返す（#859）。"""
     (
         completion_events,
         deviation_events,
@@ -1024,7 +1068,7 @@ def _execute_cycle_pipeline(
         now,
         config,
     )
-    return _pipeline_report(
+    report = _pipeline_report(
         scheduling,
         lock_result,
         deviation_events=deviation_events,
@@ -1032,6 +1076,34 @@ def _execute_cycle_pipeline(
         promotion_events=promotion_events,
         applied=config.apply,
     )
+    return report, _same_cycle_completions(ctx, completed_issue_numbers)
+
+
+def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
+    """Issue取得・status intent整合・recovery・先行マージ整合を経てContextを構築する。"""
+    issues = _prepare_cycle_issues(run_state, config, now)
+    reconcile_status_repair_intents(config, now=datetime.fromtimestamp(now, UTC))
+    recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+    if _recovery_requeued(recovery_report):
+        issues = _fetch_issues(config).filtered_by_parent(config.parent_issue_number)
+    tasks_by_issue, _, _ = _build_task_mappings(issues.all())
+    prior_merges = reconcile_prior_parent_merges(
+        config.resolved_forge,
+        tasks_by_issue,
+        apply=config.apply,
+        issues_by_number={issue.number: issue for issue in issues.all()},
+        active_issue_numbers=frozenset(
+            active.issue_number for active in run_state.active_worktrees.values()
+        ),
+    )
+    ctx = _build_cycle_context(
+        issues,
+        run_state,
+        config,
+        prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
+        prior_parent_merge_completed_issue_numbers=prior_merges.completed_issue_numbers,
+    )
+    return issues, ctx, recovery_report, prior_merges
 
 
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
@@ -1039,34 +1111,13 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
     with file_lock(lock_path):
         run_state = load_run_state(config.run_state_path)
         now = time.time()
-        issues = _prepare_cycle_issues(run_state, config, now)
-        reconcile_status_repair_intents(config, now=datetime.fromtimestamp(now, UTC))
-        recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
-        if _recovery_requeued(recovery_report):
-            issues = _fetch_issues(config).filtered_by_parent(
-                config.parent_issue_number
-            )
-        tasks_by_issue, _, _ = _build_task_mappings(issues.all())
-        prior_merges = reconcile_prior_parent_merges(
-            config.resolved_forge,
-            tasks_by_issue,
-            apply=config.apply,
-            issues_by_number={issue.number: issue for issue in issues.all()},
-            active_issue_numbers=frozenset(
-                active.issue_number for active in run_state.active_worktrees.values()
-            ),
-        )
-        ctx = _build_cycle_context(
-            issues,
-            run_state,
-            config,
-            prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
-            prior_parent_merge_completed_issue_numbers=prior_merges.completed_issue_numbers,
+        issues, ctx, recovery_report, prior_merges = _prepare_cycle_context(
+            run_state, config, now
         )
         consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
         repair_cycle = _RepairCycleState()
         repair_cycle.add_report(recovery_report)
-        report = _execute_cycle_pipeline(
+        report, same_cycle_completions = _execute_cycle_pipeline(
             ctx,
             issues,
             run_state,
@@ -1076,7 +1127,13 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             prior_merges.events,
         )
         _finish_consistency_runtime(
-            consistency_runtime, report, ctx, now, config, repair_cycle
+            consistency_runtime,
+            report,
+            ctx,
+            now,
+            config,
+            repair_cycle,
+            same_cycle_completions,
         )
 
         if config.apply:
