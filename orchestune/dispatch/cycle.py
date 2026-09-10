@@ -105,6 +105,7 @@ from orchestune.dispatch.phase_reconciliation import (
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
 from orchestune.dispatch.recovery import (
+    LAUNCH_ATTEMPT_PENDING,
     LAUNCH_HISTORY_STALE,
     RecoveryBookkeepingAdapter,
     execute_bookkeeping_repair_command,
@@ -874,7 +875,11 @@ def _run_recovery_bookkeeping_boundary(
 
 def _recovery_requeued(report: ConsistencyCycleReport) -> bool:
     return any(
-        result.command.code == COMMAND_REQUEUE and result.status is RepairStatus.APPLIED
+        (
+            result.command.code == COMMAND_REQUEUE
+            or LAUNCH_ATTEMPT_PENDING in repair_command_finding_codes(result.command)
+        )
+        and result.status is RepairStatus.APPLIED
         for repair_pass in report.repair_passes
         for result in repair_pass.results
     )

@@ -1,5 +1,31 @@
 # 使用方法とコマンドリファレンス
 
+### クラウド起動の障害復旧
+
+通常の`cloud-routine`・`codex-cloud`ワーカー起動では、起動前にタスクIssueへ
+`orchestune:launch-attempt`のJSONブロックを保存します。親Issueのクオータ予約とは別の台帳です。
+
+| 停止時のphase | 復旧方針 |
+|---|---|
+| 台帳なし | provider呼び出し前。新しい試行を開始する。 |
+| `prepared` | providerは未呼び出し。同じ試行IDで再開する。 |
+| `unknown` | 起動済みの可能性あり。対応providerで試行IDを照合し、照合不能なら人手確認へ保留する。queuedタスクとして再起動しない。 |
+| `launched` | handle保存済み。PR・ローカル状態がなくても同じ試行ID・phase・開始時刻・ブランチ・handleを復元する。 |
+
+組み込みクラウドアダプターは試行IDによる照会・冪等起動に未対応のため、通常ワーカーのRoutine POSTは通信エラー時に再送しません。
+provider境界を越えた失敗ではworktreeとクオータ予約を維持します。ローカル起動とSemantic Reviewの`fire_text`の再試行契約は従来どおりです。
+
+照合不能な試行はID・理由付きで`status:blocked-human-review`へ遷移します。
+queuedへのラベル変更、ローカル状態消失、クオータ窓の経過だけでは新しい実行を許可しません。
+手動復旧時はdispatcherを停止し、provider上の旧実行を確認してください。
+同じ実行を追跡する場合は確認済みhandleと`launched`を台帳に復元し、
+新しい実行が必要な場合は旧実行が動いていないことを確認してから台帳ブロックを退避・削除します。
+推測で`unknown`を`prepared`へ戻してはいけません。回収済みクラウドタスクの意図的な再投入もこの手順に従います。
+
+既存の単一dispatcherロックとIssue本文APIを使い、独立ランナー間のCASは提供しません。
+同じタスクに複数の独立dispatcherを同時実行しないでください。
+導入前の台帳がない実行は従来のPRによる復旧となり、失われた過去のhandleを推測して補完しません。
+
 Orchestuneの各CLIコマンド（`orchestune dag`、`orchestune provision`、`orchestune dispatch`）の使い方、およびタスクの分解計画ファイル（`decomposition_plan.md`）の記述仕様について説明します。
 
 ---

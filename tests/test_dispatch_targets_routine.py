@@ -351,7 +351,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         body = json.loads(request.data.decode("utf-8"))
         assert body["text"] == "結合diffをレビューして"
 
-    def test_retries_on_transient_error_then_succeeds(self, tmp_path):
+    def test_fire_text_retries_on_transient_error_then_succeeds(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget(
             "trig_1", "token", max_retries=3, initial_delay=0.01
         )
@@ -364,12 +364,12 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             ),
             patch("orchestune.dispatch.targets.time.sleep") as mock_sleep,
         ):
-            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+            handle = target.fire_text("review integration")
 
         assert handle.external_id == "session_1"
         mock_sleep.assert_called_once()
 
-    def test_gives_up_after_max_retries(self, tmp_path):
+    def test_launch_does_not_retry_an_ambiguous_server_error(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget(
             "trig_1", "token", max_retries=2, initial_delay=0.01
         )
@@ -379,11 +379,12 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             patch(
                 "orchestune.dispatch.targets.urllib.request.urlopen",
                 side_effect=[transient, transient, transient],
-            ),
+            ) as mock_urlopen,
             patch("orchestune.dispatch.targets.time.sleep"),
         ):
             with pytest.raises(urllib.error.HTTPError):
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+        assert mock_urlopen.call_count == 1
 
     def test_does_not_retry_on_client_error(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget(

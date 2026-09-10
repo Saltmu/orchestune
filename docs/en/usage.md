@@ -1,5 +1,38 @@
 # Usage & Command Reference
 
+### Cloud launch recovery
+
+Ordinary `cloud-routine` and `codex-cloud` worker launches persist an
+`orchestune:launch-attempt` JSON block in the task Issue before dispatch.
+The journal is independent of the parent Issue's quota timestamps:
+
+| Phase at interruption | Recovery |
+|---|---|
+| No journal | No provider call was authorized; start a new attempt. |
+| `prepared` | The provider has not been called; resume the same attempt ID. |
+| `unknown` | The call may have succeeded. Look up the exact attempt if supported; otherwise hold for human review. Never replay it as a queued task. |
+| `launched` | The handle is durable. Restore the same ID, phase, start time, branch and handle even without a PR or local state. |
+
+The built-in cloud providers do not currently offer attempt-ID lookup or
+idempotent launch through these adapters. Normal Routine worker POSTs therefore
+run once, without transport retries. A failure after the provider boundary keeps
+the worktree and quota reservation. Local workers and Semantic Review's
+`fire_text` retry contract are unchanged.
+
+An unresolved attempt transitions to `status:blocked-human-review` with its ID
+and reason. Changing the label to queued, losing local state, or waiting for the
+quota window to expire does not authorize a replacement execution. Stop the
+dispatcher and verify the old execution in the provider before intervening:
+restore a verified handle with phase `launched` to resume it, or, only after
+confirming no execution is running, archive/remove that journal block to permit
+a new attempt. Never change `unknown` back to `prepared` by assumption.
+This also applies when a reclaimed cloud task is intentionally retried.
+
+The journal uses the existing single-dispatcher lock and Issue body API, not a
+cross-runner compare-and-swap. Do not run independent dispatchers against the
+same task concurrently. Pre-existing executions without journals retain the
+legacy PR-based recovery behavior; missing historical handles cannot be inferred.
+
 This document describes how to use the Orchestune CLI commands (`orchestune dag`, `orchestune provision`, `orchestune dispatch`) and the specification for the task decomposition plan (`decomposition_plan.md`).
 
 ---

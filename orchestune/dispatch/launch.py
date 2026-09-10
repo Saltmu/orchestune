@@ -20,9 +20,13 @@ from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
 from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.launch_attempts import (
+    LaunchOutcomeUnknown,
+    prepare_journaled_target,
+)
 from orchestune.dispatch.scoring import Task, parse_task_from_issue
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
-from orchestune.dispatch.worktree import create_worktree_and_launch
+from orchestune.dispatch.worktree import LaunchResult, create_worktree_and_launch
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     backfill_launch_history,
@@ -35,6 +39,7 @@ from orchestune.models import IssueRecord, PrRecord
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
     from orchestune.dispatch.rules import CycleContext
+    from orchestune.dispatch.targets import DispatchTarget
 
 
 def _is_task_stack_eligible(
@@ -429,6 +434,8 @@ def _build_active_worktree_from_launch(
         model=model,
         reasoning_effort=reasoning_effort,
         selection_reason=selection_reason,
+        launch_attempt_id=launch.launch_attempt_id,
+        launch_phase="launched" if launch.launch_attempt_id else None,
     )
 
 
@@ -469,6 +476,27 @@ def _record_successful_launch(
     )
 
 
+def _try_planned_launch(
+    plan: TaskLaunchPlan, target: DispatchTarget, config: DispatcherConfig
+) -> LaunchResult | None:
+    try:
+        return create_worktree_and_launch(
+            plan.task,
+            plan.branch_name,
+            config.worktree_root,
+            target,
+            apply=True,
+            base_branch=plan.base_branch_for_launch,
+            execution_selection=plan.execution_selection,
+        )
+    except LaunchOutcomeUnknown as exc:
+        print(
+            f"Holding launch of issue #{plan.task.issue_number}: {exc}; reconcile durable attempt on next cycle",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _apply_task_launches(
     plans: list[TaskLaunchPlan],
     run_state: RunState,
@@ -487,15 +515,16 @@ def _apply_task_launches(
             if commit_reservation is None:
                 continue
 
-            launch = create_worktree_and_launch(
-                task,
-                plan.branch_name,
-                config.worktree_root,
-                config.dispatch_target,
-                apply=True,
-                base_branch=plan.base_branch_for_launch,
-                execution_selection=plan.execution_selection,
+            target = prepare_journaled_target(
+                plan, run_state, now, config, commit_reservation
             )
+            if target is None:
+                continue
+
+            launch = _try_planned_launch(plan, target, config)
+            if launch is None:
+                run_state.launch_history.append(now)
+                continue
             if not launch.launched:
                 _handle_launch_failure(task, launch, config)
                 continue

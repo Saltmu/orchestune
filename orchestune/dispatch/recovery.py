@@ -39,6 +39,7 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
+from orchestune.dispatch.attempt_record import MARKER, attempt_from_body, read_attempt
 from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
@@ -52,6 +53,7 @@ from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
+from orchestune.dispatch.launch_attempts import active_from_attempt, reconcile_attempt
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.issue_parsing import (
@@ -74,6 +76,8 @@ FACT_RECOVERY_COUNTERS = "dispatch.recovery-counters"
 FACT_LAUNCH_HISTORY = "dispatch.launch-history"
 RECOVERY_COUNTERS_STALE = "execution.recovery-counters-stale"
 LAUNCH_HISTORY_STALE = "execution.launch-history-stale"
+FACT_LAUNCH_ATTEMPT = "dispatch.launch-attempt-restored"
+LAUNCH_ATTEMPT_PENDING = "execution.launch-attempt-pending"
 
 type _Restoration = tuple[str, str, ActiveWorktree]
 type _CounterTarget = tuple[str, int, bool]
@@ -88,6 +92,7 @@ class RecoveryBookkeepingSnapshot:
     restorations: tuple[_Restoration, ...]
     counter_targets: tuple[_CounterTarget, ...]
     launch_history: tuple[float, ...]
+    attempt_tasks: tuple[Task, ...] = ()
 
 
 def _scope_order(scope: ConsistencyScope) -> int:
@@ -176,7 +181,11 @@ class _RecoveryBookkeepingInvariant:
     ) -> tuple[ConsistencyFinding, ...]:
         findings = []
         for expected in desired.facts:
-            if expected.name not in {FACT_RECOVERY_COUNTERS, FACT_LAUNCH_HISTORY}:
+            if expected.name not in {
+                FACT_RECOVERY_COUNTERS,
+                FACT_LAUNCH_HISTORY,
+                FACT_LAUNCH_ATTEMPT,
+            }:
                 continue
             actual = _observed_fact(observed, expected)
             if actual is None or actual.certainty is not ObservationCertainty.KNOWN:
@@ -186,7 +195,9 @@ class _RecoveryBookkeepingInvariant:
             findings.append(
                 ConsistencyFinding(
                     code=(
-                        RECOVERY_COUNTERS_STALE
+                        LAUNCH_ATTEMPT_PENDING
+                        if expected.name == FACT_LAUNCH_ATTEMPT
+                        else RECOVERY_COUNTERS_STALE
                         if expected.name == FACT_RECOVERY_COUNTERS
                         else LAUNCH_HISTORY_STALE
                     ),
@@ -236,7 +247,8 @@ def plan_recovery_bookkeeping_repairs(
     commands.extend(
         _bookkeeping_command(finding)
         for finding in report.findings
-        if finding.code in {RECOVERY_COUNTERS_STALE, LAUNCH_HISTORY_STALE}
+        if finding.code
+        in {RECOVERY_COUNTERS_STALE, LAUNCH_HISTORY_STALE, LAUNCH_ATTEMPT_PENDING}
     )
     return tuple(commands)
 
@@ -418,6 +430,9 @@ def _build_restored_active_worktree(
     subtask_id_to_issue_number: dict[str, int],
     config: DispatcherConfig,
 ) -> ActiveWorktree:
+    attempt = attempt_from_body(issue.body)
+    if attempt is not None and attempt.phase == "launched":
+        return active_from_attempt(attempt, parse_task_from_issue(issue), config)
     recompute_count, forced_serial = _recovery_counters_for_issue(issue)
     branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
         issue, subtask_id, open_prs
@@ -527,6 +542,26 @@ def _bookkeeping_observations(
     return additions
 
 
+def _include_queued_attempts(
+    issues: Sequence[IssueRecord], config: DispatcherConfig
+) -> tuple[IssueRecord, ...]:
+    queued = (
+        issue
+        for issue in config.resolved_forge.list_issues_by_label(StatusLabel.QUEUED)
+        if MARKER in issue.body
+    )
+    combined = {issue.number: issue for issue in (*issues, *queued)}
+    # Keep legacy recovery unchanged, but do not widen journal recovery to tasks
+    # owned by a different parent dispatcher.
+    return tuple(
+        issue
+        for issue in combined.values()
+        if MARKER not in issue.body
+        or config.parent_issue_number is None
+        or (issue.parent or {}).get("number") == config.parent_issue_number
+    )
+
+
 class RecoveryBookkeepingAdapter:
     """Fresh repository-wide startup observation for recovery bookkeeping."""
 
@@ -556,7 +591,8 @@ class RecoveryBookkeepingAdapter:
 
     def _refresh_snapshot(self) -> RecoveryBookkeepingSnapshot:
         forge = self._config.resolved_forge
-        issues = tuple(forge.list_issues_by_label(StatusLabel.IN_PROGRESS))
+        in_progress = tuple(forge.list_issues_by_label(StatusLabel.IN_PROGRESS))
+        issues = _include_queued_attempts(in_progress, self._config)
         open_prs = tuple(forge.list_open_prs())
         parent_issue = (
             forge.get_issue(self._config.parent_issue_number)
@@ -567,12 +603,21 @@ class RecoveryBookkeepingAdapter:
             tasks_by_issue=_tasks_from_issues(issues),
             open_prs=open_prs,
             restorations=_restoration_candidates(issues, open_prs, self._config),
-            counter_targets=_counter_targets(self._run_state, issues),
+            counter_targets=_counter_targets(self._run_state, in_progress),
             launch_history=_merged_launch_history(
                 self._run_state,
                 parent_issue,
                 now=self._now,
                 window_seconds=self._config.window_seconds,
+            ),
+            attempt_tasks=tuple(
+                parse_task_from_issue(issue)
+                for issue in issues
+                if (attempt := attempt_from_body(issue.body)) is not None
+                and attempt.phase != "prepared"
+                and not any(
+                    label in issue.labels for label in TERMINAL_ESCALATION_LABELS
+                )
             ),
         )
         return self._snapshot
@@ -592,9 +637,24 @@ class RecoveryBookkeepingAdapter:
             self._repository_id,
             observed_at,
         )
-        return _with_observations(
-            base, _bookkeeping_observations(self._run_state, snapshot, observed_at)
-        )
+        additions = _bookkeeping_observations(self._run_state, snapshot, observed_at)
+        for task in snapshot.attempt_tasks:
+            active = self._run_state.active_worktrees.get(str(task.issue_number))
+            additions.append(
+                (
+                    ConsistencyScope.TASK,
+                    str(task.issue_number),
+                    _observation(
+                        FACT_LAUNCH_ATTEMPT,
+                        active is not None
+                        and active.launch_attempt_id is not None
+                        and StatusLabel.IN_PROGRESS in task.status_labels,
+                        observed_at,
+                        source="launch-attempt-journal",
+                    ),
+                )
+            )
+        return _with_observations(base, additions)
 
     def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState:
         snapshot = self.snapshot
@@ -625,6 +685,16 @@ class RecoveryBookkeepingAdapter:
                     reason="never roll recovery bookkeeping backward",
                 )
             )
+        additions.extend(
+            DesiredFact(
+                name=FACT_LAUNCH_ATTEMPT,
+                value=True,
+                scope=ConsistencyScope.TASK,
+                subject_id=str(task.issue_number),
+                reason="restore or hold durable cloud launch before scheduling",
+            )
+            for task in snapshot.attempt_tasks
+        )
         return _with_desired_facts(desired, additions)
 
 
@@ -668,6 +738,17 @@ def execute_recovery_requeue_command(
         )
     if not config.apply:
         return _skipped(command, "requeue is disabled in dry-run mode")
+    task = snapshot.tasks_by_issue.get(int(command.subject_id or "0"))
+    if (
+        task is not None
+        and config.dispatch_target is not None
+        and config.dispatch_target.launch_capabilities.durable_attempt
+    ):
+        attempt = read_attempt(config.resolved_forge, task.issue_number)
+        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
+            return _skipped(
+                command, "durable launch attempt restored or held; no requeue"
+            )
     selected = tuple(
         item for item in snapshot.restorations if item[0] == command.subject_id
     )
@@ -806,6 +887,22 @@ def execute_bookkeeping_repair_command(
             diagnostics=(f"unsupported recovery repair command: {command.code}",),
         )
     finding_codes = set(command_finding_codes(command))
+    task = next(
+        (
+            task
+            for task in snapshot.attempt_tasks
+            if str(task.issue_number) == command.subject_id
+        ),
+        None,
+    )
+    if (
+        task is not None
+        and config.apply
+        and finding_codes & {LAUNCH_ATTEMPT_PENDING, RUN_STATE_MISSING}
+    ):
+        attempt = read_attempt(config.resolved_forge, task.issue_number)
+        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
+            return RepairResult(command=command, status=RepairStatus.APPLIED)
     if (
         LAUNCH_HISTORY_STALE in finding_codes
         and command.scope is ConsistencyScope.REPOSITORY
