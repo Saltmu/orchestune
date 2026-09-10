@@ -9,6 +9,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
+    resolve_stackable_dependency_issue,
 )
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.labels import transition_status_label
@@ -148,31 +149,33 @@ def _resolve_base_branch_for_task(
     branch_by_issue_number: dict[int, str] | None = None,
     done_issue_numbers: set[int] | None = None,
     dependency_resolution: dict[int, TaskDependencies] | None = None,
+    ci_passed_pr_issue_numbers: set[int] | None = None,
+    *,
+    dep_issue: int | None = None,
 ) -> str:
     """#799: 依存元は`dependency_resolution`で解決済みのIssue番号を使う。
     未解決の依存が1件でもある場合は、依存先ブランチを推測せず親/mainへ
     フォールバックする（依存元ロック除外・自動リベース対象選定と同じ方針）。
+    #860: 単一未完了依存がCI通過済み（`ci_passed_pr_issue_numbers`）の
+    場合のみそのブランチを採用し、CI未通過やCHANGES_REQUESTEDの場合は推測せず
+    親/mainへフォールバックする。`dep_issue`が事前計算されている場合はそれを優先する。
     """
-    deps = (
-        dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
-        if dependency_resolution is not None
-        else EMPTY_DEPENDENCIES
+    resolved_dep = (
+        dep_issue
+        if dep_issue is not None
+        else resolve_stackable_dependency_issue(
+            task,
+            dependency_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+        )
     )
     if (
-        not deps.is_empty
-        and not deps.unresolved
+        resolved_dep is not None
         and branch_by_issue_number
-        and done_issue_numbers is not None
+        and resolved_dep in branch_by_issue_number
     ):
-        unresolved_deps = [
-            dep_issue
-            for dep_issue in deps.resolved
-            if dep_issue not in done_issue_numbers
-        ]
-        if len(unresolved_deps) == 1:
-            dep_issue = unresolved_deps[0]
-            if dep_issue in branch_by_issue_number:
-                return branch_by_issue_number[dep_issue]
+        return branch_by_issue_number[resolved_dep]
     if config.parent_issue_number is not None:
         return f"parent/issue-{config.parent_issue_number}"
     return "origin/main"
@@ -349,6 +352,40 @@ def _apply_base_branch_red_recovery(
     return events
 
 
+def _resolve_recovery_base_sha(
+    task: Task,
+    config: DispatcherConfig,
+    ctx: CycleContext,
+    done_issue_numbers: set[int],
+    repo_root: Path | None,
+) -> str | None:
+    """#860: 未完了依存があるタスクにおいて、依存先がCI未通過等でスタック対象外
+    （親/mainへフォールバック）の場合は、前回の依存先ブランチと異なるブランチの
+    SHAを比較して誤ったhas_advanced（unmark_only）を招かないよう、Noneとする。
+    """
+    has_pending = _has_pending_dependencies(
+        task, done_issue_numbers, ctx.dependency_resolution
+    )
+    stackable_dep = resolve_stackable_dependency_issue(
+        task,
+        ctx.dependency_resolution,
+        done_issue_numbers,
+        ctx.ci_passed_pr_issue_numbers,
+    )
+    if has_pending and stackable_dep is None:
+        return None
+    base_branch = _resolve_base_branch_for_task(
+        task,
+        config,
+        ctx.branch_by_issue_number,
+        done_issue_numbers,
+        ctx.dependency_resolution,
+        ctx.ci_passed_pr_issue_numbers,
+        dep_issue=stackable_dep,
+    )
+    return _get_branch_commit_sha(base_branch, repo_root)
+
+
 def _handle_base_branch_red_recovery(
     issues: Any,
     ctx: CycleContext,
@@ -377,15 +414,8 @@ def _handle_base_branch_red_recovery(
 
         task = ctx.tasks_by_issue.get(issue.number)
         if task is not None:
-            base_branch = _resolve_base_branch_for_task(
-                task,
-                config,
-                ctx.branch_by_issue_number,
-                done_issue_numbers,
-                ctx.dependency_resolution,
-            )
-            current_base_shas[issue.number] = _get_branch_commit_sha(
-                base_branch, repo_root
+            current_base_shas[issue.number] = _resolve_recovery_base_sha(
+                task, config, ctx, done_issue_numbers, repo_root
             )
 
     decisions = _decide_base_branch_red_recovery(

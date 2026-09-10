@@ -286,6 +286,52 @@ class TestBaseBranchRedRecovery:
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
         fake_forge.add_label.assert_called_once_with(1, "status:queued")
 
+    def test_handle_base_branch_red_recovery_does_not_unmark_when_pending_dep_not_ci_passed(
+        self, tmp_path
+    ):
+        """#860: 未完了依存先がCI未通過で親/mainへフォールバックした場合、
+        異なるブランチのSHA比較により誤ってunmark_only（ci:base-branch-red剥がし）
+        が発生してはならない。"""
+        issue = _issue(2, labels=("status:blocked", "ci:base-branch-red"))
+        issues_mock = MagicMock()
+        issues_mock.all.return_value = [issue]
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        outcome = OutcomeRecord(
+            result="blocked",
+            issue=2,
+            reason="base-branch-red",
+            base_sha="1111111111111111111111111111111111111111",  # 過去の依存先ブランチのSHA
+            attempt=1,
+        )
+        fake_forge = MagicMock()
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}
+        ]
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=fake_forge,
+        )
+        ctx = MagicMock()
+        ctx.tasks_by_issue = {2: task}
+        ctx.done_issue_numbers = set()  # 依存先(1)は未完了
+        ctx.branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        ctx.dependency_resolution = {2: TaskDependencies(resolved=(1,))}
+        ctx.ci_passed_pr_issue_numbers = set()  # 依存先(1)はCI未通過
+
+        with patch(
+            "orchestune.dispatch.reconciliation._get_branch_commit_sha",
+            autospec=True,
+            return_value="2222222222222222222222222222222222222222",  # parent/mainのSHA
+        ):
+            events = _handle_base_branch_red_recovery(issues_mock, ctx, set(), config)
+
+        assert events == []
+        fake_forge.remove_label.assert_not_called()
+
 
 class TestResolveBaseBranchForTask:
     def test_when_sole_dependency_is_done_returns_origin_main(self, tmp_path):
@@ -330,7 +376,80 @@ class TestResolveBaseBranchForTask:
         )
         assert base_branch == "parent/issue-100"
 
-    def test_when_single_dependency_unresolved_returns_dep_branch(self, tmp_path):
+    def test_when_single_dependency_ci_passed_returns_dep_branch(self, tmp_path):
+        """#860: 未完了依存がちょうど1件でCI通過済みの場合は、その依存先ブランチを返す。"""
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        done_issue_numbers = set()
+        dependency_resolution = {2: TaskDependencies(resolved=(1,))}
+        ci_passed_pr_issue_numbers = {1}
+
+        base_branch = _resolve_base_branch_for_task(
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
+            ci_passed_pr_issue_numbers,
+        )
+        assert base_branch == "claude/issue-1-task-a"
+
+    def test_when_single_dependency_not_ci_passed_falls_back_to_parent(self, tmp_path):
+        """#860: 未完了依存のPRがCI未通過の場合、ベースブランチが親/mainへフォールバックする。"""
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        done_issue_numbers = set()
+        dependency_resolution = {2: TaskDependencies(resolved=(1,))}
+        ci_passed_pr_issue_numbers = set()
+
+        base_branch = _resolve_base_branch_for_task(
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
+            ci_passed_pr_issue_numbers,
+        )
+        assert base_branch == "parent/issue-100"
+
+    def test_when_single_dependency_changes_requested_falls_back_to_parent(
+        self, tmp_path
+    ):
+        """#860: 未完了依存がCHANGES_REQUESTEDでci_passedに含まれない場合もフォールバックする。"""
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        done_issue_numbers = set()
+        dependency_resolution = {2: TaskDependencies(resolved=(1,))}
+        # CHANGES_REQUESTED は cycle_context で ci_passed_pr_issue_numbers から除外されるため空
+        ci_passed_pr_issue_numbers = set()
+
+        base_branch = _resolve_base_branch_for_task(
+            task,
+            config,
+            branch_by_issue_number,
+            done_issue_numbers,
+            dependency_resolution,
+            ci_passed_pr_issue_numbers,
+        )
+        assert base_branch == "parent/issue-100"
+
+    def test_when_ci_passed_unspecified_falls_back_to_parent(self, tmp_path):
+        """#860: ci_passed_pr_issue_numbers が None の場合は推測せずフォールバックする。"""
         task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -347,8 +466,9 @@ class TestResolveBaseBranchForTask:
             branch_by_issue_number,
             done_issue_numbers,
             dependency_resolution,
+            None,
         )
-        assert base_branch == "claude/issue-1-task-a"
+        assert base_branch == "parent/issue-100"
 
     def test_when_multiple_dependencies_unresolved_returns_parent_or_main(
         self, tmp_path
@@ -399,3 +519,21 @@ class TestResolveBaseBranchForTask:
             task, config, {}, set(), dependency_resolution
         )
         assert base_branch == "parent/issue-100"
+
+    def test_when_precomputed_dep_issue_provided_uses_it_directly(self, tmp_path):
+        """#860: 事前計算された dep_issue が渡された場合、再計算せずそのブランチを返す。"""
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+
+        base_branch = _resolve_base_branch_for_task(
+            task,
+            config,
+            branch_by_issue_number,
+            dep_issue=1,
+        )
+        assert base_branch == "claude/issue-1-task-a"
