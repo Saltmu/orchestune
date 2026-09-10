@@ -58,6 +58,8 @@ def _is_task_stack_eligible(
     if deps.unresolved:
         return False, []
 
+    # NOTE: Keep loop condition in sync with resolve_stackable_dependency_issue;
+    # enforced by test_dispatch_stackable_dependency_consistency.py (#860).
     all_resolved_or_stackable = True
     stackable_deps: list[int] = []
     for dep_issue in deps.resolved:

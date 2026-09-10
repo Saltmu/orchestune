@@ -346,6 +346,39 @@ def _apply_base_branch_red_recovery(
     return events
 
 
+def _resolve_recovery_base_sha(
+    task: Task,
+    config: DispatcherConfig,
+    ctx: CycleContext,
+    done_issue_numbers: set[int],
+    repo_root: Path | None,
+) -> str | None:
+    """#860: 未完了依存があるタスクにおいて、依存先がCI未通過等でスタック対象外
+    （親/mainへフォールバック）の場合は、前回の依存先ブランチと異なるブランチの
+    SHAを比較して誤ったhas_advanced（unmark_only）を招かないよう、Noneとする。
+    """
+    has_pending = _has_pending_dependencies(
+        task, done_issue_numbers, ctx.dependency_resolution
+    )
+    stackable_dep = resolve_stackable_dependency_issue(
+        task,
+        ctx.dependency_resolution,
+        done_issue_numbers,
+        ctx.ci_passed_pr_issue_numbers,
+    )
+    if has_pending and stackable_dep is None:
+        return None
+    base_branch = _resolve_base_branch_for_task(
+        task,
+        config,
+        ctx.branch_by_issue_number,
+        done_issue_numbers,
+        ctx.dependency_resolution,
+        ctx.ci_passed_pr_issue_numbers,
+    )
+    return _get_branch_commit_sha(base_branch, repo_root)
+
+
 def _handle_base_branch_red_recovery(
     issues: Any,
     ctx: CycleContext,
@@ -374,16 +407,8 @@ def _handle_base_branch_red_recovery(
 
         task = ctx.tasks_by_issue.get(issue.number)
         if task is not None:
-            base_branch = _resolve_base_branch_for_task(
-                task,
-                config,
-                ctx.branch_by_issue_number,
-                done_issue_numbers,
-                ctx.dependency_resolution,
-                ctx.ci_passed_pr_issue_numbers,
-            )
-            current_base_shas[issue.number] = _get_branch_commit_sha(
-                base_branch, repo_root
+            current_base_shas[issue.number] = _resolve_recovery_base_sha(
+                task, config, ctx, done_issue_numbers, repo_root
             )
 
     decisions = _decide_base_branch_red_recovery(
