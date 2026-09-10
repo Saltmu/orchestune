@@ -150,26 +150,32 @@ def _resolve_base_branch_for_task(
     done_issue_numbers: set[int] | None = None,
     dependency_resolution: dict[int, TaskDependencies] | None = None,
     ci_passed_pr_issue_numbers: set[int] | None = None,
+    *,
+    dep_issue: int | None = None,
 ) -> str:
     """#799: 依存元は`dependency_resolution`で解決済みのIssue番号を使う。
     未解決の依存が1件でもある場合は、依存先ブランチを推測せず親/mainへ
     フォールバックする（依存元ロック除外・自動リベース対象選定と同じ方針）。
     #860: 単一未完了依存がCI通過済み（`ci_passed_pr_issue_numbers`）の
     場合のみそのブランチを採用し、CI未通過やCHANGES_REQUESTEDの場合は推測せず
-    親/mainへフォールバックする。
+    親/mainへフォールバックする。`dep_issue`が事前計算されている場合はそれを優先する。
     """
-    dep_issue = resolve_stackable_dependency_issue(
-        task,
-        dependency_resolution,
-        done_issue_numbers,
-        ci_passed_pr_issue_numbers,
+    resolved_dep = (
+        dep_issue
+        if dep_issue is not None
+        else resolve_stackable_dependency_issue(
+            task,
+            dependency_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+        )
     )
     if (
-        dep_issue is not None
+        resolved_dep is not None
         and branch_by_issue_number
-        and dep_issue in branch_by_issue_number
+        and resolved_dep in branch_by_issue_number
     ):
-        return branch_by_issue_number[dep_issue]
+        return branch_by_issue_number[resolved_dep]
     if config.parent_issue_number is not None:
         return f"parent/issue-{config.parent_issue_number}"
     return "origin/main"
@@ -368,16 +374,15 @@ def _resolve_recovery_base_sha(
     )
     if has_pending and stackable_dep is None:
         return None
-    if (
-        stackable_dep is not None
-        and ctx.branch_by_issue_number
-        and stackable_dep in ctx.branch_by_issue_number
-    ):
-        base_branch = ctx.branch_by_issue_number[stackable_dep]
-    elif config.parent_issue_number is not None:
-        base_branch = f"parent/issue-{config.parent_issue_number}"
-    else:
-        base_branch = "origin/main"
+    base_branch = _resolve_base_branch_for_task(
+        task,
+        config,
+        ctx.branch_by_issue_number,
+        done_issue_numbers,
+        ctx.dependency_resolution,
+        ctx.ci_passed_pr_issue_numbers,
+        dep_issue=stackable_dep,
+    )
     return _get_branch_commit_sha(base_branch, repo_root)
 
 

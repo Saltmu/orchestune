@@ -519,3 +519,21 @@ class TestResolveBaseBranchForTask:
             task, config, {}, set(), dependency_resolution
         )
         assert base_branch == "parent/issue-100"
+
+    def test_when_precomputed_dep_issue_provided_uses_it_directly(self, tmp_path):
+        """#860: 事前計算された dep_issue が渡された場合、再計算せずそのブランチを返す。"""
+        task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            parent_issue_number=100,
+        )
+        branch_by_issue_number = {1: "claude/issue-1-task-a"}
+
+        base_branch = _resolve_base_branch_for_task(
+            task,
+            config,
+            branch_by_issue_number,
+            dep_issue=1,
+        )
+        assert base_branch == "claude/issue-1-task-a"
