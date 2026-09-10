@@ -260,6 +260,46 @@ def resolve_all_dependencies(
     }
 
 
+def resolve_stackable_dependency_issue(
+    task: Task,
+    dependency_resolution: Mapping[int, TaskDependencies] | None,
+    done_issue_numbers: set[int] | None,
+    ci_passed_pr_issue_numbers: set[int] | None,
+) -> int | None:
+    """#860: タスクが土台として積む（スタック・自動リベース・ベースブランチ解決）対象となる
+    単一の未完了依存先Issue番号を解決する。
+
+    条件:
+    1. 未解決依存（`deps.unresolved`）が1件もないこと。
+    2. 未完了依存（`dep_issue not in done_issue_numbers`）がちょうど1件であること。
+    3. その1件の依存先がCI通過済み（`dep_issue in ci_passed_pr_issue_numbers`）であること。
+       （CHANGES_REQUESTED除外済みは`ci_passed_pr_issue_numbers`構築時点で担保される）
+    上記をすべて満たす場合のみそのIssue番号を返し、それ以外はNoneを返す。
+    """
+    if (
+        dependency_resolution is None
+        or done_issue_numbers is None
+        or ci_passed_pr_issue_numbers is None
+    ):
+        return None
+    deps = dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
+    if deps.is_empty or deps.unresolved:
+        return None
+
+    stackable_deps: list[int] = []
+    for dep_issue in deps.resolved:
+        if dep_issue in done_issue_numbers:
+            continue
+        if dep_issue in ci_passed_pr_issue_numbers:
+            stackable_deps.append(dep_issue)
+            continue
+        return None
+
+    if len(stackable_deps) == 1:
+        return stackable_deps[0]
+    return None
+
+
 __all__ = [
     "REASON_AMBIGUOUS",
     "REASON_MISSING",
@@ -270,5 +310,6 @@ __all__ = [
     "describe_unresolved_dependency",
     "legacy_merged_depends_on",
     "resolve_all_dependencies",
+    "resolve_stackable_dependency_issue",
     "resolve_task_dependencies",
 ]

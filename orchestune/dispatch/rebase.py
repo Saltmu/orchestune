@@ -17,8 +17,8 @@ from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import subtasks_from_tasks
 from orchestune.dispatch.dependency_resolution import (
-    EMPTY_DEPENDENCIES,
     TaskDependencies,
+    resolve_stackable_dependency_issue,
 )
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
@@ -322,24 +322,19 @@ def _decide_rebase_target(
 
     #799: 依存元は`dependency_resolution`が解決済みのIssue番号で判定する。
     未解決の依存が1件でもあれば、依存先を推測せずリベースを見送る。
+    #860: 単一未完了依存の抽出は共通ヘルパ`resolve_stackable_dependency_issue`に統一。
     """
     if active_task is None:
         return None
-    deps = dependency_resolution.get(active_task.issue_number, EMPTY_DEPENDENCIES)
-    if deps.is_empty or deps.unresolved:
+    dep_issue = resolve_stackable_dependency_issue(
+        active_task,
+        dependency_resolution,
+        done_issue_numbers,
+        ci_passed_pr_issue_numbers,
+    )
+    if dep_issue is None:
         return None
-    stackable_deps: list[int] = []
-    for dep_issue in deps.resolved:
-        if dep_issue in done_issue_numbers:
-            continue
-        if dep_issue in ci_passed_pr_issue_numbers:
-            stackable_deps.append(dep_issue)
-            continue
-        return None
-
-    if len(stackable_deps) != 1:
-        return None
-    return branch_by_issue_number.get(stackable_deps[0])
+    return branch_by_issue_number.get(dep_issue)
 
 
 def _decide_rebase_needed(
