@@ -368,14 +368,16 @@ def _resolve_recovery_base_sha(
     )
     if has_pending and stackable_dep is None:
         return None
-    base_branch = _resolve_base_branch_for_task(
-        task,
-        config,
-        ctx.branch_by_issue_number,
-        done_issue_numbers,
-        ctx.dependency_resolution,
-        ctx.ci_passed_pr_issue_numbers,
-    )
+    if (
+        stackable_dep is not None
+        and ctx.branch_by_issue_number
+        and stackable_dep in ctx.branch_by_issue_number
+    ):
+        base_branch = ctx.branch_by_issue_number[stackable_dep]
+    elif config.parent_issue_number is not None:
+        base_branch = f"parent/issue-{config.parent_issue_number}"
+    else:
+        base_branch = "origin/main"
     return _get_branch_commit_sha(base_branch, repo_root)
 
 
