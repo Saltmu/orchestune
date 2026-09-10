@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import MagicMock
 
 from orchestune.dispatch.prior_parent_merge import (
@@ -210,6 +211,63 @@ def test_partial_repair_failure_holds_without_marking_dependencies_completed():
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
     assert result.events[0]["action"] == "already_merged_repair_pending"
+
+
+def test_closed_without_terminal_label_gets_label_normalized_without_reclose():
+    """#862: an Issue closed externally between the initial scan and the
+
+    fresh re-verification (but never labeled `status:done`/`status:not-needed`)
+    must still have its label normalized in the same cycle, so live
+    dependency-resolution precondition checks (which read current labels)
+    recognize the completion — without re-closing or re-notifying.
+    """
+    issue = _issue()
+    issue = dataclasses.replace(issue, state="CLOSED")
+    forge = _forge_for_reconciliation(issue)
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == {101}
+    forge.add_label.assert_called_once_with(101, StatusLabel.DONE)
+    forge.remove_label.assert_called_once_with(101, StatusLabel.QUEUED)
+    forge.close_issue.assert_not_called()
+    forge.add_comment.assert_not_called()
+
+
+def test_closed_with_terminal_label_already_present_is_a_no_op():
+    issue = _issue()
+    issue = dataclasses.replace(issue, state="CLOSED", labels=(StatusLabel.DONE,))
+    forge = _forge_for_reconciliation(issue)
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == {101}
+    forge.add_label.assert_not_called()
+    forge.remove_label.assert_not_called()
+    forge.close_issue.assert_not_called()
+    forge.add_comment.assert_not_called()
+
+
+def test_closed_label_normalization_failure_holds_without_marking_completed():
+    issue = _issue()
+    issue = dataclasses.replace(issue, state="CLOSED")
+    forge = _forge_for_reconciliation(issue)
+    forge.add_label.side_effect = RuntimeError("temporary label API failure")
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == set()
+    assert result.events[0]["action"] == "already_merged_repair_pending"
+    forge.close_issue.assert_not_called()
 
 
 def test_active_worktree_defers_repair_without_closing_or_marking_done():

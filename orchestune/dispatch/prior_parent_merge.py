@@ -41,6 +41,10 @@ class PriorParentMergeEvidence:
 
 MergeReachabilityProbe = Callable[[str, str], bool | None]
 
+#: #862: terminal status labels that already reflect a completed lifecycle;
+#: their presence means label normalization is a no-op.
+_TERMINAL_STATUS_LABELS = (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
+
 
 @dataclass(frozen=True, slots=True)
 class PriorParentMergeReconciliation:
@@ -245,6 +249,23 @@ def _apply_verified_repair(
     forge.close_issue(issue.number, "completed")
 
 
+def _normalize_closed_issue_label(forge, issue: IssueRecord) -> None:
+    """#862: reflect verified prior-parent-merge evidence onto a closed Issue's
+
+    labels without re-closing it or re-sending the merge notice. The Issue
+    was closed by something other than Orchestune's own close path (which
+    always labels before closing), so only the missing label state is
+    repaired here; `close_issue`/`ensure_pr_merged_notice` must not run again
+    against an already-closed Issue.
+    """
+    if any(label in issue.labels for label in _TERMINAL_STATUS_LABELS):
+        return
+    stale_statuses = tuple(
+        label for label in PRIMARY_STATUS_LABELS if label in issue.labels
+    )
+    transition_status_label(forge, issue.number, StatusLabel.DONE, stale_statuses)
+
+
 def _evidence_event(
     issue_number: int, evidence: PriorParentMergeEvidence
 ) -> dict[str, object]:
@@ -271,6 +292,12 @@ def _apply_or_preview_verified_repair(
         event["action"] = "already_merged_dry_run"
         return event, True
     if fresh_issue.state.upper() != "OPEN":
+        try:
+            _normalize_closed_issue_label(forge, fresh_issue)
+        except Exception as error:  # noqa: BLE001 - retry idempotently next cycle
+            event["action"] = "already_merged_repair_pending"
+            event["reason"] = f"repair failed: {type(error).__name__}"
+            return event, False
         return event, True
     try:
         _apply_verified_repair(forge, fresh_issue, fresh)
