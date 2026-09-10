@@ -254,6 +254,31 @@ def test_closed_with_terminal_label_already_present_is_a_no_op():
     forge.add_comment.assert_not_called()
 
 
+def test_closed_with_terminal_label_but_stale_primary_finishes_cleanup_on_retry():
+    """PR #863 review: a prior cycle may have added status:done but then
+
+    failed to remove the stale status:queued label. That must not look like
+    an already-normalized no-op forever; the leftover primary label needs to
+    be cleaned up without re-adding status:done or re-closing/notifying.
+    """
+    issue = _issue()
+    issue = dataclasses.replace(
+        issue, state="CLOSED", labels=(StatusLabel.DONE, StatusLabel.QUEUED)
+    )
+    forge = _forge_for_reconciliation(issue)
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == {101}
+    forge.add_label.assert_not_called()
+    forge.remove_label.assert_called_once_with(101, StatusLabel.QUEUED)
+    forge.close_issue.assert_not_called()
+    forge.add_comment.assert_not_called()
+
+
 def test_closed_label_normalization_failure_holds_without_marking_completed():
     issue = _issue()
     issue = dataclasses.replace(issue, state="CLOSED")
@@ -267,6 +292,25 @@ def test_closed_label_normalization_failure_holds_without_marking_completed():
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
     assert result.events[0]["action"] == "already_merged_repair_pending"
+    forge.close_issue.assert_not_called()
+
+
+def test_closed_stale_primary_cleanup_failure_holds_for_retry_next_cycle():
+    issue = _issue()
+    issue = dataclasses.replace(
+        issue, state="CLOSED", labels=(StatusLabel.DONE, StatusLabel.QUEUED)
+    )
+    forge = _forge_for_reconciliation(issue)
+    forge.remove_label.side_effect = RuntimeError("temporary label API failure")
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == set()
+    assert result.events[0]["action"] == "already_merged_repair_pending"
+    forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()
 
 

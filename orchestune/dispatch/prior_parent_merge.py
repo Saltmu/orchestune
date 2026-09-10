@@ -257,12 +257,21 @@ def _normalize_closed_issue_label(forge, issue: IssueRecord) -> None:
     always labels before closing), so only the missing label state is
     repaired here; `close_issue`/`ensure_pr_merged_notice` must not run again
     against an already-closed Issue.
+
+    A terminal label can already be present while a stale primary label
+    (`status:queued` etc.) still lingers, if a prior attempt added the
+    terminal label but then failed while removing the old one (PR #863
+    review): the normal status-consistency repair skips closed Issues, so
+    this path must finish that cleanup on retry rather than treating any
+    terminal label as proof the Issue is already fully normalized.
     """
-    if any(label in issue.labels for label in _TERMINAL_STATUS_LABELS):
-        return
     stale_statuses = tuple(
         label for label in PRIMARY_STATUS_LABELS if label in issue.labels
     )
+    if any(label in issue.labels for label in _TERMINAL_STATUS_LABELS):
+        for stale in stale_statuses:
+            forge.remove_label(issue.number, stale)
+        return
     transition_status_label(forge, issue.number, StatusLabel.DONE, stale_statuses)
 
 
