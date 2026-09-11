@@ -20,7 +20,7 @@ from orchestune.dispatch.phase_reconciliation import _MAIN_ACTIVE_WORKTREE_RULES
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.models import IssueRecord, PrRecord, Task
-from tests.conftest import make_issue, make_pr
+from tests.conftest import make_issue, make_pr, make_task
 
 
 @dataclass(frozen=True)
@@ -173,16 +173,11 @@ def test_dependency_contract_matrix(
 
 
 def _task(number: int, subtask_id: str, depends_on: tuple[str, ...]) -> Task:
-    return Task(
-        issue_number=number,
+    return make_task(
+        number,
         subtask_id=subtask_id,
         footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
         status_labels=("status:blocked",),
-        created_at="2026-01-01T00:00:00+00:00",
         depends_on=depends_on,
         parent_number=823,
     )
@@ -235,35 +230,30 @@ def _stack_consumer_results(
     return launch, base, rebase
 
 
-def test_grand_dependency_contract_c_incomplete_issue_870_871(tmp_path) -> None:
-    """Current asymmetry: launch checks C; stack base and rebase only inspect B."""
+@pytest.mark.parametrize(
+    ("missing_b_resolution", "expected_launch"),
+    [(False, (False, [])), (True, (True, [2]))],
+    ids=["c-incomplete", "b-resolution-missing"],
+)
+def test_grand_dependency_contract_issue_870_871(
+    tmp_path, missing_b_resolution, expected_launch
+) -> None:
+    """Launch checks known C, but base/rebase inspect only B; missing B data passes."""
     task_a, resolution, branches = _grand_dependency_contract()
+    if missing_b_resolution:
+        del resolution[2]
 
     launch, base, rebase = _stack_consumer_results(
         task_a, resolution, branches, tmp_path
     )
 
-    assert launch == (False, [])
-    assert base == "claude/issue-2-b"
-    assert rebase == "claude/issue-2-b"
-
-
-def test_grand_dependency_contract_missing_b_resolution_issue_870_871(tmp_path) -> None:
-    """Current asymmetry: missing B metadata lets launch's grand-dep check pass."""
-    task_a, resolution, branches = _grand_dependency_contract()
-    del resolution[2]
-
-    launch, base, rebase = _stack_consumer_results(
-        task_a, resolution, branches, tmp_path
-    )
-
-    assert launch == (True, [2])
+    assert launch == expected_launch
     assert base == "claude/issue-2-b"
     assert rebase == "claude/issue-2-b"
 
 
 def test_status_priority_is_derived_from_issue_and_pr_inputs() -> None:
-    """DONE remains terminal while CHANGES_REQUESTED outranks a passing CI flag."""
+    """DONE is independent; completion precedes review, and review excludes CI-pass."""
     issues = [
         _issue(1, "done-and-reviewed", labels=("status:done",)),
         _issue(2, "reviewed", labels=("status:in-progress",)),

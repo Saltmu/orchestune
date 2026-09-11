@@ -51,7 +51,7 @@ from orchestune.dispatch.scoring import (
 from orchestune.dispatch.state import RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import merge_skips
 from orchestune.dispatch.worktree import LaunchResult
-from tests.conftest import make_issue
+from tests.conftest import make_issue, make_task
 
 
 def _task(
@@ -60,21 +60,16 @@ def _task(
     status: str = "status:queued",
     subtask_id: str | None = None,
 ) -> Task:
-    return Task(
-        issue_number=issue_number,
+    return make_task(
+        issue_number,
         subtask_id=(subtask_id if subtask_id is not None else f"task-{issue_number}"),
         footprint=(f"src/{issue_number}.py",),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
         status_labels=(status,),
-        created_at="2026-01-01T00:00:00+00:00",
         parent_number=823,
     )
 
 
-def _config(tmp_path, forge: MagicMock | None = None, **overrides) -> DispatcherConfig:
+def _config(tmp_path, forge: MagicMock, **overrides) -> DispatcherConfig:
     values = {
         "apply": False,
         "max_concurrent": 10,
@@ -82,7 +77,7 @@ def _config(tmp_path, forge: MagicMock | None = None, **overrides) -> Dispatcher
         "run_state_path": tmp_path / "run_state.json",
         "events_log_path": tmp_path / "events.jsonl",
         "worktree_root": tmp_path / "worktrees",
-        "forge": forge or MagicMock(),
+        "forge": forge,
     }
     values.update(overrides)
     return DispatcherConfig(**values)
@@ -113,11 +108,11 @@ def _empty_issues() -> IssuesByStatus:
     return IssuesByStatus([], [], [], [], [], [])
 
 
-def test_cycle_phase_order_and_batch_selection_contract(tmp_path) -> None:
+def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) -> None:
     """Completion facts reach reconciliation before the cycle's sole selection pass."""
     order: list[str] = []
     selected = _task(20)
-    config = _config(tmp_path)
+    config = _config(tmp_path, fake_forge)
     ctx = _context(
         config,
         [],
@@ -261,12 +256,12 @@ def test_candidate_and_skip_order_contract(tmp_path) -> None:
 
 
 def test_effective_completion_current_not_needed_and_subtask_id_contract_issue_868(
-    tmp_path,
+    tmp_path, fake_forge
 ) -> None:
     """#868 will keep NOT_NEEDED but remove the current subtask_id requirement."""
     not_needed = _task(10, status="status:not-needed")
     missing_id = _task(20, status="status:done", subtask_id="")
-    config = _config(tmp_path)
+    config = _config(tmp_path, fake_forge)
     ctx = _context(config, [not_needed, missing_id])
 
     completed = _completed_issue_numbers(ctx, set())
@@ -286,10 +281,10 @@ def _decision(task: Task) -> SchedulingDecision:
     )
 
 
-def test_dry_run_and_launch_failure_observation_contract(tmp_path) -> None:
+def test_dry_run_and_launch_failure_observation_contract(tmp_path, fake_forge) -> None:
     """Dry-run predicts selection; an apply-time launch failure rewrites only its report."""
     task = _task(10)
-    config = _config(tmp_path, apply=False)
+    config = _config(tmp_path, fake_forge, apply=False)
     ctx = _context(config, [task])
     issues = IssuesByStatus([make_issue(10)], [], [], [], [], [])
 
@@ -353,7 +348,9 @@ def test_skipped_and_failed_repairs_remain_observable_in_cycle_report() -> None:
 
 
 @pytest.mark.parametrize("failure_surface", ["run-state", "forge-label"])
-def test_successful_launch_partial_update_contract(tmp_path, failure_surface) -> None:
+def test_successful_launch_partial_update_contract(
+    tmp_path, fake_forge, failure_surface
+) -> None:
     """Memory precedes RunState persistence, which precedes the Forge label update."""
     task = _task(10)
     plan = TaskLaunchPlan(task, "claude/issue-10-task-10", None, "origin/main")
@@ -364,7 +361,7 @@ def test_successful_launch_partial_update_contract(tmp_path, failure_surface) ->
         pid=123,
         launched=True,
     )
-    forge = MagicMock()
+    forge = fake_forge
     config = _config(tmp_path, forge, apply=True)
     run_state = RunState()
     save_error = RuntimeError("run-state failed")
