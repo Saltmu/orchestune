@@ -177,9 +177,9 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
     assert completions == frozenset({5, 7})
 
 
-def test_candidate_and_skip_order_contract(tmp_path) -> None:
+def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
     """Population, scoring, pre-filter skips, and reported skips have distinct order."""
-    forge = MagicMock()
+    forge = fake_forge
     forge.get_label_actor.return_value = "trusted"
     forge.get_actor_permission.return_value = "write"
     config = _config(tmp_path, forge)
