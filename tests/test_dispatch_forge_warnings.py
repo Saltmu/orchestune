@@ -114,6 +114,19 @@ class TestFetchOutcomeForActive:
         assert WARN_PREFIX in captured
         assert "list_comments" in captured
 
+    def test_queries_prs_with_head_filter_first(self, tmp_path):
+        forge = MagicMock()
+        forge.list_comments.return_value = []
+        forge.list_prs.return_value = []
+        active = _active(tmp_path, branch="claude/issue-702-task-a")
+
+        _fetch_outcome_for_active(active, forge)
+
+        assert (
+            forge.list_prs.call_args_list[0].kwargs.get("head")
+            == "claude/issue-702-task-a"
+        )
+
 
 class TestCompletionForgeErrorHold:
     def test_event_carries_the_operation_and_error(self, tmp_path):
