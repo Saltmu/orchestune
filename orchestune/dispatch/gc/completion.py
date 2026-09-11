@@ -165,11 +165,7 @@ def _fetch_outcome_for_active(
         return "error"
     had_error = False
     try:
-        prs: list[PrRecord] = []
-        if active.branch:
-            prs = forge.list_prs(state="all", head=active.branch)
-        if not prs:
-            prs = forge.list_prs(state="all")
+        prs = forge.list_prs(state="all")
         matching_prs = [
             pr
             for pr in prs
