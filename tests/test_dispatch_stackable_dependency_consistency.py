@@ -14,6 +14,10 @@ from __future__ import annotations
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    assess_dependencies,
+)
 from orchestune.dispatch.dependency_resolution import (
     REASON_AMBIGUOUS,
     TaskDependencies,
@@ -24,6 +28,45 @@ from orchestune.dispatch.launch import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.models import Task
+
+
+class _PolicyView:
+    def __init__(
+        self,
+        resolution: dict[int, TaskDependencies],
+        done: set[int],
+        ci_passed: set[int],
+        branches: dict[int, str],
+    ) -> None:
+        self.resolution = resolution
+        self.done = done
+        self.ci_passed = ci_passed
+        self.branches = branches
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        dependencies = self.resolution.get(issue_number)
+        return None if dependencies is None else assess_dependencies(dependencies, self)
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        return issue_number in self.done
+
+    def has_changes_requested(self, issue_number: int) -> bool:
+        return False
+
+    def is_ci_passed(self, issue_number: int) -> bool:
+        return issue_number in self.ci_passed
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        return self.branches.get(issue_number)
+
+
+def _policy_view(
+    resolution: dict[int, TaskDependencies],
+    done: set[int],
+    ci_passed: set[int],
+    branches: dict[int, str],
+) -> _PolicyView:
+    return _PolicyView(resolution, done, ci_passed, branches)
 
 
 def _task(
@@ -69,6 +112,12 @@ class TestStackableDependencyConsistency:
         done_issue_numbers = set()
         ci_passed_pr_issue_numbers = {1}
         branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         # 共通ヘルパ
         dep_issue = resolve_stackable_dependency_issue(
@@ -88,24 +137,11 @@ class TestStackableDependencyConsistency:
         assert stackable_deps == [1]
 
         # 2. rebase
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target == "claude/issue-1-task-a"
 
         # 3. reconciliation
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "claude/issue-1-task-a"
 
     def test_when_single_dependency_ci_not_passed_all_three_decline(self, config):
@@ -118,6 +154,12 @@ class TestStackableDependencyConsistency:
         done_issue_numbers = set()
         ci_passed_pr_issue_numbers = set()  # CI未通過
         branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         # 共通ヘルパ
         dep_issue = resolve_stackable_dependency_issue(
@@ -136,24 +178,11 @@ class TestStackableDependencyConsistency:
         assert all_ok is False
 
         # 2. rebase
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
 
         # 3. reconciliation
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "parent/issue-100"
 
     def test_when_single_dependency_changes_requested_all_three_decline(self, config):
@@ -166,6 +195,12 @@ class TestStackableDependencyConsistency:
         done_issue_numbers = set()
         ci_passed_pr_issue_numbers = set()  # CHANGES_REQUESTED除外
         branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         assert (
             resolve_stackable_dependency_issue(
@@ -183,23 +218,10 @@ class TestStackableDependencyConsistency:
         )
         assert all_ok is False
 
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
 
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "parent/issue-100"
 
     def test_when_dependency_is_unresolved_all_three_decline(self, config):
@@ -215,6 +237,12 @@ class TestStackableDependencyConsistency:
         done_issue_numbers = set()
         ci_passed_pr_issue_numbers = {1}
         branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         assert (
             resolve_stackable_dependency_issue(
@@ -233,23 +261,10 @@ class TestStackableDependencyConsistency:
         assert all_ok is False
         assert stackable_deps == []
 
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
 
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "parent/issue-100"
 
     def test_when_all_dependencies_done_all_three_agree_no_stack_needed(self, config):
@@ -261,6 +276,12 @@ class TestStackableDependencyConsistency:
         done_issue_numbers = {1}
         ci_passed_pr_issue_numbers = {1}
         branch_by_issue_number = {1: "claude/issue-1-task-a"}
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         assert (
             resolve_stackable_dependency_issue(
@@ -279,23 +300,10 @@ class TestStackableDependencyConsistency:
         assert all_ok is True
         assert stackable_deps == []  # スタックは不要（通常起動可能）
 
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
 
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "parent/issue-100"
 
     def test_when_multiple_dependencies_all_three_decline(self, config):
@@ -314,6 +322,12 @@ class TestStackableDependencyConsistency:
             1: "claude/issue-1-task-a",
             2: "claude/issue-2-task-b",
         }
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         assert (
             resolve_stackable_dependency_issue(
@@ -333,23 +347,10 @@ class TestStackableDependencyConsistency:
         # launch では複数スタック可能でも len == 1 でないためスタック起動の対象外となる
         assert len(stackable_deps) == 2
 
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
 
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "parent/issue-100"
 
     def test_when_no_dependencies_all_three_agree_no_stack(self, config):
@@ -359,6 +360,12 @@ class TestStackableDependencyConsistency:
         done_issue_numbers = set()
         ci_passed_pr_issue_numbers = set()
         branch_by_issue_number = {}
+        view = _policy_view(
+            dep_resolution,
+            done_issue_numbers,
+            ci_passed_pr_issue_numbers,
+            branch_by_issue_number,
+        )
 
         assert (
             resolve_stackable_dependency_issue(
@@ -377,21 +384,8 @@ class TestStackableDependencyConsistency:
         assert all_ok is True
         assert stackable_deps == []
 
-        rebase_target = _decide_rebase_target(
-            task,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            branch_by_issue_number,
-            dep_resolution,
-        )
+        rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
 
-        base_branch = _resolve_base_branch_for_task(
-            task,
-            config,
-            branch_by_issue_number,
-            done_issue_numbers,
-            dep_resolution,
-            ci_passed_pr_issue_numbers,
-        )
+        base_branch = _resolve_base_branch_for_task(task, config, view)
         assert base_branch == "parent/issue-100"

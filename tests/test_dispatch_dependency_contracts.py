@@ -8,6 +8,10 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context import _build_pr_mappings, _build_task_mappings
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    assess_dependencies,
+)
 from orchestune.dispatch.dependency_resolution import (
     REASON_AMBIGUOUS,
     REASON_MISSING,
@@ -21,6 +25,32 @@ from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.models import IssueRecord, PrRecord, Task
 from tests.conftest import make_issue, make_pr, make_task
+
+
+class _ContractPolicyView:
+    def __init__(
+        self,
+        resolution: dict[int, TaskDependencies],
+        branches: dict[int, str],
+    ) -> None:
+        self.resolution = resolution
+        self.branches = branches
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        dependencies = self.resolution.get(issue_number)
+        return None if dependencies is None else assess_dependencies(dependencies, self)
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        return False
+
+    def has_changes_requested(self, issue_number: int) -> bool:
+        return False
+
+    def is_ci_passed(self, issue_number: int) -> bool:
+        return issue_number == 2
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        return self.branches.get(issue_number)
 
 
 @dataclass(frozen=True)
@@ -218,15 +248,9 @@ def _stack_consumer_results(
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
     )
-    base = _resolve_base_branch_for_task(
-        task,
-        config,
-        branches,
-        set(),
-        resolution,
-        {2},
-    )
-    rebase = _decide_rebase_target(task, set(), {2}, branches, resolution)
+    view = _ContractPolicyView(resolution, branches)
+    base = _resolve_base_branch_for_task(task, config, view)
+    rebase = _decide_rebase_target(task, view)
     return launch, base, rebase
 
 
@@ -238,7 +262,7 @@ def _stack_consumer_results(
 def test_grand_dependency_contract_issue_870_871(
     tmp_path, missing_b_resolution, expected_launch
 ) -> None:
-    """Launch checks known C, but base/rebase inspect only B; missing B data passes."""
+    """Base/rebase fail closed for incomplete or unavailable B assessment."""
     task_a, resolution, branches = _grand_dependency_contract()
     if missing_b_resolution:
         del resolution[2]
@@ -248,8 +272,8 @@ def test_grand_dependency_contract_issue_870_871(
     )
 
     assert launch == expected_launch
-    assert base == "claude/issue-2-b"
-    assert rebase == "claude/issue-2-b"
+    assert base == "parent/issue-823"
+    assert rebase is None
 
 
 def test_status_priority_is_derived_from_issue_and_pr_inputs() -> None:
