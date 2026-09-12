@@ -8,10 +8,17 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    DependencyState,
+)
+from orchestune.dispatch.dependency_assessment import (
+    assess_dependencies as assess_dependency_lifecycle,
+)
 from orchestune.dispatch.dependency_resolution import (
-    EMPTY_DEPENDENCIES,
     TaskDependencies,
     resolve_all_dependencies,
 )
@@ -85,14 +92,80 @@ def _collect_branch_footprints(
     return sorted(branch_footprints), sorted(unknown_branches)
 
 
+class LockDependencyView(Protocol):
+    """外部ロック除外判定(#869)が依存側を読むための最小限read-only view。
+
+    `CycleContext`(#868)はこのProtocolを構造的に満たすため、実運用では
+    `phase_rebase`がそのまま`CycleContext`をこの型として渡す。構造的部分型
+    として使うため実装側に継承も`@runtime_checkable`も要求しない。
+    """
+
+    def task(self, issue_number: int) -> Task | None: ...
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None: ...
+
+    def canonical_branch(self, issue_number: int) -> str | None: ...
+
+
+@dataclass(frozen=True)
+class _DefaultLockDependencyView:
+    """`view`が渡されなかった場合(主にCycleContextを介さない単体テスト)の
+    フォールバック。渡された`queued_tasks`だけから、従来と同じ意味論
+    （実効完了はDONE/NOT_NEEDEDラベルのみ、CHANGES_REQUESTED/CI通過は不明＝
+    常にFalse）で`LockDependencyView`を組み立てる。
+
+    実運用経路(`phase_rebase._decide_external_lock_sync`)は必ず`CycleContext`
+    自身を`view`として渡すため、この既定viewが使われるのは`CycleContext`を
+    持たない呼び出し（テスト・単発呼び出し）に限られ、既にCycleContext構築時
+    に解決済みの依存解決をここで再度行うことにはならない。
+    """
+
+    _tasks_by_issue: dict[int, Task]
+    _dependency_resolution: dict[int, TaskDependencies]
+
+    def task(self, issue_number: int) -> Task | None:
+        return self._tasks_by_issue.get(issue_number)
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        dep_task = self._tasks_by_issue.get(issue_number)
+        return dep_task is not None and (
+            StatusLabel.DONE in dep_task.status_labels
+            or StatusLabel.NOT_NEEDED in dep_task.status_labels
+        )
+
+    def has_changes_requested(self, issue_number: int) -> bool:
+        return False
+
+    def is_ci_passed(self, issue_number: int) -> bool:
+        return False
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        deps = self._dependency_resolution.get(issue_number)
+        if deps is None:
+            return None
+        return assess_dependency_lifecycle(deps, self)
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        dep_task = self._tasks_by_issue.get(issue_number)
+        if dep_task is None:
+            return None
+        return build_task_branch_name(issue_number, dep_task.subtask_id)
+
+
+def _default_lock_dependency_view(queued_tasks: list[Task]) -> LockDependencyView:
+    tasks_by_issue = {task.issue_number: task for task in queued_tasks}
+    return _DefaultLockDependencyView(
+        tasks_by_issue, resolve_all_dependencies(tasks_by_issue)
+    )
+
+
 def _direct_dependency_canonical_branches(
     task: Task,
-    tasks_by_issue: dict[int, Task],
-    dependency_resolution: dict[int, TaskDependencies],
+    view: LockDependencyView,
 ) -> frozenset[str]:
     """taskの直接の`depends_on`が指す依存元タスクの正規ブランチ名の集合。
 
-    #799: 依存元の同定は`dependency_resolution`が親Issueでスコープして
+    #799: 依存元の同定は`view.assess_dependencies`が親Issueでスコープして
     解決したIssue番号で行う。未解決の依存（親不明・曖昧・依存先欠落）は
     どの依存元も指すか分からないため、ここでは含めない
     （＝そのぶん通常の衝突判定からは除外されず、fail closedのまま残る）。
@@ -108,19 +181,24 @@ def _direct_dependency_canonical_branches(
     起動や`_build_pr_mappings`の`branch_by_issue_number`が実際に使うのは
     `build_task_branch_name`が生成する既定prefixのブランチそのもの。
     見た目が同じ形状でも別prefixのブランチ・PRはスタッキングの取り込み対象
-    ではないため、比較は既定prefixの完全一致に限定する。
+    ではないため、比較は既定prefixの完全一致に限定する。`view.canonical_branch`
+    が返す実際の起動branch（記録済みLaunchFact由来）が既定prefixの名前と
+    食い違う場合も同様に除外しない(#869)——依存元が既定と異なるbranchで実際に
+    走っている以上、既定名PRとの一致はスタッキング取り込みの証拠にならない。
 
     `depends_on`が指す依存が1件でも未解決（親不明・曖昧・候補集合に見つからない
     等）の場合は、他の依存が解決済みでも一切除外しない。fail closedのまま、
     従来通り衝突判定に残る。
 
-    Codexレビュー対応(PR#797 P2, Finding 4): 依存元が既に`status:done`/
-    `status:not-needed`に到達している場合は除外しない。`_is_task_stack_eligible`
-    はdoneな依存を`stackable_deps`に加えない（＝スタックのbaseとして選ばれない）
-    ため、依存元がdoneになった時点でこのタスクは（`status:queued`へ昇格した
-    上で）通常のparent/mainからそのまま起動され得る。このときの依存元PR・
-    ブランチとの重複は、Integratorのマージが未完了で実際にはbaseへ取り込まれて
-    いない変更を意味しうる、正真正銘の外部衝突であり除外してはならない。
+    Codexレビュー対応(PR#797 P2, Finding 4): 依存元が実効完了
+    (`DependencyState.COMPLETED`: DONE/NOT_NEEDED/同一サイクル完了/検証済み
+    先行マージ)に到達している場合は除外しない。`_is_task_stack_eligible`は
+    実効完了した依存を`stackable_deps`に加えない（＝スタックのbaseとして
+    選ばれない）ため、依存元が実効完了した時点でこのタスクは（`status:queued`
+    へ昇格した上で）通常のparent/mainからそのまま起動され得る。このときの
+    依存元PR・ブランチとの重複は、Integratorのマージが未完了で実際にはbaseへ
+    取り込まれていない変更を意味しうる、正真正銘の外部衝突であり除外しては
+    ならない。
 
     Codexレビュー対応(PR#797 P2, Finding 5): タスク自身が`status:blocked`で
     ない場合は除外しない。`_get_stack_eligible_tasks`がbaseを割り当てるのは
@@ -135,22 +213,32 @@ def _direct_dependency_canonical_branches(
     """
     if StatusLabel.BLOCKED not in task.status_labels:
         return frozenset()
-    deps = dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
+    assessment = view.assess_dependencies(task.issue_number)
     # #799レビュー指摘(Codex P2): 依存の一部でも未解決（親不明・曖昧・依存先
     # 欠落）なら、他の依存が解決済みでも一切除外しない。`_is_task_stack_eligible`
     # は未解決が1件でもあればスタック不可と判定するため、このタスクは
     # スタックされず通常のparent/mainから起動され得る——その場合、解決済み
     # だった依存元ブランチとの重複も正真正銘の外部衝突であり、部分的に
     # 除外してしまうとfail closedの原則（本Issueの受け入れ基準）が崩れる。
-    if deps.unresolved:
+    if assessment is None or assessment.unresolved:
         return frozenset()
-    return frozenset(
-        build_task_branch_name(dep_task.issue_number, dep_task.subtask_id)
-        for dep_issue in deps.resolved
-        if (dep_task := tasks_by_issue.get(dep_issue)) is not None
-        and StatusLabel.DONE not in dep_task.status_labels
-        and StatusLabel.NOT_NEEDED not in dep_task.status_labels
-    )
+    excluded: set[str] = set()
+    for dep in assessment.resolved:
+        if dep.state is DependencyState.COMPLETED:
+            continue
+        dep_task = view.task(dep.issue_number)
+        default_branch = (
+            None
+            if dep_task is None
+            else build_task_branch_name(dep.issue_number, dep_task.subtask_id)
+        )
+        actual_branch = view.canonical_branch(dep.issue_number)
+        if default_branch is None or actual_branch is None:
+            continue
+        if actual_branch != default_branch:
+            continue
+        excluded.add(default_branch)
+    return frozenset(excluded)
 
 
 def _is_dependency_pr(pr: PrRecord, dependency_branches: frozenset[str]) -> bool:
@@ -245,19 +333,22 @@ def scan_external_locks(
     remote_branches: Iterable[tuple[str, tuple[str, ...] | None]],
     prs: list[PrRecord],
     active_branches: Iterable[str],
+    view: LockDependencyView | None = None,
 ) -> ExternalLockScanResult:
+    """`view`(#869)は`depends_on`の依存識別・実効状態(`DependencyAssessment`)・
+    正規branchの参照に使う。実運用(`phase_rebase._decide_external_lock_sync`)
+    は`CycleContext`自身を渡し、そこで既に構築済みの依存解決を再利用する
+    （ここで`resolve_all_dependencies`を再実行しない）。`view`省略時は
+    `queued_tasks`だけから同等の意味論を持つ既定viewを組み立てる
+    （`CycleContext`を持たない単体呼び出し・テスト向けの後方互換）。
+    """
     active_set = set(active_branches)
     branch_footprints, unknown_branches = _collect_branch_footprints(
         remote_branches, active_set
     )
-    # #796/#799: `depends_on`の解決に使う。呼び出し元(`_decide_external_lock_sync`)は
-    # 実際には全タスク（queued/blocked/in-progress/done/not-needed）を渡すため、
-    # 依存元タスクがまだ完了していなくてもここで引ける。依存元の同定は
-    # subtask_idの文字列一致ではなく、親Issueでスコープした
-    # `dependency_resolution`（Issue番号）で行う（#799: 別EPICの同名
-    # subtask_idを取り違えないため）。
-    tasks_by_issue = {task.issue_number: task for task in queued_tasks}
-    dependency_resolution = resolve_all_dependencies(tasks_by_issue)
+    resolved_view = (
+        view if view is not None else _default_lock_dependency_view(queued_tasks)
+    )
     to_lock: list[Task] = []
     to_unlock: list[Task] = []
     conflicts_by_issue: dict[int, tuple[ExternalLockConflict, ...]] = {}
@@ -271,9 +362,7 @@ def scan_external_locks(
                 to_unlock.append(task)
             continue
 
-        dependency_branches = _direct_dependency_canonical_branches(
-            task, tasks_by_issue, dependency_resolution
-        )
+        dependency_branches = _direct_dependency_canonical_branches(task, resolved_view)
         conflicts = _collect_task_conflicts(
             task,
             active_set,

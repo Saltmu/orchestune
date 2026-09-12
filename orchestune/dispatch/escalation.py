@@ -6,9 +6,9 @@ import os
 from collections.abc import Callable
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_resolution import (
-    EMPTY_DEPENDENCIES,
-    TaskDependencies,
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    DependencyState,
 )
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
@@ -67,19 +67,20 @@ def apply_human_review_escalation(
 
 def _decide_changes_requested_escalation(
     active_task: Task | None,
-    changes_requested_issue_numbers: set[int],
-    dependency_resolution: dict[int, TaskDependencies],
+    assessment: DependencyAssessment | None,
 ) -> bool:
     """依存元PRがCHANGES_REQUESTEDを受けているかを副作用なしで判定する。
 
-    #799: 依存元は`dependency_resolution`で解決済みのIssue番号を見る
-    （親Issueでスコープ済みのため、別EPICの同名subtask_idを取り違えない）。
+    #869: 依存の識別・実効状態はいずれも`CycleContext.assess_dependencies`
+    （#867の共通`DependencyAssessment`）から読む。未解決診断（`unresolved`）
+    だけでは原因を確定できないためfalseへ倒すが、一部が未解決でも既に判明
+    している解決済み依存のCHANGES_REQUESTEDは無視しない——停止すべき状況を
+    見逃さないという既存の停止契約(#799)を維持する。
     """
-    if active_task is None:
+    if active_task is None or assessment is None:
         return False
-    deps = dependency_resolution.get(active_task.issue_number, EMPTY_DEPENDENCIES)
     return any(
-        dep_issue in changes_requested_issue_numbers for dep_issue in deps.resolved
+        dep.state is DependencyState.CHANGES_REQUESTED for dep in assessment.resolved
     )
 
 
@@ -116,9 +117,12 @@ def _rule_changes_requested(
     ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
 ) -> ActiveWorktreeRuleOutcome | None:
     """#185: 自動リベースや逸脱判定の前に、CHANGES_REQUESTEDになった親を持つかチェックする。"""
-    if not _decide_changes_requested_escalation(
-        active_task, ctx.changes_requested_issue_numbers, ctx.dependency_resolution
-    ):
+    assessment = (
+        None
+        if active_task is None
+        else ctx.assess_dependencies(active_task.issue_number)
+    )
+    if not _decide_changes_requested_escalation(active_task, assessment):
         return None
     assert active_task is not None
     event = _apply_changes_requested_escalation(

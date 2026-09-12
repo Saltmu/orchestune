@@ -969,7 +969,7 @@ def _run_pre_scheduling_reconciliation(
         run_post_gc_reconciliation(issues, run_state, ctx, completed_in_cycle, config)
     )
     lock_result = _sync_external_locks(
-        ctx.tasks_by_issue, ctx.prs, ctx.run_state, config
+        ctx.tasks_by_issue, ctx.prs, ctx.run_state, config, view=ctx
     )
     _run_status_repair_boundary(
         "status-primary-reconciliation",
