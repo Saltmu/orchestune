@@ -10,6 +10,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.locks import (
     NOTICE_KIND_EXTERNAL_LOCK,
     ExternalLockScanResult,
+    LockDependencyView,
     _strip_remote_prefix,
     render_external_lock_notice,
     render_external_lock_release_notice,
@@ -47,9 +48,18 @@ def _decide_external_lock_sync(
     prs: list[PrRecord],
     run_state: RunState,
     config: DispatcherConfig | None = None,
+    *,
+    view: LockDependencyView | None = None,
 ) -> ExternalLockScanResult:
     """githubからの読み取り(list_remote_branches/branch_changed_files)と
-    scan_external_locksの純粋計算のみを行い、ラベルの書き込みは行わない。"""
+    scan_external_locksの純粋計算のみを行い、ラベルの書き込みは行わない。
+
+    `view`(#869)は依存識別・実効状態・正規branchを`scan_external_locks`へ
+    引き継ぐ。実運用(`_sync_external_locks`)からは`CycleContext`自身が渡され、
+    その場合`resolve_all_dependencies`はここでは再実行しない。省略時
+    （`CycleContext`を持たない単体呼び出し）は`scan_external_locks`が
+    `tasks_by_issue`だけから既定viewを組み立てる。
+    """
     remote_branch_names = list_remote_branches()
     active_branches = [aw.branch for aw in run_state.active_worktrees.values()]
     pr_head_refs = {pr.head_ref for pr in prs}
@@ -74,7 +84,7 @@ def _decide_external_lock_sync(
 
     all_tasks = list(tasks_by_issue.values())
     return scan_external_locks(
-        all_tasks, remote_branch_footprints, prs, active_branches
+        all_tasks, remote_branch_footprints, prs, active_branches, view
     )
 
 
@@ -161,9 +171,13 @@ def _sync_external_locks(
     prs: list[PrRecord],
     run_state: RunState,
     config: DispatcherConfig,
+    *,
+    view: LockDependencyView | None = None,
 ) -> ExternalLockScanResult:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state, config)
+    lock_result = _decide_external_lock_sync(
+        tasks_by_issue, prs, run_state, config, view=view
+    )
     _apply_external_lock_sync(lock_result, config, run_state)
     return lock_result
 
