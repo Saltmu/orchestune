@@ -156,6 +156,31 @@ Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration
 
 ---
 
+### 3.4 CycleContext observation ownership and recording successful actions
+
+`CycleContext` freezes nested Task and dependency-diagnostic collections and
+owns the observed dictionaries and sets. Legacy tasks/dependencies/CI/branch
+attributes alias those same observations. Original input containers are detached;
+mutating an alias's contents reaches queries. Reassigning an entire legacy attribute
+is not a reinitialization API. Labels recorded by `record_*` remain separate deltas
+that queries prefer over observations. Consumer migration and removal of mutable
+legacy attributes belong to #869–#873.
+
+Initial launch observations and `record_launch` share handle validation and
+normalization. A usable PID is a positive integer excluding bool; an external ID
+is a nonempty string. Each unusable handle becomes None, and no definite launch
+is exposed when both are unusable. Nonnumeric and nonfinite start times also become
+None so retry identity remains stable. Effective completion rejects
+`execution_active=true` even when launch history remains. Launch recording cannot
+automatically clear human-review holds contained in conflicting primary labels.
+
+`record_transition` validates the issue, target primary status, and active-execution
+claim before considering NOOP. It then checks an identical retry, expected labels,
+and terminal/transition rules, in that order. Verified DONE/NOT_NEEDED labels may
+catch up with prior completion; a new update to stale nonterminal labels is rejected.
+An identical retry with no active execution returns NOOP without changing state.
+These APIs perform no external I/O; callers record only confirmed successful actions.
+
 ## 4. Module Layers & Package Boundary
 
 `orchestune/__init__.py` declares the package's public API in `__all__`. Anything

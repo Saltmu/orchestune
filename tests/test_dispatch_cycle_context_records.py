@@ -12,6 +12,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context_state import (
     REASON_EXECUTION_MISMATCH,
@@ -754,3 +756,83 @@ class TestRecordTransition:
         assert result.status == RecordStatus.CONFLICT
         assert ctx.task(1) == before_task
         assert ctx.is_effectively_done(1) == before_done
+
+
+class TestRecordInvariantRegressions:
+    @pytest.mark.parametrize(
+        "human_label",
+        [StatusLabel.BLOCKED_HUMAN_REVIEW, StatusLabel.MANUAL_MERGE_REQUIRED],
+    )
+    def test_launch_cannot_clear_human_hold_in_conflicting_labels(self, human_label):
+        labels = (StatusLabel.QUEUED, StatusLabel.DONE, human_label)
+        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=labels)})
+        before = ctx.task(1)
+        result = ctx.record_launch(_active(1))
+        assert (result.status, result.reason) == (
+            RecordStatus.CONFLICT,
+            REASON_TERMINAL_STATE,
+        )
+        assert ctx.task(1) == before
+        assert ctx.launch_fact(1) is None
+
+    @pytest.mark.parametrize("changed_labels", [False, True])
+    def test_prior_completion_cannot_reaffirm_an_active_execution(self, changed_labels):
+        labels = (StatusLabel.IN_PROGRESS,)
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=labels)},
+            run_state=RunState(active_worktrees={"1": _active(1)}),
+            prior_parent_merge_completed_issue_numbers=frozenset({1}),
+        )
+        verified = (*labels, "priority:high") if changed_labels else labels
+        result = ctx.record_transition(
+            1, expected_labels=labels, verified_labels=verified, execution_active=True
+        )
+        assert (result.status, result.reason) == (
+            RecordStatus.CONFLICT,
+            REASON_EXECUTION_MISMATCH,
+        )
+        assert ctx.task(1).status_labels == labels
+
+    def test_prior_completion_rejects_nonterminal_label_update(self):
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1)},
+            prior_parent_merge_completed_issue_numbers=frozenset({1}),
+        )
+        result = ctx.record_transition(
+            1,
+            expected_labels=(StatusLabel.QUEUED,),
+            verified_labels=(StatusLabel.QUEUED, "priority:high"),
+            execution_active=False,
+        )
+        assert (result.status, result.reason) == (
+            RecordStatus.CONFLICT,
+            REASON_TERMINAL_STATE,
+        )
+        assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
+
+    @pytest.mark.parametrize("bad_time", [float("nan"), float("inf"), -float("inf")])
+    def test_nonfinite_launch_time_is_normalized_for_idempotent_retries(self, bad_time):
+        ctx = _ctx(tasks_by_issue={1: _task(1)})
+        assert (
+            ctx.record_launch(_active(1, started_at=bad_time)).status
+            == RecordStatus.APPLIED
+        )
+        assert ctx.launch_fact(1).started_at is None
+        retry = ctx.record_launch(_active(1, started_at=float(str(bad_time))))
+        assert retry.status == RecordStatus.NOOP
+
+    @pytest.mark.parametrize("initial", [False, True])
+    @pytest.mark.parametrize("pid,external_id", [(111, True), (-1, "remote")])
+    def test_mixed_handle_normalization_is_shared_by_both_entry_points(
+        self, initial, pid, external_id
+    ):
+        active = _active(1, pid=pid, external_id=external_id)
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(active_worktrees={"1": active} if initial else {}),
+        )
+        result = ctx.record_launch(active)
+        assert result.status == (RecordStatus.NOOP if initial else RecordStatus.APPLIED)
+        fact = ctx.launch_fact(1)
+        assert fact.pid == (111 if pid == 111 else None)
+        assert fact.external_id == ("remote" if external_id == "remote" else None)

@@ -69,8 +69,8 @@ class CycleContext:
     prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
-        # #868: 初期観測から`_CycleState`を構築する。既存フィールドは一切
-        # 変更しない——新APIはこれらを読むだけの公開窓口として振る舞う。
+        # #868: 入力をコピーして所有し、旧属性は同じ観測正本の互換aliasとする。
+        # record差分は旧属性へ逆書込みしない。alias撤去は#873が担当する。
         self._state = _CycleState.from_observations(
             tasks_by_issue=self.tasks_by_issue,
             dependency_resolution=self.dependency_resolution,
@@ -82,6 +82,12 @@ class CycleContext:
                 self.prior_parent_merge_completed_issue_numbers
             ),
         )
+        # Private access is confined to this owner-construction boundary.
+        self.tasks_by_issue = self._state._tasks
+        self.dependency_resolution = self._state._dependency_resolution
+        self.ci_passed_pr_issue_numbers = self._state._ci_passed
+        self.changes_requested_issue_numbers = self._state._changes_requested
+        self.branch_by_issue_number = self._state._branch_by_issue
 
     # ---- semantic query API (#868) ------------------------------------------
     #

@@ -26,6 +26,7 @@ Lifecycle（実効状態）だけを扱う。`_CycleState`は#867の`DependencyS
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -151,6 +152,7 @@ def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
             active.started_at
             if isinstance(active.started_at, int | float)
             and not isinstance(active.started_at, bool)
+            and math.isfinite(active.started_at)
             else None
         ),
         external_id=_usable_str_or_none(active.external_id),
@@ -186,7 +188,7 @@ def _is_usable_pid(value: object) -> bool:
 
 
 def _usable_str_or_none(value: object) -> str | None:
-    return value if _is_non_empty_str(value) else None  # type: ignore[return-value]
+    return value if isinstance(value, str) and value else None
 
 
 def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
@@ -265,6 +267,37 @@ def _replace_primary_label(
     return tuple(sorted(remaining))
 
 
+def _owned_task(task: Task) -> Task:
+    """Freeze nested collections while retaining already immutable DTOs."""
+    fields = (
+        "footprint",
+        "symbols",
+        "status_labels",
+        "depends_on",
+        "native_depends_on",
+    )
+    if all(isinstance(getattr(task, name), tuple) for name in fields):
+        return task
+    return dataclasses.replace(
+        task,
+        footprint=tuple(task.footprint),
+        symbols=tuple(task.symbols),
+        status_labels=tuple(task.status_labels),
+        depends_on=tuple(task.depends_on),
+        native_depends_on=tuple(task.native_depends_on),
+    )
+
+
+def _owned_dependencies(deps: TaskDependencies) -> TaskDependencies:
+    return TaskDependencies(
+        resolved=tuple(deps.resolved),
+        unresolved=tuple(
+            dataclasses.replace(dep, candidates=tuple(dep.candidates))
+            for dep in deps.unresolved
+        ),
+    )
+
+
 @dataclass
 class _CycleState:
     """1サイクル分のLifecycle実効状態を所有する、`CycleContext`専用の内部型。
@@ -274,8 +307,8 @@ class _CycleState:
 
     _tasks: dict[int, Task] = field(default_factory=dict)
     _dependency_resolution: dict[int, TaskDependencies] = field(default_factory=dict)
-    _ci_passed: frozenset[int] = frozenset()
-    _changes_requested: frozenset[int] = frozenset()
+    _ci_passed: set[int] = field(default_factory=set)
+    _changes_requested: set[int] = field(default_factory=set)
     _branch_by_issue: dict[int, str] = field(default_factory=dict)
     _prior_completed: frozenset[int] = frozenset()
     _effective_labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
@@ -294,35 +327,43 @@ class _CycleState:
         active_worktrees: Mapping[str, ActiveWorktree],
         prior_parent_merge_completed_issue_numbers: frozenset[int],
     ) -> _CycleState:
-        tasks = dict(tasks_by_issue)
         return cls(
-            _tasks=tasks,
-            _dependency_resolution=dict(dependency_resolution),
-            _ci_passed=frozenset(ci_passed_pr_issue_numbers),
-            _changes_requested=frozenset(changes_requested_issue_numbers),
+            _tasks={
+                number: _owned_task(task) for number, task in tasks_by_issue.items()
+            },
+            _dependency_resolution={
+                number: _owned_dependencies(deps)
+                for number, deps in dependency_resolution.items()
+            },
+            _ci_passed=set(ci_passed_pr_issue_numbers),
+            _changes_requested=set(changes_requested_issue_numbers),
             _branch_by_issue=dict(branch_by_issue_number),
             _prior_completed=frozenset(prior_parent_merge_completed_issue_numbers),
-            # 初期観測はそのままのタプルを保持する(順序を変えない)。これにより
-            # 未変更のTaskは`task()`から同一オブジェクトとして返る。
-            _effective_labels={
-                issue_number: tuple(task.status_labels)
-                for issue_number, task in tasks.items()
-            },
+            # Labels are read from the shared observation until a record supplies
+            # a delta. Do not keep a second mutable copy of the observed labels.
             _launch_states=_build_launch_states(active_worktrees),
         )
 
     # ---- read-only queries -------------------------------------------------
 
+    def _labels(self, issue_number: int) -> tuple[str, ...]:
+        if issue_number in self._effective_labels:
+            return self._effective_labels[issue_number]
+        task = self._tasks.get(issue_number)
+        return () if task is None else tuple(task.status_labels)
+
     def task(self, issue_number: int) -> Task | None:
         base = self._tasks.get(issue_number)
         if base is None:
             return None
-        labels = self._effective_labels.get(issue_number, base.status_labels)
+        labels = self._labels(issue_number)
         if labels == base.status_labels:
             return base
         return dataclasses.replace(base, status_labels=labels)
 
     def dependencies_of(self, issue_number: int) -> TaskDependencies | None:
+        if issue_number not in self._tasks:
+            return None
         return self._dependency_resolution.get(issue_number)
 
     def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
@@ -336,26 +377,29 @@ class _CycleState:
             issue_number in self._recorded_completions
             or issue_number in self._prior_completed
         )
-        labels = self._effective_labels.get(issue_number)
-        if labels is None:
+        if issue_number not in self._tasks:
             return completed_override
-        return task_lifecycle(labels, completed=completed_override) in (
-            _TERMINAL_LIFECYCLE
-        )
+        return task_lifecycle(
+            self._labels(issue_number), completed=completed_override
+        ) in (_TERMINAL_LIFECYCLE)
 
     def has_changes_requested(self, issue_number: int) -> bool:
-        return issue_number in self._changes_requested
+        return issue_number in self._tasks and issue_number in self._changes_requested
 
     def is_ci_passed(self, issue_number: int) -> bool:
-        return issue_number in self._ci_passed
+        return issue_number in self._tasks and issue_number in self._ci_passed
 
     def canonical_branch(self, issue_number: int) -> str | None:
+        if issue_number not in self._tasks:
+            return None
         launch_state = self._launch_states.get(issue_number)
         if launch_state is not None and launch_state.fact is not None:
             return launch_state.fact.branch
         return self._branch_by_issue.get(issue_number)
 
     def launch_fact(self, issue_number: int) -> LaunchFact | None:
+        if issue_number not in self._tasks:
+            return None
         launch_state = self._launch_states.get(issue_number)
         return None if launch_state is None else launch_state.fact
 
@@ -364,7 +408,7 @@ class _CycleState:
         return launch_state is not None and launch_state.active
 
     def _current_primary(self, issue_number: int) -> str | None:
-        labels = self._effective_labels.get(issue_number, ())
+        labels = self._labels(issue_number)
         primaries = primary_status_labels(labels)
         return primaries[0] if len(primaries) == 1 else None
 
@@ -400,7 +444,7 @@ class _CycleState:
             return RecordResult(RecordStatus.NOOP)
         self._recorded_completions.add(issue_number)
         self._effective_labels[issue_number] = _replace_primary_label(
-            self._effective_labels.get(issue_number, ()), StatusLabel.DONE
+            self._labels(issue_number), StatusLabel.DONE
         )
         existing = self._launch_states.get(issue_number)
         if existing is not None:
@@ -412,7 +456,7 @@ class _CycleState:
     def _is_terminal_for_launch(self, issue_number: int) -> bool:
         if self.is_effectively_done(issue_number):
             return True
-        return self._current_primary(issue_number) in _ESCALATION_TARGETS
+        return any(label in self._labels(issue_number) for label in _ESCALATION_TARGETS)
 
     def record_launch(self, active: ActiveWorktree) -> RecordResult:
         issue_number = active.issue_number
@@ -441,7 +485,7 @@ class _CycleState:
             fact=new_fact, active=True, indeterminate=False
         )
         self._effective_labels[issue_number] = _replace_primary_label(
-            self._effective_labels.get(issue_number, ()), StatusLabel.IN_PROGRESS
+            self._labels(issue_number), StatusLabel.IN_PROGRESS
         )
         return RecordResult(RecordStatus.APPLIED)
 
@@ -498,7 +542,10 @@ class _CycleState:
         """
         if not execution_active:
             return None
-        if self.launch_fact(issue_number) is None:
+        if (
+            self.is_effectively_done(issue_number)
+            or self.launch_fact(issue_number) is None
+        ):
             return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
         if target not in _EXECUTION_ACTIVE_ALLOWED_TARGETS:
             return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
@@ -524,11 +571,7 @@ class _CycleState:
         # terminal-stateとして拒否する。終端ラベルへの遷移は巻き戻しではなく
         # 「確定済みの完了にラベルが追いつく」ケースなので、ここでは弾かず
         # `_allowed_transition`の判断に委ねる(#868レビュー対応)。
-        if (
-            lifecycle in _TERMINAL_LIFECYCLE
-            and target != current_primary
-            and target not in _TERMINAL_TARGETS
-        ):
+        if lifecycle in _TERMINAL_LIFECYCLE and target not in _TERMINAL_TARGETS:
             return RecordResult(RecordStatus.CONFLICT, REASON_TERMINAL_STATE)
         if not self._allowed_transition(current_primary, target, lifecycle):
             return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
@@ -565,7 +608,7 @@ class _CycleState:
         if conflict is not None:
             return conflict
 
-        current_labels = self._effective_labels.get(issue_number, ())
+        current_labels = self._labels(issue_number)
         verified_set = _normalize_labels(verified_labels)
         current_set = _normalize_labels(current_labels)
 

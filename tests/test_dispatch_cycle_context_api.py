@@ -90,6 +90,52 @@ def _ctx(**overrides):
 class TestOwnership:
     """入力の別名参照・返却値からの変更が新APIへ漏れないこと（F段1・6）。"""
 
+    def test_nested_task_and_dependency_collections_are_owned(self):
+        footprint = ["src/a.py"]
+        candidates = [2, 3]
+        resolved = [2]
+        diagnostics = [
+            UnresolvedDependency(
+                raw="dep", reason=REASON_MISSING, candidates=candidates
+            )
+        ]
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, footprint=footprint)},
+            dependency_resolution={
+                1: TaskDependencies(resolved=resolved, unresolved=diagnostics)
+            },
+        )
+        task = ctx.task(1)
+        deps = ctx.dependencies_of(1)
+        footprint.append("src/b.py")
+        candidates.append(4)
+        resolved.append(5)
+        diagnostics.clear()
+        assert task.footprint == ("src/a.py",)
+        assert deps.resolved == (2,)
+        assert deps.unresolved[0].candidates == (2, 3)
+        assert ctx.dependencies_of(1) == deps
+
+    def test_legacy_alias_updates_share_observations_but_not_record_deltas(self):
+        original = {1: _task(1)}
+        ctx = _ctx(tasks_by_issue=original)
+        ctx.tasks_by_issue[1] = _task(1, status_labels=(StatusLabel.BLOCKED,))
+        ctx.dependency_resolution[1] = TaskDependencies(resolved=(2,))
+        ctx.ci_passed_pr_issue_numbers.add(1)
+        ctx.changes_requested_issue_numbers.add(1)
+        ctx.branch_by_issue_number[1] = "observed"
+        assert original[1].status_labels == (StatusLabel.QUEUED,)
+        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
+        assert ctx.blocked_tasks() == (ctx.task(1),)
+        assert ctx.dependencies_of(1).resolved == (2,)
+        assert ctx.is_ci_passed(1)
+        assert ctx.has_changes_requested(1)
+        assert ctx.canonical_branch(1) == "observed"
+        ctx.record_completion(1)
+        assert ctx.tasks_by_issue[1].status_labels == (StatusLabel.BLOCKED,)
+        ctx.tasks_by_issue[1] = _task(1)
+        assert ctx.task(1).status_labels == (StatusLabel.DONE,)
+
     def test_mutating_input_dict_after_construction_does_not_change_queries(self):
         tasks_by_issue = {1: _task(1, status_labels=(StatusLabel.QUEUED,))}
         ctx = _ctx(tasks_by_issue=tasks_by_issue)
@@ -144,6 +190,22 @@ class TestOwnership:
 
 class TestQueries:
     """`task` / `dependencies_of` / CI / branch / launch query（F段2）。"""
+
+    def test_orphan_observations_do_not_create_a_known_task(self):
+        ctx = _ctx(
+            dependency_resolution={9: TaskDependencies()},
+            branch_by_issue_number={9: "orphan"},
+            ci_passed_pr_issue_numbers={9},
+            changes_requested_issue_numbers={9},
+            run_state=RunState(active_worktrees={"9": _active(9)}),
+        )
+        assert ctx.task(9) is None
+        assert ctx.dependencies_of(9) is None
+        assert ctx.assess_dependencies(9) is None
+        assert ctx.canonical_branch(9) is None
+        assert ctx.launch_fact(9) is None
+        assert not ctx.is_ci_passed(9)
+        assert not ctx.has_changes_requested(9)
 
     def test_task_returns_none_for_unknown_issue(self):
         ctx = _ctx()
