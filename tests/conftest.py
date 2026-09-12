@@ -548,19 +548,31 @@ class FakeForge:
         state: str = "open",
         limit: int = 1000,
         paginate_files: bool = False,
+        head: str | None = None,
+        include_files: bool = False,
     ) -> list[PrRecord]:
         results: list[PrRecord] = []
         for num, pr in self.prs.items():
             pr_state = self.pr_states.get(num, "open")
             if state != "all" and pr_state.lower() != state.lower():
                 continue
+            if head is not None and pr.head_ref != head:
+                continue
             results.append(pr)
         return results[:limit]
 
     def list_open_prs(
-        self, limit: int = 1000, paginate_files: bool = False
+        self,
+        limit: int = 1000,
+        paginate_files: bool = False,
+        include_files: bool = True,
     ) -> list[PrRecord]:
-        return self.list_prs(state="open", limit=limit, paginate_files=paginate_files)
+        return self.list_prs(
+            state="open",
+            limit=limit,
+            paginate_files=paginate_files,
+            include_files=include_files,
+        )
 
     def list_merged_prs_for_base(self, base: str) -> list[PrRecord]:
         return [

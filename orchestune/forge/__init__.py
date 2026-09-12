@@ -131,13 +131,21 @@ class PullRequestForge(Protocol):
     def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool: ...
 
     def list_prs(
-        self, state: str = "open", limit: int = 1000, paginate_files: bool = False
+        self,
+        state: str = "open",
+        limit: int = 1000,
+        paginate_files: bool = False,
+        head: str | None = None,
+        include_files: bool = False,
     ) -> list[PrRecord]: ...
 
     def list_merged_prs_for_base(self, base: str) -> list[PrRecord]: ...
 
     def list_open_prs(
-        self, limit: int = 1000, paginate_files: bool = False
+        self,
+        limit: int = 1000,
+        paginate_files: bool = False,
+        include_files: bool = True,
     ) -> list[PrRecord]: ...
 
 

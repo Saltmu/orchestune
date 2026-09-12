@@ -18,6 +18,12 @@ _PR_JSON_FIELDS = (
     "closingIssuesReferences,title,body"
 )
 
+_PR_LIGHT_JSON_FIELDS = (
+    "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,"
+    "mergedAt,mergeCommit,reviewDecision,statusCheckRollup,"
+    "closingIssuesReferences,title,body"
+)
+
 _PR_FILES_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -298,23 +304,30 @@ class GitHubPullRequestMixin:
         )
 
     def list_prs(
-        self, state: str = "open", limit: int = 1000, paginate_files: bool = False
+        self,
+        state: str = "open",
+        limit: int = 1000,
+        paginate_files: bool = False,
+        head: str | None = None,
+        include_files: bool = False,
     ) -> list[PrRecord]:
         if state not in {"open", "closed", "merged", "all"}:
             raise ValueError(f"Unsupported PR state: {state}")
-        stdout = self._run(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                state,
-                "--limit",
-                str(limit),
-                "--json",
-                _PR_JSON_FIELDS,
-            ]
-        )
+        cmd = [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            _PR_JSON_FIELDS if include_files else _PR_LIGHT_JSON_FIELDS,
+        ]
+        if head is not None:
+            validate_ref_name(head)
+            cmd.extend(["--head", head])
+        stdout = self._run(cmd)
         return [
             self._parse_pr_record(raw, state, paginate_files)
             for raw in json.loads(stdout)
@@ -340,7 +353,7 @@ class GitHubPullRequestMixin:
                 "--limit",
                 "100000",
                 "--json",
-                _PR_JSON_FIELDS,
+                _PR_LIGHT_JSON_FIELDS,
             ]
         )
         return [
@@ -349,9 +362,17 @@ class GitHubPullRequestMixin:
         ]
 
     def list_open_prs(
-        self, limit: int = 1000, paginate_files: bool = False
+        self,
+        limit: int = 1000,
+        paginate_files: bool = False,
+        include_files: bool = True,
     ) -> list[PrRecord]:
-        return self.list_prs(state="open", limit=limit, paginate_files=paginate_files)
+        return self.list_prs(
+            state="open",
+            limit=limit,
+            paginate_files=paginate_files,
+            include_files=include_files,
+        )
 
     @staticmethod
     def _is_check_passing(check: dict[str, object]) -> bool:
