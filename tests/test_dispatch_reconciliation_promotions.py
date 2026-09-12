@@ -471,9 +471,7 @@ class TestHandleBlockedRecomputeRecovery:
         )
         dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tasks_by_issue={1: task, 2: dep}, done_issue_numbers={dep.issue_number}
-        )
+        ctx = _ctx(tasks_by_issue={1: task, 2: dep})
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -491,7 +489,7 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                set(),
+                {dep.issue_number},
                 config,
             )
 
@@ -515,9 +513,7 @@ class TestHandleBlockedRecomputeRecovery:
         )
         dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tasks_by_issue={1: task, 2: dep}, done_issue_numbers={dep.issue_number}
-        )
+        ctx = _ctx(tasks_by_issue={1: task, 2: dep})
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -542,7 +538,7 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                set(),
+                {dep.issue_number},
                 config,
             )
 

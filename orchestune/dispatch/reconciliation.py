@@ -6,11 +6,12 @@ from typing import Any
 
 from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_resolution import (
-    EMPTY_DEPENDENCIES,
-    TaskDependencies,
-    resolve_stackable_dependency_issue,
+from orchestune.dispatch.dependency_policy import (
+    DependencyPolicyView,
+    decide_stack_target,
+    has_pending_dependencies,
 )
+from orchestune.dispatch.dependency_policy_compat import with_confirmed_completions
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
@@ -88,6 +89,7 @@ def _handle_blocked_recompute_recovery(
     active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(
         run_state, ctx, subtasks_for_recompute, config
     )
+    dependencies = with_confirmed_completions(ctx, completed_issue_numbers)
 
     for issue in blocked_recompute_issues:
         task = ctx.tasks_by_issue.get(issue.number)
@@ -100,10 +102,7 @@ def _handle_blocked_recompute_recovery(
                     issue.number, StatusLabel.BLOCKED_RECOMPUTE
                 )
 
-            done_issue_numbers = ctx.done_issue_numbers | completed_issue_numbers
-            has_pending_deps = _has_pending_dependencies(
-                task, done_issue_numbers, ctx.dependency_resolution
-            )
+            has_pending_deps = _has_pending_dependencies(task, dependencies)
 
             if not has_pending_deps:
                 if config.apply:
@@ -146,36 +145,12 @@ def _get_branch_commit_sha(
 def _resolve_base_branch_for_task(
     task: Task,
     config: DispatcherConfig,
-    branch_by_issue_number: dict[int, str] | None = None,
-    done_issue_numbers: set[int] | None = None,
-    dependency_resolution: dict[int, TaskDependencies] | None = None,
-    ci_passed_pr_issue_numbers: set[int] | None = None,
-    *,
-    dep_issue: int | None = None,
+    view: DependencyPolicyView,
 ) -> str:
-    """#799: 依存元は`dependency_resolution`で解決済みのIssue番号を使う。
-    未解決の依存が1件でもある場合は、依存先ブランチを推測せず親/mainへ
-    フォールバックする（依存元ロック除外・自動リベース対象選定と同じ方針）。
-    #860: 単一未完了依存がCI通過済み（`ci_passed_pr_issue_numbers`）の
-    場合のみそのブランチを採用し、CI未通過やCHANGES_REQUESTEDの場合は推測せず
-    親/mainへフォールバックする。`dep_issue`が事前計算されている場合はそれを優先する。
-    """
-    resolved_dep = (
-        dep_issue
-        if dep_issue is not None
-        else resolve_stackable_dependency_issue(
-            task,
-            dependency_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-        )
-    )
-    if (
-        resolved_dep is not None
-        and branch_by_issue_number
-        and resolved_dep in branch_by_issue_number
-    ):
-        return branch_by_issue_number[resolved_dep]
+    """Use the common safe stack target, retaining the existing fallback base."""
+    decision = decide_stack_target(task.issue_number, view)
+    if decision.target is not None:
+        return decision.target.branch
     if config.parent_issue_number is not None:
         return f"parent/issue-{config.parent_issue_number}"
     return "origin/main"
@@ -183,14 +158,10 @@ def _resolve_base_branch_for_task(
 
 def _has_pending_dependencies(
     task: Task,
-    done_issue_numbers: set[int],
-    dependency_resolution: dict[int, TaskDependencies],
+    view: DependencyPolicyView,
 ) -> bool:
-    """#799: 未解決の依存は常に保留扱いにする（依存なしへ倒さない）。"""
-    deps = dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
-    return bool(deps.unresolved) or any(
-        dep_issue not in done_issue_numbers for dep_issue in deps.resolved
-    )
+    """Delegate completion waiting to the common assessment-based predicate."""
+    return has_pending_dependencies(view.assess_dependencies(task.issue_number))
 
 
 def _decide_single_base_branch_red_recovery(
@@ -198,8 +169,7 @@ def _decide_single_base_branch_red_recovery(
     task: Task,
     outcome: OutcomeRecord,
     current_base_shas: dict[int, str | None],
-    done_issue_numbers: set[int],
-    dependency_resolution: dict[int, TaskDependencies],
+    dependencies: DependencyPolicyView,
 ) -> BaseBranchRedRecoveryDecision | None:
     if outcome.attempt is not None and outcome.attempt >= 3:
         return BaseBranchRedRecoveryDecision(
@@ -221,9 +191,7 @@ def _decide_single_base_branch_red_recovery(
     if not has_advanced:
         return None
     action = (
-        "unmark_only"
-        if _has_pending_dependencies(task, done_issue_numbers, dependency_resolution)
-        else "requeue"
+        "unmark_only" if _has_pending_dependencies(task, dependencies) else "requeue"
     )
     return BaseBranchRedRecoveryDecision(
         issue_number=issue.number,
@@ -238,8 +206,7 @@ def _decide_single_base_branch_red_recovery(
 def _decide_base_branch_red_recovery(
     base_branch_red_issues: list[IssueRecord],
     tasks_by_issue: dict[int, Task],
-    done_issue_numbers: set[int],
-    dependency_resolution: dict[int, TaskDependencies],
+    dependencies: DependencyPolicyView,
     current_base_shas: dict[int, str | None],
     outcomes_by_issue: dict[int, OutcomeRecord | None],
 ) -> list[BaseBranchRedRecoveryDecision]:
@@ -257,8 +224,7 @@ def _decide_base_branch_red_recovery(
             task,
             outcome,
             current_base_shas,
-            done_issue_numbers,
-            dependency_resolution,
+            dependencies,
         )
         if decision is not None:
             decisions.append(decision)
@@ -355,34 +321,24 @@ def _apply_base_branch_red_recovery(
 def _resolve_recovery_base_sha(
     task: Task,
     config: DispatcherConfig,
-    ctx: CycleContext,
-    done_issue_numbers: set[int],
+    dependencies: DependencyPolicyView,
     repo_root: Path | None,
 ) -> str | None:
     """#860: 未完了依存があるタスクにおいて、依存先がCI未通過等でスタック対象外
     （親/mainへフォールバック）の場合は、前回の依存先ブランチと異なるブランチの
     SHAを比較して誤ったhas_advanced（unmark_only）を招かないよう、Noneとする。
     """
-    has_pending = _has_pending_dependencies(
-        task, done_issue_numbers, ctx.dependency_resolution
-    )
-    stackable_dep = resolve_stackable_dependency_issue(
-        task,
-        ctx.dependency_resolution,
-        done_issue_numbers,
-        ctx.ci_passed_pr_issue_numbers,
-    )
-    if has_pending and stackable_dep is None:
+    decision = decide_stack_target(task.issue_number, dependencies)
+    if decision.target is not None:
+        base_branch = decision.target.branch
+    elif decision.reason == "no-stack-dependency":
+        base_branch = (
+            f"parent/issue-{config.parent_issue_number}"
+            if config.parent_issue_number is not None
+            else "origin/main"
+        )
+    else:
         return None
-    base_branch = _resolve_base_branch_for_task(
-        task,
-        config,
-        ctx.branch_by_issue_number,
-        done_issue_numbers,
-        ctx.dependency_resolution,
-        ctx.ci_passed_pr_issue_numbers,
-        dep_issue=stackable_dep,
-    )
     return _get_branch_commit_sha(base_branch, repo_root)
 
 
@@ -402,7 +358,7 @@ def _handle_base_branch_red_recovery(
     outcomes_by_issue: dict[int, OutcomeRecord | None] = {}
     current_base_shas: dict[int, str | None] = {}
     repo_root = config.worktree_root.parent if config.worktree_root else None
-    done_issue_numbers = ctx.done_issue_numbers | completed_issue_numbers
+    dependencies = with_confirmed_completions(ctx, completed_issue_numbers)
 
     for issue in base_branch_red_issues:
         try:
@@ -415,14 +371,13 @@ def _handle_base_branch_red_recovery(
         task = ctx.tasks_by_issue.get(issue.number)
         if task is not None:
             current_base_shas[issue.number] = _resolve_recovery_base_sha(
-                task, config, ctx, done_issue_numbers, repo_root
+                task, config, dependencies, repo_root
             )
 
     decisions = _decide_base_branch_red_recovery(
         base_branch_red_issues,
         ctx.tasks_by_issue,
-        done_issue_numbers,
-        ctx.dependency_resolution,
+        dependencies,
         current_base_shas,
         outcomes_by_issue,
     )

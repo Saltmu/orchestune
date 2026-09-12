@@ -16,9 +16,9 @@ from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import subtasks_from_tasks
-from orchestune.dispatch.dependency_resolution import (
-    TaskDependencies,
-    resolve_stackable_dependency_issue,
+from orchestune.dispatch.dependency_policy import (
+    DependencyPolicyView,
+    decide_stack_target,
 )
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
@@ -44,10 +44,7 @@ class RebaseContext:
     active_task: Task | None
     key: str
     run_state: RunState
-    done_issue_numbers: set[int]
-    ci_passed_pr_issue_numbers: set[int]
-    branch_by_issue_number: dict[int, str]
-    dependency_resolution: dict[int, TaskDependencies]
+    dependencies: DependencyPolicyView
     config: DispatcherConfig
 
 
@@ -312,29 +309,13 @@ def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
 
 def _decide_rebase_target(
     active_task: Task | None,
-    done_issue_numbers: set[int],
-    ci_passed_pr_issue_numbers: set[int],
-    branch_by_issue_number: dict[int, str],
-    dependency_resolution: dict[int, TaskDependencies],
+    view: DependencyPolicyView,
 ) -> str | None:
-    """起動時のスタッキング制約に合わせて、自動リベース対象を1件に絞れる場合のみ
-    その依存先ブランチを返す（副作用なし）。
-
-    #799: 依存元は`dependency_resolution`が解決済みのIssue番号で判定する。
-    未解決の依存が1件でもあれば、依存先を推測せずリベースを見送る。
-    #860: 単一未完了依存の抽出は共通ヘルパ`resolve_stackable_dependency_issue`に統一。
-    """
+    """共通policyが安全と判定した依存ブランチだけを返す。"""
     if active_task is None:
         return None
-    dep_issue = resolve_stackable_dependency_issue(
-        active_task,
-        dependency_resolution,
-        done_issue_numbers,
-        ci_passed_pr_issue_numbers,
-    )
-    if dep_issue is None:
-        return None
-    return branch_by_issue_number.get(dep_issue)
+    decision = decide_stack_target(active_task.issue_number, view)
+    return decision.target.branch if decision.target is not None else None
 
 
 def _decide_rebase_needed(
@@ -527,13 +508,7 @@ def _try_auto_rebase(ctx: RebaseContext) -> bool:
     実行した場合は True を返す。リベースが不要、あるいは対象がない場合は
     False を返す（呼び出し元が footprint 逸脱チェック等の後続処理へ
     フォールスルーできるようにするため）。"""
-    parent_branch = _decide_rebase_target(
-        ctx.active_task,
-        ctx.done_issue_numbers,
-        ctx.ci_passed_pr_issue_numbers,
-        ctx.branch_by_issue_number,
-        ctx.dependency_resolution,
-    )
+    parent_branch = _decide_rebase_target(ctx.active_task, ctx.dependencies)
     if parent_branch is None:
         return False
 
@@ -556,10 +531,7 @@ def _rule_auto_rebase(
         active_task=active_task,
         key=key,
         run_state=ctx.run_state,
-        done_issue_numbers=ctx.done_issue_numbers,
-        ci_passed_pr_issue_numbers=ctx.ci_passed_pr_issue_numbers,
-        branch_by_issue_number=ctx.branch_by_issue_number,
-        dependency_resolution=ctx.dependency_resolution,
+        dependencies=ctx,
         config=ctx.config,
     )
     if not _try_auto_rebase(rebase_ctx):
