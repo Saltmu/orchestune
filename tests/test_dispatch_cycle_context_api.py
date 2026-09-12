@@ -286,6 +286,20 @@ class TestQueries:
         )
         assert ctx.queued_tasks() == ()
 
+    def test_launch_fact_is_none_when_external_id_is_empty_string(self):
+        # #868レビュー対応: `_parse_active_worktrees`は空文字列のexternal_id
+        # をそのまま保持するため、`is not None`だけでは有効なhandleとして
+        # 誤認する。空文字列はpid欠如と同じ「照会不能」として扱う。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(1, pid=None, external_id="", launch_phase=None)
+                }
+            ),
+        )
+        assert ctx.launch_fact(1) is None
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""

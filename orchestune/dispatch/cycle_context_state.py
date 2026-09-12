@@ -138,8 +138,13 @@ class _LaunchState:
 def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     """`record_launch`のinvalid-launch判定と同じ基準(#868レビュー対応)。
 
-    branch/worktree_pathが空、またはpidもexternal_idも無い(生存確認も
-    プロバイダへの照会もできない)場合は、有効な起動として扱わない。
+    branch/worktree_pathが空、またはpidも(空文字列でない)external_idも無い
+    (生存確認もプロバイダへの照会もできない)場合は、有効な起動として扱わない。
+    `run_state.json`の`_parse_active_worktrees`は空文字列の`external_id`を
+    そのまま保持する(起動時attemptのパーサは空文字列を既に拒否しているが、
+    この構築経路は素通りする)ため、`is not None`だけでは空文字列を有効な
+    handleとして誤認する。
+
     構築時の初期観測にもこの基準を適用しないと、`recovery`がジャーナルも
     一致するPRも見つけられずhandle無しで復元した`ActiveWorktree`
     (`_build_restored_active_worktree`参照)を、誤って確定的なLaunchFactへ
@@ -149,7 +154,7 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     return (
         bool(active.branch)
         and bool(active.worktree_path)
-        and (active.pid is not None or active.external_id is not None)
+        and (active.pid is not None or bool(active.external_id))
     )
 
 

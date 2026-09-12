@@ -216,6 +216,13 @@ class TestRecordLaunch:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_INVALID_LAUNCH
 
+    def test_invalid_launch_empty_string_external_id_is_conflict(self):
+        # 空文字列はpid欠如と同じ「照会不能」として扱う(#868レビュー対応)。
+        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
+        result = ctx.record_launch(_active(1, pid=None, external_id=""))
+        assert result.status == RecordStatus.CONFLICT
+        assert result.reason == REASON_INVALID_LAUNCH
+
     def test_invalid_launch_phase_prepared_is_conflict(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         result = ctx.record_launch(_active(1, launch_phase="prepared"))
