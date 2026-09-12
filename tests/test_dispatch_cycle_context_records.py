@@ -821,6 +821,17 @@ class TestRecordInvariantRegressions:
         retry = ctx.record_launch(_active(1, started_at=float(str(bad_time))))
         assert retry.status == RecordStatus.NOOP
 
+    @pytest.mark.parametrize("oversized_time", [10**1000, -(10**1000)])
+    def test_oversized_integer_launch_time_is_normalized_without_crashing(
+        self, oversized_time
+    ):
+        ctx = _ctx(tasks_by_issue={1: _task(1)})
+        result = ctx.record_launch(_active(1, started_at=oversized_time))
+        assert result.status == RecordStatus.APPLIED
+        assert ctx.launch_fact(1).started_at is None
+        retry = ctx.record_launch(_active(1, started_at=oversized_time))
+        assert retry.status == RecordStatus.NOOP
+
     @pytest.mark.parametrize("initial", [False, True])
     @pytest.mark.parametrize("pid,external_id", [(111, True), (-1, "remote")])
     def test_mixed_handle_normalization_is_shared_by_both_entry_points(

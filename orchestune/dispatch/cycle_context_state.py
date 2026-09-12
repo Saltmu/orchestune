@@ -148,16 +148,27 @@ def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
         branch=active.branch,
         worktree_path=active.worktree_path,
         pid=active.pid if _is_usable_pid(active.pid) else None,
-        started_at=(
-            active.started_at
-            if isinstance(active.started_at, int | float)
-            and not isinstance(active.started_at, bool)
-            and math.isfinite(active.started_at)
-            else None
-        ),
+        started_at=_usable_started_at_or_none(active.started_at),
         external_id=_usable_str_or_none(active.external_id),
         launch_attempt_id=_usable_str_or_none(active.launch_attempt_id),
     )
+
+
+def _usable_started_at_or_none(value: object) -> float | None:
+    """永続化された値が、有限の開始時刻として使える数値かどうか。
+
+    `bool`は`int`のサブクラスなので除外する。`math.isfinite`は任意長の巨大整数
+    （例: `10**1000`）を受け取るとC double型変換時に`OverflowError`を送出するため、
+    型変換例外を安全に捕捉して`None`へ正規化する(#868レビュー対応)。
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        if not math.isfinite(value):
+            return None
+    except OverflowError:
+        return None
+    return value
 
 
 @dataclass

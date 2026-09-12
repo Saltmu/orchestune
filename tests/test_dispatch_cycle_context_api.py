@@ -451,6 +451,20 @@ class TestQueries:
         assert fact.started_at is None
         assert fact.launch_attempt_id is None
 
+    @pytest.mark.parametrize("oversized_time", [10**1000, -(10**1000)])
+    def test_initial_active_worktree_with_oversized_integer_time_normalizes_to_none(
+        self, oversized_time
+    ):
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={"1": _active(1, pid=42, started_at=oversized_time)}
+            ),
+        )
+        fact = ctx.launch_fact(1)
+        assert fact is not None
+        assert fact.started_at is None
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""
