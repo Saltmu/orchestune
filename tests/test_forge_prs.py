@@ -281,6 +281,46 @@ class TestListPrsQuery:
         called_args = gh_run.call_args.args[0]
         assert called_args[called_args.index("--limit") + 1] == "1000"
 
+    def test_list_prs_omits_files_by_default(self, forge: GitHubForge, gh_run):
+        gh_run.stdout("[]")
+
+        forge.list_prs()
+
+        called_args = gh_run.call_args.args[0]
+        json_fields = called_args[called_args.index("--json") + 1].split(",")
+        assert "files" not in json_fields
+        assert "number" in json_fields
+        assert "headRefName" in json_fields
+
+    def test_list_prs_includes_files_when_requested(self, forge: GitHubForge, gh_run):
+        gh_run.stdout("[]")
+
+        forge.list_prs(include_files=True)
+
+        called_args = gh_run.call_args.args[0]
+        json_fields = called_args[called_args.index("--json") + 1].split(",")
+        assert "files" in json_fields
+
+    def test_list_prs_passes_head_filter_when_specified(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout("[]")
+
+        forge.list_prs(head="feat/target-branch")
+
+        called_args = gh_run.call_args.args[0]
+        assert "--head" in called_args
+        assert called_args[called_args.index("--head") + 1] == "feat/target-branch"
+
+    def test_list_open_prs_includes_files_by_default(self, forge: GitHubForge, gh_run):
+        gh_run.stdout("[]")
+
+        forge.list_open_prs()
+
+        called_args = gh_run.call_args.args[0]
+        json_fields = called_args[called_args.index("--json") + 1].split(",")
+        assert "files" in json_fields
+
 
 class TestListPrsRecordMapping:
     def test_records_each_pr_state(self, forge: GitHubForge, gh_run):
