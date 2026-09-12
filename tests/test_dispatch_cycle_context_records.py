@@ -483,6 +483,44 @@ class TestRecordTransition:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_TERMINAL_STATE
 
+    def test_verified_done_label_can_catch_up_after_prior_merge_completion(self):
+        # #868レビュー対応: 検証済み先行マージで完了したがラベルはqueuedのまま
+        # だったIssue(Issue本文が述べる実シナリオ)に、後から確認済みの
+        # status:doneが付いた場合。record_completionはNOOP、record_transitionが
+        # terminal-stateだと、どのAPIでもDONEラベルを反映できず`task()`が
+        # 古いまま取り残される。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))},
+            prior_parent_merge_completed_issue_numbers=frozenset({1}),
+        )
+        assert ctx.is_effectively_done(1) is True
+        assert ctx.record_completion(1).status == RecordStatus.NOOP
+
+        result = ctx.record_transition(
+            1,
+            expected_labels=(StatusLabel.QUEUED,),
+            verified_labels=(StatusLabel.DONE,),
+            execution_active=False,
+        )
+        assert result.status == RecordStatus.APPLIED
+        assert ctx.task(1).status_labels == (StatusLabel.DONE,)
+        assert ctx.is_effectively_done(1) is True
+
+    def test_incomplete_issue_cannot_be_completed_via_record_transition(self):
+        # 完了の確立はrecord_completionの責務。未完了タスクを終端ラベルへ
+        # 遷移させることはできない(上の許可はあくまで確定済み完了への
+        # ラベル追いつきに限る)。
+        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
+        result = ctx.record_transition(
+            1,
+            expected_labels=(StatusLabel.QUEUED,),
+            verified_labels=(StatusLabel.DONE,),
+            execution_active=False,
+        )
+        assert result.status == RecordStatus.CONFLICT
+        assert result.reason == REASON_INVALID_TRANSITION
+        assert ctx.is_effectively_done(1) is False
+
     def test_same_primary_reflects_auxiliary_label_removal(self):
         ctx = _ctx(
             tasks_by_issue={

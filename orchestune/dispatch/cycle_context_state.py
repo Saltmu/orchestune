@@ -67,6 +67,12 @@ _ESCALATION_TARGETS = (
 )
 _TERMINAL_LIFECYCLE = (TaskLifecycle.DONE, TaskLifecycle.NOT_NEEDED)
 
+# 終端を表す主状態ラベル。既に実効完了しているタスクについては、これらへの
+# 遷移は「巻き戻し」ではなく確定済みの完了にラベルが追いつくだけなので許可する
+# (#868レビュー対応)。逆に、まだ完了していないタスクをこれらへ遷移させて完了を
+# 新規に確立することはできない——それは`record_completion`の責務。
+_TERMINAL_TARGETS = (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
+
 # execution_active=trueが意味を持つ遷移先はこの3状態だけ(Issue本文セクション
 # E: IN_PROGRESSへの遷移、およびエスカレーションで起動継続する場合)。
 # それ以外(QUEUED/BLOCKED、DONE等の終端)への遷移でexecution_active=trueを
@@ -123,14 +129,32 @@ class LaunchFact:
 
 
 def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
+    """`ActiveWorktree`から`LaunchFact`を作る。各handleは個別に健全化する。
+
+    `_has_valid_launch_handle`は「pidかexternal_idの**いずれか**が使えるか」を
+    見るOR判定なので、片方が有効なら不正なもう片方も一緒に通ってしまう
+    (例: 有効なpid + `external_id=true`、有効なexternal_id + `pid=-1`)。
+    そのまま型付きの`LaunchFact`へ載せると、`external_id is not None`だけを
+    見る消費側がプロバイダAPIへbooleanを送ったり、pid消費側がプロセスグループ
+    宛のpidを受け取ったりする。使えない値は`None`へ倒し、`LaunchFact`が常に
+    宣言どおりの型であることを保証する(#868レビュー対応)。
+
+    branch / worktree_pathは`_has_valid_launch_handle`が非空`str`を必須と
+    しているため、ここへ到達する時点で健全な値であることが保証されている。
+    """
     return LaunchFact(
         issue_number=active.issue_number,
         branch=active.branch,
         worktree_path=active.worktree_path,
-        pid=active.pid,
-        started_at=active.started_at,
-        external_id=active.external_id,
-        launch_attempt_id=active.launch_attempt_id,
+        pid=active.pid if _is_usable_pid(active.pid) else None,
+        started_at=(
+            active.started_at
+            if isinstance(active.started_at, int | float)
+            and not isinstance(active.started_at, bool)
+            else None
+        ),
+        external_id=_usable_str_or_none(active.external_id),
+        launch_attempt_id=_usable_str_or_none(active.launch_attempt_id),
     )
 
 
@@ -152,6 +176,19 @@ def _is_non_empty_str(value: object) -> bool:
     return isinstance(value, str) and value != ""
 
 
+def _is_usable_pid(value: object) -> bool:
+    """永続化された値が、生存確認に使える正の整数pidかどうか。
+
+    POSIXでは`0`や負数のpidはプロセスグループ宛のシグナル送信という別の意味を
+    持つため、識別子としては使えない。`bool`は`int`のサブクラスなので除外する。
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _usable_str_or_none(value: object) -> str | None:
+    return value if _is_non_empty_str(value) else None  # type: ignore[return-value]
+
+
 def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     """`record_launch`のinvalid-launch判定と同じ基準(#868レビュー対応)。
 
@@ -168,27 +205,19 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     昇格させてしまう——`record_launch`が同じ入力をinvalid-launchとして
     拒否するのと矛盾する。
 
-    pidは正の整数のみを有効なプロセスIDとして扱う。`_parse_active_worktrees`
-    は`run_state.json`の`pid`を検証せずそのまま復元するため、`0`・負数・
-    `bool`(`isinstance(True, int)`)も届き得る——POSIXでは`0`や負数のpidは
-    プロセスグループ宛のシグナル送信という別の意味を持ち、生存確認の対象
-    identifierとして使えない。
+    branch / worktree_path / external_idはいずれも非空の`str`、pidは正の整数の
+    みを有効と扱う。`_parse_active_worktrees`は`run_state.json`の値を検証せず
+    そのまま復元するため、`true`や数値・`0`・負数のような使えない値も届き得る
+    ——`bool(...)`や`is not None`だけではこれらを有効なhandleとして誤認する。
 
-    branch / worktree_path / external_idはいずれも非空の`str`のみを有効と扱う。
-    `_parse_active_worktrees`は`run_state.json`の値を検証せずそのまま復元する
-    ため、`true`や数値のような非文字列も届き得る——`bool(...)`だけではこれらを
-    truthyとして誤認し、ブランチ名・パス・プロバイダIDとして使えない値を
-    確定的な`LaunchFact`へ載せてしまう。
+    なお本判定は「pidかexternal_idの**いずれか**が使えるか」というOR判定なので、
+    片方だけが有効な場合ももう片方の不正値ごと通る。型付きの`LaunchFact`へ
+    載せる前の健全化は`_launch_fact_from_active`が個別に行う。
     """
-    has_usable_pid = (
-        isinstance(active.pid, int)
-        and not isinstance(active.pid, bool)
-        and active.pid > 0
-    )
     return (
         _is_non_empty_str(active.branch)
         and _is_non_empty_str(active.worktree_path)
-        and (has_usable_pid or _is_non_empty_str(active.external_id))
+        and (_is_usable_pid(active.pid) or _is_non_empty_str(active.external_id))
     )
 
 
@@ -431,6 +460,12 @@ class _CycleState:
         """
         if current_primary == target:
             return True
+        if lifecycle in _TERMINAL_LIFECYCLE and target in _TERMINAL_TARGETS:
+            # 既に実効完了しているタスクのラベルが、確定済みの完了へ追いつく
+            # ケース(例: 検証済み先行マージで完了したがラベルはqueuedのまま
+            # だったIssueに、後から確認済みのstatus:doneが付く)。巻き戻しでは
+            # ないため、人手判断待ち等の他ルールより先に許可する。
+            return True
         if current_primary in _ESCALATION_TARGETS:
             # 人手判断待ちからの自動解除は許可しない。
             return False
@@ -451,6 +486,63 @@ class _CycleState:
             )
         return target in _NON_TERMINAL_TRANSITIONS.get(current_primary, frozenset())
 
+    def _reject_inconsistent_execution(
+        self, issue_number: int, target: str, execution_active: bool
+    ) -> RecordResult | None:
+        """`execution_active=true`の主張が成立するかを検証する。
+
+        呼出側は**NOOP判定より前に**これを通す(#868レビュー対応)。NOOP判定を
+        先に行うと、handle欠如の不確定起動(構築時からactive=Trueだが
+        launch_fact=None)に対して同じラベル・`execution_active=true`をそのまま
+        再送するだけで、起動事実の検証を経ずにNOOPが返ってしまう。
+        """
+        if not execution_active:
+            return None
+        if self.launch_fact(issue_number) is None:
+            return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
+        if target not in _EXECUTION_ACTIVE_ALLOWED_TARGETS:
+            return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
+        return None
+
+    def _reject_disallowed_transition(
+        self,
+        issue_number: int,
+        current_labels: tuple[str, ...],
+        target: str,
+        execution_active: bool,
+    ) -> RecordResult | None:
+        """遷移表・終端規則・起動条件に照らして遷移先を検証する。"""
+        current_primary = self._current_primary(issue_number)
+        lifecycle = task_lifecycle(
+            current_labels,
+            completed=(
+                issue_number in self._recorded_completions
+                or issue_number in self._prior_completed
+            ),
+        )
+        # 終端(DONE/NOT_NEEDED)から**非終端**への巻き戻しは、表の内外を問わず
+        # terminal-stateとして拒否する。終端ラベルへの遷移は巻き戻しではなく
+        # 「確定済みの完了にラベルが追いつく」ケースなので、ここでは弾かず
+        # `_allowed_transition`の判断に委ねる(#868レビュー対応)。
+        if (
+            lifecycle in _TERMINAL_LIFECYCLE
+            and target != current_primary
+            and target not in _TERMINAL_TARGETS
+        ):
+            return RecordResult(RecordStatus.CONFLICT, REASON_TERMINAL_STATE)
+        if not self._allowed_transition(current_primary, target, lifecycle):
+            return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
+        if (
+            target == StatusLabel.IN_PROGRESS
+            and current_primary != target
+            and not execution_active
+        ):
+            # 新たにIN_PROGRESSへ入る遷移はexecution_active=trueとの組でのみ
+            # 有効。既にIN_PROGRESSな同一主状態への再記録(起動終了の反映)は
+            # 別枠であり、ここでは対象にしない。
+            return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
+        return None
+
     def record_transition(
         self,
         issue_number: int,
@@ -467,56 +559,29 @@ class _CycleState:
             return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
         target = verified_primaries[0]
 
-        # execution_active=trueの整合性は、NOOP/APPLIEDのいずれであるかに関わらず
-        # 常に検証する(#868レビュー対応)。NOOP判定を先に行うと、handle欠如の
-        # 不確定起動(構築時からactive=Trueだがlaunch_fact=None)に対して同じ
-        # ラベル・execution_active=trueをそのまま再送するだけで、起動事実の
-        # 検証を経ずにNOOPが返ってしまう。
-        if execution_active:
-            if self.launch_fact(issue_number) is None:
-                return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
-            if target not in _EXECUTION_ACTIVE_ALLOWED_TARGETS:
-                return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
+        conflict = self._reject_inconsistent_execution(
+            issue_number, target, execution_active
+        )
+        if conflict is not None:
+            return conflict
 
         current_labels = self._effective_labels.get(issue_number, ())
-        current_active = self._is_in_progress(issue_number)
         verified_set = _normalize_labels(verified_labels)
         current_set = _normalize_labels(current_labels)
 
-        if verified_set == current_set and execution_active == current_active:
+        if verified_set == current_set and execution_active == self._is_in_progress(
+            issue_number
+        ):
             return RecordResult(RecordStatus.NOOP)
 
-        expected_set = _normalize_labels(expected_labels)
-        if expected_set != current_set:
+        if _normalize_labels(expected_labels) != current_set:
             return RecordResult(RecordStatus.CONFLICT, REASON_STALE_OBSERVATION)
 
-        current_primary = self._current_primary(issue_number)
-        lifecycle = task_lifecycle(
-            current_labels,
-            completed=(
-                issue_number in self._recorded_completions
-                or issue_number in self._prior_completed
-            ),
+        conflict = self._reject_disallowed_transition(
+            issue_number, current_labels, target, execution_active
         )
-        # 終端(DONE/NOT_NEEDED)からの非終端への巻き戻しは、表の内外を問わず
-        # terminal-stateとして拒否する(同一実効状態の再記録は上の
-        # `current_primary == target`分岐でNOOP/APPLIEDのいずれかに既に
-        # 倒れている)。
-        if lifecycle in _TERMINAL_LIFECYCLE and target != current_primary:
-            return RecordResult(RecordStatus.CONFLICT, REASON_TERMINAL_STATE)
-
-        if not self._allowed_transition(current_primary, target, lifecycle):
-            return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
-
-        if (
-            target == StatusLabel.IN_PROGRESS
-            and current_primary != target
-            and not execution_active
-        ):
-            # 新たにIN_PROGRESSへ入る遷移はexecution_active=trueとの組でのみ
-            # 有効。既にIN_PROGRESSな同一主状態への再記録(起動終了の反映)は
-            # 別枠であり、ここでは対象にしない。
-            return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
+        if conflict is not None:
+            return conflict
 
         self._effective_labels[issue_number] = verified_set
         self._apply_execution_active(issue_number, execution_active)

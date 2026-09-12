@@ -354,6 +354,41 @@ class TestQueries:
             )
             assert ctx.launch_fact(1) is None, (field, bad_value)
 
+    def test_launch_fact_sanitizes_the_unusable_half_of_a_mixed_handle(self):
+        # #868レビュー対応: handle判定は「pidかexternal_idのいずれか」を見る
+        # OR判定なので、片方が有効なら不正なもう片方も一緒に通る。型付きの
+        # LaunchFactへ載せる前に個別に健全化し、消費側が`external_id is not
+        # None`だけを見てプロバイダAPIへbooleanを送る等を防ぐ。
+        valid_pid = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={"1": _active(1, pid=111, external_id=True)}
+            ),
+        )
+        fact = valid_pid.launch_fact(1)
+        assert fact.pid == 111
+        assert fact.external_id is None
+
+        valid_external_id = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(
+                        1,
+                        pid=-1,
+                        external_id="ext-1",
+                        started_at="not-a-number",
+                        launch_attempt_id=42,
+                    )
+                }
+            ),
+        )
+        fact = valid_external_id.launch_fact(1)
+        assert fact.external_id == "ext-1"
+        assert fact.pid is None
+        assert fact.started_at is None
+        assert fact.launch_attempt_id is None
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""
