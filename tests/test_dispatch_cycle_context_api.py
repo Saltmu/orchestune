@@ -336,6 +336,24 @@ class TestQueries:
             )
             assert ctx.launch_fact(1) is None, bad_external_id
 
+    def test_launch_fact_is_none_when_branch_or_worktree_path_is_not_a_string(self):
+        # セルフチェックで発見(#868): external_id/pidと同じく、branchと
+        # worktree_pathも`run_state.json`から検証されずに復元されるため、
+        # 非文字列の真値を`bool(...)`で受け入れるとブランチ名・パスとして
+        # 使えない値が確定的なLaunchFactへ載ってしまう。
+        for field, bad_value in (
+            ("branch", 123),
+            ("branch", True),
+            ("worktree_path", 999),
+        ):
+            ctx = _ctx(
+                tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+                run_state=RunState(
+                    active_worktrees={"1": _active(1, **{field: bad_value})}
+                ),
+            )
+            assert ctx.launch_fact(1) is None, (field, bad_value)
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""

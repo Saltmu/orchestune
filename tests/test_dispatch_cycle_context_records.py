@@ -242,6 +242,19 @@ class TestRecordLaunch:
             assert result.status == RecordStatus.CONFLICT, bad_external_id
             assert result.reason == REASON_INVALID_LAUNCH, bad_external_id
 
+    def test_invalid_launch_non_string_branch_or_worktree_path_is_conflict(self):
+        # セルフチェックで発見(#868): branch/worktree_pathも非文字列の真値を
+        # 受け付けてはならない。
+        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
+        for field, bad_value in (
+            ("branch", 123),
+            ("branch", True),
+            ("worktree_path", 999),
+        ):
+            result = ctx.record_launch(_active(1, **{field: bad_value}))
+            assert result.status == RecordStatus.CONFLICT, (field, bad_value)
+            assert result.reason == REASON_INVALID_LAUNCH, (field, bad_value)
+
     def test_invalid_launch_phase_prepared_is_conflict(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         result = ctx.record_launch(_active(1, launch_phase="prepared"))

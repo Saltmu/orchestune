@@ -147,6 +147,11 @@ class _LaunchState:
     indeterminate: bool
 
 
+def _is_non_empty_str(value: object) -> bool:
+    """永続化された値が、識別子として使える非空の文字列かどうか。"""
+    return isinstance(value, str) and value != ""
+
+
 def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     """`record_launch`のinvalid-launch判定と同じ基準(#868レビュー対応)。
 
@@ -169,22 +174,21 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     プロセスグループ宛のシグナル送信という別の意味を持ち、生存確認の対象
     identifierとして使えない。
 
-    external_idは非空の`str`のみを有効なプロバイダIDとして扱う。同じ理由で
-    `run_state.json`が保持する`true`等の非文字列値は、`bool(...)`だけでは
-    truthyとして誤認する——プロバイダAPIへの照会には文字列のIDが必要。
+    branch / worktree_path / external_idはいずれも非空の`str`のみを有効と扱う。
+    `_parse_active_worktrees`は`run_state.json`の値を検証せずそのまま復元する
+    ため、`true`や数値のような非文字列も届き得る——`bool(...)`だけではこれらを
+    truthyとして誤認し、ブランチ名・パス・プロバイダIDとして使えない値を
+    確定的な`LaunchFact`へ載せてしまう。
     """
     has_usable_pid = (
         isinstance(active.pid, int)
         and not isinstance(active.pid, bool)
         and active.pid > 0
     )
-    has_usable_external_id = (
-        isinstance(active.external_id, str) and active.external_id != ""
-    )
     return (
-        bool(active.branch)
-        and bool(active.worktree_path)
-        and (has_usable_pid or has_usable_external_id)
+        _is_non_empty_str(active.branch)
+        and _is_non_empty_str(active.worktree_path)
+        and (has_usable_pid or _is_non_empty_str(active.external_id))
     )
 
 
