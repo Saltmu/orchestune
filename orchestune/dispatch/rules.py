@@ -12,6 +12,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_context_state import (
+    LaunchFact,
+    RecordResult,
+    _CycleState,
+)
+from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
@@ -61,6 +67,81 @@ class CycleContext:
     # ラベルを見るが、`tasks_by_issue`は先行マージが`status:done`を付与する前の
     # Issueから構築されるため、この集合が無いと同一サイクル内では観測できない。
     prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset()
+
+    def __post_init__(self) -> None:
+        # #868: 初期観測から`_CycleState`を構築する。既存フィールドは一切
+        # 変更しない——新APIはこれらを読むだけの公開窓口として振る舞う。
+        self._state = _CycleState.from_observations(
+            tasks_by_issue=self.tasks_by_issue,
+            dependency_resolution=self.dependency_resolution,
+            ci_passed_pr_issue_numbers=self.ci_passed_pr_issue_numbers,
+            changes_requested_issue_numbers=self.changes_requested_issue_numbers,
+            branch_by_issue_number=self.branch_by_issue_number,
+            active_worktrees=self.run_state.active_worktrees,
+            prior_parent_merge_completed_issue_numbers=(
+                self.prior_parent_merge_completed_issue_numbers
+            ),
+        )
+
+    # ---- semantic query API (#868) ------------------------------------------
+    #
+    # 実効状態を返す。取得済みの戻り値(Task/tuple/Assessment)は後からContextが
+    # 更新されても変化しない——再問い合わせで最新状態を反映する。
+
+    def task(self, issue_number: int) -> Task | None:
+        return self._state.task(issue_number)
+
+    def dependencies_of(self, issue_number: int) -> TaskDependencies | None:
+        return self._state.dependencies_of(issue_number)
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        return self._state.assess_dependencies(issue_number)
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        return self._state.is_effectively_done(issue_number)
+
+    def has_changes_requested(self, issue_number: int) -> bool:
+        return self._state.has_changes_requested(issue_number)
+
+    def is_ci_passed(self, issue_number: int) -> bool:
+        return self._state.is_ci_passed(issue_number)
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        return self._state.canonical_branch(issue_number)
+
+    def launch_fact(self, issue_number: int) -> LaunchFact | None:
+        return self._state.launch_fact(issue_number)
+
+    def queued_tasks(self) -> tuple[Task, ...]:
+        return self._state.queued_tasks()
+
+    def blocked_tasks(self) -> tuple[Task, ...]:
+        return self._state.blocked_tasks()
+
+    # ---- record API (#868) --------------------------------------------------
+    #
+    # 外部I/Oを行わない。呼出側が既に成功を確認した事実だけを反映する。
+
+    def record_completion(self, issue_number: int) -> RecordResult:
+        return self._state.record_completion(issue_number)
+
+    def record_launch(self, active: ActiveWorktree) -> RecordResult:
+        return self._state.record_launch(active)
+
+    def record_transition(
+        self,
+        issue_number: int,
+        *,
+        expected_labels: tuple[str, ...],
+        verified_labels: tuple[str, ...],
+        execution_active: bool,
+    ) -> RecordResult:
+        return self._state.record_transition(
+            issue_number,
+            expected_labels=expected_labels,
+            verified_labels=verified_labels,
+            execution_active=execution_active,
+        )
 
 
 @dataclass
