@@ -223,6 +223,14 @@ class TestRecordLaunch:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_INVALID_LAUNCH
 
+    def test_invalid_launch_non_positive_or_bool_pid_is_conflict(self):
+        # 0・負数・boolは有効なプロセスIDではない(#868レビュー対応)。
+        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
+        for bad_pid in (0, -1, True):
+            result = ctx.record_launch(_active(1, pid=bad_pid, external_id=None))
+            assert result.status == RecordStatus.CONFLICT, bad_pid
+            assert result.reason == REASON_INVALID_LAUNCH, bad_pid
+
     def test_invalid_launch_phase_prepared_is_conflict(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         result = ctx.record_launch(_active(1, launch_phase="prepared"))
@@ -600,6 +608,42 @@ class TestRecordTransition:
         )
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_EXECUTION_MISMATCH
+
+    def test_execution_active_cannot_reactivate_a_completed_issue(self):
+        # #868レビュー対応: record_completionは起動事実を履歴として残す
+        # (active=Falseにするだけ)。そのfactを使ってDONEへ同じ主状態の
+        # まま(同一->同一)execution_active=trueを主張すると、
+        # 「DONEなのに実行中」という不変条件違反を作れてしまっていた。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(active_worktrees={"1": _active(1)}),
+        )
+        ctx.record_completion(1)
+        assert ctx.launch_fact(1) is not None  # 履歴としては残る
+
+        result = ctx.record_transition(
+            1,
+            expected_labels=ctx.task(1).status_labels,
+            verified_labels=(StatusLabel.DONE,),
+            execution_active=True,
+        )
+        assert result.status == RecordStatus.CONFLICT
+        assert result.reason == REASON_EXECUTION_MISMATCH
+
+    def test_execution_active_true_is_allowed_for_continued_escalation(self):
+        # エスカレーション後も起動を継続する場合はexecution_active=trueが
+        # 正当(遷移表: QUEUED/BLOCKED/IN_PROGRESS -> 人手判断待ち)。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(active_worktrees={"1": _active(1)}),
+        )
+        result = ctx.record_transition(
+            1,
+            expected_labels=(StatusLabel.IN_PROGRESS,),
+            verified_labels=(StatusLabel.BLOCKED_HUMAN_REVIEW,),
+            execution_active=True,
+        )
+        assert result.status == RecordStatus.APPLIED
 
     def test_blocked_to_in_progress_is_allowed_given_an_existing_launch_fact(self):
         # QUEUED / BLOCKED いずれからもIN_PROGRESSへ遷移できる(遷移表)。

@@ -300,6 +300,23 @@ class TestQueries:
         )
         assert ctx.launch_fact(1) is None
 
+    def test_launch_fact_is_none_when_pid_is_not_a_usable_process_id(self):
+        # #868レビュー対応: `_parse_active_worktrees`はpidを検証せず復元する
+        # ため、0・負数・boolも届き得る。POSIXでは0/負数のpidはプロセス
+        # グループ宛のシグナルという別の意味を持ち、生存確認には使えない。
+        for bad_pid in (0, -1, True):
+            ctx = _ctx(
+                tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+                run_state=RunState(
+                    active_worktrees={
+                        "1": _active(
+                            1, pid=bad_pid, external_id=None, launch_phase=None
+                        )
+                    }
+                ),
+            )
+            assert ctx.launch_fact(1) is None, bad_pid
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""

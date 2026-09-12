@@ -67,6 +67,18 @@ _ESCALATION_TARGETS = (
 )
 _TERMINAL_LIFECYCLE = (TaskLifecycle.DONE, TaskLifecycle.NOT_NEEDED)
 
+# execution_active=trueが意味を持つ遷移先はこの3状態だけ(Issue本文セクション
+# E: IN_PROGRESSへの遷移、およびエスカレーションで起動継続する場合)。
+# それ以外(QUEUED/BLOCKED、DONE等の終端)への遷移でexecution_active=trueを
+# 主張すると、record_completionが履歴として残したLaunchFactを使って
+# 「DONEなのに実行中」という不変条件違反(consistency.invariants.status.
+# _done_findings参照)を作り出せてしまう(#868レビュー対応)。ブラックリスト
+# ではなくホワイトリストとすることで、将来の主状態追加時にも安全側に倒す。
+_EXECUTION_ACTIVE_ALLOWED_TARGETS = (
+    StatusLabel.IN_PROGRESS,
+    *_ESCALATION_TARGETS,
+)
+
 # 非終端主状態間の許可遷移(Issue本文セクションE)。IN_PROGRESSへの遷移は
 # 「既に記録済みの起動事実があり、execution_active=true」が別途必要——それは
 # `_CycleState.record_transition`の実行時チェックが担い、この表自体には
@@ -150,11 +162,22 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     (`_build_restored_active_worktree`参照)を、誤って確定的なLaunchFactへ
     昇格させてしまう——`record_launch`が同じ入力をinvalid-launchとして
     拒否するのと矛盾する。
+
+    pidは正の整数のみを有効なプロセスIDとして扱う。`_parse_active_worktrees`
+    は`run_state.json`の`pid`を検証せずそのまま復元するため、`0`・負数・
+    `bool`(`isinstance(True, int)`)も届き得る——POSIXでは`0`や負数のpidは
+    プロセスグループ宛のシグナル送信という別の意味を持ち、生存確認の対象
+    identifierとして使えない。
     """
+    has_usable_pid = (
+        isinstance(active.pid, int)
+        and not isinstance(active.pid, bool)
+        and active.pid > 0
+    )
     return (
         bool(active.branch)
         and bool(active.worktree_path)
-        and (active.pid is not None or bool(active.external_id))
+        and (has_usable_pid or bool(active.external_id))
     )
 
 
@@ -441,7 +464,7 @@ class _CycleState:
         if execution_active:
             if self.launch_fact(issue_number) is None:
                 return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
-            if target in (StatusLabel.QUEUED, StatusLabel.BLOCKED):
+            if target not in _EXECUTION_ACTIVE_ALLOWED_TARGETS:
                 return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
 
         current_labels = self._effective_labels.get(issue_number, ())
