@@ -390,14 +390,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         task = _task(
             issue_number=1, subtask_id="task-a", status_labels=("status:queued",)
         )
-        issues = IssuesByStatus(
-            queued=[_issue(1, labels=("status:queued",))],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         ctx = _ctx(
             tasks_by_issue={1: task},
             run_state=RunState(
@@ -411,12 +403,12 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
 
         candidate_tasks, _, _ = _determine_candidate_tasks(
-            ctx, issues, lock_result, set(), False, now=119.0
+            ctx, lock_result, set(), False, now=119.0
         )
         assert candidate_tasks == []
 
         candidate_tasks, _, _ = _determine_candidate_tasks(
-            ctx, issues, lock_result, set(), False, now=120.0
+            ctx, lock_result, set(), False, now=120.0
         )
         assert candidate_tasks == [task]
 
@@ -431,17 +423,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
             subtask_id="task-b",
             status_labels=("status:queued",),
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(1, labels=("status:done", "status:queued")),
-                _issue(2, labels=("status:queued",)),
-            ],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         ctx = _ctx(tasks_by_issue={1: dual_status_task, 2: normal_task})
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
 
@@ -451,7 +432,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         fake_forge.get_actor_permission.return_value = "write"
         candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx,
-            issues,
             lock_result,
             completed_issue_numbers=set(),
             any_forced_serial=False,
@@ -478,17 +458,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
             subtask_id="task-b",
             status_labels=("status:queued",),
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(1, labels=("status:in-progress", "status:queued")),
-                _issue(2, labels=("status:queued",)),
-            ],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         ctx = _ctx(tasks_by_issue={1: dual_status_task, 2: normal_task})
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
 
@@ -498,7 +467,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         fake_forge.get_actor_permission.return_value = "write"
         candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx,
-            issues,
             lock_result,
             completed_issue_numbers=set(),
             any_forced_serial=False,

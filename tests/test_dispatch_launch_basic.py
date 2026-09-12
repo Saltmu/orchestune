@@ -13,7 +13,7 @@ from orchestune.dispatch.launch import (
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import CompletedWorktree, RunState
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -855,20 +855,6 @@ class TestGetStackEligibleTasks:
         """Issue #252: _get_stack_eligible_tasks が parse_task_from_issue で raw YAML を
         再パースせず、tasks_by_issue の context 済み Task（GitHub native blocked_by が反映されたもの）
         を優先して採用することを検証する。"""
-        raw_body = """```yaml
-subtask_id: task-2
-depends_on:
-  - yaml-dep
-```"""
-        _issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body=raw_body,
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-            blocked_by=(1,),
-        )
-
         task1 = _task(1, subtask_id="gh-native-dep")
         task2 = Task(
             issue_number=2,
@@ -909,13 +895,6 @@ depends_on:
         # Issueがstatus:blocked/status:in-progressを同時に持つ中断状態のまま
         # 残りうる。稼働中セッションを新たなstack候補として二重に扱わないよう
         # 除外しなければならない。
-        _issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body="",
-            labels=("status:blocked", "status:in-progress"),
-            created_at="2026-01-01T00:00:00Z",
-        )
         task1 = _task(1, subtask_id="dep-task")
         dual_status_task = Task(
             issue_number=2,
@@ -949,20 +928,6 @@ depends_on:
     def test_respects_unpassed_native_blocked_by_even_if_yaml_dep_passed(self):
         """GitHub blocked_byの依存先がCI未通過の場合、YAMLの依存先がCI通過していても
         スタッキング対象外となることを検証する。"""
-        raw_body = """```yaml
-subtask_id: task-2
-depends_on:
-  - yaml-passed-dep
-```"""
-        _issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body=raw_body,
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-            blocked_by=(1,),
-        )
-
         task1 = _task(1, subtask_id="gh-unpassed-dep")
         # #799: 本文の`depends_on`（"yaml-passed-dep"）は自タスクと同じ親配下で
         # 解決される必要があるため、その依存先タスクも用意する。
@@ -1014,15 +979,6 @@ depends_on:
         """Codex Review 指摘: blocked_by に複数Issue (例: 1, 3) が含まれるが、
         一部のIssue (3) が cycle context / mapping に含まれず省略されている場合、
         既知のblocker (1) が CI 通過していても fail closed となりスタッキング対象外となることを検証する。"""
-        _issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body="subtask_id: task-2",
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-            blocked_by=(1, 3),
-        )
-
         task1 = _task(1, subtask_id="dep-1")
         task2 = Task(
             issue_number=2,
@@ -1060,14 +1016,6 @@ depends_on:
     def test_same_subtask_id_in_different_epic_does_not_stack_across_epics(self):
         """#799: 別EPIC（別parent）が同名subtask_idを使っていても、
         スタッキング起動のbase選定が取り違わない。"""
-        _issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body="",
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-        )
-
         # Two different EPICs (parent 100 and parent 200) each have their own
         # "backend-api" subtask. Only the one under parent 100 is the real
         # dependency of task2 (also under parent 100).

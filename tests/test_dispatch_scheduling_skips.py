@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
     UnresolvedDependency,
@@ -93,14 +92,6 @@ class TestDetermineCandidateTaskSkips:
         task = _task(
             issue_number=695, subtask_id="task-a", status_labels=("status:queued",)
         )
-        issues = IssuesByStatus(
-            queued=[_issue(695, labels=("status:queued",))],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         lock_result = ExternalLockScanResult(
             to_lock=[task],
             to_unlock=[],
@@ -117,7 +108,6 @@ class TestDetermineCandidateTaskSkips:
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={695: task}),
-            issues,
             lock_result,
             set(),
             False,
@@ -143,18 +133,9 @@ class TestDetermineCandidateTaskSkips:
             status_labels=("status:blocked",),
             depends_on=(),
         )
-        issues = IssuesByStatus(
-            queued=[],
-            locked=[],
-            in_progress=[],
-            blocked=[_issue(1, labels=("status:blocked",))],
-            done=[],
-            not_needed=[],
-        )
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={1: task}),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
             False,
@@ -179,18 +160,9 @@ class TestDetermineCandidateTaskSkips:
             depends_on=("task-a",),
             parent_number=100,
         )
-        issues = IssuesByStatus(
-            queued=[],
-            locked=[],
-            in_progress=[],
-            blocked=[_issue(696, labels=("status:blocked",))],
-            done=[],
-            not_needed=[],
-        )
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={695: upstream, 696: task}),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
             False,
@@ -212,18 +184,9 @@ class TestDetermineCandidateTaskSkips:
             depends_on=("task-a",),
             parent_number=None,
         )
-        issues = IssuesByStatus(
-            queued=[],
-            locked=[],
-            in_progress=[],
-            blocked=[_issue(696, labels=("status:blocked",))],
-            done=[],
-            not_needed=[],
-        )
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={696: task}),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
             False,
@@ -236,18 +199,9 @@ class TestDetermineCandidateTaskSkips:
 
     def test_queued_task_with_missing_assessment_fails_closed(self, fake_forge):
         task = _task(issue_number=5, status_labels=("status:queued",))
-        issues = IssuesByStatus(
-            queued=[_issue(5, labels=("status:queued",))],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
 
         candidates, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, dependency_resolution={}),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
             False,
@@ -262,14 +216,6 @@ class TestDetermineCandidateTaskSkips:
         self, fake_forge
     ):
         task = _task(issue_number=5, status_labels=("status:queued",))
-        issues = IssuesByStatus(
-            queued=[_issue(5, labels=("status:queued",))],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         resolution = {
             5: TaskDependencies(
                 unresolved=(
@@ -282,7 +228,6 @@ class TestDetermineCandidateTaskSkips:
 
         candidates, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, dependency_resolution=resolution),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
             False,
@@ -332,14 +277,6 @@ class TestDetermineCandidateTaskSkips:
 
         candidates, _, skips = _determine_candidate_tasks(
             ctx,
-            IssuesByStatus(
-                queued=[],
-                locked=[],
-                in_progress=[],
-                blocked=[_issue(3, labels=("status:blocked",))],
-                done=[],
-                not_needed=[],
-            ),
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
             set(),
             False,
@@ -353,19 +290,6 @@ class TestExternalLockSkipScope:
     """PR#789レビュー(Codex P2): 同じサイクルでロックを外すタスクを
     「外部ロックで見送った」と報告しない。"""
 
-    def _issues(self, locked_numbers):
-        return IssuesByStatus(
-            queued=[],
-            locked=[
-                _issue(number, labels=("status:external-lock",))
-                for number in locked_numbers
-            ],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
-
     def test_task_being_unlocked_is_not_reported_as_locked(self, fake_forge):
         """`lock_changes`が同じサイクルでロック解除を報告しているのに、
         未選定一覧では「ロック中」と出るのは矛盾している。"""
@@ -373,7 +297,6 @@ class TestExternalLockSkipScope:
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={1: task}),
-            self._issues([1]),
             ExternalLockScanResult(to_lock=[], to_unlock=[task], conflicts={}),
             set(),
             False,
@@ -392,7 +315,6 @@ class TestExternalLockSkipScope:
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={2: done_task}),
-            self._issues([2]),
             ExternalLockScanResult(to_lock=[], to_unlock=[done_task], conflicts={}),
             set(),
             False,
@@ -413,7 +335,6 @@ class TestExternalLockSkipScope:
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={695: task}),
-            self._issues([695]),
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts=conflicts),
             set(),
             False,
@@ -428,16 +349,6 @@ class TestExternalLockSkipScope:
 
 class TestInProgressTasksAreNotSkipCandidates:
     """PR#789レビュー(Codex P2): 実行中のタスクは起動候補ではない。"""
-
-    def _locked_issues(self, number):
-        return IssuesByStatus(
-            queued=[],
-            locked=[_issue(number, labels=("status:external-lock",))],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
 
     def _conflicts(self, number):
         return {
@@ -454,7 +365,6 @@ class TestInProgressTasksAreNotSkipCandidates:
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}),
-            self._locked_issues(5),
             ExternalLockScanResult(
                 to_lock=[], to_unlock=[], conflicts=self._conflicts(5)
             ),
@@ -483,7 +393,6 @@ class TestInProgressTasksAreNotSkipCandidates:
 
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, run_state=run_state),
-            self._locked_issues(5),
             ExternalLockScanResult(
                 to_lock=[], to_unlock=[], conflicts=self._conflicts(5)
             ),
@@ -515,17 +424,8 @@ class TestInProgressTasksAreNotSkipCandidates:
         )
 
         # now=50.0 (バックオフ期間中) -> スキップされる
-        issues = IssuesByStatus(
-            queued=[_issue(5, ("status:queued",))],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         candidates, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
             set(),
             False,
@@ -539,7 +439,6 @@ class TestInProgressTasksAreNotSkipCandidates:
         # now=150.0 (バックオフ経過後) -> 起動候補に残る
         candidates_after, _, skips_after = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config),
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
             set(),
             False,

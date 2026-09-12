@@ -285,6 +285,8 @@ def _dependency_detail(
         elif decision.reason == "branch-unavailable":
             nested = "branch unavailable"
         else:
+            # Defensive fallback for future policy reasons that identify a
+            # nested blocker without attaching its assessment.
             nested = _waiting_detail(assessment) or decision.reason
         return f"dependency #{blocking}: {nested}"
     return _waiting_detail(assessment)
@@ -358,7 +360,6 @@ def _apply_forced_serial_candidate_filter(
 
 def _determine_candidate_tasks(
     ctx: CycleContext,
-    issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
     completed_issue_numbers: DependencyPolicyView | set[int],
     any_forced_serial: bool,
@@ -503,7 +504,7 @@ def run_scheduling_phase(
     """
     dependency_view = with_confirmed_completions(ctx, completed_issue_numbers)
     candidate_tasks, task_to_base_branch, skips = _determine_candidate_tasks(
-        ctx, issues, lock_result, dependency_view, any_forced_serial, now
+        ctx, lock_result, dependency_view, any_forced_serial, now
     )
 
     undeviated = _filter_deviation_blocked_candidates(

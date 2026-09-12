@@ -218,7 +218,7 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
     lock_result = ExternalLockScanResult([], [])
 
     population, _, skips = _determine_candidate_tasks(
-        ctx, issues, lock_result, set(), False, 100.0
+        ctx, lock_result, set(), False, 100.0
     )
     result = run_scheduling_phase(
         ctx, issues, lock_result, set(), False, [], 100.0, config
@@ -245,18 +245,9 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
             )
         },
     )
-    skip_issues = IssuesByStatus(
-        queued=[make_issue(30)],
-        locked=[],
-        in_progress=[],
-        blocked=[make_issue(20, labels=("status:blocked",))],
-        done=[],
-        not_needed=[],
-    )
     conflict = ExternalLockConflict("branch", "external/topic")
     _, _, phase_skips = _determine_candidate_tasks(
         skip_ctx,
-        skip_issues,
         ExternalLockScanResult([], [], {40: (conflict,)}),
         set(),
         False,
