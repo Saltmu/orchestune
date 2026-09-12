@@ -4,9 +4,11 @@ from pathlib import Path
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_resolution import TaskDependencies
+from orchestune.dispatch.phase_scheduling import _finalize_launch
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import CompletedWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import PrRecord, Usage
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -17,10 +19,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -47,6 +50,90 @@ def _task(issue_number, subtask_id=None, yaml_error=False):
         depends_on=(),
         yaml_error=yaml_error,
     )
+
+
+class TestFinalizeLaunchContextRecording:
+    def test_records_each_committed_launch_through_cycle_context(self, tmp_path):
+        from unittest.mock import patch
+
+        task = _task(1, subtask_id="task-a")
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+        ctx = _ctx(
+            tasks_by_issue={1: task},
+            dependency_resolution={1: TaskDependencies()},
+            config=config,
+        )
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="feat/issue-1-task-a",
+            worktree_path=str(tmp_path / "worktrees" / "task-a"),
+            pid=123,
+            started_at=1.0,
+            declared_footprint=(),
+            launch_phase="launched",
+        )
+
+        def launch(launch_ctx):
+            assert launch_ctx.on_launch_committed is not None
+            launch_ctx.on_launch_committed(active)
+            return [task]
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+                autospec=True,
+                side_effect=launch,
+            ),
+            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
+        ):
+            selected = _finalize_launch([task], {}, [task], ctx, 1.0, config)
+
+        assert selected == [task]
+        assert ctx.launch_fact(1) is not None
+        assert ctx.queued_tasks() == ()
+
+    def test_propagates_record_launch_conflict_without_continuing(self, tmp_path):
+        from unittest.mock import patch
+
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+        ctx = _ctx(config=config)
+        active = ActiveWorktree(
+            issue_number=999,
+            branch="feat/issue-999-unknown",
+            worktree_path=str(tmp_path / "worktrees" / "unknown"),
+            pid=123,
+            started_at=1.0,
+            declared_footprint=(),
+            launch_phase="launched",
+        )
+
+        def launch(launch_ctx):
+            assert launch_ctx.on_launch_committed is not None
+            launch_ctx.on_launch_committed(active)
+            raise AssertionError("record conflict must stop the launch batch")
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+                autospec=True,
+                side_effect=launch,
+            ),
+            pytest.raises(
+                RuntimeError,
+                match="record_launch conflict for issue #999: unknown-issue",
+            ),
+        ):
+            _finalize_launch([], {}, [], ctx, 1.0, config)
 
 
 class TestApplyTaskLaunchesRunStatePersistence:

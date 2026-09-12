@@ -209,11 +209,14 @@ stateDiagram-v2
     `status:blocked`のタスクだけなので、`status:queued`のタスク（本来は
     依存解決済みのはずだが、`QUEUED_WITH_UNRESOLVED_DEPENDENCIES`が
     検知・修復する異常系として依存未解決のまま`status:queued`になり得る）
-    には適用しない。
+    には適用しない。Schedulingもqueued候補の依存assessmentを再確認し、
+    assessment欠落または未解決依存があれば起動せず依存待ちとして報告する。
     スタッキング起動（`orchestune/dispatch/launch.py`の
     `_get_stack_eligible_tasks`）は依存元ブランチをbaseに積むため、
     その重なりは「Orchestune管理外の衝突」ではない。祖先依存（依存元の
-    さらに依存元）までは遡らない。見た目上は`issue-{N}-{subtask_id}`の
+    さらに依存元）まではロック除外判定で遡らない。一方、stack対象の決定は
+    共通policyで依存元自身のassessmentも確認し、未完了または取得不能なら
+    fail closedにする。見た目上は`issue-{N}-{subtask_id}`の
     形状に一致していても、既定prefix以外のブランチ（人間や他エージェントが
     独自prefixで作成したもの等）は対象外としない。依存元が既に`status:done`
     または`status:not-needed`に到達している場合も対象外としない

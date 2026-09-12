@@ -15,8 +15,17 @@ from orchestune.dispatch.actor_verification import (
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.cycle_context_state import RecordStatus
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    DependencyState,
+)
+from orchestune.dispatch.dependency_policy import (
+    DependencyPolicyView,
+    StackDecision,
+)
+from orchestune.dispatch.dependency_policy_compat import with_confirmed_completions
 from orchestune.dispatch.dependency_resolution import (
-    EMPTY_DEPENDENCIES,
     describe_unresolved_dependency,
 )
 from orchestune.dispatch.execution_profiles import (
@@ -32,6 +41,7 @@ from orchestune.dispatch.launch import (
     _apply_duplicate_skip,
     _decide_duplicate_candidates,
     _get_stack_eligible_tasks,
+    _is_task_stack_eligible,
     _launch_selected_tasks,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult, describe_conflict
@@ -79,28 +89,35 @@ class SchedulingPhaseResult:
 
 def _filter_queued_candidates(
     ctx: CycleContext,
-    issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
+    view: DependencyPolicyView,
     now: float = 0.0,
-) -> list[Task]:
+) -> tuple[list[Task], list[Task]]:
     newly_locked = {t.issue_number for t in lock_result.to_lock}
     queued_candidates = [
-        ctx.tasks_by_issue[issue.number]
-        for issue in issues.queued
-        if issue.number not in newly_locked
-        and issue.number not in ctx.prior_parent_merge_hold_issue_numbers
-        and StatusLabel.DONE not in ctx.tasks_by_issue[issue.number].status_labels
-        and StatusLabel.IN_PROGRESS
-        not in ctx.tasks_by_issue[issue.number].status_labels
+        task
+        for task in ctx.queued_tasks()
+        if task.issue_number not in newly_locked
+        and task.issue_number not in ctx.prior_parent_merge_hold_issue_numbers
         and (
-            (record := ctx.run_state.task_reclaim_counts.get(issue.number)) is None
+            (record := ctx.run_state.task_reclaim_counts.get(task.issue_number)) is None
             or max(record.early_death_retry_at, record.review_timeout_retry_at) <= now
         )
+    ]
+    dependency_rejected = [
+        task
+        for task in queued_candidates
+        if (assessment := view.assess_dependencies(task.issue_number)) is None
+        or bool(assessment.unresolved)
+    ]
+    rejected_numbers = {task.issue_number for task in dependency_rejected}
+    queued_candidates = [
+        task for task in queued_candidates if task.issue_number not in rejected_numbers
     ]
     actor_decisions = _decide_actor_verification(
         queued_candidates, forge=ctx.config.resolved_forge
     )
-    return _apply_actor_verification(actor_decisions, ctx.config)
+    return _apply_actor_verification(actor_decisions, ctx.config), dependency_rejected
 
 
 def _skip_record(task: Task, reason: str, detail: str = "") -> SkipRecord:
@@ -159,9 +176,9 @@ def _external_lock_skips(
 
 def _queued_drop_skips(
     ctx: CycleContext,
-    issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
     survivors: list[Task],
+    dependency_rejected: list[Task],
     now: float,
 ) -> list[SkipRecord]:
     """`_filter_queued_candidates`が落としたqueuedタスクの理由を復元する。
@@ -176,16 +193,12 @@ def _queued_drop_skips(
     """
     survivor_numbers = {task.issue_number for task in survivors}
     survivor_numbers |= {task.issue_number for task in lock_result.to_lock}
+    survivor_numbers |= {task.issue_number for task in dependency_rejected}
     skips = []
-    for issue in issues.queued:
-        task = ctx.tasks_by_issue.get(issue.number)
-        if task is None or issue.number in survivor_numbers:
+    for task in ctx.queued_tasks():
+        if task.issue_number in survivor_numbers:
             continue
-        if StatusLabel.DONE in task.status_labels:
-            continue
-        if StatusLabel.IN_PROGRESS in task.status_labels:
-            continue
-        record = ctx.run_state.task_reclaim_counts.get(issue.number)
+        record = ctx.run_state.task_reclaim_counts.get(task.issue_number)
         if record is not None and record.early_death_retry_at > now:
             skips.append(_skip_record(task, REASON_EARLY_DEATH_BACKOFF))
         elif record is not None and record.review_timeout_retry_at > now:
@@ -196,9 +209,12 @@ def _queued_drop_skips(
 
 
 def _dependency_skips(
-    ctx: CycleContext, issues: IssuesByStatus, stack_eligible: list[Task]
+    blocked_tasks: tuple[Task, ...],
+    queued_dependency_rejected: list[Task],
+    stack_eligible: list[Task],
+    view: DependencyPolicyView,
 ) -> list[SkipRecord]:
-    """未解決の依存を実際に持つ`status:blocked`タスクだけを依存待ちとして記録する。
+    """Assessment/policyが拒否したqueued/blockedタスクの依存診断を記録する。
 
     PR#789レビュー対応(Codex P2): `status:blocked`は依存待ち以外の経路でも付く
     （base-branch-redの保留は`gc.completion`が、ブランチ名不正等の起動失敗は
@@ -208,27 +224,70 @@ def _dependency_skips(
     `status.blocked-with-resolved-dependencies`が扱う関心事である。
     """
     eligible = {task.issue_number for task in stack_eligible}
-    done_issue_numbers = ctx.done_issue_numbers
     skips = []
-    for issue in issues.blocked:
-        task = ctx.tasks_by_issue.get(issue.number)
-        if task is None or issue.number in eligible:
+    for task in (*blocked_tasks, *queued_dependency_rejected):
+        if task.issue_number in eligible:
             continue
-        deps = ctx.dependency_resolution.get(task.issue_number, EMPTY_DEPENDENCIES)
-        waiting = [
-            f"#{dep_issue}"
-            for dep_issue in deps.resolved
-            if dep_issue not in done_issue_numbers
-        ]
-        waiting.extend(
-            describe_unresolved_dependency(dependency) for dependency in deps.unresolved
-        )
-        if not waiting:
+        assessment = view.assess_dependencies(task.issue_number)
+        decision = _is_task_stack_eligible(task, view)
+        detail = _dependency_detail(task, assessment, decision)
+        if detail is None:
             continue
-        skips.append(
-            _skip_record(task, REASON_DEPENDENCY, f"waiting: {', '.join(waiting)}")
-        )
+        skips.append(_skip_record(task, REASON_DEPENDENCY, detail))
     return skips
+
+
+def _unresolved_detail(assessment: DependencyAssessment) -> list[str]:
+    details = []
+    for dependency in assessment.unresolved:
+        rendered = describe_unresolved_dependency(dependency)
+        if rendered == dependency.raw:
+            suffix = f" ({dependency.reason}"
+            if dependency.candidates:
+                suffix += ": " + ", ".join(
+                    f"#{number}" for number in dependency.candidates
+                )
+            rendered += suffix + ")"
+        details.append(rendered)
+    return details
+
+
+def _waiting_detail(assessment: DependencyAssessment) -> str | None:
+    waiting = [
+        f"#{dependency.issue_number}"
+        for dependency in assessment.resolved
+        if dependency.state is not DependencyState.COMPLETED
+    ]
+    waiting.extend(_unresolved_detail(assessment))
+    return None if not waiting else f"waiting: {', '.join(waiting)}"
+
+
+def _dependency_detail(
+    task: Task,
+    assessment: DependencyAssessment | None,
+    decision: StackDecision,
+) -> str | None:
+    if assessment is None:
+        return f"dependency assessment unavailable: #{task.issue_number}"
+    if (
+        decision.blocking_issue_number not in (None, task.issue_number)
+        and decision.reason
+        and (
+            decision.reason.startswith("grand-")
+            or decision.reason == "branch-unavailable"
+        )
+    ):
+        blocking = decision.blocking_issue_number
+        if decision.reason == "grand-assessment-unavailable":
+            nested = f"dependency assessment unavailable: #{blocking}"
+        elif decision.reason.startswith("grand-") and decision.assessment is not None:
+            nested = _waiting_detail(decision.assessment) or decision.reason
+        elif decision.reason == "branch-unavailable":
+            nested = "branch unavailable"
+        else:
+            nested = _waiting_detail(assessment) or decision.reason
+        return f"dependency #{blocking}: {nested}"
+    return _waiting_detail(assessment)
 
 
 def _drop_duplicate_candidates(
@@ -253,11 +312,55 @@ def _drop_duplicate_candidates(
     return remaining, skips
 
 
+def _combine_candidate_sources(
+    ctx: CycleContext,
+    queued_candidates: list[Task],
+    stack_eligible_tasks: list[Task],
+    task_to_base_branch: dict[int, str],
+) -> tuple[list[Task], dict[int, str]]:
+    """Prefer queued tasks on overlap and return the canonical sorted population."""
+    queued_numbers = {task.issue_number for task in queued_candidates}
+    candidate_numbers = queued_numbers | {
+        task.issue_number for task in stack_eligible_tasks
+    }
+    candidates = [
+        task
+        for issue_number in sorted(candidate_numbers)
+        if (task := ctx.task(issue_number)) is not None
+        and issue_number not in ctx.prior_parent_merge_hold_issue_numbers
+    ]
+    stack_bases = {
+        issue_number: branch
+        for issue_number, branch in task_to_base_branch.items()
+        if issue_number not in queued_numbers
+    }
+    return candidates, stack_bases
+
+
+def _apply_forced_serial_candidate_filter(
+    ctx: CycleContext,
+    candidate_tasks: list[Task],
+    any_forced_serial: bool,
+) -> tuple[list[Task], list[SkipRecord]]:
+    if not any_forced_serial:
+        return candidate_tasks, []
+    survivors = _filter_candidates_for_forced_serial(
+        candidate_tasks,
+        ctx.run_state,
+        ctx,
+    )
+    skips = [
+        _skip_record(task, REASON_FORCED_SERIAL)
+        for task in _dropped_tasks(candidate_tasks, survivors)
+    ]
+    return survivors, skips
+
+
 def _determine_candidate_tasks(
     ctx: CycleContext,
     issues: IssuesByStatus,
     lock_result: ExternalLockScanResult,
-    completed_issue_numbers: set[int],
+    completed_issue_numbers: DependencyPolicyView | set[int],
     any_forced_serial: bool,
     now: float = 0.0,
 ) -> tuple[list[Task], dict[int, str], list[SkipRecord]]:
@@ -267,45 +370,44 @@ def _determine_candidate_tasks(
     #787: 各絞り込み段の前後差分から、落ちたタスクとその理由(`SkipRecord`)も
     併せて持ち帰る。フィルタ関数自体は純粋なまま保つ。
     """
-    queued_candidates = _filter_queued_candidates(ctx, issues, lock_result, now)
+    view = (
+        with_confirmed_completions(ctx, completed_issue_numbers)
+        if isinstance(completed_issue_numbers, set)
+        else completed_issue_numbers
+    )
+
+    queued_candidates, queued_dependency_rejected = _filter_queued_candidates(
+        ctx, lock_result, view, now
+    )
 
     stack_eligible_tasks, task_to_base_branch = _get_stack_eligible_tasks(
-        issues.blocked,
-        ctx.tasks_by_issue,
-        ctx.done_issue_numbers,
-        ctx.ci_passed_pr_issue_numbers,
-        ctx.branch_by_issue_number,
-        ctx.dependency_resolution,
-        completed_issue_numbers=completed_issue_numbers,
+        ctx.blocked_tasks(), view
     )
     skips = [
         *_external_lock_skips(ctx, lock_result),
-        *_queued_drop_skips(ctx, issues, lock_result, queued_candidates, now),
-        *_dependency_skips(ctx, issues, stack_eligible_tasks),
+        *_queued_drop_skips(
+            ctx, lock_result, queued_candidates, queued_dependency_rejected, now
+        ),
+        *_dependency_skips(
+            ctx.blocked_tasks(),
+            queued_dependency_rejected,
+            stack_eligible_tasks,
+            view,
+        ),
     ]
 
-    candidate_tasks = queued_candidates + stack_eligible_tasks
-    candidate_tasks = [
-        task
-        for task in candidate_tasks
-        if task.issue_number not in ctx.prior_parent_merge_hold_issue_numbers
-    ]
+    candidate_tasks, task_to_base_branch = _combine_candidate_sources(
+        ctx, queued_candidates, stack_eligible_tasks, task_to_base_branch
+    )
     candidate_tasks, duplicate_skips = _drop_duplicate_candidates(candidate_tasks, ctx)
     skips.extend(duplicate_skips)
 
-    if any_forced_serial:
-        serialized = _filter_candidates_for_forced_serial(
-            candidate_tasks,
-            ctx.run_state,
-            ctx.tasks_by_issue,
-            ctx.dependency_resolution,
-        )
-        skips.extend(
-            _skip_record(task, REASON_FORCED_SERIAL)
-            for task in _dropped_tasks(candidate_tasks, serialized)
-        )
-        candidate_tasks = serialized
+    candidate_tasks, forced_serial_skips = _apply_forced_serial_candidate_filter(
+        ctx, candidate_tasks, any_forced_serial
+    )
+    skips.extend(forced_serial_skips)
 
+    skips.sort(key=lambda record: (record.issue_number, record.reason, record.detail))
     return candidate_tasks, task_to_base_branch, skips
 
 
@@ -320,6 +422,14 @@ def _finalize_launch(
     """apply時のみ、選出タスクを実起動しrun_stateを永続化する。"""
     if not config.apply:
         return selected
+
+    def _record_launch(active) -> None:
+        result = ctx.record_launch(active)
+        if result.status is RecordStatus.CONFLICT:
+            raise RuntimeError(
+                f"record_launch conflict for issue #{active.issue_number}: {result.reason}"
+            )
+
     selected = _launch_selected_tasks(
         LaunchContext(
             selected,
@@ -329,6 +439,7 @@ def _finalize_launch(
             now,
             config,
             open_prs=ctx.prs,
+            on_launch_committed=_record_launch,
         )
     )
     ctx.run_state.last_reconciled_at = now
@@ -390,8 +501,9 @@ def run_scheduling_phase(
     `_filter_deviation_blocked_candidates`（deviation_eventsによる絞り込み）
     はdispatch_filtersに定義済みのため、ここではそれを呼び出す。
     """
+    dependency_view = with_confirmed_completions(ctx, completed_issue_numbers)
     candidate_tasks, task_to_base_branch, skips = _determine_candidate_tasks(
-        ctx, issues, lock_result, completed_issue_numbers, any_forced_serial, now
+        ctx, issues, lock_result, dependency_view, any_forced_serial, now
     )
 
     undeviated = _filter_deviation_blocked_candidates(
@@ -429,5 +541,8 @@ def run_scheduling_phase(
         # レポートが実態と食い違わないよう、起動結果で判定を突き合わせる。
         decisions=reconcile_decisions_with_launches(scheduling.decisions, selected),
         execution_selections=execution_selections,
-        skips=skips,
+        skips=sorted(
+            skips,
+            key=lambda record: (record.issue_number, record.reason, record.detail),
+        ),
     )

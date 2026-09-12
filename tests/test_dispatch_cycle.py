@@ -25,6 +25,7 @@ from orchestune.dispatch.cycle_context import (
     _fetch_issues,
     _group_by_status,
 )
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import (
     _determine_candidate_tasks,
@@ -111,6 +112,10 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
+    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
+        defaults["dependency_resolution"] = resolve_all_dependencies(
+            overrides["tasks_by_issue"]
+        )
     return CycleContext(**defaults)
 
 
