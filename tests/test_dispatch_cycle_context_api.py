@@ -317,6 +317,25 @@ class TestQueries:
             )
             assert ctx.launch_fact(1) is None, bad_pid
 
+    def test_launch_fact_is_none_when_external_id_is_not_a_string(self):
+        # #868レビュー対応: `run_state.json`が保持し得る非文字列の真値
+        # (例: `true`)は、`bool(...)`だけではプロバイダIDとして誤認する。
+        for bad_external_id in (True, 12345):
+            ctx = _ctx(
+                tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+                run_state=RunState(
+                    active_worktrees={
+                        "1": _active(
+                            1,
+                            pid=None,
+                            external_id=bad_external_id,
+                            launch_phase=None,
+                        )
+                    }
+                ),
+            )
+            assert ctx.launch_fact(1) is None, bad_external_id
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""

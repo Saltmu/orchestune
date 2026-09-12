@@ -231,6 +231,17 @@ class TestRecordLaunch:
             assert result.status == RecordStatus.CONFLICT, bad_pid
             assert result.reason == REASON_INVALID_LAUNCH, bad_pid
 
+    def test_invalid_launch_non_string_external_id_is_conflict(self):
+        # 非文字列の真値(例: true)は有効なプロバイダIDではない
+        # (#868レビュー対応)。
+        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
+        for bad_external_id in (True, 12345):
+            result = ctx.record_launch(
+                _active(1, pid=None, external_id=bad_external_id)
+            )
+            assert result.status == RecordStatus.CONFLICT, bad_external_id
+            assert result.reason == REASON_INVALID_LAUNCH, bad_external_id
+
     def test_invalid_launch_phase_prepared_is_conflict(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         result = ctx.record_launch(_active(1, launch_phase="prepared"))

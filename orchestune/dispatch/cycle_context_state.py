@@ -168,16 +168,23 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     `bool`(`isinstance(True, int)`)も届き得る——POSIXでは`0`や負数のpidは
     プロセスグループ宛のシグナル送信という別の意味を持ち、生存確認の対象
     identifierとして使えない。
+
+    external_idは非空の`str`のみを有効なプロバイダIDとして扱う。同じ理由で
+    `run_state.json`が保持する`true`等の非文字列値は、`bool(...)`だけでは
+    truthyとして誤認する——プロバイダAPIへの照会には文字列のIDが必要。
     """
     has_usable_pid = (
         isinstance(active.pid, int)
         and not isinstance(active.pid, bool)
         and active.pid > 0
     )
+    has_usable_external_id = (
+        isinstance(active.external_id, str) and active.external_id != ""
+    )
     return (
         bool(active.branch)
         and bool(active.worktree_path)
-        and (has_usable_pid or bool(active.external_id))
+        and (has_usable_pid or has_usable_external_id)
     )
 
 
