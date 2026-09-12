@@ -577,6 +577,30 @@ class TestRecordTransition:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_EXECUTION_MISMATCH
 
+    def test_unchanged_handleless_observation_with_execution_active_is_still_mismatch(
+        self,
+    ):
+        # #868レビュー対応: handle欠如(pid/external_idいずれも無い)の不確定
+        # 起動は構築時からactive=Trueだがlaunch_fact=None。同じラベル・
+        # execution_active=trueをそのまま再送してNOOP判定に落ちる経路でも、
+        # 起動事実の検証を経ずにNOOPへ倒れてはならない。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(1, pid=None, external_id=None, launch_phase=None)
+                }
+            ),
+        )
+        result = ctx.record_transition(
+            1,
+            expected_labels=(StatusLabel.IN_PROGRESS,),
+            verified_labels=(StatusLabel.IN_PROGRESS,),
+            execution_active=True,
+        )
+        assert result.status == RecordStatus.CONFLICT
+        assert result.reason == REASON_EXECUTION_MISMATCH
+
     def test_blocked_to_in_progress_is_allowed_given_an_existing_launch_fact(self):
         # QUEUED / BLOCKED いずれからもIN_PROGRESSへ遷移できる(遷移表)。
         ctx = _ctx(

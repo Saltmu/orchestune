@@ -433,6 +433,17 @@ class _CycleState:
             return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
         target = verified_primaries[0]
 
+        # execution_active=trueの整合性は、NOOP/APPLIEDのいずれであるかに関わらず
+        # 常に検証する(#868レビュー対応)。NOOP判定を先に行うと、handle欠如の
+        # 不確定起動(構築時からactive=Trueだがlaunch_fact=None)に対して同じ
+        # ラベル・execution_active=trueをそのまま再送するだけで、起動事実の
+        # 検証を経ずにNOOPが返ってしまう。
+        if execution_active:
+            if self.launch_fact(issue_number) is None:
+                return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
+            if target in (StatusLabel.QUEUED, StatusLabel.BLOCKED):
+                return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
+
         current_labels = self._effective_labels.get(issue_number, ())
         current_active = self._is_in_progress(issue_number)
         verified_set = _normalize_labels(verified_labels)
@@ -472,12 +483,6 @@ class _CycleState:
             # 有効。既にIN_PROGRESSな同一主状態への再記録(起動終了の反映)は
             # 別枠であり、ここでは対象にしない。
             return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_TRANSITION)
-
-        if execution_active:
-            if self.launch_fact(issue_number) is None:
-                return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
-            if target in (StatusLabel.QUEUED, StatusLabel.BLOCKED):
-                return RecordResult(RecordStatus.CONFLICT, REASON_EXECUTION_MISMATCH)
 
         self._effective_labels[issue_number] = verified_set
         self._apply_execution_active(issue_number, execution_active)
