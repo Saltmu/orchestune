@@ -270,6 +270,22 @@ class TestRecordLaunch:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_LAUNCH_MISMATCH
 
+    def test_handleless_recovered_launch_is_indeterminate_and_conflicts(self):
+        # #868レビュー対応: handle無し(pid/external_idいずれも無い)で復元
+        # されたActiveWorktree(recoveryのfallback)は、構築時から不確定として
+        # 保持され、新しいrecord_launchも常にlaunch-mismatchとなる。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(1, pid=None, external_id=None, launch_phase=None)
+                }
+            ),
+        )
+        result = ctx.record_launch(_active(1))
+        assert result.status == RecordStatus.CONFLICT
+        assert result.reason == REASON_LAUNCH_MISMATCH
+
     def test_input_mutation_after_record_launch_does_not_change_result(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         active = _active(1, branch="claude/issue-1-original")

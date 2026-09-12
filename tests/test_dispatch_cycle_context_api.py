@@ -259,6 +259,33 @@ class TestQueries:
             )
             assert ctx.launch_fact(1) is None, phase
 
+    def test_launch_fact_is_none_when_handle_is_missing(self):
+        # #868レビュー対応: recoveryがジャーナルも一致するPRも見つけられず
+        # handle無し(pid/external_idいずれも無い)で復元したActiveWorktree
+        # (`recovery._build_restored_active_worktree`)を、誤って確定的な
+        # LaunchFactへ昇格させない。record_launchが同じ入力をinvalid-launch
+        # として拒否するのと矛盾させない。
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(1, pid=None, external_id=None, launch_phase=None)
+                }
+            ),
+        )
+        assert ctx.launch_fact(1) is None
+
+    def test_handleless_launch_excludes_issue_from_candidate_views(self):
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(1, pid=None, external_id=None, launch_phase=None)
+                }
+            ),
+        )
+        assert ctx.queued_tasks() == ()
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""

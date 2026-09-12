@@ -135,6 +135,24 @@ class _LaunchState:
     indeterminate: bool
 
 
+def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
+    """`record_launch`のinvalid-launch判定と同じ基準(#868レビュー対応)。
+
+    branch/worktree_pathが空、またはpidもexternal_idも無い(生存確認も
+    プロバイダへの照会もできない)場合は、有効な起動として扱わない。
+    構築時の初期観測にもこの基準を適用しないと、`recovery`がジャーナルも
+    一致するPRも見つけられずhandle無しで復元した`ActiveWorktree`
+    (`_build_restored_active_worktree`参照)を、誤って確定的なLaunchFactへ
+    昇格させてしまう——`record_launch`が同じ入力をinvalid-launchとして
+    拒否するのと矛盾する。
+    """
+    return (
+        bool(active.branch)
+        and bool(active.worktree_path)
+        and (active.pid is not None or active.external_id is not None)
+    )
+
+
 def _build_launch_states(
     active_worktrees: Mapping[str, ActiveWorktree],
 ) -> dict[int, _LaunchState]:
@@ -152,8 +170,11 @@ def _build_launch_states(
             )
             continue
         active = entries[0]
-        if active.launch_phase not in _ACCEPTED_LAUNCH_PHASES:
-            # 起動前(prepared)・結果不明(unknown)の不確定起動。
+        if active.launch_phase not in _ACCEPTED_LAUNCH_PHASES or (
+            not _has_valid_launch_handle(active)
+        ):
+            # 起動前(prepared)・結果不明(unknown)、またはhandle欠如
+            # (pid/external_idいずれも無い)の不確定起動。
             states[issue_number] = _LaunchState(
                 fact=None, active=True, indeterminate=True
             )
@@ -329,11 +350,8 @@ class _CycleState:
         issue_number = active.issue_number
         if issue_number not in self._tasks:
             return RecordResult(RecordStatus.CONFLICT, REASON_UNKNOWN_ISSUE)
-        if (
-            not active.branch
-            or not active.worktree_path
-            or (active.pid is None and active.external_id is None)
-            or active.launch_phase not in _ACCEPTED_LAUNCH_PHASES
+        if not _has_valid_launch_handle(active) or (
+            active.launch_phase not in _ACCEPTED_LAUNCH_PHASES
         ):
             return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_LAUNCH)
         if self._is_terminal_for_launch(issue_number):
