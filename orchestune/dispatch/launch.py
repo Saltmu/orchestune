@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING
 
 from orchestune.branch_naming import branch_matches_task, build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
-from orchestune.dispatch.dependency_resolution import (
-    TaskDependencies,
-    resolve_task_dependencies,
+from orchestune.dispatch.dependency_policy import (
+    DependencyPolicyView,
+    StackDecision,
+    decide_stack_target,
 )
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import (
@@ -24,7 +25,7 @@ from orchestune.dispatch.launch_attempts import (
     LaunchOutcomeUnknown,
     prepare_journaled_target,
 )
-from orchestune.dispatch.scoring import Task, parse_task_from_issue
+from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.worktree import LaunchResult, create_worktree_and_launch
 from orchestune.infra.git_cli import run_git
@@ -34,7 +35,7 @@ from orchestune.issue_parsing import (
     launch_history_in_window,
 )
 from orchestune.labels import StatusLabel
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import PrRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
@@ -42,86 +43,30 @@ if TYPE_CHECKING:
     from orchestune.dispatch.targets import DispatchTarget
 
 
-def _is_task_stack_eligible(
-    task: Task,
-    dependency_resolution: dict[int, TaskDependencies],
-    done_issue_numbers: set[int],
-    ci_passed_pr_issue_numbers: set[int],
-    resolved_grand_deps: set[int],
-) -> tuple[bool, list[int]]:
-    """#799: `task.depends_on`（subtask_id文字列）を直接見るのではなく、
-    親Issueでスコープ済みに解決されたIssue番号（`dependency_resolution`）を
-    見る。未解決の依存が1件でもあれば、他の依存がどれだけ揃っていても
-    スタック不可（未解決を「依存なし」として読み飛ばしてはならない）。
-    """
-    deps = dependency_resolution.get(task.issue_number, TaskDependencies())
-    if deps.unresolved:
-        return False, []
+LaunchCommitted = Callable[[ActiveWorktree], None]
 
-    # NOTE: Keep loop condition in sync with resolve_stackable_dependency_issue;
-    # enforced by test_dispatch_stackable_dependency_consistency.py (#860).
-    all_resolved_or_stackable = True
-    stackable_deps: list[int] = []
-    for dep_issue in deps.resolved:
-        if dep_issue in done_issue_numbers:
-            continue
-        elif dep_issue in ci_passed_pr_issue_numbers:
-            # 孫依存（依存元タスク自身の依存）も、分かる範囲では検証する
-            # （#799受け入れ基準）。依存元タスクの解決結果が無い場合は
-            # 従来通り検証不能として素通しする。
-            grand_deps = dependency_resolution.get(dep_issue)
-            if grand_deps is not None and (
-                grand_deps.unresolved
-                or not all(
-                    grand_dep in resolved_grand_deps
-                    for grand_dep in grand_deps.resolved
-                )
-            ):
-                all_resolved_or_stackable = False
-                break
-            stackable_deps.append(dep_issue)
-        else:
-            all_resolved_or_stackable = False
-            break
-    return all_resolved_or_stackable, stackable_deps
+
+def _is_task_stack_eligible(task: Task, view: DependencyPolicyView) -> StackDecision:
+    """Delegate launch eligibility and base selection to the shared policy."""
+    return decide_stack_target(task.issue_number, view)
 
 
 def _get_stack_eligible_tasks(
-    blocked_issues: list[IssueRecord],
-    tasks_by_issue: dict[int, Task],
-    done_issue_numbers: set[int],
-    ci_passed_pr_issue_numbers: set[int],
-    branch_by_issue_number: dict[int, str],
-    dependency_resolution: dict[int, TaskDependencies],
-    completed_issue_numbers: set[int] | None = None,
+    tasks: Sequence[Task], view: DependencyPolicyView
 ) -> tuple[list[Task], dict[int, str]]:
     stack_eligible_tasks = []
     task_to_base_branch = {}
-    resolved_grand_deps = done_issue_numbers | (completed_issue_numbers or set())
 
-    for issue in blocked_issues:
-        task = tasks_by_issue.get(issue.number) or parse_task_from_issue(issue)
+    for task in sorted(tasks, key=lambda candidate: candidate.issue_number):
         if not task.subtask_id:
-            continue
-        deps = dependency_resolution.get(
-            task.issue_number
-        ) or resolve_task_dependencies(task, tasks_by_issue)
-        if deps.is_empty:
             continue
         if StatusLabel.IN_PROGRESS in task.status_labels:
             continue
-
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dependency_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps,
-        )
-        if all_ok and len(stackable_deps) == 1:
-            stack_eligible_tasks.append(task)
-            dep_issue = stackable_deps[0]
-            task_to_base_branch[task.issue_number] = branch_by_issue_number[dep_issue]
+        decision = _is_task_stack_eligible(task, view)
+        if decision.target is None:
+            continue
+        stack_eligible_tasks.append(task)
+        task_to_base_branch[task.issue_number] = decision.target.branch
 
     return stack_eligible_tasks, task_to_base_branch
 
@@ -449,10 +394,10 @@ def _record_successful_launch(
     now: float,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None,
+    on_launch_committed: LaunchCommitted | None = None,
 ) -> None:
-    run_state.active_worktrees[str(task.issue_number)] = (
-        _build_active_worktree_from_launch(task, plan, launch, run_state, now)
-    )
+    active = _build_active_worktree_from_launch(task, plan, launch, run_state, now)
+    run_state.active_worktrees[str(task.issue_number)] = active
     run_state.launch_history.append(now)
     reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)
     if reclaim_record is not None and reclaim_record.pending:
@@ -466,6 +411,8 @@ def _record_successful_launch(
         launch_window_seconds=config.window_seconds,
         open_prs=open_prs,
     )
+    if on_launch_committed is not None:
+        on_launch_committed(active)
     transition_status_label(
         config.resolved_forge,
         task.issue_number,
@@ -505,6 +452,7 @@ def _apply_task_launches(
     now: float,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
+    on_launch_committed: LaunchCommitted | None = None,
 ) -> list[Task]:
     actually_selected = []
     for plan in plans:
@@ -533,7 +481,14 @@ def _apply_task_launches(
 
             commit_reservation()
             _record_successful_launch(
-                task, plan, launch, run_state, now, config, open_prs
+                task,
+                plan,
+                launch,
+                run_state,
+                now,
+                config,
+                open_prs,
+                on_launch_committed,
             )
             actually_selected.append(task)
 
@@ -558,6 +513,7 @@ class LaunchContext:
     now: float
     config: DispatcherConfig
     open_prs: Sequence[PrRecord] | None = None
+    on_launch_committed: LaunchCommitted | None = None
 
 
 def _launch_selected_tasks(ctx: LaunchContext) -> list[Task]:
@@ -567,5 +523,10 @@ def _launch_selected_tasks(ctx: LaunchContext) -> list[Task]:
 
     plans = _decide_task_launch_plan(ctx.selected, ctx.task_to_base_branch, ctx.config)
     return _apply_task_launches(
-        plans, ctx.run_state, ctx.now, ctx.config, open_prs=ctx.open_prs
+        plans,
+        ctx.run_state,
+        ctx.now,
+        ctx.config,
+        open_prs=ctx.open_prs,
+        on_launch_committed=ctx.on_launch_committed,
     )

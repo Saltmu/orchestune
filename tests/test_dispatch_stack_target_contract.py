@@ -10,6 +10,7 @@ from orchestune.dispatch.dependency_assessment import (
     DependencyAssessment,
     DependencyState,
 )
+from orchestune.dispatch.launch import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from tests.conftest import make_task
@@ -43,7 +44,9 @@ def _task():
     )
 
 
-def test_rebase_and_base_wrappers_return_the_same_safe_stack_branch(tmp_path) -> None:
+def test_launch_rebase_and_base_wrappers_return_the_same_safe_stack_branch(
+    tmp_path,
+) -> None:
     view = FakeDependencyPolicyView(
         {
             3: _assessment((2, DependencyState.CI_PASSED_UNMERGED)),
@@ -57,6 +60,11 @@ def test_rebase_and_base_wrappers_return_the_same_safe_stack_branch(tmp_path) ->
         run_state_path=tmp_path / "state.json",
     )
 
+    launch = _is_task_stack_eligible(_task(), view)
+
+    assert launch.target is not None
+    assert launch.target.issue_number == 2
+    assert launch.target.branch == "feat/issue-2-b"
     assert _decide_rebase_target(_task(), view) == "feat/issue-2-b"
     assert _resolve_base_branch_for_task(_task(), config, view) == "feat/issue-2-b"
 
@@ -85,5 +93,6 @@ def test_no_safe_target_means_no_rebase_and_parent_base_fallback(
         run_state_path=tmp_path / "state.json",
     )
 
+    assert _is_task_stack_eligible(_task(), view).target is None
     assert _decide_rebase_target(_task(), view) is None
     assert _resolve_base_branch_for_task(_task(), config, view) == "parent/issue-823"

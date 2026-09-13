@@ -30,6 +30,7 @@ from orchestune.dispatch.dependency_resolution import (
     REASON_MISSING,
     TaskDependencies,
     UnresolvedDependency,
+    resolve_all_dependencies,
 )
 from orchestune.dispatch.launch import TaskLaunchPlan, _record_successful_launch
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
@@ -84,24 +85,33 @@ def _config(tmp_path, forge: MagicMock, **overrides) -> DispatcherConfig:
 
 
 def _context(config: DispatcherConfig, tasks: list[Task], **overrides) -> CycleContext:
-    context = CycleContext(
-        run_state=RunState(),
-        tasks_by_issue={task.issue_number: task for task in tasks},
-        issue_number_by_subtask_id={
-            task.subtask_id: task.issue_number for task in tasks
-        },
-        dependency_resolution={},
-        done_issue_numbers=set(),
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        pr_by_branch={},
+    tasks_by_issue = {task.issue_number: task for task in tasks}
+    return CycleContext(
+        run_state=overrides.get("run_state", RunState()),
+        tasks_by_issue=tasks_by_issue,
+        issue_number_by_subtask_id=overrides.get(
+            "issue_number_by_subtask_id",
+            {task.subtask_id: task.issue_number for task in tasks},
+        ),
+        dependency_resolution=overrides.get(
+            "dependency_resolution", resolve_all_dependencies(tasks_by_issue)
+        ),
+        done_issue_numbers=overrides.get("done_issue_numbers", set()),
+        ci_passed_pr_issue_numbers=overrides.get("ci_passed_pr_issue_numbers", set()),
+        changes_requested_issue_numbers=overrides.get(
+            "changes_requested_issue_numbers", set()
+        ),
+        branch_by_issue_number=overrides.get("branch_by_issue_number", {}),
+        prs=overrides.get("prs", []),
+        pr_by_branch=overrides.get("pr_by_branch", {}),
         config=config,
+        prior_parent_merge_hold_issue_numbers=overrides.get(
+            "prior_parent_merge_hold_issue_numbers", frozenset()
+        ),
+        prior_parent_merge_completed_issue_numbers=overrides.get(
+            "prior_parent_merge_completed_issue_numbers", frozenset()
+        ),
     )
-    for name, value in overrides.items():
-        setattr(context, name, value)
-    return context
 
 
 def _empty_issues() -> IssuesByStatus:
@@ -185,7 +195,9 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
     config = _config(tmp_path, forge)
     candidates = [_task(30), _task(10), _task(20, status="status:blocked")]
     dependency_resolution = {
+        10: TaskDependencies(),
         20: TaskDependencies(resolved=(99,)),
+        30: TaskDependencies(),
         99: TaskDependencies(),
     }
     ctx = _context(
@@ -206,15 +218,15 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
     lock_result = ExternalLockScanResult([], [])
 
     population, _, skips = _determine_candidate_tasks(
-        ctx, issues, lock_result, set(), False, 100.0
+        ctx, lock_result, set(), False, 100.0
     )
     result = run_scheduling_phase(
         ctx, issues, lock_result, set(), False, [], 100.0, config
     )
 
-    assert [task.issue_number for task in population] == [30, 10, 20]
-    # Current scoring tie-break is Issue number ascending (#871 will also make
-    # population/SkipRecord order ascending; these contracts remain distinct).
+    assert [task.issue_number for task in population] == [10, 20, 30]
+    # The selector remains free to order its selected result by score after the
+    # input population has been normalized by Issue number.
     assert [task.issue_number for task in result.selected] == [10, 20, 30]
     assert skips == []
 
@@ -233,25 +245,16 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
             )
         },
     )
-    skip_issues = IssuesByStatus(
-        queued=[make_issue(30)],
-        locked=[],
-        in_progress=[],
-        blocked=[make_issue(20, labels=("status:blocked",))],
-        done=[],
-        not_needed=[],
-    )
     conflict = ExternalLockConflict("branch", "external/topic")
     _, _, phase_skips = _determine_candidate_tasks(
         skip_ctx,
-        skip_issues,
         ExternalLockScanResult([], [], {40: (conflict,)}),
         set(),
         False,
         100.0,
     )
 
-    assert [record.issue_number for record in phase_skips] == [40, 30, 20]
+    assert [record.issue_number for record in phase_skips] == [20, 30, 40, 40]
     assert [record.issue_number for record in merge_skips(phase_skips)] == [20, 30, 40]
 
 
@@ -366,6 +369,7 @@ def test_successful_launch_partial_update_contract(
     run_state = RunState()
     save_error = RuntimeError("run-state failed")
     label_error = RuntimeError("forge label failed")
+    committed = MagicMock()
 
     with patch("orchestune.dispatch.launch.save_run_state") as save:
         if failure_surface == "run-state":
@@ -376,14 +380,23 @@ def test_successful_launch_partial_update_contract(
             expected = label_error
         with pytest.raises(RuntimeError, match=str(expected)):
             _record_successful_launch(
-                task, plan, launch, run_state, 100.0, config, open_prs=[]
+                task,
+                plan,
+                launch,
+                run_state,
+                100.0,
+                config,
+                open_prs=[],
+                on_launch_committed=committed,
             )
 
     assert set(run_state.active_worktrees) == {"10"}
     assert run_state.launch_history == [100.0]
     if failure_surface == "run-state":
+        committed.assert_not_called()
         forge.add_label.assert_not_called()
     else:
         save.assert_called_once()
+        committed.assert_called_once_with(run_state.active_worktrees["10"])
         forge.add_label.assert_called_once_with(10, "status:in-progress")
         forge.remove_label.assert_not_called()

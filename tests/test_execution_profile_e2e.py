@@ -751,6 +751,10 @@ model_tier: strong
         in_memory_forge.remove_label(num, "status:in-progress")
         in_memory_forge.add_label(num, "status:queued")
         in_memory_forge.set_label_actor(num, "status:queued", "bot")
+        # This test starts a second independent launch to exercise CLI
+        # overrides. Clear the first launch's durable active record as well
+        # as resetting its Forge label.
+        config.run_state_path.unlink()
 
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),

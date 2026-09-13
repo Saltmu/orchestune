@@ -126,15 +126,10 @@ class TestStackableDependencyConsistency:
         assert dep_issue == 1
 
         # 1. launch
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is True
-        assert stackable_deps == [1]
+        launch = _is_task_stack_eligible(task, view)
+        assert launch.target is not None
+        assert launch.target.issue_number == 1
+        assert launch.target.branch == "claude/issue-1-task-a"
 
         # 2. rebase
         rebase_target = _decide_rebase_target(task, view)
@@ -168,14 +163,7 @@ class TestStackableDependencyConsistency:
         assert dep_issue is None
 
         # 1. launch
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is False
+        assert _is_task_stack_eligible(task, view).target is None
 
         # 2. rebase
         rebase_target = _decide_rebase_target(task, view)
@@ -209,14 +197,7 @@ class TestStackableDependencyConsistency:
             is None
         )
 
-        all_ok, _ = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is False
+        assert _is_task_stack_eligible(task, view).target is None
 
         rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
@@ -251,15 +232,7 @@ class TestStackableDependencyConsistency:
             is None
         )
 
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is False
-        assert stackable_deps == []
+        assert _is_task_stack_eligible(task, view).target is None
 
         rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
@@ -290,15 +263,7 @@ class TestStackableDependencyConsistency:
             is None
         )
 
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is True
-        assert stackable_deps == []  # スタックは不要（通常起動可能）
+        assert _is_task_stack_eligible(task, view).target is None
 
         rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
@@ -336,16 +301,7 @@ class TestStackableDependencyConsistency:
             is None
         )
 
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is True
-        # launch では複数スタック可能でも len == 1 でないためスタック起動の対象外となる
-        assert len(stackable_deps) == 2
+        assert _is_task_stack_eligible(task, view).target is None
 
         rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None
@@ -374,15 +330,7 @@ class TestStackableDependencyConsistency:
             is None
         )
 
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dep_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps=set(),
-        )
-        assert all_ok is True
-        assert stackable_deps == []
+        assert _is_task_stack_eligible(task, view).target is None
 
         rebase_target = _decide_rebase_target(task, view)
         assert rebase_target is None

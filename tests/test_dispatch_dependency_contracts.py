@@ -12,6 +12,7 @@ from orchestune.dispatch.dependency_assessment import (
     DependencyAssessment,
     assess_dependencies,
 )
+from orchestune.dispatch.dependency_policy import StackDecision
 from orchestune.dispatch.dependency_resolution import (
     REASON_AMBIGUOUS,
     REASON_MISSING,
@@ -235,32 +236,24 @@ def _stack_consumer_results(
     resolution: dict[int, TaskDependencies],
     branches: dict[int, str],
     tmp_path,
-) -> tuple[tuple[bool, list[int]], str, str | None]:
-    launch = _is_task_stack_eligible(
-        task,
-        resolution,
-        done_issue_numbers=set(),
-        ci_passed_pr_issue_numbers={2},
-        resolved_grand_deps=set(),
-    )
+) -> tuple[StackDecision, str, str | None]:
     config = DispatcherConfig(
         parent_issue_number=823,
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
     )
     view = _ContractPolicyView(resolution, branches)
+    launch = _is_task_stack_eligible(task, view)
     base = _resolve_base_branch_for_task(task, config, view)
     rebase = _decide_rebase_target(task, view)
     return launch, base, rebase
 
 
 @pytest.mark.parametrize(
-    ("missing_b_resolution", "expected_launch"),
-    [(False, (False, [])), (True, (True, [2]))],
-    ids=["c-incomplete", "b-resolution-missing"],
+    "missing_b_resolution", [False, True], ids=["c-incomplete", "b-resolution-missing"]
 )
 def test_grand_dependency_contract_issue_870_871(
-    tmp_path, missing_b_resolution, expected_launch
+    tmp_path, missing_b_resolution
 ) -> None:
     """Base/rebase fail closed for incomplete or unavailable B assessment."""
     task_a, resolution, branches = _grand_dependency_contract()
@@ -271,7 +264,7 @@ def test_grand_dependency_contract_issue_870_871(
         task_a, resolution, branches, tmp_path
     )
 
-    assert launch == expected_launch
+    assert launch.target is None
     assert base == "parent/issue-823"
     assert rebase is None
 
