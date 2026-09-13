@@ -321,7 +321,7 @@ class _DispatchConsistencyAdapter:
         return self._desired_inputs()[0]
 
     def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState:
-        desired_tasks, completed_dependency_ids = self._desired_inputs()
+        desired_tasks, completed_ids = self._desired_inputs()
         intents = (
             IntentJournal(status_intent_journal_path(self._config)).pending(
                 now=observed.observed_at
@@ -333,7 +333,7 @@ class _DispatchConsistencyAdapter:
             observed.repository_id,
             desired_tasks,
             active_task_ids=self._active_task_ids(),
-            completed_task_ids=completed_dependency_ids,
+            completed_task_ids=completed_ids,
             policy=DispatchPolicy(
                 max_concurrent=self._config.max_concurrent,
                 task_timeout_seconds=self._config.task_timeout_seconds,

@@ -13,7 +13,10 @@ from orchestune.dispatch.dependency_resolution import (
     REASON_MISSING,
     UnresolvedDependency,
 )
-from orchestune.dispatch.status_dependency_policy import dependencies_completed
+from orchestune.dispatch.status_dependency_policy import (
+    completed_dependency_ids,
+    dependencies_completed,
+)
 
 
 def _assessment(
@@ -61,3 +64,14 @@ def test_dependencies_completed_truth_table(
     assessment: DependencyAssessment | None, expected: bool
 ) -> None:
     assert dependencies_completed(assessment) is expected
+
+
+def test_completed_ids_come_only_from_fully_completed_assessments() -> None:
+    completed = _assessment(DependencyState.COMPLETED)
+    partial = _assessment(DependencyState.COMPLETED, DependencyState.WAITING)
+    unresolved = _assessment(
+        DependencyState.COMPLETED,
+        unresolved=(UnresolvedDependency(raw="missing", reason=REASON_MISSING),),
+    )
+
+    assert completed_dependency_ids((None, completed, partial, unresolved)) == {"1"}

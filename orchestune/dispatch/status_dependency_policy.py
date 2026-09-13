@@ -43,18 +43,12 @@ def completed_dependency_ids(
     """Collect completed IDs while preserving each assessment's fail-closed policy."""
     completed_ids: set[str] = set()
     for assessment in assessments:
-        if assessment is None:
+        if not dependencies_completed(assessment):
             continue
-        completed = (
-            assessment.resolved
-            if dependencies_completed(assessment)
-            else tuple(
-                dependency
-                for dependency in assessment.resolved
-                if dependency.state is DependencyState.COMPLETED
-            )
+        assert assessment is not None
+        completed_ids.update(
+            str(dependency.issue_number) for dependency in assessment.resolved
         )
-        completed_ids.update(str(dependency.issue_number) for dependency in completed)
     return frozenset(completed_ids)
 
 
