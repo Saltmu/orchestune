@@ -32,6 +32,7 @@ from orchestune.dispatch.cycle import (
 )
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
@@ -389,7 +390,9 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
         issue_number_by_subtask_id={
             task.subtask_id: issue_number for issue_number, task in tasks.items()
         },
-        dependency_resolution={},
+        dependency_resolution={
+            issue_number: TaskDependencies() for issue_number in tasks
+        },
         done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
@@ -403,6 +406,7 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
     )
     fake_forge.list_issues_by_label.side_effect = list_issues
     fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue.side_effect = current_issue
     fake_forge.get_issue_state.return_value = "OPEN"
     fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
         labels_by_issue[issue_number]
@@ -513,7 +517,7 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         run_state=run_state,
         tasks_by_issue={709: task},
         issue_number_by_subtask_id={task.subtask_id: 709},
-        dependency_resolution={},
+        dependency_resolution={709: TaskDependencies()},
         done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
@@ -526,6 +530,7 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         [issue] if label in issue.labels else []
     )
     fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue.return_value = issue
     fake_forge.get_issue_state.return_value = "OPEN"
     fake_forge.get_issue_labels.return_value = issue.labels
     fake_forge.remove_label.side_effect = RuntimeError("Forge unavailable")
@@ -611,6 +616,7 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
 
     fake_forge.list_issues_by_label.side_effect = list_issues
     fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue.side_effect = current_issue
     fake_forge.get_issue_state.return_value = "OPEN"
     fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
         labels[issue_number]
@@ -705,6 +711,7 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
 
     fake_forge.list_issues_by_label.side_effect = list_issues
     fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue.side_effect = current_issue
     fake_forge.get_issue_state.return_value = "OPEN"
     fake_forge.get_issue_labels.side_effect = lambda issue_number: tuple(
         labels[issue_number]
@@ -807,6 +814,7 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
 
     fake_forge.list_issues_by_label.side_effect = list_issues
     fake_forge.list_open_prs.return_value = []
+    fake_forge.get_issue.side_effect = current_issue
     fake_forge.get_issue_state.return_value = "OPEN"
     fake_forge.get_issue_labels.side_effect = get_issue_labels
     fake_forge.get_label_actor.return_value = "trusted-actor"

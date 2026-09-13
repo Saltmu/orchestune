@@ -522,6 +522,32 @@ class TestIsEffectivelyDone:
         assert ctx.is_effectively_done(1) is True
 
 
+class TestConfirmedCompletion:
+    def test_initial_terminal_labels_are_not_confirmation_evidence(self):
+        ctx = _ctx(
+            tasks_by_issue={
+                1: _task(1, status_labels=(StatusLabel.DONE,)),
+                2: _task(2, status_labels=(StatusLabel.NOT_NEEDED,)),
+            }
+        )
+
+        assert ctx.is_completion_confirmed(1) is False
+        assert ctx.is_completion_confirmed(2) is False
+
+    def test_recorded_completion_is_confirmed(self):
+        ctx = _ctx(tasks_by_issue={1: _task(1)})
+
+        ctx.record_completion(1)
+
+        assert ctx.is_completion_confirmed(1) is True
+
+    def test_verified_prior_merge_is_confirmed_even_for_unknown_issue(self):
+        ctx = _ctx(prior_parent_merge_completed_issue_numbers=frozenset({7}))
+
+        assert ctx.is_completion_confirmed(7) is True
+        assert ctx.is_completion_confirmed(999) is False
+
+
 class TestCandidateViews:
     """`queued_tasks` / `blocked_tasks`（F段4）。"""
 

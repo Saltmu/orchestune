@@ -6,15 +6,21 @@
 """
 
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from orchestune.consistency.models import ConsistencyScope, ObservedRepositoryState
+from orchestune.consistency.vocabulary import DESIRED_DEPENDENCIES_RESOLVED
 from orchestune.dag.models import (
     FootprintConflict,
     SubTask,
     compile_extra_ignore_patterns,
 )
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.reconciliation import (
     _collect_active_conflict_subtask_ids,
@@ -499,6 +505,75 @@ class TestHandleBlockedRecomputeRecovery:
         ]
         mock_add.assert_called_once_with(1, "status:queued")
         assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+
+    def _normal_promotion_dependency_result(
+        self, tmp_path, *, dependency_labels, confirmed=()
+    ):
+        subject = _task(
+            issue_number=1,
+            subtask_id="subject",
+            status_labels=("status:blocked",),
+            depends_on=("dep",),
+            parent_number=100,
+        )
+        dependency = _task(
+            issue_number=2,
+            subtask_id="dep",
+            status_labels=dependency_labels,
+            parent_number=100,
+        )
+        run_state = RunState(active_worktrees={})
+        ctx = _ctx(tasks_by_issue={1: subject, 2: dependency}, run_state=run_state)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=False,
+        )
+        adapter = _DispatchConsistencyAdapter(
+            config,
+            run_state,
+            _IssuesStub([]),
+            ctx,
+            fresh=False,
+            confirmed_completion_numbers=confirmed,
+        )
+        desired = adapter.derive(
+            ObservedRepositoryState(
+                repository_id="test-repository",
+                observed_at=datetime(2026, 9, 13, tzinfo=UTC),
+            )
+        )
+        (fact,) = (
+            fact
+            for fact in desired.facts
+            if fact.scope is ConsistencyScope.TASK
+            and fact.subject_id == "1"
+            and fact.name == DESIRED_DEPENDENCIES_RESOLVED
+        )
+        return fact.value
+
+    @pytest.mark.parametrize(
+        ("dependency_labels", "confirmed", "expected"),
+        (
+            (("status:done",), (), True),
+            (("status:not-needed",), (), True),
+            (("status:queued",), {2}, True),
+            (("status:queued",), (), False),
+            (("status:done", "status:queued"), (), False),
+        ),
+    )
+    def test_normal_promotion_uses_dependency_assessment_policy(
+        self, tmp_path, dependency_labels, confirmed, expected
+    ):
+        assert (
+            self._normal_promotion_dependency_result(
+                tmp_path,
+                dependency_labels=dependency_labels,
+                confirmed=confirmed,
+            )
+            is expected
+        )
 
     def test_adds_queued_before_removing_blocked(self, tmp_path):
         # #381: status:blocked-recompute除去後もstatus:blockedが併存する間は

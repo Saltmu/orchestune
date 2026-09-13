@@ -91,7 +91,6 @@ def test_unbound_execution_command_fails_closed_without_phase_owned_skip(
             worktree_root=tmp_path / "worktrees",
         ),
         adapter=Mock(),
-        completed_issue_numbers=frozenset(),
     )
 
     result = executor.execute(command)

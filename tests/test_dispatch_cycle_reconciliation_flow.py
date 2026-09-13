@@ -7,6 +7,7 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 
 import subprocess
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from unittest.mock import ANY, patch
 
 import pytest
@@ -92,6 +93,7 @@ def _track_forge_labels(fake_forge, *issues: IssueRecord) -> None:
     """Make label mutation mocks observable by fresh status precondition probes."""
     labels = {issue.number: list(issue.labels) for issue in issues}
     states = {issue.number: issue.state for issue in issues}
+    issues_by_number = {issue.number: issue for issue in issues}
 
     def add_label(issue_number, label):
         current = labels.setdefault(int(issue_number), [])
@@ -109,6 +111,11 @@ def _track_forge_labels(fake_forge, *issues: IssueRecord) -> None:
     )
     fake_forge.get_issue_state.side_effect = lambda issue_number: states.get(
         int(issue_number), "OPEN"
+    )
+    fake_forge.get_issue.side_effect = lambda issue_number: replace(
+        issues_by_number[int(issue_number)],
+        labels=tuple(labels[int(issue_number)]),
+        state=states[int(issue_number)],
     )
 
 
@@ -144,6 +151,21 @@ def _install_mutable_issue_snapshot(fake_forge, specs):
         labels_by_issue[issue_number]
     )
     fake_forge.get_issue_state.return_value = "OPEN"
+    fake_forge.get_issue.side_effect = lambda issue_number: _full_issue(
+        int(issue_number),
+        labels=tuple(labels_by_issue[int(issue_number)]),
+        subtask_id=next(
+            subtask_id
+            for number, subtask_id, _, _ in specs
+            if number == int(issue_number)
+        ),
+        depends_on=next(
+            depends_on
+            for number, _, _, depends_on in specs
+            if number == int(issue_number)
+        ),
+        parent_number=100,
+    )
     fake_forge.add_label.side_effect = add_label
     fake_forge.remove_label.side_effect = remove_label
     fake_forge.list_open_prs.return_value = []

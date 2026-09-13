@@ -44,7 +44,7 @@ from orchestune.dispatch.dependency_assessment import (
 )
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.state import ActiveWorktree
-from orchestune.dispatch.status_repair import task_lifecycle
+from orchestune.dispatch.status_repair_dependencies import task_lifecycle
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
 
@@ -384,15 +384,19 @@ class _CycleState:
         return assess_dependency_lifecycle(deps, self)
 
     def is_effectively_done(self, issue_number: int) -> bool:
-        completed_override = (
-            issue_number in self._recorded_completions
-            or issue_number in self._prior_completed
-        )
+        completed_override = self.is_completion_confirmed(issue_number)
         if issue_number not in self._tasks:
             return completed_override
         return task_lifecycle(
             self._labels(issue_number), completed=completed_override
         ) in (_TERMINAL_LIFECYCLE)
+
+    def is_completion_confirmed(self, issue_number: int) -> bool:
+        """Return only completion established by a verified in-cycle transition."""
+        return (
+            issue_number in self._recorded_completions
+            or issue_number in self._prior_completed
+        )
 
     def has_changes_requested(self, issue_number: int) -> bool:
         return issue_number in self._tasks and issue_number in self._changes_requested
@@ -573,10 +577,7 @@ class _CycleState:
         current_primary = self._current_primary(issue_number)
         lifecycle = task_lifecycle(
             current_labels,
-            completed=(
-                issue_number in self._recorded_completions
-                or issue_number in self._prior_completed
-            ),
+            completed=self.is_completion_confirmed(issue_number),
         )
         # 終端(DONE/NOT_NEEDED)から**非終端**への巻き戻しは、表の内外を問わず
         # terminal-stateとして拒否する。終端ラベルへの遷移は巻き戻しではなく

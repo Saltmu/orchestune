@@ -19,7 +19,6 @@ from orchestune.consistency.supervisor import (
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
-    _completed_issue_numbers,
     _execute_cycle_pipeline,
     _pipeline_state_changes,
     _RepairCycleState,
@@ -145,7 +144,8 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
 
     def reconcile(**kwargs):
         order.append("pre-scheduling-reconciliation")
-        assert kwargs["completed"] == {5, 7}
+        assert kwargs["completed_in_cycle"] == {5}
+        assert kwargs["ctx"].is_completion_confirmed(7)
         return ([], lock_result)
 
     def schedule(*args):
@@ -258,18 +258,17 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
     assert [record.issue_number for record in merge_skips(phase_skips)] == [20, 30, 40]
 
 
-def test_effective_completion_current_not_needed_and_subtask_id_contract_issue_868(
+def test_initial_status_labels_are_not_completion_confirmation_issue_872(
     tmp_path, fake_forge
 ) -> None:
-    """#868 will keep NOT_NEEDED but remove the current subtask_id requirement."""
+    """Initial DONE/NOT_NEEDED labels are observations, not confirmed evidence."""
     not_needed = _task(10, status="status:not-needed")
     missing_id = _task(20, status="status:done", subtask_id="")
     config = _config(tmp_path, fake_forge)
     ctx = _context(config, [not_needed, missing_id])
 
-    completed = _completed_issue_numbers(ctx, set())
-
-    assert completed == {10}
+    assert not ctx.is_completion_confirmed(10)
+    assert not ctx.is_completion_confirmed(20)
 
 
 def _decision(task: Task) -> SchedulingDecision:

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from orchestune.consistency.desired import TaskLifecycle
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import (
     PROMOTION_HOLD_LABELS,
@@ -29,35 +29,27 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_resolution import resolve_task_dependencies
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task
-from orchestune.labels import StatusLabel
+from orchestune.dispatch.status_dependency_policy import dependencies_completed
+from orchestune.dispatch.status_repair_dependencies import (
+    CompletionEvidenceView,
+    FreshDependencyEvaluation,
+    evaluate_fresh_dependencies,
+    task_lifecycle,
+)
 
 _STATUS_REPAIR_OPERATION = "supervisor-status-repair"
 
 
-def task_lifecycle(
-    status_labels: tuple[str, ...], *, completed: bool = False
-) -> TaskLifecycle:
-    """Resolve lifecycle with an explicit same-cycle completion override."""
-    if completed:
-        return TaskLifecycle.DONE
-    if StatusLabel.DONE in status_labels and StatusLabel.QUEUED in status_labels:
-        return TaskLifecycle.OPEN
-    if StatusLabel.DONE in status_labels:
-        return TaskLifecycle.DONE
-    if StatusLabel.NOT_NEEDED in status_labels:
-        return TaskLifecycle.NOT_NEEDED
-    if any(
-        label in status_labels
-        for label in (
-            StatusLabel.BLOCKED_HUMAN_REVIEW,
-            StatusLabel.MANUAL_MERGE_REQUIRED,
-        )
-    ):
-        return TaskLifecycle.HUMAN_REVIEW
-    return TaskLifecycle.OPEN
+@dataclass(frozen=True, slots=True)
+class VerifiedStatusTransition:
+    """A status transition proven by live state and a verified intent journal."""
+
+    issue_number: int
+    before_labels: tuple[str, ...]
+    verified_labels: tuple[str, ...]
+    intent_id: str
 
 
 def status_intent_journal_path(config: DispatcherConfig) -> Path:
@@ -135,8 +127,8 @@ def _intent_expected_label(intent: TransitionIntent) -> str | None:
 def _precondition_holds(
     precondition: str,
     *,
-    task: Task,
     labels: tuple[str, ...],
+    dependencies_declared: bool,
     dependencies_resolved: bool,
 ) -> bool:
     primary = primary_status_labels(labels)
@@ -145,7 +137,7 @@ def _precondition_holds(
     if precondition == "absent-primary-status":
         return not primary
     if precondition == "dependencies-declared":
-        return bool(task.depends_on) or bool(task.native_depends_on)
+        return dependencies_declared
     if precondition == "dependencies-resolved":
         return dependencies_resolved
     if precondition == "dependencies-unresolved":
@@ -159,64 +151,32 @@ def _precondition_holds(
     return False
 
 
-def _fresh_dependencies_resolved(
-    task: Task,
-    tasks_by_issue: Mapping[int, Task],
-    completed_issue_numbers: frozenset[int],
-    config: DispatcherConfig,
-) -> bool:
-    """#799: 実行直前に、渡された（fresh な）`tasks_by_issue`からその場で
-    依存解決をやり直す。親Issueでスコープした解決が1件でも未解決なら、
-    このタスクの依存はまだ満たされていないものとして扱う。
-    """
-    deps = resolve_task_dependencies(task, tasks_by_issue)
-    if deps.unresolved:
-        return False
-    for dep_issue in deps.resolved:
-        if dep_issue not in completed_issue_numbers:
-            return False
-        dependency_task = tasks_by_issue.get(dep_issue)
-        if dependency_task is None:
-            continue
-        labels = config.resolved_forge.get_issue_labels(dep_issue)
-        if not any(
-            label in labels for label in (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
-        ):
-            return False
-    return True
-
-
 def _fresh_preconditions_hold(
     command: RepairCommand,
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_issue_numbers: frozenset[int],
+    completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
-) -> bool:
-    if config.resolved_forge.get_issue_state(task.issue_number).upper() != "OPEN":
-        return False
-    labels = tuple(config.resolved_forge.get_issue_labels(task.issue_number))
-    dependency_preconditions = {
-        "dependencies-resolved",
-        "dependencies-unresolved",
-    }
-    dependencies_resolved = not dependency_preconditions.isdisjoint(
-        command.preconditions
-    ) and _fresh_dependencies_resolved(
+) -> FreshDependencyEvaluation | None:
+    evaluation = evaluate_fresh_dependencies(
         task,
         tasks_by_issue,
-        completed_issue_numbers,
-        config,
+        completion_evidence=completion_evidence,
+        forge=config.resolved_forge,
     )
-    return all(
+    if evaluation is None or evaluation.task.issue_state.upper() != "OPEN":
+        return None
+    labels = tuple(evaluation.task.status_labels)
+    holds = all(
         _precondition_holds(
             precondition,
-            task=task,
             labels=labels,
-            dependencies_resolved=dependencies_resolved,
+            dependencies_declared=not evaluation.dependencies.is_empty,
+            dependencies_resolved=dependencies_completed(evaluation.assessment),
         )
         for precondition in command.preconditions
     )
+    return evaluation if holds else None
 
 
 def _apply_command(
@@ -252,13 +212,19 @@ def _apply_command(
     journal.mark_applied(intent.intent_id)
 
 
+def _verified_status_labels(
+    issue_number: int, expected_label: str, config: DispatcherConfig
+) -> tuple[str, ...] | None:
+    if config.resolved_forge.get_issue_state(issue_number).upper() != "OPEN":
+        return None
+    labels = tuple(config.resolved_forge.get_issue_labels(issue_number))
+    return labels if primary_status_labels(labels) == (expected_label,) else None
+
+
 def _status_is_verified(
     issue_number: int, expected_label: str, config: DispatcherConfig
 ) -> bool:
-    if config.resolved_forge.get_issue_state(issue_number).upper() != "OPEN":
-        return False
-    labels = tuple(config.resolved_forge.get_issue_labels(issue_number))
-    return primary_status_labels(labels) == (expected_label,)
+    return _verified_status_labels(issue_number, expected_label, config) is not None
 
 
 def reconcile_status_repair_intents(
@@ -295,24 +261,35 @@ def _execute(
     command: RepairCommand,
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_issue_numbers: frozenset[int],
+    completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
     journal: IntentJournal,
     now: datetime,
     intent: TransitionIntent | None = None,
-) -> bool:
-    if not _fresh_preconditions_hold(
-        command, task, tasks_by_issue, completed_issue_numbers, config
-    ):
-        return False
+) -> VerifiedStatusTransition | None:
+    fresh = _fresh_preconditions_hold(
+        command, task, tasks_by_issue, completion_evidence, config
+    )
+    if fresh is None:
+        return None
     current = intent or journal.plan(_new_intent(command, now))
-    _apply_command(command, task, current, journal, config)
+    _apply_command(command, fresh.task, current, journal, config)
     expected = _intent_expected_label(current)
-    if expected is None or not _status_is_verified(task.issue_number, expected, config):
-        return False
+    verified_labels = (
+        None
+        if expected is None
+        else _verified_status_labels(fresh.task.issue_number, expected, config)
+    )
+    if verified_labels is None:
+        return None
     journal.mark_applied(current.intent_id)
     journal.mark_verified(current.intent_id)
-    return True
+    return VerifiedStatusTransition(
+        issue_number=fresh.task.issue_number,
+        before_labels=tuple(fresh.task.status_labels),
+        verified_labels=verified_labels,
+        intent_id=current.intent_id,
+    )
 
 
 def _repair_subject_task(
@@ -389,9 +366,10 @@ def _execute_with_pending_intent(
     command: RepairCommand,
     task: Task,
     tasks_by_issue: Mapping[int, Task],
-    completed_issue_numbers: Iterable[int],
+    completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
     observed_at: datetime,
+    on_verified: Callable[[VerifiedStatusTransition], None] | None,
 ) -> RepairResult:
     journal = IntentJournal(status_intent_journal_path(config))
     pending = journal.pending(now=observed_at)
@@ -405,21 +383,23 @@ def _execute_with_pending_intent(
             diagnostics=("another live status transition covers this subject",),
         )
     try:
-        applied = _execute(
+        evidence = _execute(
             command,
             task,
             tasks_by_issue,
-            frozenset(completed_issue_numbers),
+            completion_evidence,
             config,
             journal,
             observed_at,
             intent,
         )
+        if evidence is not None and on_verified is not None:
+            on_verified(evidence)
     except Exception as exc:  # noqa: BLE001 - retain the Intent for restart
         return _failed_repair_result(command, exc)
     return RepairResult(
         command=command,
-        status=RepairStatus.APPLIED if applied else RepairStatus.SKIPPED,
+        status=RepairStatus.APPLIED if evidence is not None else RepairStatus.SKIPPED,
     )
 
 
@@ -427,9 +407,10 @@ def execute_status_repair_command(
     command: RepairCommand,
     tasks_by_issue: Mapping[int, Task],
     *,
-    completed_issue_numbers: Iterable[int],
+    completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
     now: datetime | None = None,
+    on_verified: Callable[[VerifiedStatusTransition], None] | None = None,
 ) -> RepairResult:
     """Execute one supervisor-selected command through live safeguards."""
     preflight = _status_command_preflight(command, tasks_by_issue, config)
@@ -442,13 +423,15 @@ def execute_status_repair_command(
         command,
         task,
         tasks_by_issue,
-        completed_issue_numbers,
+        completion_evidence,
         config,
         observed_at,
+        on_verified,
     )
 
 
 __all__ = [
+    "VerifiedStatusTransition",
     "execute_status_repair_command",
     "reconcile_status_repair_intents",
     "status_intent_journal_path",
