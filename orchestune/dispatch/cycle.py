@@ -317,9 +317,6 @@ class _DispatchConsistencyAdapter:
         )
         return desired_tasks, completed_ids
 
-    def _desired_tasks(self) -> tuple[DesiredTaskInput, ...]:
-        return self._desired_inputs()[0]
-
     def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState:
         desired_tasks, completed_ids = self._desired_inputs()
         intents = (
@@ -953,13 +950,14 @@ def _run_pre_scheduling_reconciliation(
     config,
     repair_cycle,
 ):
+    confirmed_completions = _same_cycle_completions(ctx, completed_in_cycle)
     promotion_events = _run_status_repair_boundary(
         "status-blocked-promotion",
         BLOCKED_WITH_RESOLVED_DEPENDENCIES,
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        confirmed_completion_numbers=_same_cycle_completions(ctx, completed_in_cycle),
+        confirmed_completion_numbers=confirmed_completions,
         config=config,
         cycle_state=repair_cycle,
     )
@@ -975,7 +973,7 @@ def _run_pre_scheduling_reconciliation(
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        confirmed_completion_numbers=_same_cycle_completions(ctx, completed_in_cycle),
+        confirmed_completion_numbers=confirmed_completions,
         config=config,
         cycle_state=repair_cycle,
     )

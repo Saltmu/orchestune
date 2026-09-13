@@ -28,28 +28,26 @@ def desired_dependency_ids(
     """Translate an assessment without losing unavailable/unresolved dependencies."""
     if assessment is None:
         return (f"unresolved-dependency:{issue_number}:assessment-unavailable",)
-    return (
-        *(str(dependency.issue_number) for dependency in assessment.resolved),
-        *(
-            f"unresolved-dependency:{issue_number}:{index}"
-            for index in range(len(assessment.unresolved))
-        ),
+    resolved = tuple(str(dependency.issue_number) for dependency in assessment.resolved)
+    if dependencies_completed(assessment):
+        return resolved
+    return resolved + tuple(
+        f"unresolved-dependency:{issue_number}:{index}"
+        for index in range(len(assessment.unresolved))
     )
 
 
 def completed_dependency_ids(
     assessments: Iterable[DependencyAssessment | None],
 ) -> frozenset[str]:
-    """Collect completed IDs while preserving each assessment's fail-closed policy."""
-    completed_ids: set[str] = set()
-    for assessment in assessments:
-        if not dependencies_completed(assessment):
-            continue
-        assert assessment is not None
-        completed_ids.update(
-            str(dependency.issue_number) for dependency in assessment.resolved
-        )
-    return frozenset(completed_ids)
+    """Collect each completed dependency ID for accurate unresolved diagnostics."""
+    return frozenset(
+        str(dependency.issue_number)
+        for assessment in assessments
+        if assessment is not None
+        for dependency in assessment.resolved
+        if dependency.state is DependencyState.COMPLETED
+    )
 
 
 __all__ = [

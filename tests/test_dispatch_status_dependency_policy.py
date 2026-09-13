@@ -75,3 +75,5 @@ def test_completed_ids_come_only_from_fully_completed_assessments() -> None:
     )
 
     assert completed_dependency_ids((None, completed, partial, unresolved)) == {"1"}
+    assert completed_dependency_ids((partial,)) == {"1"}
+    assert completed_dependency_ids((unresolved,)) == {"1"}

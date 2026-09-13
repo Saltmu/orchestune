@@ -40,6 +40,30 @@ def test_missing_fresh_subject_fails_closed(in_memory_forge):
     assert _evaluate(stale, {1: stale}, in_memory_forge) is None
 
 
+def test_closed_fresh_subject_skips_before_dependency_label_io(in_memory_forge):
+    stale = make_task(1, subtask_id="subject")
+    dependency = make_task(2, subtask_id="dep")
+    in_memory_forge.seed_issue(
+        make_issue(
+            1,
+            subtask_id="subject",
+            depends_on=("dep",),
+            labels=(StatusLabel.BLOCKED,),
+            state="CLOSED",
+        )
+    )
+
+    with patch.object(
+        in_memory_forge,
+        "get_issue_labels",
+        side_effect=RuntimeError("dependency labels must not be fetched"),
+    ) as get_labels:
+        result = _evaluate(stale, {1: stale, 2: dependency}, in_memory_forge)
+
+    assert result is None
+    get_labels.assert_not_called()
+
+
 def test_reparses_subject_and_uses_changed_dependency_declaration(in_memory_forge):
     stale = make_task(1, subtask_id="subject", depends_on=())
     dependency = make_task(2, subtask_id="dep", status_labels=(StatusLabel.DONE,))

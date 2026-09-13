@@ -104,6 +104,8 @@ def task_lifecycle(
 
 @dataclass(frozen=True, slots=True)
 class _FreshDependencyStateView:
+    """Classify only terminal completion; status repair does not inspect PR state."""
+
     completion_evidence: CompletionEvidenceView
     labels_by_issue: Mapping[int, tuple[str, ...]]
 
@@ -133,6 +135,8 @@ def evaluate_fresh_dependencies(
     if issue is None:
         return None
     fresh_task = parse_task_from_issue(issue)
+    if fresh_task.issue_state.upper() != "OPEN":
+        return None
     fresh_tasks = dict(tasks_by_issue)
     fresh_tasks[fresh_task.issue_number] = fresh_task
     dependencies = resolve_task_dependencies(fresh_task, fresh_tasks)
