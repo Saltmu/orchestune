@@ -76,6 +76,20 @@ _EXECUTION_ACTIVE_TARGETS = frozenset(
 )
 
 
+def _has_any_active_worktree_entry(ctx: CycleContext, issue_number: int) -> bool:
+    """Whether `run_state` carries *any* active-worktree bookkeeping entry for
+    this Issue -- present even when it can't form a clean `LaunchFact` (a
+    handleless recovery-restored entry, or several ambiguous entries for the
+    same Issue). `ctx.run_state` is `CycleContext`'s own documented public
+    field (the source of truth this module owns no separate copy of), so
+    reading it here does not reach into another module's private state.
+    """
+    return any(
+        active.issue_number == issue_number
+        for active in ctx.run_state.active_worktrees.values()
+    )
+
+
 def _authoritative_execution_active(
     ctx: CycleContext, receipt: VerifiedStatusTransition
 ) -> bool | None:
@@ -89,23 +103,21 @@ def _authoritative_execution_active(
     on an Issue whose worktree is genuinely still running) must not silently
     reclaim that launch out from under it -- that would let
     `ctx.queued_tasks()` offer the Issue to scheduling again while the first
-    run is still active. So: a live launch fact makes any target *outside*
-    `_EXECUTION_ACTIVE_TARGETS` unknown (hold) rather than `False`; only its
-    absence makes `False` deterministically safe. Symmetrically, a target
-    *inside* `_EXECUTION_ACTIVE_TARGETS` can assert `True` only when that
-    launch fact exists; without one, it is unknown (hold) rather than a
-    guess in either direction. `ctx.launch_fact` is the one authoritative
-    per-Issue execution signal `CycleContext` exposes; its absence could mean
-    either "no launch" or an ambiguous/indeterminate one (`CycleContext` does
-    not distinguish these over its public API), which is exactly why the
-    unknown cases hold instead of guessing.
+    run is still active. So: any active-worktree bookkeeping entry (even a
+    handleless/ambiguous one `ctx.launch_fact` reports as `None`, per
+    `cycle_context_state.py`'s `_LaunchState(fact=None, active=True,
+    indeterminate=True)`) makes any target *outside* `_EXECUTION_ACTIVE_TARGETS`
+    unknown (hold) rather than `False`; only the complete absence of one makes
+    `False` deterministically safe. Symmetrically, a target *inside*
+    `_EXECUTION_ACTIVE_TARGETS` can assert `True` only when a *clean, single*
+    launch fact exists (`ctx.launch_fact` itself, not just entry presence);
+    without one it is unknown (hold) rather than a guess in either direction.
     """
     primaries = primary_status_labels(receipt.verified_labels)
     target = primaries[0] if len(primaries) == 1 else None
-    has_launch = ctx.launch_fact(receipt.issue_number) is not None
     if target in _EXECUTION_ACTIVE_TARGETS:
-        return True if has_launch else None
-    return None if has_launch else False
+        return True if ctx.launch_fact(receipt.issue_number) is not None else None
+    return None if _has_any_active_worktree_entry(ctx, receipt.issue_number) else False
 
 
 def _on_status_transition_verified(

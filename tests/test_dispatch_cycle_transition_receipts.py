@@ -10,6 +10,7 @@ CONFLICT/NOOP/APPLIED outcome comes straight from `record_transition`.
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import MagicMock, patch
 
 from orchestune.consistency.intents import IntentJournal
@@ -194,6 +195,36 @@ class TestAuthoritativeExecutionActive:
         )
 
         assert _authoritative_execution_active(ctx, receipt) is False
+
+    def test_indeterminate_active_entry_and_non_execution_target_holds(self, tmp_path):
+        """Two ActiveWorktree entries for the same Issue make `launch_fact`
+        report `None` (ambiguous), but the bookkeeping entries are still
+        present -- this must hold, not fall through to `False`.
+        """
+        duplicate = ActiveWorktree(
+            issue_number=280,
+            branch="claude/issue-280-task-a",
+            worktree_path="worktrees/w1",
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=(),
+        )
+        ctx = _ctx(
+            tmp_path,
+            tasks_by_issue={280: _task()},
+            run_state=RunState(
+                active_worktrees={
+                    "1": duplicate,
+                    "2": dataclasses.replace(duplicate, worktree_path="worktrees/w2"),
+                }
+            ),
+        )
+        assert ctx.launch_fact(280) is None
+        receipt = VerifiedStatusTransition(
+            280, ("status:blocked",), ("status:queued",), "i"
+        )
+
+        assert _authoritative_execution_active(ctx, receipt) is None
 
     def test_active_launch_and_non_execution_target_holds(self, tmp_path):
         ctx = _ctx_with_active_launch(tmp_path, tasks_by_issue={280: _task()})
