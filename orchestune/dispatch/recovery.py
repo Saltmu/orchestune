@@ -305,17 +305,27 @@ def _dependency_issue_numbers(
     issue: IssueRecord,
     dependency_resolution: dict[int, TaskDependencies],
 ) -> tuple[int, ...]:
-    """自己修復に使う依存Issue番号を、EPICスコープの共通resolver（#799）から
-    解決する（旧: グローバルな`{subtask_id: issue_number}`辞書。別EPICの
-    同名subtask_idを取り違えるバグがあった）。
+    """自己修復に使う依存Issue番号を決定する。
 
-    ネイティブ`blocked_by`と本文`depends_on`は独立に解決され、両方が同じ
-    tupleへ合流する（resolverの内部順序でネイティブが先）。未解決の依存は
-    `.resolved`へ現れないため、呼出側（`_restored_base_branch`）が
-    別途unresolvedを確認する必要はない——「解決できた依存だけがbase branch
-    候補になり得る」という制約はこの合流だけで自然に満たされる。
+    ネイティブ`blocked_by`は`issue`から直接、Issue番号のまま採用する
+    （resolverの`.resolved`は経由しない）。startup recoveryの母集団
+    （`_refresh_snapshot`）はin-progress/queued-attemptのIssueに限られる
+    ため、既に`status:done`等で外れたblockerは`tasks_by_issue`に存在せず、
+    resolverの`_resolve_native`はそれを（状態確認不能という別の理由で）
+    未解決として扱う——しかしここでは単にPRのbase branchを探す手掛かり
+    として使うだけなので、母集団に無くても番号として信頼してよい（旧実装が
+    `issue.blocked_by`をそのまま使っていたのと同じ前提）。
+
+    本文`depends_on`はEPICスコープの共通resolver（#799）で解決し、native
+    に無いものだけ追加で合流する（旧実装は`blocked_by`があれば本文を一切
+    見ない早期returnで、body側のambiguityを黙って落としていた——`resolved`
+    は独立解決の結果を保つのでこの合流だけで両立する）。native優先の順序は
+    `_restored_base_branch`のPR探索順として保たれる。
     """
-    return dependency_resolution.get(issue.number, EMPTY_DEPENDENCIES).resolved
+    native = issue.blocked_by
+    resolved = dependency_resolution.get(issue.number, EMPTY_DEPENDENCIES).resolved
+    body_only = tuple(dep for dep in resolved if dep not in native)
+    return native + body_only
 
 
 def _restored_base_branch(

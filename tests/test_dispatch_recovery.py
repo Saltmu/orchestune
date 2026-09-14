@@ -517,6 +517,52 @@ class TestRestorationCandidateProjection:
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
 
+    def test_native_blocked_by_restores_pr_even_when_blocker_issue_is_out_of_population(
+        self, tmp_path
+    ):
+        """#886 review fix: startup recoveryの母集団（`_refresh_snapshot`）は
+        in-progress/queued-attemptのIssueに限られるため、`status:done`等で
+        既に外れたnative blockerはそこに含まれない。この場合でも、その
+        blockerを閉じるPRがまだopenなら（例: stacking PRが未マージ）base
+        branchとして採用しなければならない——resolverの`.resolved`は候補
+        集合に無いnative依存を（状態確認不能という別の理由で）未解決扱いに
+        するが、ここでは単にPR探索の手掛かりとして番号を使うだけなので、
+        母集団の有無に関わらずnative番号をそのまま信頼してよい（旧実装の
+        `issue.blocked_by`直接使用と同じ前提）。
+        """
+        run_state = RunState(active_worktrees={})
+        # blocker issue 103 is intentionally NOT included in `issues` below --
+        # it has already left the in-progress/queued population (e.g. done).
+        dependent = _issue_with_footprint(
+            102,
+            subtask_id="task-b",
+            blocked_by=(103,),
+        )
+        blocker_pr = PrRecord(
+            number=43,
+            head_ref="claude/issue-103-task-c",
+            changed_files=(),
+            closes_issue_numbers=(103,),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "fake_forge_proxy.active_fake_forge.list_open_prs",
+            return_value=[blocker_pr],
+        ):
+            result = _project_restoration_candidates(
+                run_state,
+                [dependent],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        assert active_by_key["102"].base_branch == "claude/issue-103-task-c"
+
     def test_restores_active_worktree_from_open_pr_with_empty_closes_issues_via_head_ref(
         self, tmp_path
     ):
