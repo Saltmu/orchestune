@@ -164,10 +164,16 @@ class CycleActionAdapter:
                 record.number: record for record in view.issue_records()
             },
             tasks_by_issue={task.issue_number: task for task in view.tasks()},
-            # #884: display-only map (footprint-deviation Conflict Graph
-            # notifications); `CycleQueries` has no equivalent query, and
-            # this adapter is not yet wired into the live pipeline (#873).
-            issue_number_by_subtask_id={},
+            # #884 Codex review: not display-only -- `notify_recompute`
+            # (rebase.py) uses this to look up the blocked issue and actually
+            # transition it to status:blocked/status:blocked-recompute, not
+            # just to word a comment. Reconstructed the same way
+            # `cycle_context.py` builds it for `CycleContext`.
+            issue_number_by_subtask_id={
+                task.subtask_id: task.issue_number
+                for task in view.tasks()
+                if task.subtask_id
+            },
         )
 
     def process_active_worktrees(self) -> ActivePhaseResult:

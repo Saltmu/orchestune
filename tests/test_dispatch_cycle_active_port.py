@@ -129,6 +129,32 @@ class TestProcessActiveWorktrees:
         assert is_completion_hold_event(passed_events[0])
 
 
+class TestExecutionContext:
+    def test_issue_number_by_subtask_id_is_populated_from_the_bound_view(self):
+        """Codex #900 review: this map is not display-only -- footprint
+        deviation handling (`rebase.notify_recompute`) uses it to find and
+        transition the actually-blocked issue, so it must be reconstructed
+        from the bound view rather than left empty.
+        """
+        run_state = RunState(active_worktrees={})
+        upstream = _task(issue_number=280, subtask_id="task-a")
+        downstream = _task(issue_number=281, subtask_id="task-b")
+        no_subtask = _task(issue_number=282, subtask_id="")
+        ctx = _ctx(
+            tasks_by_issue={280: upstream, 281: downstream, 282: no_subtask},
+            run_state=run_state,
+        )
+        adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
+        adapter.bind_context(ctx)
+
+        execution_ctx = adapter._execution_context()
+
+        assert execution_ctx.issue_number_by_subtask_id == {
+            "task-a": 280,
+            "task-b": 281,
+        }
+
+
 class TestRunGc:
     def test_uses_the_adapters_own_run_state_and_query_derived_args(self):
         run_state = RunState(active_worktrees={})

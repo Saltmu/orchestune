@@ -195,12 +195,14 @@ class _RuleExecutionContext:
     no method for -- `not_needed_review_dispatcher` in particular is L3
     behavior injected into L2 Rule code specifically to avoid an L2->L3
     import, the same reason `CycleContext` already carries it as a plain
-    field rather than a method. `issue_number_by_subtask_id` is a
-    display-only map (footprint-deviation Conflict Graph notifications, never
-    dependency resolution, per `CycleContext`'s own docstring); `CycleQueries`
-    has no equivalent query, so `CycleActionAdapter` (not yet wired into the
-    live pipeline -- that is #873's job) defaults it to `{}` rather than
-    reaching for one.
+    field rather than a method. `issue_number_by_subtask_id` is never used
+    for dependency resolution itself (per `CycleContext`'s own docstring),
+    but it is not display-only either (#884 Codex review): footprint-deviation
+    handling (`rebase.notify_recompute`) uses it to find and actually
+    transition the blocked issue to `status:blocked`/`status:blocked-recompute`,
+    not just to word a notification comment. `CycleQueries` has no equivalent
+    query, so `CycleActionAdapter` reconstructs it the same way
+    `cycle_context.py` builds it for `CycleContext` (from `view.tasks()`).
 
     Lives in `rules.py` rather than the new L3 `cycle_actions.py` because the
     Rule functions that take it as `ctx` (`gc/__init__.py`, `rebase.py`,
