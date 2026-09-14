@@ -192,6 +192,12 @@ class ActiveWorktreeRuleOutcome:
     completion_event: dict | None = None
     deviation_event: dict | None = None
     completed_subtask_id: str | None = None
+    # #882: `completed_subtask_id`はsubtask_idが空/未知だと決して立たない
+    # （検証済みalready_mergedは常に該当する）ため、同一サイクル内の依存解決
+    # （`completed_issue_numbers`）がIssue番号を取りこぼす。この欠落を埋める、
+    # subtask_idに依存しない受け渡し専用フィールド。`completed_subtask_id`は
+    # 表示・後方互換用に維持し、#873の最終cutoverまでこちらと並行させる。
+    confirmed_completion_issue_number: int | None = None
     forced_serial: bool = False
     terminal: bool = True
 
@@ -229,6 +235,10 @@ def _merge_active_worktree_outcome(
     if outcome.completed_subtask_id is not None:
         aggregates.completed_subtask_ids.add(outcome.completed_subtask_id)
         aggregates.completed_issue_numbers.add(issue_number)
+    if outcome.confirmed_completion_issue_number is not None:
+        aggregates.completed_issue_numbers.add(
+            outcome.confirmed_completion_issue_number
+        )
     if outcome.forced_serial:
         aggregates.any_forced_serial = True
 

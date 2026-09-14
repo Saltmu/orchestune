@@ -14,6 +14,7 @@ from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
@@ -232,6 +233,79 @@ def _apply_dirty_worktree_hold(
     return _escalate_held_dirty_worktree(ctx, key, active, active_task, hold_count)
 
 
+# GC completion actions confirmed enough to mint a `CompletionReceipt` (#882).
+# Exact membership only: several other actions share the `completed`-prefix
+# (`completed_no_commits`, `completed_without_outcome`) without being a
+# genuine confirmed completion, and `escalated_token_limit_exceeded` is still
+# recorded to history below but must never confirm completion.
+_CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged"})
+
+
+def _completed_worktree_record(
+    completion_active: ActiveWorktree,
+    active_task: Task | None,
+    completion_event: dict,
+) -> CompletedWorktree:
+    raw_usage = completion_event.get("usage")
+    usage_obj = Usage(**raw_usage) if raw_usage else None
+    return CompletedWorktree(
+        issue_number=completion_active.issue_number,
+        subtask_id=active_task.subtask_id if active_task else "",
+        branch=completion_active.branch,
+        started_at=completion_active.started_at,
+        completed_at=time.time(),
+        recompute_count=completion_active.recompute_count,
+        forced_serial=completion_active.forced_serial,
+        commit_sha=completion_event.get("commit_sha"),
+        base_branch=completion_active.base_branch,
+        usage=usage_obj,
+        profile=completion_active.profile,
+        model=completion_active.model,
+        reasoning_effort=completion_active.reasoning_effort,
+        selection_reason=completion_active.selection_reason,
+    )
+
+
+def _persist_and_confirm_completion(
+    ctx: CycleContext,
+    completion_active: ActiveWorktree,
+    receipt: CompletionReceipt | None,
+) -> bool:
+    """#882: save_run_stateの成功を境界に、receiptの消費(ctx.record_completion)を
+    続ける。保存前・保存例外時はContextへ一切反映しない——保存に追いつく前の
+    完了をConsumerへ見せてしまうと、再起動でrun_state.jsonから消えるはずの完了が
+    同一サイクル中だけ他タスクの依存解決を進めてしまう。戻り値は保存が成功した
+    かどうかで、呼出側はこれに応じて`ActiveWorktreeRuleOutcome`の確認フィールド
+    自体を取り消す（Codex #898レビュー対応: `ctx.record_completion`だけでなく、
+    `completed_issue_numbers`へ伝搬する確認フィールドも保存失敗時は立てない）。
+    """
+    try:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+    except Exception as e:  # noqa: BLE001 - 保存失敗はrecordを止めるだけ
+        print(
+            "Warning: failed to persist the completion of issue "
+            f"#{completion_active.issue_number}: {e}",
+            file=sys.stderr,
+        )
+        return False
+    if receipt is not None:
+        # CONFLICT here means the issue fell out of `ctx.tasks_by_issue` scope
+        # (closed/reparented/filtered) by completion time — unlike
+        # `record_launch`'s CONFLICT (always a genuine bug, since a launch
+        # only ever targets a freshly selected in-scope task), there is no
+        # in-cycle lifecycle left to update, so this is an expected no-op, not
+        # an invariant violation worth raising on. NOOP (already effectively
+        # done, e.g. a concurrently confirmed prior merge) is likewise a
+        # harmless no-op.
+        ctx.record_completion(receipt.issue_number)
+    return True
+
+
 def _record_completed_worktree(
     ctx: CycleContext,
     key: str,
@@ -244,32 +318,29 @@ def _record_completed_worktree(
     completed_subtask_id = None
     if action == "completed" and active_task is not None and active_task.subtask_id:
         completed_subtask_id = active_task.subtask_id
+    receipt = (
+        CompletionReceipt(issue_number=completion_active.issue_number)
+        if action in _CONFIRMED_COMPLETION_ACTIONS
+        else None
+    )
     if ctx.config.apply:
-        raw_usage = completion_event.get("usage")
-        usage_obj = Usage(**raw_usage) if raw_usage else None
         ctx.run_state.completed_worktrees.append(
-            CompletedWorktree(
-                issue_number=completion_active.issue_number,
-                subtask_id=active_task.subtask_id if active_task else "",
-                branch=completion_active.branch,
-                started_at=completion_active.started_at,
-                completed_at=time.time(),
-                recompute_count=completion_active.recompute_count,
-                forced_serial=completion_active.forced_serial,
-                commit_sha=completion_event.get("commit_sha"),
-                base_branch=completion_active.base_branch,
-                usage=usage_obj,
-                profile=completion_active.profile,
-                model=completion_active.model,
-                reasoning_effort=completion_active.reasoning_effort,
-                selection_reason=completion_active.selection_reason,
-            )
+            _completed_worktree_record(completion_active, active_task, completion_event)
         )
         del ctx.run_state.active_worktrees[key]
+        if not _persist_and_confirm_completion(ctx, completion_active, receipt):
+            # Persistence failed: no confirmation signal may claim completion
+            # ahead of disk state, neither the legacy display field nor the
+            # same-cycle propagation field.
+            completed_subtask_id = None
+            receipt = None
 
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         completed_subtask_id=completed_subtask_id,
+        confirmed_completion_issue_number=(
+            receipt.issue_number if receipt is not None else None
+        ),
         terminal=True,
     )
 

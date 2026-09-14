@@ -21,8 +21,9 @@ from orchestune.dispatch.cycle import (
     _same_cycle_completions,
 )
 from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.phase_reconciliation import _process_active_worktrees
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import Task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-same-cycle-"))
@@ -85,6 +86,57 @@ class TestSameCycleCompletions:
 
     def test_is_empty_without_either_source(self):
         assert _same_cycle_completions(_ctx(), ()) == frozenset()
+
+
+class TestVerifiedAlreadyMergedReachesSameCycleCompletions:
+    """#882: 検証済みalready_mergedはsubtask_idを持たないため、Issue番号を
+    直接運ぶ`confirmed_completion_issue_number`が無いと同一サイクルの依存元へ
+    完了が届かない（`completed_subtask_id`ベースの旧経路はaction=="completed"
+    かつ非空subtask_idしか拾わない）。
+    """
+
+    def test_already_merged_completion_reaches_completed_issue_numbers(self):
+        upstream = _task(280, subtask_id="", status_labels=("status:in-progress",))
+        ctx = _ctx(tasks_by_issue={280: upstream})
+        ctx.config.apply = True
+        active = ActiveWorktree(
+            issue_number=280,
+            branch="claude/issue-280-task-a",
+            worktree_path="worktrees/w1",
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=(),
+        )
+        ctx.run_state.active_worktrees["1"] = active
+
+        with (
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
+            # #898 Codex review: `_resolve_local_completion` still calls the
+            # real `_local_pr_completion_status` (default `GitHubForge`)
+            # between `_is_worktree_complete` and `_finalize_completed_worktree`
+            # — stub it too so this stays a deterministic unit test that
+            # never shells out to `gh`.
+            patch(
+                "orchestune.dispatch.gc._local_pr_completion_status",
+                autospec=True,
+                return_value="completed",
+            ),
+            patch(
+                "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
+                return_value={"action": "already_merged", "subtask_id": ""},
+            ),
+            patch("orchestune.dispatch.gc.save_run_state", autospec=True),
+        ):
+            _, _, _, completed_issue_numbers = _process_active_worktrees(ctx)
+
+        assert completed_issue_numbers == {280}
+        assert _same_cycle_completions(ctx, completed_issue_numbers) == frozenset({280})
+        assert ctx.is_completion_confirmed(280) is True
 
 
 class TestFinalConsistencyRepairExecutor:
