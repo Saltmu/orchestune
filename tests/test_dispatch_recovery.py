@@ -317,13 +317,21 @@ class TestRestorationCandidateProjection:
 
     def test_yaml_dependency_restores_open_dependency_pr_as_base_branch(self, tmp_path):
         """#305: GitHub MCP起票でnative blocked_byが空でも、Footprint YAMLの
-        depends_onから依存PRのhead branchを復元する。"""
+        depends_onから依存PRのhead branchを復元する。
+
+        #886: 本文`depends_on`は自タスクの親IssueでスコープしたEPICスコープの
+        共通resolverで解決するため、`parent`が必要（cross-EPIC衝突を防ぐ
+        設計上の制約）。
+        """
         run_state = RunState(active_worktrees={})
-        dependency = _issue_with_footprint(101, subtask_id="task-a")
+        dependency = _issue_with_footprint(
+            101, subtask_id="task-a", parent={"number": 100}
+        )
         dependent = _issue_with_footprint(
             102,
             subtask_id="task-b",
             depends_on=["task-a"],
+            parent={"number": 100},
         )
         dependency_pr = PrRecord(
             number=41,
@@ -414,6 +422,101 @@ class TestRestorationCandidateProjection:
 
         assert result[0][2].base_branch == "parent/issue-100"
 
+    def test_cross_epic_same_subtask_id_does_not_collide(self, tmp_path):
+        """#886: 2つの異なるEPIC（親Issue）配下に、同名subtask_idを持つ
+        別々のタスクが存在する母集団でも、depends_onは自タスクの親でスコープ
+        して解決しなければならない（旧: グローバルな
+        `{subtask_id: issue_number}`辞書は最後に見つかった方で上書きされ、
+        別EPICのタスクを誤って依存先に選んでしまうバグがあった）。
+        """
+        run_state = RunState(active_worktrees={})
+        # 両方のEPICに"task-a"という名前のタスクが存在する。
+        epic_a_dependency = _issue_with_footprint(
+            201, subtask_id="task-a", parent={"number": 100}
+        )
+        epic_b_dependency = _issue_with_footprint(
+            301, subtask_id="task-a", parent={"number": 200}
+        )
+        epic_b_dependent = _issue_with_footprint(
+            302,
+            subtask_id="task-b",
+            depends_on=["task-a"],
+            parent={"number": 200},
+        )
+        epic_a_pr = PrRecord(
+            number=41,
+            head_ref="claude/issue-201-task-a",
+            changed_files=(),
+            closes_issue_numbers=(201,),
+        )
+        epic_b_pr = PrRecord(
+            number=42,
+            head_ref="claude/issue-301-task-a",
+            changed_files=(),
+            closes_issue_numbers=(301,),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "fake_forge_proxy.active_fake_forge.list_open_prs",
+            return_value=[epic_a_pr, epic_b_pr],
+        ):
+            result = _project_restoration_candidates(
+                run_state,
+                [epic_a_dependency, epic_b_dependency, epic_b_dependent],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        # epic_b_dependent (parent=200) must resolve "task-a" to epic_b's own
+        # #301, never epic_a's #201, regardless of open_prs iteration order.
+        assert active_by_key["302"].base_branch == "claude/issue-301-task-a"
+
+    def test_partially_unresolved_dependencies_still_use_the_resolved_ones(
+        self, tmp_path
+    ):
+        """#886: 複数の本文依存のうち一部が未解決でも、解決できた依存の
+        PRは採用してよい（「一部未解決」は「全て未採用」を意味しない）。
+        """
+        run_state = RunState(active_worktrees={})
+        resolvable = _issue_with_footprint(
+            101, subtask_id="task-a", parent={"number": 100}
+        )
+        dependent = _issue_with_footprint(
+            102,
+            subtask_id="task-b",
+            depends_on=["task-a", "unknown-task"],
+            parent={"number": 100},
+        )
+        resolvable_pr = PrRecord(
+            number=41,
+            head_ref="claude/issue-101-task-a",
+            changed_files=(),
+            closes_issue_numbers=(101,),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch(
+            "fake_forge_proxy.active_fake_forge.list_open_prs",
+            return_value=[resolvable_pr],
+        ):
+            result = _project_restoration_candidates(
+                run_state,
+                [resolvable, dependent],
+                config,
+            )
+
+        active_by_key = {key: active for key, _, active in result}
+        assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
+
     def test_restores_active_worktree_from_open_pr_with_empty_closes_issues_via_head_ref(
         self, tmp_path
     ):
@@ -453,13 +556,19 @@ class TestRestorationCandidateProjection:
     def test_restores_open_dependency_pr_with_empty_closes_issues_as_base_branch(
         self, tmp_path
     ):
-        """#739: 依存先PRのcloses_issue_numbersが空でもhead_refから依存PRを解決する。"""
+        """#739: 依存先PRのcloses_issue_numbersが空でもhead_refから依存PRを解決する。
+
+        #886: 本文`depends_on`はEPICスコープの共通resolverで解決するため`parent`が必要。
+        """
         run_state = RunState(active_worktrees={})
-        dependency = _issue_with_footprint(709, subtask_id="task-a")
+        dependency = _issue_with_footprint(
+            709, subtask_id="task-a", parent={"number": 700}
+        )
         dependent = _issue_with_footprint(
             710,
             subtask_id="task-b",
             depends_on=["task-a"],
+            parent={"number": 700},
         )
         dependency_pr = PrRecord(
             number=737,

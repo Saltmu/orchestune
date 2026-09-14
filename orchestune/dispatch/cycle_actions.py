@@ -18,6 +18,10 @@ raises `ValueError`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import cast
+
+from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_action_contracts import (
@@ -26,8 +30,15 @@ from orchestune.dispatch.cycle_action_contracts import (
     GcPhaseResult,
     StackBase,
 )
+from orchestune.dispatch.cycle_context import (
+    _build_cycle_context,
+    _dispatch_not_needed_review,
+    _fetch_issues,
+)
 from orchestune.dispatch.cycle_context_state import RecordStatus
+from orchestune.dispatch.cycle_records import _on_status_transition_verified
 from orchestune.dispatch.escalation import _rule_changes_requested
+from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
 from orchestune.dispatch.gc import (
     _rule_completed,
     _rule_not_needed,
@@ -41,7 +52,12 @@ from orchestune.dispatch.rebase import (
     _rule_auto_rebase,
     _rule_footprint_deviation,
 )
+from orchestune.dispatch.reconciliation import (
+    _handle_base_branch_red_recovery,
+    _handle_blocked_recompute_recovery,
+)
 from orchestune.dispatch.rules import (
+    CycleContext,
     RuleChain,
     _ActiveWorktreeAggregates,
     _RuleExecutionContext,
@@ -52,27 +68,23 @@ from orchestune.dispatch.scoring import (
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
-from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
-from orchestune.integrator.coordinator import (
-    IntegrationCoordinator,
-    record_pending_not_needed_review,
-)
+from orchestune.dispatch.status_repair import execute_status_repair_command
+from orchestune.models import IssueRecord
 
 
-def _dispatch_not_needed_review(
-    issue_number: int, subtask_id: str, config: DispatcherConfig
-) -> None:
-    dispatch_target = config.dispatch_target
-    if not isinstance(dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
-        raise RuntimeError("not-needed review requires a cloud routine dispatch target")
-    coordinator = IntegrationCoordinator(dispatch_target)
-    handle = coordinator.dispatch_not_needed_review(issue_number, subtask_id)
-    record_pending_not_needed_review(
-        config.not_needed_review_state_path,
-        issue_number=issue_number,
-        subtask_id=subtask_id,
-        session_handle=handle,
-    )
+@dataclass(frozen=True, slots=True)
+class _IssueRecordsView:
+    """`.all()`だけを要求する`reconciliation.py`のrecovery関数向けの最小shim。
+
+    `queries.issue_records()`(初期Forge観測)をそのまま`.all()`として返す。
+    `status:blocked-recompute`/`ci:base-branch-red`はForgeが直接管理する
+    生ラベルであり、record反映後の実効ラベルではないため、初期観測で十分。
+    """
+
+    _records: tuple[IssueRecord, ...]
+
+    def all(self) -> tuple[IssueRecord, ...]:
+        return self._records
 
 
 # active worktreeごとの判定の優先順位(#86)。#884でphase_reconciliation.pyから
@@ -308,6 +320,68 @@ class CycleActionAdapter:
             open_prs=view.pull_requests(),
         )
         return tuple(launched)
+
+    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+        """#886: post-GCの自動復帰（`status:blocked-recompute`/
+        `ci:base-branch-red`）。startup recovery（`CycleContext`が存在する前）
+        は別の`RecoveryBookkeepingAdapter`（recovery.py）が担当し、この
+        portとは無関係——ここで扱うのは既存`CycleContext`が存在する通常サイクル
+        中のpost-GC復帰だけ。
+
+        `completed_issue_numbers`は空集合で呼ぶ: #882/#883の
+        `ctx.record_completion`/`ctx.record_transition`が既に同一サイクル内で
+        `queries.assess_dependencies`/`is_effectively_done`を最新に保つため、
+        別集合を二重に用意してoverlayする必要がない（同じ状態を通常/freshで
+        異なる母集団から誤って混ぜない）。
+        """
+        view = self._bound_view()
+        ctx = cast(CycleContext, view)
+        issues = _IssueRecordsView(view.issue_records())
+        events = _handle_blocked_recompute_recovery(
+            issues, self._run_state, ctx, set(), self._config
+        )
+        events.extend(
+            _handle_base_branch_red_recovery(issues, ctx, set(), self._config)
+        )
+        return tuple(events)
+
+    def execute_repair(self, command: RepairCommand) -> RepairResult:
+        """#886: fresh consistency executor。#872のresolver/Assessment/policy
+        と`is_completion_confirmed`を使うのは、このfresh executorだけ
+        （通常/cachedのdesiredは既にqueryのAssessmentから導出しており、
+        resolverを再実行しない——`cycle.py`の`_DispatchConsistencyAdapter`が
+        既に担う既存の使い分けと同じ原則）。`status.*`以外のcommandは
+        `_DispatchRepairExecutor`と同じfail-closed実装（ハンドラ0件の
+        `DispatchRepairExecutorAdapter`）へ委ねる——任意commandへの汎用execや
+        独自retry loopは追加しない。
+
+        `cycle.py`は`phase_reconciliation.py`経由でこのモジュール自身を
+        importする（#884の移設先）ため、`cycle.py`の`_DispatchConsistencyAdapter`
+        を再利用すると循環importになる（このモジュールの関数内importも
+        `test_internal_imports_are_not_hidden_inside_functions`が禁止する）。
+        代わりに`cycle_context.py`の`_fetch_issues`/`_build_cycle_context`
+        （どちらも循環しない）でfresh観測用の使い捨て`CycleContext`を
+        自前で組み立てる。`RecordStatus.CONFLICT`とexecution unknownの
+        診断/保留は、recordの宛先である*束縛済みの*`view`
+        （`_on_status_transition_verified`経由）がそのまま担う——決定に使う
+        fresh評価と、recordする先の正本を混同しない（同じ状態を通常/freshで
+        異なる母集団から誤って混ぜない）。
+        """
+        view = self._bound_view()
+        if not command.code.startswith("status."):
+            return DispatchRepairExecutorAdapter({}).execute(command)
+
+        fresh_issues = _fetch_issues(self._config).filtered_by_parent(
+            self._config.parent_issue_number
+        )
+        fresh_ctx = _build_cycle_context(fresh_issues, self._run_state, self._config)
+        return execute_status_repair_command(
+            command,
+            fresh_ctx.tasks_by_issue,
+            completion_evidence=fresh_ctx,
+            config=self._config,
+            on_verified=_on_status_transition_verified(cast(CycleContext, view)),
+        )
 
 
 __all__ = [

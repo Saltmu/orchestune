@@ -40,6 +40,11 @@ from orchestune.consistency.repairs.execution import (
     plan_execution_repairs,
 )
 from orchestune.dispatch.attempt_record import MARKER, attempt_from_body, read_attempt
+from orchestune.dispatch.dependency_resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+    resolve_all_dependencies,
+)
 from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
@@ -298,43 +303,43 @@ def _parse_subtask_info_from_issue(
 
 def _dependency_issue_numbers(
     issue: IssueRecord,
-    issue_to_subtask_id: dict[int, str],
-    subtask_id_to_issue_number: dict[str, int],
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> tuple[int, ...]:
-    """自己修復に使う依存Issue番号をnative関係またはYAMLから解決する。"""
-    if issue.blocked_by:
-        return issue.blocked_by
+    """自己修復に使う依存Issue番号を、EPICスコープの共通resolver（#799）から
+    解決する（旧: グローバルな`{subtask_id: issue_number}`辞書。別EPICの
+    同名subtask_idを取り違えるバグがあった）。
 
-    task = parse_task_from_issue(issue, issue_to_subtask_id)
-    return tuple(
-        subtask_id_to_issue_number[subtask_id]
-        for subtask_id in task.depends_on
-        if subtask_id in subtask_id_to_issue_number
-    )
+    ネイティブ`blocked_by`と本文`depends_on`は独立に解決され、両方が同じ
+    tupleへ合流する（resolverの内部順序でネイティブが先）。未解決の依存は
+    `.resolved`へ現れないため、呼出側（`_restored_base_branch`）が
+    別途unresolvedを確認する必要はない——「解決できた依存だけがbase branch
+    候補になり得る」という制約はこの合流だけで自然に満たされる。
+    """
+    return dependency_resolution.get(issue.number, EMPTY_DEPENDENCIES).resolved
 
 
 def _restored_base_branch(
     issue: IssueRecord,
     open_prs: list[PrRecord],
     issue_to_subtask_id: dict[int, str],
-    subtask_id_to_issue_number: dict[str, int],
+    dependency_resolution: dict[int, TaskDependencies],
 ) -> str:
-    """Issueの親・依存関係から自己修復時のbase branchを決定する。"""
+    """Issueの親・依存関係から自己修復時のbase branchを決定する。
+
+    依存Issue番号は解決順（ネイティブ優先）で1件ずつ試し、最初に一致した
+    open PRのhead_refを採用する。この順序が「ネイティブ依存が本文depends_on
+    より優先される」という既存契約を保つ——旧実装の「ネイティブがあれば
+    本文を一切見ない」早期returnとは異なり、本文側の未解決診断も
+    （呼出側の他用途のために）resolver内では失われない。
+    """
     base_branch = "origin/main"
     if issue.parent and issue.parent.get("number") is not None:
         base_branch = f"parent/issue-{issue.parent['number']}"
 
-    dependency_issue_numbers = _dependency_issue_numbers(
-        issue,
-        issue_to_subtask_id,
-        subtask_id_to_issue_number,
-    )
-    for pr in open_prs:
-        if any(
-            pr_matches_issue(pr, dep_num, issue_to_subtask_id.get(dep_num))
-            for dep_num in dependency_issue_numbers
-        ):
-            return pr.head_ref
+    for dep_num in _dependency_issue_numbers(issue, dependency_resolution):
+        for pr in open_prs:
+            if pr_matches_issue(pr, dep_num, issue_to_subtask_id.get(dep_num)):
+                return pr.head_ref
 
     return base_branch
 
@@ -427,7 +432,7 @@ def _build_restored_active_worktree(
     declared_footprint: tuple[str, ...],
     open_prs: list[PrRecord],
     issue_to_subtask_id: dict[int, str],
-    subtask_id_to_issue_number: dict[str, int],
+    dependency_resolution: dict[int, TaskDependencies],
     config: DispatcherConfig,
 ) -> ActiveWorktree:
     attempt = attempt_from_body(issue.body)
@@ -440,7 +445,7 @@ def _build_restored_active_worktree(
     slug = branch_name.replace("/", "-")
     worktree_path = Path(config.worktree_root) / slug
     restored_base = _restored_base_branch(
-        issue, open_prs, issue_to_subtask_id, subtask_id_to_issue_number
+        issue, open_prs, issue_to_subtask_id, dependency_resolution
     )
 
     task = parse_task_from_issue(issue, issue_to_subtask_id)
@@ -475,10 +480,11 @@ def _restoration_candidates(
         for issue in issues
         if (raw := _extract_raw_subtask_id(issue)) is not None
     }
-    subtask_id_to_issue_number = {
-        subtask_id: issue_number
-        for issue_number, subtask_id in issue_to_subtask_id.items()
+    tasks_by_issue = {
+        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
+        for issue in issues
     }
+    dependency_resolution = resolve_all_dependencies(tasks_by_issue)
     candidates = []
     for issue in issues:
         subtask_id, declared_footprint = _parse_subtask_info_from_issue(issue)
@@ -488,7 +494,7 @@ def _restoration_candidates(
             declared_footprint,
             list(open_prs),
             issue_to_subtask_id,
-            subtask_id_to_issue_number,
+            dependency_resolution,
             config,
         )
         candidates.append((str(issue.number), subtask_id, active))

@@ -8,16 +8,43 @@ from dataclasses import dataclass
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_actions import _dispatch_not_needed_review
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.dispatch.recovery import _extract_raw_subtask_id
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue
 from orchestune.dispatch.state import RunState
+from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
+from orchestune.integrator.coordinator import (
+    IntegrationCoordinator,
+    record_pending_not_needed_review,
+)
 from orchestune.issue_parsing import find_children_by_parent
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
+
+
+def _dispatch_not_needed_review(
+    issue_number: int, subtask_id: str, config: DispatcherConfig
+) -> None:
+    # #886: moved here (from cycle_actions.py, which itself moved it here from
+    # phase_reconciliation.py in #884) to break a real import cycle:
+    # cycle_actions.py -> cycle.py -> cycle_context.py -> cycle_actions.py.
+    # cycle_context.py has no need to import anything from cycle_actions.py,
+    # so this definition -- needed by both -- has to live wherever neither
+    # side creates a cycle importing it; this module qualifies, cycle_actions.py
+    # does not.
+    dispatch_target = config.dispatch_target
+    if not isinstance(dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
+        raise RuntimeError("not-needed review requires a cloud routine dispatch target")
+    coordinator = IntegrationCoordinator(dispatch_target)
+    handle = coordinator.dispatch_not_needed_review(issue_number, subtask_id)
+    record_pending_not_needed_review(
+        config.not_needed_review_state_path,
+        issue_number=issue_number,
+        subtask_id=subtask_id,
+        session_handle=handle,
+    )
 
 
 @dataclass
