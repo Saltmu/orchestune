@@ -287,3 +287,36 @@ class TestRecomputeRecoveryWiring:
 
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
         assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
+
+    def test_transient_forge_read_failure_does_not_abort_the_recovery(self, tmp_path):
+        """Codex #899 review: a live-verify read failure must fail closed
+        (no receipt) rather than propagate and abort the whole recovery/cycle.
+        """
+        fake_forge = MagicMock()
+        fake_forge.get_issue_state.side_effect = RuntimeError("transient API error")
+        ctx = _ctx(
+            tmp_path,
+            tasks_by_issue={
+                1: _task(
+                    issue_number=1,
+                    status_labels=(StatusLabel.BLOCKED,),
+                    depends_on=(),
+                )
+            },
+            dependency_resolution={1: TaskDependencies()},
+        )
+        ctx.config.apply = True
+        ctx.config.forge = fake_forge
+
+        class _Issues:
+            def all(self):
+                return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
+
+        events = _handle_blocked_recompute_recovery(
+            _Issues(), ctx.run_state, ctx, set(), ctx.config
+        )
+
+        # The label mutation and promotion event still happen; only the
+        # ctx-side confirmation is withheld.
+        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)

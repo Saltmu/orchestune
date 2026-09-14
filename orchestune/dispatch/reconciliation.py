@@ -85,10 +85,21 @@ def _live_verify_queued_transition(
     set -- never reconstructed from the promotion-event dict this recovery
     already returns for reporting, which must stay decoupled from this
     confirmation path.
+
+    Codex #899 review: unlike the typed status executor (whose own live
+    re-fetch is wrapped by `_execute_with_pending_intent`'s `try/except`),
+    nothing upstream of this recovery path (`run_post_gc_reconciliation`)
+    catches a Forge read failure, so a transient API error here must be
+    treated the same as a failed verification -- no receipt -- rather than
+    aborting the entire dispatch cycle after the label mutation already
+    landed.
     """
-    if config.resolved_forge.get_issue_state(issue_number).upper() != "OPEN":
+    try:
+        if config.resolved_forge.get_issue_state(issue_number).upper() != "OPEN":
+            return None
+        labels = tuple(config.resolved_forge.get_issue_labels(issue_number))
+    except Exception:  # noqa: BLE001 - fail-closed: no receipt, cycle continues
         return None
-    labels = tuple(config.resolved_forge.get_issue_labels(issue_number))
     if primary_status_labels(labels) != (StatusLabel.QUEUED,):
         return None
     return VerifiedStatusTransition(
