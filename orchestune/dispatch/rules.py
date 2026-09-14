@@ -81,6 +81,15 @@ class CycleContext:
             prior_parent_merge_completed_issue_numbers=(
                 self.prior_parent_merge_completed_issue_numbers
             ),
+            prior_parent_merge_hold_issue_numbers=(
+                self.prior_parent_merge_hold_issue_numbers
+            ),
+            # #881: 全件queryが返す初期Forge観測。旧raw属性（`prs`
+            # `issue_records_by_number`）はaliasへ束縛し直さない——構築後に
+            # `ctx.prs`を差し替える既存経路と観測順に依存する消費側があり、
+            # 新queryはv3が定める構築時スナップショットを返す。撤去は#873。
+            issue_records_by_number=self.issue_records_by_number,
+            prs=self.prs,
         )
         # Private access is confined to this owner-construction boundary.
         self.tasks_by_issue = self._state._tasks
@@ -126,6 +135,23 @@ class CycleContext:
 
     def blocked_tasks(self) -> tuple[Task, ...]:
         return self._state.blocked_tasks()
+
+    # ---- all-task / observation queries (#881) ------------------------------
+    #
+    # `tasks`はrecord反映後の実効値、`issue_records`/`pull_requests`は初期Forge
+    # 観測。いずれもIssue/PR番号昇順で、取得済みのtupleは後から変化しない。
+
+    def tasks(self) -> tuple[Task, ...]:
+        return self._state.tasks()
+
+    def issue_records(self) -> tuple[IssueRecord, ...]:
+        return self._state.issue_records()
+
+    def pull_requests(self) -> tuple[PrRecord, ...]:
+        return self._state.pull_requests()
+
+    def is_prior_merge_held(self, issue_number: int) -> bool:
+        return self._state.is_prior_merge_held(issue_number)
 
     # ---- record API (#868) --------------------------------------------------
     #

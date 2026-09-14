@@ -25,7 +25,6 @@ from orchestune.consistency.repairs.execution import (
     plan_execution_repairs,
 )
 from orchestune.consistency.supervisor import (
-    ConsistencyCycleReport,
     ConsistencyMode,
     ConsistencySupervisor,
     FunctionRepairPlanner,
@@ -34,6 +33,7 @@ from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )
+from orchestune.dispatch.cycle_action_contracts import GcPhaseResult
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
@@ -53,14 +53,6 @@ from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
-
-
-@dataclass(frozen=True, slots=True)
-class GcPhaseResult:
-    """Events and typed repair audit data produced at the GC boundary."""
-
-    completion_events: list[dict]
-    consistency: ConsistencyCycleReport
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,8 +8,11 @@
 - **初期観測**: コンストラクタ入力（`tasks_by_issue`, `dependency_resolution`,
   `ci_passed_pr_issue_numbers`, `changes_requested_issue_numbers`,
   `branch_by_issue_number`, `run_state.active_worktrees`,
-  `prior_parent_merge_completed_issue_numbers`）から、必要なスカラー値だけを
-  コピーして所有する。入力コンテナや`ActiveWorktree`自体への参照は保持しない。
+  `prior_parent_merge_completed_issue_numbers`,
+  `prior_parent_merge_hold_issue_numbers`, `issue_records_by_number`, `prs`）から、
+  必要なスカラー値だけをコピーして所有する。入力コンテナや`ActiveWorktree`自体への
+  参照は保持しない。`issue_records`/`pull_requests`が返すのはこの初期Forge観測で
+  あり、`record_*`の差分は反映しない（#881: 生ラベルをrecordで偽装しない）。
 - **成功確認後の差分**: `record_completion` / `record_launch` /
   `record_transition`が反映する、Issue番号別の実効ラベル・起動事実・実行中
   フラグ。外部I/Oは行わず、呼出側が既に成功を確認した事実だけを反映する。
@@ -46,7 +49,7 @@ from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.status_repair_dependencies import task_lifecycle
 from orchestune.labels import StatusLabel
-from orchestune.models import Task
+from orchestune.models import IssueRecord, PrRecord, Task
 
 # record_*が返す競合理由の固定文字列（Issue本文セクションD/E）。
 REASON_UNKNOWN_ISSUE = "unknown-issue"
@@ -299,6 +302,43 @@ def _owned_task(task: Task) -> Task:
     )
 
 
+def _owned_issue_record(record: IssueRecord) -> IssueRecord:
+    """可変な`parent`を切り離し、コレクションをtupleへ正規化したコピーを返す。
+
+    所有時と返却時の両方で使う。`IssueRecord`自体はfrozenだが`parent`はdictなので、
+    共有したままにすると呼出側の変更が内部観測へ伝わる（#881）。すでに
+    `parent is None`かつコレクションがtupleなら、値全体が不変なのでそのまま返す。
+    """
+    if (
+        record.parent is None
+        and isinstance(record.labels, tuple)
+        and isinstance(record.blocked_by, tuple)
+    ):
+        return record
+    return dataclasses.replace(
+        record,
+        labels=tuple(record.labels),
+        blocked_by=tuple(record.blocked_by),
+        parent=None if record.parent is None else dict(record.parent),
+    )
+
+
+def _owned_pull_request(pr: PrRecord) -> PrRecord:
+    """コレクションをtupleへ正規化したコピーを返す。
+
+    正規化後の`PrRecord`は全フィールドが不変値なので、返却ごとのコピーは不要。
+    """
+    if isinstance(pr.changed_files, tuple) and isinstance(
+        pr.closes_issue_numbers, tuple
+    ):
+        return pr
+    return dataclasses.replace(
+        pr,
+        changed_files=tuple(pr.changed_files),
+        closes_issue_numbers=tuple(pr.closes_issue_numbers),
+    )
+
+
 def _owned_dependencies(deps: TaskDependencies) -> TaskDependencies:
     return TaskDependencies(
         resolved=tuple(deps.resolved),
@@ -322,6 +362,9 @@ class _CycleState:
     _changes_requested: set[int] = field(default_factory=set)
     _branch_by_issue: dict[int, str] = field(default_factory=dict)
     _prior_completed: frozenset[int] = frozenset()
+    _prior_held: frozenset[int] = frozenset()
+    _issue_records: tuple[IssueRecord, ...] = ()
+    _pull_requests: tuple[PrRecord, ...] = ()
     _effective_labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
     _launch_states: dict[int, _LaunchState] = field(default_factory=dict)
     _recorded_completions: set[int] = field(default_factory=set)
@@ -337,6 +380,9 @@ class _CycleState:
         branch_by_issue_number: Mapping[int, str],
         active_worktrees: Mapping[str, ActiveWorktree],
         prior_parent_merge_completed_issue_numbers: frozenset[int],
+        prior_parent_merge_hold_issue_numbers: frozenset[int],
+        issue_records_by_number: Mapping[int, IssueRecord],
+        prs: Iterable[PrRecord],
     ) -> _CycleState:
         return cls(
             _tasks={
@@ -350,6 +396,22 @@ class _CycleState:
             _changes_requested=set(changes_requested_issue_numbers),
             _branch_by_issue=dict(branch_by_issue_number),
             _prior_completed=frozenset(prior_parent_merge_completed_issue_numbers),
+            _prior_held=frozenset(prior_parent_merge_hold_issue_numbers),
+            _issue_records=tuple(
+                sorted(
+                    (
+                        _owned_issue_record(record)
+                        for record in issue_records_by_number.values()
+                    ),
+                    key=lambda record: record.number,
+                )
+            ),
+            _pull_requests=tuple(
+                sorted(
+                    (_owned_pull_request(pr) for pr in prs),
+                    key=lambda pr: pr.number,
+                )
+            ),
             # Labels are read from the shared observation until a record supplies
             # a delta. Do not keep a second mutable copy of the observed labels.
             _launch_states=_build_launch_states(active_worktrees),
@@ -449,6 +511,40 @@ class _CycleState:
 
     def blocked_tasks(self) -> tuple[Task, ...]:
         return self._candidate_tasks(StatusLabel.BLOCKED)
+
+    def tasks(self) -> tuple[Task, ...]:
+        """全タスクの実効値をIssue番号昇順で返す（#881）。
+
+        `queued_tasks`/`blocked_tasks`は起動候補のviewなので実効完了・実行中・
+        非OPENを除外するが、こちらはquota・critical path・conflictが必要とする
+        全件母集団であり、除外しない。各要素は`task()`と同じ実効値。
+        """
+        effective: list[Task] = []
+        for issue_number in sorted(self._tasks):
+            task = self.task(issue_number)
+            assert task is not None
+            effective.append(task)
+        return tuple(effective)
+
+    def issue_records(self) -> tuple[IssueRecord, ...]:
+        """初期Forge観測をIssue番号昇順で返す（#881）。
+
+        `record_*`の差分は反映しない——実効ラベルは`task()`が返し、ここは観測
+        されたままの生ラベルを保つ。
+        """
+        return tuple(_owned_issue_record(record) for record in self._issue_records)
+
+    def pull_requests(self) -> tuple[PrRecord, ...]:
+        """初期Forge観測をPR番号昇順で返す（#881）。"""
+        return self._pull_requests
+
+    def is_prior_merge_held(self, issue_number: int) -> bool:
+        """検証済み先行マージ等による起動保留集合への所属を返す（#881）。
+
+        既存`phase_scheduling`の判定と同じ素の所属であり、タスク母集団に無い
+        Issueの保留も保留として扱う（判定条件を増やさない）。
+        """
+        return issue_number in self._prior_held
 
     # ---- record APIs --------------------------------------------------------
 
