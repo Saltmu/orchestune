@@ -19,18 +19,24 @@ raises `ValueError`.
 from __future__ import annotations
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
     CycleQueries,
     GcPhaseResult,
+    StackBase,
 )
+from orchestune.dispatch.cycle_context_state import RecordStatus
 from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.gc import (
     _rule_completed,
     _rule_not_needed,
     _rule_stale_entry_hold,
 )
+from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
+from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_gc import run_gc_phase
+from orchestune.dispatch.phase_rebase import _sync_external_locks
 from orchestune.dispatch.rebase import (
     _rule_auto_rebase,
     _rule_footprint_deviation,
@@ -40,7 +46,12 @@ from orchestune.dispatch.rules import (
     _ActiveWorktreeAggregates,
     _RuleExecutionContext,
 )
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.scoring import (
+    SchedulingResult,
+    Task,
+    select_tasks_with_decisions,
+)
+from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.integrator.coordinator import (
     IntegrationCoordinator,
@@ -197,6 +208,106 @@ class CycleActionAdapter:
             view.pull_requests(),
             now=self._now,
         )
+
+    def scan_external_locks(self) -> ExternalLockScanResult:
+        """#885: `phase_rebase._sync_external_locks`のact/portラッパー。
+
+        `view`(=`CycleQueries`)は`LockDependencyView`
+        (`task`/`assess_dependencies`/`canonical_branch`)を構造的に満たす
+        （`cycle.py`の既存呼出しが`view=ctx`とするのと同じ扱い）。
+        """
+        view = self._bound_view()
+        tasks_by_issue = {task.issue_number: task for task in view.tasks()}
+        return _sync_external_locks(
+            tasks_by_issue,
+            list(view.pull_requests()),
+            self._run_state,
+            self._config,
+            view=view,
+        )
+
+    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+        """#885: `scoring.select_tasks_with_decisions`のact/portラッパー。
+
+        `select_tasks_with_decisions`は既存selectorへの1回きりの呼出しで、
+        起動後の補充・再選定は行わない。quota/critical-path/conflictに
+        必要な全Task母集団は`view.tasks()`から得る（raw mapを再生成して
+        decisionへ渡さない）。個々のIssueに対する参照は`view.task(...)`を
+        使う。
+        """
+        view = self._bound_view()
+        all_tasks = view.tasks()
+        active_subtask_ids = {
+            task.subtask_id
+            for active in self._run_state.active_worktrees.values()
+            if (task := view.task(active.issue_number)) is not None and task.subtask_id
+        }
+        return select_tasks_with_decisions(
+            list(candidates),
+            self._run_state,
+            self._now,
+            self._config.max_concurrent,
+            self._config.max_launches_per_window,
+            self._config.window_seconds,
+            max_tokens_per_window=self._config.max_tokens_per_window,
+            conflict_graph=build_task_conflict_graph(
+                all_tasks,
+                threshold=self._config.dag_similarity_threshold,
+                ignore_patterns=self._config.dag_ignore_patterns,
+            ),
+            active_subtask_ids=active_subtask_ids,
+            known_tasks=all_tasks,
+        )
+
+    def launch_tasks(
+        self,
+        selected: tuple[Task, ...],
+        bases: tuple[StackBase, ...],
+        candidates: tuple[Task, ...],
+    ) -> tuple[Task, ...]:
+        """#885: `launch._launch_selected_tasks`のact/portラッパー。
+
+        `bases`(選出済み実行計画のtuple、`Context`のbranch map公開ではない)
+        は、このメソッドの内部だけで`LaunchContext`が要求するローカルmapへ
+        変換する。入力tupleは変更しない。唯一のrecord地点は#871の保存成功
+        callback(`view.record_launch`)——`_launch_selected_tasks`自体は
+        1回だけ呼び、バッチ内の後続追加（再選定・追加起動）は行わない。
+        """
+        view = self._bound_view()
+        if not self._config.apply:
+            return selected
+
+        task_to_base_branch = {base.issue_number: base.branch for base in bases}
+
+        def _record_launch(active: ActiveWorktree) -> None:
+            result = view.record_launch(active)
+            if result.status is RecordStatus.CONFLICT:
+                raise RuntimeError(
+                    "record_launch conflict for issue "
+                    f"#{active.issue_number}: {result.reason}"
+                )
+
+        launched = _launch_selected_tasks(
+            LaunchContext(
+                list(selected),
+                task_to_base_branch,
+                list(candidates),
+                self._run_state,
+                self._now,
+                self._config,
+                open_prs=view.pull_requests(),
+                on_launch_committed=_record_launch,
+            )
+        )
+        self._run_state.last_reconciled_at = self._now
+        save_run_state(
+            self._run_state,
+            self._config.run_state_path,
+            now=self._now,
+            launch_window_seconds=self._config.window_seconds,
+            open_prs=view.pull_requests(),
+        )
+        return tuple(launched)
 
 
 __all__ = [
