@@ -115,6 +115,16 @@ class TestVerifiedAlreadyMergedReachesSameCycleCompletions:
                 autospec=True,
                 return_value=True,
             ),
+            # #898 Codex review: `_resolve_local_completion` still calls the
+            # real `_local_pr_completion_status` (default `GitHubForge`)
+            # between `_is_worktree_complete` and `_finalize_completed_worktree`
+            # — stub it too so this stays a deterministic unit test that
+            # never shells out to `gh`.
+            patch(
+                "orchestune.dispatch.gc._local_pr_completion_status",
+                autospec=True,
+                return_value="completed",
+            ),
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,

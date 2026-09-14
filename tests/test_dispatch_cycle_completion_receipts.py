@@ -118,7 +118,12 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             )
 
         assert ctx.is_completion_confirmed(active.issue_number) is False
-        assert outcome.confirmed_completion_issue_number == active.issue_number
+        # Codex #898 review: a save failure must also withhold the outcome's
+        # confirmation fields, not just the Context-level record — otherwise
+        # `_merge_active_worktree_outcome` still feeds `completed_issue_numbers`
+        # and lets the rest of the cycle treat this as confirmed anyway.
+        assert outcome.confirmed_completion_issue_number is None
+        assert outcome.completed_subtask_id is None
         # The in-memory ledger mutation (Forge success already confirmed it)
         # is not rolled back by a persistence failure.
         assert len(ctx.run_state.completed_worktrees) == 1

@@ -270,11 +270,14 @@ def _persist_and_confirm_completion(
     ctx: CycleContext,
     completion_active: ActiveWorktree,
     receipt: CompletionReceipt | None,
-) -> None:
+) -> bool:
     """#882: save_run_stateの成功を境界に、receiptの消費(ctx.record_completion)を
     続ける。保存前・保存例外時はContextへ一切反映しない——保存に追いつく前の
     完了をConsumerへ見せてしまうと、再起動でrun_state.jsonから消えるはずの完了が
-    同一サイクル中だけ他タスクの依存解決を進めてしまう。
+    同一サイクル中だけ他タスクの依存解決を進めてしまう。戻り値は保存が成功した
+    かどうかで、呼出側はこれに応じて`ActiveWorktreeRuleOutcome`の確認フィールド
+    自体を取り消す（Codex #898レビュー対応: `ctx.record_completion`だけでなく、
+    `completed_issue_numbers`へ伝搬する確認フィールドも保存失敗時は立てない）。
     """
     try:
         save_run_state(
@@ -289,17 +292,18 @@ def _persist_and_confirm_completion(
             f"#{completion_active.issue_number}: {e}",
             file=sys.stderr,
         )
-        return
-    if receipt is None:
-        return
-    # CONFLICT here means the issue fell out of `ctx.tasks_by_issue` scope
-    # (closed/reparented/filtered) by completion time — unlike `record_launch`'s
-    # CONFLICT (always a genuine bug, since a launch only ever targets a
-    # freshly selected in-scope task), there is no in-cycle lifecycle left to
-    # update, so this is an expected no-op, not an invariant violation worth
-    # raising on. NOOP (already effectively done, e.g. a concurrently
-    # confirmed prior merge) is likewise a harmless no-op.
-    ctx.record_completion(receipt.issue_number)
+        return False
+    if receipt is not None:
+        # CONFLICT here means the issue fell out of `ctx.tasks_by_issue` scope
+        # (closed/reparented/filtered) by completion time — unlike
+        # `record_launch`'s CONFLICT (always a genuine bug, since a launch
+        # only ever targets a freshly selected in-scope task), there is no
+        # in-cycle lifecycle left to update, so this is an expected no-op, not
+        # an invariant violation worth raising on. NOOP (already effectively
+        # done, e.g. a concurrently confirmed prior merge) is likewise a
+        # harmless no-op.
+        ctx.record_completion(receipt.issue_number)
+    return True
 
 
 def _record_completed_worktree(
@@ -324,7 +328,12 @@ def _record_completed_worktree(
             _completed_worktree_record(completion_active, active_task, completion_event)
         )
         del ctx.run_state.active_worktrees[key]
-        _persist_and_confirm_completion(ctx, completion_active, receipt)
+        if not _persist_and_confirm_completion(ctx, completion_active, receipt):
+            # Persistence failed: no confirmation signal may claim completion
+            # ahead of disk state, neither the legacy display field nor the
+            # same-cycle propagation field.
+            completed_subtask_id = None
+            receipt = None
 
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
