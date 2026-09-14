@@ -16,7 +16,6 @@ from unittest.mock import MagicMock, patch
 from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
-    _completed_issue_numbers,
     _finish_consistency_runtime,
     _RepairCycleState,
     _same_cycle_completions,
@@ -88,61 +87,6 @@ class TestSameCycleCompletions:
         assert _same_cycle_completions(_ctx(), ()) == frozenset()
 
 
-class TestCompletedIssueNumbers:
-    def test_includes_prior_parent_merge_completion_without_done_label(self):
-        """#859の回帰テスト。
-
-        `tasks_by_issue`は先行マージが`status:done`を付与する前のIssueから
-        構築されるため、依存先タスクのラベルは`status:blocked`のままである。
-        それでも実効的には完了しているので、完了集合へ入らなければならない。
-        """
-        ctx = _ctx(
-            tasks_by_issue={1: _task(1, status_labels=("status:blocked",))},
-            prior_parent_merge_completed_issue_numbers=frozenset({1}),
-        )
-
-        assert _completed_issue_numbers(ctx, ()) == {1}
-
-    def test_excludes_issues_only_held_by_indeterminate_evidence(self):
-        """証拠不定で保留されただけのタスクは完了扱いにしない（fail-closed）。"""
-        ctx = _ctx(
-            tasks_by_issue={1: _task(1, status_labels=("status:blocked",))},
-            prior_parent_merge_hold_issue_numbers=frozenset({1}),
-        )
-
-        assert _completed_issue_numbers(ctx, ()) == set()
-
-    def test_preserves_label_derived_membership(self):
-        """#823でまとめて統一するまでの現行挙動を固定する。
-
-        ラベル由来の完了は`status:done`/`status:not-needed`の両方を含み、
-        `subtask_id`を持たないタスクは対象外である。この2軸の統一は
-        #823の`DependencyAssessment`導入と同時に行うため、本Issueでは変えない。
-        """
-        ctx = _ctx(
-            tasks_by_issue={
-                1: _task(1, status_labels=("status:done",)),
-                2: _task(2, subtask_id="task-b", status_labels=("status:not-needed",)),
-                3: _task(3, subtask_id="", status_labels=("status:done",)),
-                4: _task(4, subtask_id="task-d", status_labels=("status:blocked",)),
-            }
-        )
-
-        assert _completed_issue_numbers(ctx, ()) == {1, 2}
-
-    def test_merges_label_derived_and_same_cycle_sources(self):
-        ctx = _ctx(
-            tasks_by_issue={
-                1: _task(1, status_labels=("status:done",)),
-                2: _task(2, subtask_id="task-b", status_labels=("status:blocked",)),
-                3: _task(3, subtask_id="task-c", status_labels=("status:in-progress",)),
-            },
-            prior_parent_merge_completed_issue_numbers=frozenset({2}),
-        )
-
-        assert _completed_issue_numbers(ctx, {3}) == {1, 2, 3}
-
-
 class TestFinalConsistencyRepairExecutor:
     """サイクル終端の修復も、他の消費側と同じ実効完了を見る（#859）。"""
 
@@ -176,22 +120,24 @@ class TestFinalConsistencyRepairExecutor:
                 _RepairCycleState(),
                 same_cycle_completions,
             )
-        return executor_factory
+        return runtime, executor_factory
 
-    def test_receives_persisted_and_same_cycle_completions(self):
+    def test_confirms_same_cycle_completions_on_fresh_adapter(self):
         ctx = _ctx(done_issue_numbers={1})
 
-        executor_factory = self._run_finish(ctx, frozenset({2}))
+        runtime, executor_factory = self._run_finish(ctx, frozenset({2}))
 
-        assert executor_factory.call_args.kwargs[
-            "completed_issue_numbers"
-        ] == frozenset({1, 2})
+        runtime.fresh_adapter.confirm_completions.assert_called_once_with(
+            frozenset({2})
+        )
+        assert (
+            executor_factory.call_args.kwargs["completion_evidence"]
+            is runtime.fresh_adapter.completion_evidence
+        )
 
-    def test_defaults_to_persisted_completions_only(self):
+    def test_does_not_infer_confirmation_from_initial_done_snapshot(self):
         ctx = _ctx(done_issue_numbers={1})
 
-        executor_factory = self._run_finish(ctx, frozenset())
+        runtime, _ = self._run_finish(ctx, frozenset())
 
-        assert executor_factory.call_args.kwargs[
-            "completed_issue_numbers"
-        ] == frozenset({1})
+        runtime.fresh_adapter.confirm_completions.assert_called_once_with(frozenset())

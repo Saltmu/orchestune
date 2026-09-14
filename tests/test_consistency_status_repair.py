@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -45,6 +45,18 @@ from orchestune.models import Task
 from tests.conftest import make_issue, make_task
 
 NOW = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class _CompletionEvidence:
+    confirmed: frozenset[int]
+
+    def is_completion_confirmed(self, issue_number: int) -> bool:
+        return issue_number in self.confirmed
+
+
+def _evidence(issue_numbers=()) -> _CompletionEvidence:
+    return _CompletionEvidence(frozenset(issue_numbers))
 
 
 def _config(tmp_path, forge, *, apply=True) -> DispatcherConfig:
@@ -140,7 +152,7 @@ def test_closed_loop_handler_fails_closed_for_non_status_command(
     result = execute_status_repair_command(
         command,
         {},
-        completed_issue_numbers=(),
+        completion_evidence=_evidence(()),
         config=_config(tmp_path, in_memory_forge),
         now=NOW,
     )
@@ -200,7 +212,12 @@ def test_transition_intent_precedes_forge_mutation_and_is_verified(
     )
     dependency = _shadow_dependency()
     in_memory_forge.seed_issue(
-        make_issue(708, labels=task.status_labels, subtask_id=task.subtask_id)
+        make_issue(
+            708,
+            labels=task.status_labels,
+            subtask_id=task.subtask_id,
+            depends_on=task.depends_on,
+        )
     )
     in_memory_forge.seed_issue(
         make_issue(
@@ -230,7 +247,7 @@ def test_transition_intent_precedes_forge_mutation_and_is_verified(
     result = execute_status_repair_command(
         command,
         tasks_by_issue,
-        completed_issue_numbers={709},
+        completion_evidence=_evidence({709}),
         config=config,
         now=NOW,
     )
@@ -251,7 +268,12 @@ def test_partial_transition_resumes_with_the_followup_typed_command(
     )
     dependency = _shadow_dependency()
     in_memory_forge.seed_issue(
-        make_issue(708, labels=task.status_labels, subtask_id=task.subtask_id)
+        make_issue(
+            708,
+            labels=task.status_labels,
+            subtask_id=task.subtask_id,
+            depends_on=task.depends_on,
+        )
     )
     in_memory_forge.seed_issue(
         make_issue(
@@ -271,7 +293,7 @@ def test_partial_transition_resumes_with_the_followup_typed_command(
     failed = execute_status_repair_command(
         transition,
         tasks_by_issue,
-        completed_issue_numbers={709},
+        completion_evidence=_evidence({709}),
         config=config,
         now=NOW,
     )
@@ -290,7 +312,7 @@ def test_partial_transition_resumes_with_the_followup_typed_command(
     resumed = execute_status_repair_command(
         followup,
         partial_tasks_by_issue,
-        completed_issue_numbers={709},
+        completion_evidence=_evidence({709}),
         config=config,
         now=NOW,
     )
@@ -313,7 +335,11 @@ def test_conflicting_live_intent_defers_a_different_transition(
         in_memory_forge, "remove_label", side_effect=RuntimeError("Forge down")
     ):
         failed = execute_status_repair_command(
-            remove_done, {708: dual}, completed_issue_numbers=(), config=config, now=NOW
+            remove_done,
+            {708: dual},
+            completion_evidence=_evidence(()),
+            config=config,
+            now=NOW,
         )
     assert failed.status is RepairStatus.FAILED
 
@@ -333,7 +359,7 @@ def test_conflicting_live_intent_defers_a_different_transition(
     deferred = execute_status_repair_command(
         transition,
         {708: blocked},
-        completed_issue_numbers=(),
+        completion_evidence=_evidence(()),
         config=config,
         now=NOW,
     )
@@ -363,7 +389,7 @@ def test_fresh_hold_precondition_defers_stale_promotion(tmp_path, in_memory_forg
     result = execute_status_repair_command(
         command,
         {708: task},
-        completed_issue_numbers=(),
+        completion_evidence=_evidence(()),
         config=config,
         now=NOW,
     )
@@ -382,14 +408,16 @@ def test_fresh_dependency_precondition_defers_reopened_dependency(
         depends_on=("dep",),
     )
     in_memory_forge.seed_issue(make_issue(706, labels=("status:queued",)))
-    in_memory_forge.seed_issue(make_issue(708, labels=task.status_labels))
+    in_memory_forge.seed_issue(
+        make_issue(708, labels=task.status_labels, depends_on=task.depends_on)
+    )
     command = _plan({706: dependency, 708: task})[1][0]
     config = _config(tmp_path, in_memory_forge)
 
     result = execute_status_repair_command(
         command,
         {706: dependency, 708: task},
-        completed_issue_numbers={706},
+        completion_evidence=_evidence(()),
         config=config,
         now=NOW,
     )
@@ -400,7 +428,9 @@ def test_fresh_dependency_precondition_defers_reopened_dependency(
 
 def test_intent_write_failure_prevents_first_forge_mutation(tmp_path, in_memory_forge):
     task = make_task(708, status_labels=("status:done", "status:queued"))
-    in_memory_forge.seed_issue(make_issue(708, labels=task.status_labels))
+    in_memory_forge.seed_issue(
+        make_issue(708, labels=task.status_labels, depends_on=task.depends_on)
+    )
     command = _plan({708: task})[1][0]
     config = _config(tmp_path, in_memory_forge)
 
@@ -408,7 +438,11 @@ def test_intent_write_failure_prevents_first_forge_mutation(tmp_path, in_memory_
         IntentJournal, "plan", autospec=True, side_effect=OSError("journal full")
     ):
         result = execute_status_repair_command(
-            command, {708: task}, completed_issue_numbers=(), config=config, now=NOW
+            command,
+            {708: task},
+            completion_evidence=_evidence(()),
+            config=config,
+            now=NOW,
         )
 
     assert result.status is RepairStatus.FAILED
@@ -428,7 +462,9 @@ def test_first_forge_failure_keeps_planned_restartable_intent(
         status_labels=("status:blocked",),
         depends_on=("dep",),
     )
-    in_memory_forge.seed_issue(make_issue(708, labels=task.status_labels))
+    in_memory_forge.seed_issue(
+        make_issue(708, labels=task.status_labels, depends_on=task.depends_on)
+    )
     in_memory_forge.seed_issue(
         make_issue(
             706, labels=dependency.status_labels, subtask_id=dependency.subtask_id
@@ -444,7 +480,7 @@ def test_first_forge_failure_keeps_planned_restartable_intent(
         result = execute_status_repair_command(
             command,
             tasks_by_issue,
-            completed_issue_numbers={706},
+            completion_evidence=_evidence({706}),
             config=config,
             now=NOW,
         )
@@ -461,7 +497,7 @@ def test_dry_run_skips_mutation_and_intent(tmp_path, in_memory_forge):
     config = _config(tmp_path, in_memory_forge, apply=False)
 
     result = execute_status_repair_command(
-        command, {708: task}, completed_issue_numbers=(), config=config, now=NOW
+        command, {708: task}, completion_evidence=_evidence(()), config=config, now=NOW
     )
 
     assert result.status is RepairStatus.SKIPPED

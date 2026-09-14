@@ -106,6 +106,9 @@ class CycleContext:
     def is_effectively_done(self, issue_number: int) -> bool:
         return self._state.is_effectively_done(issue_number)
 
+    def is_completion_confirmed(self, issue_number: int) -> bool:
+        return self._state.is_completion_confirmed(issue_number)
+
     def has_changes_requested(self, issue_number: int) -> bool:
         return self._state.has_changes_requested(issue_number)
 
