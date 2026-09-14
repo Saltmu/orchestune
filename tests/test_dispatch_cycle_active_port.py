@@ -1,11 +1,4 @@
-"""#884: CycleActionAdapter (process_active_worktrees/run_gc only).
-
-Wiring the adapter into the live `cycle.py` pipeline is #873's job; these
-tests exercise `CycleActionAdapter` directly against a bound `CycleQueries`
-view (a real `CycleContext`, which already satisfies the Protocol), and
-compare it against the legacy `phase_reconciliation._process_active_worktrees`
-path it was relocated from.
-"""
+"""CycleActionAdapter active-worktree and GC ports."""
 
 from __future__ import annotations
 
@@ -15,7 +8,6 @@ import pytest
 
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.gc.completion import is_completion_hold_event
-from orchestune.dispatch.phase_reconciliation import _process_active_worktrees
 from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
@@ -187,9 +179,7 @@ class TestRunGc:
         assert result is mock_run_gc.return_value
 
 
-class TestParityWithLegacyPath:
-    """The relocated loop must reproduce the pre-#884 behavior exactly."""
-
+class TestActivePhaseResult:
     def _build(self, fake_forge, *, forced_serial: bool):
         active = _active(
             pid=123, started_at=1_699_999_000.0, forced_serial=forced_serial
@@ -200,24 +190,16 @@ class TestParityWithLegacyPath:
         ctx.config.apply = True
         return ctx, run_state
 
-    def test_matches_legacy_completion_events_and_forced_serial(self, fake_forge):
-        legacy_ctx, _ = self._build(fake_forge, forced_serial=True)
-        new_ctx, new_run_state = self._build(fake_forge, forced_serial=True)
+    def test_reports_completion_events_and_forced_serial(self, fake_forge):
+        ctx, run_state = self._build(fake_forge, forced_serial=True)
 
         with patch(
             "orchestune.dispatch.gc.is_process_alive", autospec=True, return_value=True
         ):
-            (
-                legacy_completion,
-                legacy_deviation,
-                legacy_forced_serial,
-                _,
-            ) = _process_active_worktrees(legacy_ctx)
-
-            adapter = CycleActionAdapter(new_run_state, new_ctx.config, now=0.0)
-            adapter.bind_context(new_ctx)
+            adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
+            adapter.bind_context(ctx)
             result = adapter.process_active_worktrees()
 
-        assert list(result.completion_events) == legacy_completion
-        assert list(result.deviation_events) == legacy_deviation
-        assert result.any_forced_serial == legacy_forced_serial is True
+        assert isinstance(result.completion_events, tuple)
+        assert isinstance(result.deviation_events, tuple)
+        assert result.any_forced_serial is True

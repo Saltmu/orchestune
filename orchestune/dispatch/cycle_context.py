@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_action_contracts import CycleActions
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.dispatch.recovery import _extract_raw_subtask_id
@@ -320,6 +321,7 @@ def _build_cycle_context(
     *,
     prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
     prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
+    actions: CycleActions | None = None,
 ) -> CycleContext:
     all_issues = issues.all()
     (
@@ -356,4 +358,5 @@ def _build_cycle_context(
         prior_parent_merge_completed_issue_numbers=(
             prior_parent_merge_completed_issue_numbers
         ),
+        actions=actions,
     )

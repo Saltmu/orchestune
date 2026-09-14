@@ -20,7 +20,8 @@ from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.dependency_assessment import DependencyState
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.gc import _record_completed_worktree
-from tests.dispatch_gc_test_support import _active, _ctx, _task
+from tests.dispatch_gc_test_support import _active, _task
+from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 
 
 class TestCompletionReceipt:
@@ -55,9 +56,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         with patch(
             "orchestune.dispatch.gc.save_run_state", side_effect=_fake_save
         ) as mock_save:
-            outcome = _record_completed_worktree(
-                ctx, "1", active, task, {"action": "completed"}
-            )
+            _record_completed_worktree(ctx, "1", active, task, {"action": "completed"})
 
         mock_save.assert_called_once_with(
             ctx.run_state,
@@ -67,7 +66,6 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         )
         assert calls == ["save"]
         assert ctx.is_completion_confirmed(active.issue_number) is True
-        assert outcome.confirmed_completion_issue_number == active.issue_number
         assert "1" not in ctx.run_state.active_worktrees
         assert len(ctx.run_state.completed_worktrees) == 1
 
@@ -77,12 +75,10 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         ctx.run_state.active_worktrees["1"] = active
 
         with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
-            outcome = _record_completed_worktree(
+            _record_completed_worktree(
                 ctx, "1", active, task, {"action": "already_merged"}
             )
 
-        assert outcome.confirmed_completion_issue_number == active.issue_number
-        assert outcome.completed_subtask_id is None
         assert ctx.is_completion_confirmed(active.issue_number) is True
 
     def test_escalated_token_limit_exceeded_does_not_record_completion(self):
@@ -91,7 +87,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         ctx.run_state.active_worktrees["1"] = active
 
         with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
-            outcome = _record_completed_worktree(
+            _record_completed_worktree(
                 ctx,
                 "1",
                 active,
@@ -99,7 +95,6 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                 {"action": "escalated_token_limit_exceeded"},
             )
 
-        assert outcome.confirmed_completion_issue_number is None
         assert ctx.is_completion_confirmed(active.issue_number) is False
         # History bookkeeping is unaffected by the receipt decision.
         assert len(ctx.run_state.completed_worktrees) == 1
@@ -113,17 +108,9 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             "orchestune.dispatch.gc.save_run_state",
             side_effect=RuntimeError("disk full"),
         ):
-            outcome = _record_completed_worktree(
-                ctx, "1", active, task, {"action": "completed"}
-            )
+            _record_completed_worktree(ctx, "1", active, task, {"action": "completed"})
 
         assert ctx.is_completion_confirmed(active.issue_number) is False
-        # Codex #898 review: a save failure must also withhold the outcome's
-        # confirmation fields, not just the Context-level record — otherwise
-        # `_merge_active_worktree_outcome` still feeds `completed_issue_numbers`
-        # and lets the rest of the cycle treat this as confirmed anyway.
-        assert outcome.confirmed_completion_issue_number is None
-        assert outcome.completed_subtask_id is None
         # The in-memory ledger mutation (Forge success already confirmed it)
         # is not rolled back by a persistence failure.
         assert len(ctx.run_state.completed_worktrees) == 1
@@ -143,9 +130,6 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         mock_save.assert_not_called()
         assert ctx.is_completion_confirmed(active.issue_number) is False
         assert outcome.completion_event["action"] == "completed"
-        # The receipt decision itself is action-based, independent of apply;
-        # only the persist+record side effect is gated on apply.
-        assert outcome.confirmed_completion_issue_number == active.issue_number
 
     def test_confirmed_completion_reflects_immediately_in_dependent_assessment(self):
         upstream = _task(

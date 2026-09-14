@@ -14,7 +14,9 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult
+from orchestune.dispatch.locks import ExternalLockScanResult
+from orchestune.dispatch.scoring import SchedulingResult, Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
@@ -181,25 +183,30 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=MockIssues(),
             ),
             patch(
-                "orchestune.dispatch.cycle._process_active_worktrees",
+                "orchestune.dispatch.cycle_actions.CycleActionAdapter.process_active_worktrees",
                 autospec=True,
-                return_value=([], deviation_events, False, set()),
+                return_value=ActivePhaseResult((), tuple(deviation_events), False),
             ),
             patch(
                 "orchestune.dispatch.cycle._run_status_repair_boundary",
                 autospec=True,
                 return_value=[],
             ),
-            patch("orchestune.dispatch.cycle._sync_external_locks", autospec=True),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
+            patch(
+                "orchestune.dispatch.cycle_actions._sync_external_locks",
+                autospec=True,
+                return_value=ExternalLockScanResult([], []),
+            ),
+            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([blocked_task, normal_task], {}, []),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling.select_tasks_with_decisions",
+                "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
                 autospec=True,
+                return_value=SchedulingResult([normal_task], []),
             ) as mock_select,
         ):
             run_dispatch_cycle(config)
@@ -278,7 +285,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 autospec=True,
                 return_value=MockIssues(),
             ),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 autospec=True,
@@ -387,11 +394,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=MockIssues(),
             ),
             patch(
-                "orchestune.dispatch.cycle._process_active_worktrees",
+                "orchestune.dispatch.cycle_actions.CycleActionAdapter.process_active_worktrees",
                 autospec=True,
-                return_value=([], [], False, set()),
+                return_value=ActivePhaseResult((), (), False),
             ),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 autospec=True,
@@ -503,11 +510,11 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
                 return_value=MockIssues(),
             ),
             patch(
-                "orchestune.dispatch.cycle._process_active_worktrees",
+                "orchestune.dispatch.cycle_actions.CycleActionAdapter.process_active_worktrees",
                 autospec=True,
-                return_value=([], [], False, set()),
+                return_value=ActivePhaseResult((), (), False),
             ),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
                 "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
                 autospec=True,

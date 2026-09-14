@@ -19,6 +19,7 @@ from orchestune.dispatch.escalation import (
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from tests.dispatch_gc_test_support import _rule_ctx
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -197,15 +198,21 @@ class TestRuleChangesRequested:
     def test_none_when_no_dependency_changes_requested(self):
         task = _task(depends_on=("task-x",), parent_number=100)
         dep = _task(issue_number=2, subtask_id="task-x", parent_number=100)
-        ctx = _ctx(tasks_by_issue={1: task, 2: dep})
+        tasks = {1: task, 2: dep}
+        ctx = _rule_ctx(
+            tasks_by_issue=tasks,
+            dependency_resolution=resolve_all_dependencies(tasks),
+        )
         outcome = _rule_changes_requested(ctx, "1", _active(), task)
         assert outcome is None
 
     def test_terminal_event_when_dependency_changes_requested(self):
         task = _task(depends_on=("task-x",), parent_number=100)
         dep = _task(issue_number=2, subtask_id="task-x", parent_number=100)
-        ctx = _ctx(
-            tasks_by_issue={1: task, 2: dep},
+        tasks = {1: task, 2: dep}
+        ctx = _rule_ctx(
+            tasks_by_issue=tasks,
+            dependency_resolution=resolve_all_dependencies(tasks),
             changes_requested_issue_numbers={2},
         )
         outcome = _rule_changes_requested(ctx, "1", _active(), task)

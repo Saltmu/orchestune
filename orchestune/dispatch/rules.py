@@ -11,8 +11,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_action_contracts import CycleQueries
+from orchestune.dispatch.cycle_action_contracts import (
+    ActivePhaseResult,
+    CycleActions,
+    CycleQueries,
+    GcPhaseResult,
+    StackBase,
+)
 from orchestune.dispatch.cycle_context_state import (
     LaunchFact,
     RecordResult,
@@ -20,84 +27,60 @@ from orchestune.dispatch.cycle_context_state import (
 )
 from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.scoring import SchedulingResult, Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
 
-@dataclass
 class CycleContext:
-    """1サイクル分の読み取り専用データをまとめたコンテキスト。
+    """One cycle's semantic query/record/action boundary.
 
-    decide/act関数の引数を位置引数の羅列にせず、新しい判断パターンが追加の
-    データを必要とする場合の引数伝播を、このコンテキストへの1フィールド追加に
-    閉じ込めることを目的とする（#86）。
-
-    #799: 依存解決に関わるフィールド（`dependency_resolution`
-    `done_issue_numbers` `ci_passed_pr_issue_numbers`
-    `changes_requested_issue_numbers` `branch_by_issue_number`）は、
-    すべてIssue番号をキー・値の同一性とする。`subtask_id`は1つの分解計画
-    （EPIC）内でしか一意性が保証されないため、`--parent-issue`を指定しない
-    複数EPIC横断のサイクルでは同名subtask_idが衝突しうる。
-    `issue_number_by_subtask_id`のみ、footprint逸脱によるConflict Graph
-    再計算通知（`dispatch.rebase.notify_recompute`等）が使う別関心事の
-    表示用マップとして維持する（依存解決には使わない）。
+    The constructor still accepts the observation containers produced by
+    ``cycle_context.py`` so the ownership boundary stays explicit, but none of
+    them is retained as a public attribute.  Phases can observe state only via
+    semantic queries and perform effects only through the seven delegated
+    action ports.
     """
 
-    run_state: RunState
-    tasks_by_issue: dict[int, Task]
-    issue_number_by_subtask_id: dict[str, int]
-    dependency_resolution: dict[int, TaskDependencies]
-    done_issue_numbers: set[int]
-    ci_passed_pr_issue_numbers: set[int]
-    changes_requested_issue_numbers: set[int]
-    branch_by_issue_number: dict[int, str]
-    prs: list[PrRecord]
-    pr_by_branch: dict[str, PrRecord]
-    config: DispatcherConfig
-    not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
-    issue_records_by_number: dict[int, IssueRecord] = field(default_factory=dict)
-    # #791: verified historical merges and indeterminate evidence are both
-    # excluded from launch; only the former is a same-cycle dependency result.
-    prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset()
-    # #859: 検証済み先行マージによる同一サイクル完了。`done_issue_numbers`へ
-    # 事前合流させたものと同じ集合を、合流前の形でも保持する。完了集合を
-    # 組み立て直す消費側（`cycle._same_cycle_completions`）は`tasks_by_issue`の
-    # ラベルを見るが、`tasks_by_issue`は先行マージが`status:done`を付与する前の
-    # Issueから構築されるため、この集合が無いと同一サイクル内では観測できない。
-    prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset()
-
-    def __post_init__(self) -> None:
-        # #868: 入力をコピーして所有し、旧属性は同じ観測正本の互換aliasとする。
-        # record差分は旧属性へ逆書込みしない。alias撤去は#873が担当する。
+    def __init__(
+        self,
+        run_state: RunState,
+        tasks_by_issue: dict[int, Task],
+        issue_number_by_subtask_id: dict[str, int],
+        dependency_resolution: dict[int, TaskDependencies],
+        done_issue_numbers: set[int],
+        ci_passed_pr_issue_numbers: set[int],
+        changes_requested_issue_numbers: set[int],
+        branch_by_issue_number: dict[int, str],
+        prs: list[PrRecord],
+        pr_by_branch: dict[str, PrRecord],
+        config: DispatcherConfig,
+        not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None,
+        issue_records_by_number: dict[int, IssueRecord] | None = None,
+        prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
+        prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
+        actions: CycleActions | None = None,
+    ) -> None:
+        # Compatibility constructor inputs that are now derivable or owned by
+        # the state/action boundaries are intentionally not retained.
+        del issue_number_by_subtask_id, done_issue_numbers, pr_by_branch
+        self.config = config
+        self.not_needed_review_dispatcher = not_needed_review_dispatcher
+        self._actions = actions
         self._state = _CycleState.from_observations(
-            tasks_by_issue=self.tasks_by_issue,
-            dependency_resolution=self.dependency_resolution,
-            ci_passed_pr_issue_numbers=self.ci_passed_pr_issue_numbers,
-            changes_requested_issue_numbers=self.changes_requested_issue_numbers,
-            branch_by_issue_number=self.branch_by_issue_number,
-            active_worktrees=self.run_state.active_worktrees,
-            prior_parent_merge_completed_issue_numbers=(
-                self.prior_parent_merge_completed_issue_numbers
-            ),
-            prior_parent_merge_hold_issue_numbers=(
-                self.prior_parent_merge_hold_issue_numbers
-            ),
-            # #881: 全件queryが返す初期Forge観測。旧raw属性（`prs`
-            # `issue_records_by_number`）はaliasへ束縛し直さない——構築後に
-            # `ctx.prs`を差し替える既存経路と観測順に依存する消費側があり、
-            # 新queryはv3が定める構築時スナップショットを返す。撤去は#873。
-            issue_records_by_number=self.issue_records_by_number,
-            prs=self.prs,
+            tasks_by_issue=tasks_by_issue,
+            dependency_resolution=dependency_resolution,
+            ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+            changes_requested_issue_numbers=changes_requested_issue_numbers,
+            branch_by_issue_number=branch_by_issue_number,
+            active_worktrees=run_state.active_worktrees,
+            prior_parent_merge_completed_issue_numbers=prior_parent_merge_completed_issue_numbers,
+            prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
+            issue_records_by_number=issue_records_by_number or {},
+            prs=prs,
         )
-        # Private access is confined to this owner-construction boundary.
-        self.tasks_by_issue = self._state._tasks
-        self.dependency_resolution = self._state._dependency_resolution
-        self.ci_passed_pr_issue_numbers = self._state._ci_passed
-        self.changes_requested_issue_numbers = self._state._changes_requested
-        self.branch_by_issue_number = self._state._branch_by_issue
 
     # ---- semantic query API (#868) ------------------------------------------
     #
@@ -179,6 +162,39 @@ class CycleContext:
             execution_active=execution_active,
         )
 
+    # ---- action API (#873) -------------------------------------------------
+
+    def _action_port(self) -> CycleActions:
+        if self._actions is None:
+            raise ValueError("CycleContext has no bound action adapter")
+        return self._actions
+
+    def process_active_worktrees(self) -> ActivePhaseResult:
+        return self._action_port().process_active_worktrees()
+
+    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+        return self._action_port().run_gc(events)
+
+    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+        return self._action_port().reconcile_recovery()
+
+    def scan_external_locks(self):
+        return self._action_port().scan_external_locks()
+
+    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+        return self._action_port().select_tasks(candidates)
+
+    def launch_tasks(
+        self,
+        selected: tuple[Task, ...],
+        bases: tuple[StackBase, ...],
+        candidates: tuple[Task, ...],
+    ) -> tuple[Task, ...]:
+        return self._action_port().launch_tasks(selected, bases, candidates)
+
+    def execute_repair(self, command: RepairCommand) -> RepairResult:
+        return self._action_port().execute_repair(command)
+
 
 @dataclass(frozen=True, slots=True)
 class _RuleExecutionContext:
@@ -222,19 +238,6 @@ class _RuleExecutionContext:
     tasks_by_issue: dict[int, Task] = field(default_factory=dict)
     issue_number_by_subtask_id: dict[str, int] = field(default_factory=dict)
 
-    @classmethod
-    def from_cycle_context(cls, ctx: CycleContext) -> _RuleExecutionContext:
-        return cls(
-            run_state=ctx.run_state,
-            queries=ctx,
-            config=ctx.config,
-            prs=tuple(ctx.prs),
-            not_needed_review_dispatcher=ctx.not_needed_review_dispatcher,
-            issue_records_by_number=ctx.issue_records_by_number,
-            tasks_by_issue=ctx.tasks_by_issue,
-            issue_number_by_subtask_id=ctx.issue_number_by_subtask_id,
-        )
-
     def record_completion(self, issue_number: int) -> RecordResult:
         return self.queries.record_completion(issue_number)
 
@@ -254,13 +257,6 @@ class ActiveWorktreeRuleOutcome:
 
     completion_event: dict | None = None
     deviation_event: dict | None = None
-    completed_subtask_id: str | None = None
-    # #882: `completed_subtask_id`はsubtask_idが空/未知だと決して立たない
-    # （検証済みalready_mergedは常に該当する）ため、同一サイクル内の依存解決
-    # （`completed_issue_numbers`）がIssue番号を取りこぼす。この欠落を埋める、
-    # subtask_idに依存しない受け渡し専用フィールド。`completed_subtask_id`は
-    # 表示・後方互換用に維持し、#873の最終cutoverまでこちらと並行させる。
-    confirmed_completion_issue_number: int | None = None
     forced_serial: bool = False
     terminal: bool = True
 
@@ -276,32 +272,16 @@ class _ActiveWorktreeAggregates:
     completion_events: list[dict] = field(default_factory=list)
     deviation_events: list[dict] = field(default_factory=list)
     any_forced_serial: bool = False
-    completed_subtask_ids: set[str] = field(default_factory=set)
-    # #799: `completed_subtask_ids`は表示・後方互換用に維持しつつ、依存解決
-    # （「このサイクル内で完了したタスクを、他タスクの依存先としてどう扱うか」）
-    # にはこちらのIssue番号集合を使う。`active.issue_number`は個々のRuleが
-    # 常に1つの確定したActiveWorktreeに対して動作した結果すでに分かっている値
-    # なので、`ActiveWorktreeRuleOutcome`自体にIssue番号を持たせ直さなくても
-    # ここで衝突なく集約できる。
-    completed_issue_numbers: set[int] = field(default_factory=set)
 
 
 def _merge_active_worktree_outcome(
     aggregates: _ActiveWorktreeAggregates,
     outcome: ActiveWorktreeRuleOutcome,
-    issue_number: int,
 ) -> None:
     if outcome.completion_event is not None:
         aggregates.completion_events.append(outcome.completion_event)
     if outcome.deviation_event is not None:
         aggregates.deviation_events.append(outcome.deviation_event)
-    if outcome.completed_subtask_id is not None:
-        aggregates.completed_subtask_ids.add(outcome.completed_subtask_id)
-        aggregates.completed_issue_numbers.add(issue_number)
-    if outcome.confirmed_completion_issue_number is not None:
-        aggregates.completed_issue_numbers.add(
-            outcome.confirmed_completion_issue_number
-        )
     if outcome.forced_serial:
         aggregates.any_forced_serial = True
 
@@ -333,7 +313,7 @@ class RuleChain:
             outcome = rule(ctx, key, active, active_task)
             if outcome is None:
                 continue
-            _merge_active_worktree_outcome(aggregates, outcome, active.issue_number)
+            _merge_active_worktree_outcome(aggregates, outcome)
             if outcome.terminal:
                 return True
         return False

@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.dependency_resolution import TaskDependencies
-from orchestune.dispatch.phase_scheduling import _finalize_launch
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
@@ -33,7 +33,10 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
-    return CycleContext(**defaults)
+    actions = CycleActionAdapter(defaults["run_state"], defaults["config"], now=1.0)
+    ctx = CycleContext(**defaults, actions=actions)
+    actions.bind_context(ctx)
+    return ctx
 
 
 def _task(issue_number, subtask_id=None, yaml_error=False):
@@ -85,15 +88,15 @@ class TestFinalizeLaunchContextRecording:
 
         with (
             patch(
-                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=launch,
             ),
-            patch("orchestune.dispatch.phase_scheduling.save_run_state"),
+            patch("orchestune.dispatch.cycle_actions.save_run_state"),
         ):
-            selected = _finalize_launch([task], {}, [task], ctx, 1.0, config)
+            selected = ctx.launch_tasks((task,), (), (task,))
 
-        assert selected == [task]
+        assert selected == (task,)
         assert ctx.launch_fact(1) is not None
         assert ctx.queued_tasks() == ()
 
@@ -124,7 +127,7 @@ class TestFinalizeLaunchContextRecording:
 
         with (
             patch(
-                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=launch,
             ),
@@ -133,7 +136,7 @@ class TestFinalizeLaunchContextRecording:
                 match="record_launch conflict for issue #999: unknown-issue",
             ),
         ):
-            _finalize_launch([], {}, [], ctx, 1.0, config)
+            ctx.launch_tasks((), (), ())
 
 
 class TestApplyTaskLaunchesRunStatePersistence:

@@ -116,24 +116,13 @@ class TestOwnership:
         assert deps.unresolved[0].candidates == (2, 3)
         assert ctx.dependencies_of(1) == deps
 
-    def test_legacy_alias_updates_share_observations_but_not_record_deltas(self):
+    def test_observations_are_private_and_record_deltas_win(self):
         original = {1: _task(1)}
         ctx = _ctx(tasks_by_issue=original)
-        ctx.tasks_by_issue[1] = _task(1, status_labels=(StatusLabel.BLOCKED,))
-        ctx.dependency_resolution[1] = TaskDependencies(resolved=(2,))
-        ctx.ci_passed_pr_issue_numbers.add(1)
-        ctx.changes_requested_issue_numbers.add(1)
-        ctx.branch_by_issue_number[1] = "observed"
         assert original[1].status_labels == (StatusLabel.QUEUED,)
-        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
-        assert ctx.blocked_tasks() == (ctx.task(1),)
-        assert ctx.dependencies_of(1).resolved == (2,)
-        assert ctx.is_ci_passed(1)
-        assert ctx.has_changes_requested(1)
-        assert ctx.canonical_branch(1) == "observed"
+        original[1] = _task(1, status_labels=(StatusLabel.BLOCKED,))
+        assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
         ctx.record_completion(1)
-        assert ctx.tasks_by_issue[1].status_labels == (StatusLabel.BLOCKED,)
-        ctx.tasks_by_issue[1] = _task(1)
         assert ctx.task(1).status_labels == (StatusLabel.DONE,)
 
     def test_mutating_input_dict_after_construction_does_not_change_queries(self):

@@ -224,7 +224,12 @@ class TestAuthoritativeExecutionActive:
             280, ("status:blocked",), ("status:queued",), "i"
         )
 
-        assert _authoritative_execution_active(ctx, receipt) is None
+        assert (
+            _authoritative_execution_active(
+                ctx, receipt, has_active_entry=lambda issue_number: issue_number == 280
+            )
+            is None
+        )
 
     def test_active_launch_and_non_execution_target_holds(self, tmp_path):
         ctx = _ctx_with_active_launch(tmp_path, tasks_by_issue={280: _task()})
@@ -370,6 +375,7 @@ class TestRecomputeRecoveryWiring:
         fake_forge = MagicMock()
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
+        run_state = RunState(active_worktrees={})
         ctx = _ctx(
             tmp_path,
             tasks_by_issue={
@@ -380,6 +386,7 @@ class TestRecomputeRecoveryWiring:
                 )
             },
             dependency_resolution={1: TaskDependencies()},
+            run_state=run_state,
         )
         ctx.config.apply = True
         ctx.config.forge = fake_forge
@@ -389,7 +396,7 @@ class TestRecomputeRecoveryWiring:
                 return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
 
         events = _handle_blocked_recompute_recovery(
-            _Issues(), ctx.run_state, ctx, set(), ctx.config
+            _Issues(), run_state, ctx, ctx.config
         )
 
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
@@ -401,6 +408,7 @@ class TestRecomputeRecoveryWiring:
         """
         fake_forge = MagicMock()
         fake_forge.get_issue_state.side_effect = RuntimeError("transient API error")
+        run_state = RunState(active_worktrees={})
         ctx = _ctx(
             tmp_path,
             tasks_by_issue={
@@ -411,6 +419,7 @@ class TestRecomputeRecoveryWiring:
                 )
             },
             dependency_resolution={1: TaskDependencies()},
+            run_state=run_state,
         )
         ctx.config.apply = True
         ctx.config.forge = fake_forge
@@ -420,7 +429,7 @@ class TestRecomputeRecoveryWiring:
                 return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
 
         events = _handle_blocked_recompute_recovery(
-            _Issues(), ctx.run_state, ctx, set(), ctx.config
+            _Issues(), run_state, ctx, ctx.config
         )
 
         # The label mutation and promotion event still happen; only the
@@ -447,6 +456,7 @@ class TestRecomputeRecoveryWiring:
             started_at=1_699_999_000.0,
             declared_footprint=(),
         )
+        run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(
             tmp_path,
             tasks_by_issue={
@@ -457,7 +467,7 @@ class TestRecomputeRecoveryWiring:
                 )
             },
             dependency_resolution={1: TaskDependencies()},
-            run_state=RunState(active_worktrees={"1": active}),
+            run_state=run_state,
         )
         ctx.config.apply = True
         ctx.config.forge = fake_forge
@@ -472,7 +482,7 @@ class TestRecomputeRecoveryWiring:
             return_value=(),
         ):
             events = _handle_blocked_recompute_recovery(
-                _Issues(), ctx.run_state, ctx, set(), ctx.config
+                _Issues(), run_state, ctx, ctx.config
             )
 
         # The label mutation and promotion event still happen; only the

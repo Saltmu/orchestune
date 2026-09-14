@@ -30,6 +30,7 @@ from orchestune.dispatch.cycle import (
     _run_recovery_bookkeeping_boundary,
     run_dispatch_cycle,
 )
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.dependency_resolution import TaskDependencies
@@ -384,6 +385,7 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
         done=list(issues_by_number.values()),
         not_needed=[],
     )
+    actions = CycleActionAdapter(run_state, config, now=0.0)
     ctx = CycleContext(
         run_state=run_state,
         tasks_by_issue=tasks,
@@ -403,7 +405,9 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
         prs=[],
         pr_by_branch={},
         config=config,
+        actions=actions,
     )
+    actions.bind_context(ctx)
     fake_forge.list_issues_by_label.side_effect = list_issues
     fake_forge.list_open_prs.return_value = []
     fake_forge.get_issue.side_effect = current_issue
@@ -432,7 +436,7 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
             autospec=True,
-            return_value=(_pipeline_report(), frozenset()),
+            return_value=_pipeline_report(),
         ),
     ):
         report = run_dispatch_cycle(config)
@@ -513,6 +517,7 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         done=[issue],
         not_needed=[],
     )
+    actions = CycleActionAdapter(run_state, config, now=0.0)
     ctx = CycleContext(
         run_state=run_state,
         tasks_by_issue={709: task},
@@ -525,7 +530,9 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         prs=[],
         pr_by_branch={},
         config=config,
+        actions=actions,
     )
+    actions.bind_context(ctx)
     fake_forge.list_issues_by_label.side_effect = lambda label, *args, **kwargs: (
         [issue] if label in issue.labels else []
     )
@@ -554,7 +561,7 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
         patch(
             "orchestune.dispatch.cycle._execute_cycle_pipeline",
             autospec=True,
-            return_value=(_pipeline_report(), frozenset()),
+            return_value=_pipeline_report(),
         ),
     ):
         report = run_dispatch_cycle(config)
@@ -640,7 +647,7 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
             return_value=[],
         ),
         patch(
-            "orchestune.dispatch.cycle._sync_external_locks",
+            "orchestune.dispatch.cycle_actions._sync_external_locks",
             autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
@@ -738,7 +745,7 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
             return_value=[],
         ),
         patch(
-            "orchestune.dispatch.cycle._sync_external_locks",
+            "orchestune.dispatch.cycle_actions._sync_external_locks",
             autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
@@ -839,7 +846,7 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
             return_value=[],
         ),
         patch(
-            "orchestune.dispatch.cycle._sync_external_locks",
+            "orchestune.dispatch.cycle_actions._sync_external_locks",
             autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),

@@ -76,22 +76,11 @@ _EXECUTION_ACTIVE_TARGETS = frozenset(
 )
 
 
-def _has_any_active_worktree_entry(ctx: CycleContext, issue_number: int) -> bool:
-    """Whether `run_state` carries *any* active-worktree bookkeeping entry for
-    this Issue -- present even when it can't form a clean `LaunchFact` (a
-    handleless recovery-restored entry, or several ambiguous entries for the
-    same Issue). `ctx.run_state` is `CycleContext`'s own documented public
-    field (the source of truth this module owns no separate copy of), so
-    reading it here does not reach into another module's private state.
-    """
-    return any(
-        active.issue_number == issue_number
-        for active in ctx.run_state.active_worktrees.values()
-    )
-
-
 def _authoritative_execution_active(
-    ctx: CycleContext, receipt: VerifiedStatusTransition
+    ctx: CycleContext,
+    receipt: VerifiedStatusTransition,
+    *,
+    has_active_entry: Callable[[int], bool] | None = None,
 ) -> bool | None:
     """#883: derive `execution_active` from `ctx`'s own authoritative launch view.
 
@@ -117,11 +106,18 @@ def _authoritative_execution_active(
     target = primaries[0] if len(primaries) == 1 else None
     if target in _EXECUTION_ACTIVE_TARGETS:
         return True if ctx.launch_fact(receipt.issue_number) is not None else None
-    return None if _has_any_active_worktree_entry(ctx, receipt.issue_number) else False
+    active_entry_exists = (
+        has_active_entry(receipt.issue_number)
+        if has_active_entry is not None
+        else ctx.launch_fact(receipt.issue_number) is not None
+    )
+    return None if active_entry_exists else False
 
 
 def _on_status_transition_verified(
     ctx: CycleContext,
+    *,
+    has_active_entry: Callable[[int], bool] | None = None,
 ) -> Callable[[VerifiedStatusTransition], None]:
     """#883: bridge `execute_status_repair_command`'s `on_verified` into `ctx`.
 
@@ -137,7 +133,9 @@ def _on_status_transition_verified(
         result = apply_verified_transition(
             ctx,
             receipt,
-            execution_active=_authoritative_execution_active(ctx, receipt),
+            execution_active=_authoritative_execution_active(
+                ctx, receipt, has_active_entry=has_active_entry
+            ),
         )
         if result is not None and result.status is RecordStatus.CONFLICT:
             raise RuntimeError(

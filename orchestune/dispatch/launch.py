@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from orchestune.branch_naming import branch_matches_task, build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
+from orchestune.dispatch.cycle_action_contracts import CycleQueries
 from orchestune.dispatch.dependency_policy import (
     DependencyPolicyView,
     StackDecision,
@@ -26,7 +27,12 @@ from orchestune.dispatch.launch_attempts import (
     prepare_journaled_target,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import (
+    ActiveWorktree,
+    CompletedWorktree,
+    RunState,
+    save_run_state,
+)
 from orchestune.dispatch.worktree import LaunchResult, create_worktree_and_launch
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
@@ -39,7 +45,6 @@ from orchestune.models import PrRecord
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.rules import CycleContext
     from orchestune.dispatch.targets import DispatchTarget
 
 
@@ -89,11 +94,12 @@ def _is_orchestune_issue_branch(head_ref: str, issue_number: int) -> bool:
     return branch_matches_task(head_ref, issue_number)
 
 
-def _find_existing_pr_for_task(task: Task, ctx: CycleContext) -> PrRecord | None:
+def _find_existing_pr_for_task(task: Task, view: CycleQueries) -> PrRecord | None:
     expected_branch = build_task_branch_name(task.issue_number, task.subtask_id)
-    existing_pr = ctx.pr_by_branch.get(expected_branch)
+    prs = view.pull_requests()
+    existing_pr = next((pr for pr in prs if pr.head_ref == expected_branch), None)
     if not existing_pr:
-        for pr in ctx.prs:
+        for pr in prs:
             if (
                 task.issue_number in pr.closes_issue_numbers
                 and _is_orchestune_issue_branch(pr.head_ref, task.issue_number)
@@ -103,10 +109,12 @@ def _find_existing_pr_for_task(task: Task, ctx: CycleContext) -> PrRecord | None
 
 
 def _is_pr_duplicate_update(
-    existing_pr: PrRecord, task: Task, ctx: CycleContext
+    existing_pr: PrRecord,
+    task: Task,
+    completed_worktrees: list[CompletedWorktree],
 ) -> bool:
     last_completed = None
-    for cw in reversed(ctx.run_state.completed_worktrees):
+    for cw in reversed(completed_worktrees):
         if cw.issue_number == task.issue_number:
             last_completed = cw
             break
@@ -135,14 +143,17 @@ def _is_pr_duplicate_update(
 
 def _decide_duplicate_candidates(
     candidate_tasks: list[Task],
-    ctx: CycleContext,
+    view: CycleQueries,
+    completed_worktrees: list[CompletedWorktree] | None = None,
 ) -> list[DuplicateCandidateDecision]:
     decisions = []
     for task in candidate_tasks:
-        existing_pr = _find_existing_pr_for_task(task, ctx)
+        existing_pr = _find_existing_pr_for_task(task, view)
         is_duplicate = False
         if existing_pr:
-            is_duplicate = _is_pr_duplicate_update(existing_pr, task, ctx)
+            is_duplicate = _is_pr_duplicate_update(
+                existing_pr, task, completed_worktrees or []
+            )
         decisions.append(
             DuplicateCandidateDecision(
                 task=task, is_duplicate=is_duplicate, existing_pr=existing_pr
@@ -153,7 +164,7 @@ def _decide_duplicate_candidates(
 
 def _apply_duplicate_skip(
     decisions: list[DuplicateCandidateDecision],
-    ctx: CycleContext,
+    config: DispatcherConfig,
 ) -> list[Task]:
     """decide層が判定した重複候補をstatus:blocked-human-reviewへ遷移させ、
     重複でないタスクのみを起動候補として返す。"""
@@ -166,14 +177,14 @@ def _apply_duplicate_skip(
                 f"Skipping task {task.subtask_id} (Issue #{task.issue_number}) because an open PR #{existing_pr.number} already exists on branch '{existing_pr.head_ref}' and has been updated.",
                 file=sys.stderr,
             )
-            if ctx.config.apply:
+            if config.apply:
                 apply_human_review_escalation(
                     task.issue_number,
                     task.status_labels,
                     f"重複起動防止: このサブタスクに対応するオープンなPR #{existing_pr.number} (ブランチ: `{existing_pr.head_ref}`) が既に検出され、更新されています。\n"
                     f"重複したエージェントセッションの起動を防ぐため、自動起動をスキップし、ステータスを `status:blocked-human-review` に変更しました。\n"
                     f"必要に応じて手動でPRをマージするか、再起動したい場合は既存のPRをクローズした上で再度 `status:queued` に設定してください。",
-                    forge=ctx.config.resolved_forge,
+                    forge=config.resolved_forge,
                 )
         else:
             valid_candidate_tasks.append(task)

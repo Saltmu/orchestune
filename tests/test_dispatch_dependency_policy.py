@@ -14,7 +14,6 @@ from orchestune.dispatch.dependency_policy import (
     decide_stack_target,
     has_pending_dependencies,
 )
-from orchestune.dispatch.dependency_policy_compat import with_confirmed_completions
 from orchestune.dispatch.dependency_resolution import (
     REASON_MISSING,
     UnresolvedDependency,
@@ -218,40 +217,3 @@ def test_has_pending_dependencies_truth_table(
     assessment: DependencyAssessment | None, expected: bool
 ) -> None:
     assert has_pending_dependencies(assessment) is expected
-
-
-def test_confirmed_completion_adapter_reclassifies_only_confirmed_resolved_items() -> (
-    None
-):
-    unresolved = UnresolvedDependency(raw="missing", reason=REASON_MISSING)
-    original = _assessment(
-        (1, DependencyState.WAITING),
-        (2, DependencyState.CHANGES_REQUESTED),
-        unresolved=(unresolved,),
-    )
-    confirmed = {1}
-    source = FakeDependencyPolicyView(
-        {3: original}, {1: "feat/issue-1-a", 2: "feat/issue-2-b"}
-    )
-    view = with_confirmed_completions(source, confirmed)
-    confirmed.add(2)
-
-    actual = view.assess_dependencies(3)
-
-    assert actual == _assessment(
-        (1, DependencyState.COMPLETED),
-        (2, DependencyState.CHANGES_REQUESTED),
-        unresolved=(unresolved,),
-    )
-    assert original.resolved[0].state is DependencyState.WAITING
-    assert view.canonical_branch(2) == "feat/issue-2-b"
-
-
-def test_confirmed_completion_adapter_preserves_none_and_requeries_live_view() -> None:
-    source = FakeDependencyPolicyView({3: None})
-    view = with_confirmed_completions(source, {1})
-
-    assert view.assess_dependencies(3) is None
-    source.assessments[3] = _assessment((1, DependencyState.WAITING))
-    assert view.assess_dependencies(3) == _assessment((1, DependencyState.COMPLETED))
-    assert source.assessment_calls == [3, 3]

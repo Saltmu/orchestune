@@ -5,12 +5,13 @@ import pytest
 
 import orchestune.dispatch.locks
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import CycleReport, _sync_external_locks
+from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.locks import (
     ExternalLockConflict,
     check_footprint_deviation,
     scan_external_locks,
 )
+from orchestune.dispatch.phase_rebase import _sync_external_locks
 from orchestune.dispatch.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState

@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from orchestune.dispatch.gc import _rule_completed
 from orchestune.models import PrRecord
-from tests.dispatch_gc_test_support import _active, _ctx, _task
+from tests.dispatch_gc_test_support import _active, _task
+from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 
 
 class TestRuleCompleted:
@@ -19,10 +20,7 @@ class TestRuleCompleted:
     ):
         active = _active(pid=123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx(forge=fake_forge)
-        ctx.config.apply = True
-        ctx.run_state.active_worktrees["1"] = active
-        ctx.prs = [
+        prs = [
             PrRecord(
                 number=210,
                 head_ref=active.branch,
@@ -31,7 +29,10 @@ class TestRuleCompleted:
                 state="CLOSED",
             )
         ]
-        fake_forge.list_prs.return_value = ctx.prs
+        ctx = _ctx(forge=fake_forge, prs=prs)
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        fake_forge.list_prs.return_value = prs
         with (
             patch(
                 "orchestune.dispatch.gc.completion.is_process_alive",
@@ -51,7 +52,6 @@ class TestRuleCompleted:
 
         assert outcome is not None
         assert outcome.terminal is True
-        assert outcome.completed_subtask_id is None
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         fake_forge.list_prs.assert_called_once_with(state="all")
@@ -67,10 +67,7 @@ class TestRuleCompleted:
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
         active = _active(pid=123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx(forge=fake_forge)
-        ctx.config.apply = True
-        ctx.run_state.active_worktrees["1"] = active
-        ctx.prs = [
+        prs = [
             PrRecord(
                 number=210,
                 head_ref=active.branch,
@@ -79,7 +76,10 @@ class TestRuleCompleted:
                 state="CLOSED",
             )
         ]
-        fake_forge.list_prs.return_value = ctx.prs
+        ctx = _ctx(forge=fake_forge, prs=prs)
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        fake_forge.list_prs.return_value = prs
         call_order: list[tuple[str, str]] = []
         fake_forge.remove_label.side_effect = lambda issue, label: call_order.append(
             ("remove", label)
@@ -136,7 +136,6 @@ class TestRuleCompleted:
 
         assert outcome is not None
         assert outcome.terminal is True
-        assert outcome.completed_subtask_id is None
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         mock_remove.assert_called_once_with(active.worktree_path)
@@ -229,7 +228,6 @@ class TestRuleCompleted:
 
         assert outcome is not None
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
-        assert outcome.completed_subtask_id is None
 
     def test_all_state_lookup_failure_holds_local_completion_for_retry(
         self, fake_forge
@@ -292,7 +290,6 @@ class TestRuleCompleted:
 
         assert outcome is not None
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
-        assert outcome.completed_subtask_id is None
         fake_forge.list_prs.assert_called_once_with(state="all")
 
     def test_pending_cloud_completion_status_returns_none(self):
@@ -359,10 +356,7 @@ class TestRuleCompleted:
     def test_completed_worktree_preserves_unknown_start_time(self, fake_forge):
         active = _active(started_at=None)
         task = _task(status_labels=("status:in-progress",))
-        ctx = _ctx(forge=fake_forge)
-        ctx.config.apply = True
-        ctx.run_state.active_worktrees["1"] = active
-        ctx.prs = [
+        prs = [
             PrRecord(
                 number=281,
                 head_ref="agent/issue-280-task-a",
@@ -370,7 +364,10 @@ class TestRuleCompleted:
                 closes_issue_numbers=(280,),
             )
         ]
-        fake_forge.list_prs.return_value = ctx.prs
+        ctx = _ctx(forge=fake_forge, prs=prs)
+        ctx.config.apply = True
+        ctx.run_state.active_worktrees["1"] = active
+        fake_forge.list_prs.return_value = prs
 
         with (
             patch(
