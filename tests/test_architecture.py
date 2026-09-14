@@ -44,6 +44,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     3: frozenset(
         {
             "dispatch.cycle",
+            "dispatch.cycle_actions",
             "dispatch.cycle_context",
             "dispatch.cycle_report",
             "dispatch.phase_gc",

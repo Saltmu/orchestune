@@ -48,7 +48,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
 )
-from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -90,7 +90,10 @@ __all__ = [
 
 
 def _rule_not_needed(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#280/#552: status:not-neededラベルまたはoutcome(not-needed)検知による即時完了処理。
 
@@ -132,7 +135,10 @@ def _rule_not_needed(
 
 
 def _rule_stale_entry_hold(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """Leave cached stale entries untouched until Supervisor-owned GC runs.
 
@@ -147,7 +153,7 @@ def _rule_stale_entry_hold(
     return ActiveWorktreeRuleOutcome(terminal=True)
 
 
-def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
+def _persist_run_state_best_effort(ctx: _RuleExecutionContext, what: str) -> None:
     """run_stateをその場で永続化する（失敗はサイクル終端の保存に委ねて警告のみ）。"""
     try:
         save_run_state(
@@ -160,7 +166,7 @@ def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
         print(f"Warning: failed to persist {what}: {e}", file=sys.stderr)
 
 
-def _update_hold_record(ctx: CycleContext, active: ActiveWorktree) -> int:
+def _update_hold_record(ctx: _RuleExecutionContext, active: ActiveWorktree) -> int:
     """dirty worktreeの保留回数を記録・永続化して返す。"""
     previous = ctx.run_state.task_reclaim_counts.get(active.issue_number)
     hold_count = (previous.count if previous else 0) + 1
@@ -174,7 +180,7 @@ def _update_hold_record(ctx: CycleContext, active: ActiveWorktree) -> int:
 
 
 def _escalate_held_dirty_worktree(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
@@ -222,7 +228,10 @@ def _escalate_held_dirty_worktree(
 
 
 def _apply_dirty_worktree_hold(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> str:
     """#212のdirty worktree保留にも`max_task_reclaims`の上限を効かせる。"""
     if not ctx.config.apply:
@@ -267,7 +276,7 @@ def _completed_worktree_record(
 
 
 def _persist_and_confirm_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     completion_active: ActiveWorktree,
     receipt: CompletionReceipt | None,
 ) -> bool:
@@ -307,7 +316,7 @@ def _persist_and_confirm_completion(
 
 
 def _record_completed_worktree(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     completion_active: ActiveWorktree,
     active_task: Task | None,
@@ -399,7 +408,7 @@ def _apply_stale_active_entry_discard(
 
 
 def _create_abandonment_callbacks(
-    ctx: CycleContext, key: str, active: ActiveWorktree
+    ctx: _RuleExecutionContext, key: str, active: ActiveWorktree
 ) -> tuple[Callable[[], None], Callable[[], None], Callable[[], bool]]:
     """放棄worktree処理時の永続化・解放コールバック群を生成する。"""
     released = False
@@ -433,7 +442,7 @@ def _create_abandonment_callbacks(
 
 
 def _abandoned_worktree_outcome(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
@@ -555,7 +564,7 @@ def _completion_forge_error_hold(
 
 
 def _resolve_recovered_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
@@ -588,7 +597,7 @@ def _resolve_recovered_completion(
 
 
 def _resolve_cloud_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
@@ -613,7 +622,7 @@ def _resolve_cloud_completion(
 
 
 def _resolve_local_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
@@ -640,7 +649,7 @@ def _resolve_local_completion(
 
 
 def _resolve_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
     active_task: Task | None,
@@ -654,7 +663,7 @@ def _resolve_completion(
 
 
 def _handle_completed_event_outcome(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     completion_active: ActiveWorktree,
     active_task: Task | None,
@@ -695,7 +704,10 @@ def _handle_completed_event_outcome(
 
 
 def _rule_completed(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     resolution = _resolve_completion(ctx, key, active, active_task)
     if resolution.state == "pending":
