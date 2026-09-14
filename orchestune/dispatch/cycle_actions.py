@@ -18,16 +18,25 @@ raises `ValueError`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
-    CycleQueries,
     GcPhaseResult,
     StackBase,
 )
+from orchestune.dispatch.cycle_context import (
+    _build_task_mappings,
+    _dispatch_not_needed_review,
+    _fetch_issues,
+)
 from orchestune.dispatch.cycle_context_state import RecordStatus
+from orchestune.dispatch.cycle_records import _on_status_transition_verified
 from orchestune.dispatch.escalation import _rule_changes_requested
+from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
 from orchestune.dispatch.gc import (
     _rule_completed,
     _rule_not_needed,
@@ -41,7 +50,12 @@ from orchestune.dispatch.rebase import (
     _rule_auto_rebase,
     _rule_footprint_deviation,
 )
+from orchestune.dispatch.reconciliation import (
+    _handle_base_branch_red_recovery,
+    _handle_blocked_recompute_recovery,
+)
 from orchestune.dispatch.rules import (
+    CycleContext,
     RuleChain,
     _ActiveWorktreeAggregates,
     _RuleExecutionContext,
@@ -52,27 +66,24 @@ from orchestune.dispatch.scoring import (
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
-from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
-from orchestune.integrator.coordinator import (
-    IntegrationCoordinator,
-    record_pending_not_needed_review,
-)
+from orchestune.dispatch.status_repair import execute_status_repair_command
+from orchestune.dispatch.status_repair_dependencies import ConfirmedCompletionView
+from orchestune.models import IssueRecord
 
 
-def _dispatch_not_needed_review(
-    issue_number: int, subtask_id: str, config: DispatcherConfig
-) -> None:
-    dispatch_target = config.dispatch_target
-    if not isinstance(dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
-        raise RuntimeError("not-needed review requires a cloud routine dispatch target")
-    coordinator = IntegrationCoordinator(dispatch_target)
-    handle = coordinator.dispatch_not_needed_review(issue_number, subtask_id)
-    record_pending_not_needed_review(
-        config.not_needed_review_state_path,
-        issue_number=issue_number,
-        subtask_id=subtask_id,
-        session_handle=handle,
-    )
+@dataclass(frozen=True, slots=True)
+class _IssueRecordsView:
+    """`.all()`だけを要求する`reconciliation.py`のrecovery関数向けの最小shim。
+
+    `queries.issue_records()`(初期Forge観測)をそのまま`.all()`として返す。
+    `status:blocked-recompute`/`ci:base-branch-red`はForgeが直接管理する
+    生ラベルであり、record反映後の実効ラベルではないため、初期観測で十分。
+    """
+
+    _records: tuple[IssueRecord, ...]
+
+    def all(self) -> tuple[IssueRecord, ...]:
+        return self._records
 
 
 # active worktreeごとの判定の優先順位(#86)。#884でphase_reconciliation.pyから
@@ -141,8 +152,11 @@ class CycleActionAdapter:
     """L3 `CycleActions`実装（#884: process_active_worktrees/run_gcのみ）。
 
     `run_state`/`config`/`now`をコンストラクタで1回だけ受け取り所有する。
-    `bind_context`で`CycleQueries`実装（通常は`CycleContext`自身）を1回だけ
-    接続してから各portを呼ぶ。所有する`RunState`を返すgetterは公開しない。
+    `bind_context`で`CycleContext`を1回だけ接続してから各portを呼ぶ
+    （#886 Codex round 6: `bind_context`は#823の固定APIに無いadapter内部の
+    配線であり、`reconcile_recovery`/`execute_repair`が具象`CycleContext`
+    専用フィールドを要求する以上、型を`CycleQueries`まで緩めない——7 port
+    全部が同じ束縛契約に従う）。所有する`RunState`を返すgetterは公開しない。
     """
 
     def __init__(
@@ -151,14 +165,27 @@ class CycleActionAdapter:
         self._run_state = run_state
         self._config = config
         self._now = now
-        self._view: CycleQueries | None = None
+        self._view: CycleContext | None = None
+        self._completed_issue_numbers: frozenset[int] = frozenset()
 
-    def bind_context(self, view: CycleQueries) -> None:
+    def bind_context(self, view: CycleContext) -> None:
+        """#886 Codex review: `bind_context`は`CycleActions`Protocol（#823の
+        固定API）には無いadapter内部の配線であり、`view`の型を`CycleQueries`
+        まで緩める必要はない。`reconcile_recovery`/`execute_repair`は
+        `reconciliation.py`/`cycle_records.py`の既存関数（`ctx.tasks_by_issue`
+        /`ctx.run_state`のような具象`CycleContext`専用フィールドを使う）を
+        そのまま再利用するため、実際には全portが常に具象`CycleContext`で
+        束縛される（`cycle.py`側の唯一の実インスタンスも常にこれ）。型を
+        `CycleQueries`のままにして2 portだけ実行時に`TypeError`で弾く設計は、
+        「5 portは成功するのに残り2 portだけ失敗する」という一貫しない契約に
+        なる（#886 Codex round 6指摘）。`CycleContext`は`CycleQueries`を構造的に
+        満たすため、7 port全てにとってこの型で何も失わない。
+        """
         if self._view is not None:
             raise ValueError("CycleActionAdapter.bind_context called more than once")
         self._view = view
 
-    def _bound_view(self) -> CycleQueries:
+    def _bound_view(self) -> CycleContext:
         if self._view is None:
             raise ValueError("CycleActionAdapter used before bind_context")
         return self._view
@@ -188,9 +215,19 @@ class CycleActionAdapter:
         )
 
     def process_active_worktrees(self) -> ActivePhaseResult:
-        completion_events, deviation_events, any_forced_serial, _ = (
+        completion_events, deviation_events, any_forced_serial, completed = (
             _run_active_worktree_rules(self._execution_context())
         )
+        # #886 Codex review: `reconcile_recovery`'s Protocol signature takes
+        # no arguments (the #823-fixed API), yet cycle.py's equivalent
+        # existing call site (`run_post_gc_reconciliation`) passes this same
+        # same-cycle completion set explicitly -- `record_completion` alone
+        # does not stand in for it (dry runs never record; `_rule_not_needed`
+        # can report an outcome-based completion without recording one).
+        # Remembered here and consumed by `reconcile_recovery()` within the
+        # same bound cycle, mirroring cycle.py's own data flow without
+        # widening either method's declared signature.
+        self._completed_issue_numbers = frozenset(completed)
         return ActivePhaseResult(
             completion_events=tuple(completion_events),
             deviation_events=tuple(deviation_events),
@@ -308,6 +345,84 @@ class CycleActionAdapter:
             open_prs=view.pull_requests(),
         )
         return tuple(launched)
+
+    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+        """#886: post-GCの自動復帰（`status:blocked-recompute`/
+        `ci:base-branch-red`）。startup recovery（`CycleContext`が存在する前）
+        は別の`RecoveryBookkeepingAdapter`（recovery.py）が担当し、この
+        portとは無関係——ここで扱うのは既存`CycleContext`が存在する通常サイクル
+        中のpost-GC復帰だけ。
+
+        `completed_issue_numbers`は`process_active_worktrees()`が同一サイクル
+        内で計算した集合を使う（#886 Codex review: 空集合で二重にoverlayしない
+        という当初の想定は誤りだった——`record_completion`はdry runでは呼ばれず、
+        `_rule_not_needed`はrecordなしでoutcome-based completionを報告しうる
+        ため、この集合は`ctx.record_completion`の反映だけでは代替できない。
+        `cycle.py`の既存呼出し`run_post_gc_reconciliation`が
+        `completed_in_cycle`をそのまま渡すのと同じ値をここでも使う）。
+        `process_active_worktrees()`を未実行のまま呼ばれた場合は空集合の
+        まま（bind_context直後の単体呼び出しでは#884以前と同じ挙動）。
+        """
+        ctx = self._bound_view()
+        issues = _IssueRecordsView(ctx.issue_records())
+        completed = set(self._completed_issue_numbers)
+        events = _handle_blocked_recompute_recovery(
+            issues, self._run_state, ctx, completed, self._config
+        )
+        events.extend(
+            _handle_base_branch_red_recovery(issues, ctx, completed, self._config)
+        )
+        return tuple(events)
+
+    def execute_repair(self, command: RepairCommand) -> RepairResult:
+        """#886: fresh consistency executor。`status.*`以外のcommandは
+        `_DispatchRepairExecutor`と同じfail-closed実装（ハンドラ0件の
+        `DispatchRepairExecutorAdapter`）へ委ねる——任意commandへの汎用execや
+        独自retry loopは追加しない。
+
+        `status.*`の"fresh"は`cycle.py`の`_DispatchConsistencyAdapter`
+        （`fresh=True`）と同じ意味: 再取得したIssueから`tasks_by_issue`
+        （依存解決前提のTask母集団）だけを新しく作り直す
+        （`_DispatchConsistencyAdapter.observe()`が`_build_task_mappings`で
+        行うのと同じ処理）。`is_completion_confirmed`/`assess_dependencies`
+        （completion evidence）は再構築しない——`cycle.py`のcached/fresh
+        両adapterが常に*同一の*束縛済み`ctx`を`ConfirmedCompletionView`で
+        包むのと同じで、#882/#883の`ctx.record_completion`/`record_transition`
+        が同一サイクル内で自己無矛盾に保つ状態を、独立した使い捨て
+        `CycleContext`で上書き・分岐させない。`confirmed_completion_numbers`
+        overlayは`reconcile_recovery`と同じ`self._completed_issue_numbers`
+        （#886 Codex review: `record_completion`されない同一サイクル完了
+        ——dry run/`_rule_not_needed`のoutcome-based completion——を
+        拾うため必須）。
+
+        `cycle.py`は`phase_reconciliation.py`経由でこのモジュール自身を
+        importする（#884の移設先）ため、`cycle.py`の`_DispatchConsistencyAdapter`
+        自体を再利用すると循環importになる（このモジュールの関数内importも
+        `test_internal_imports_are_not_hidden_inside_functions`が禁止する）。
+        代わりに`cycle_context.py`の`_fetch_issues`/`_build_task_mappings`
+        （どちらも循環しない）で同じ計算を自前で組み立てる。
+        `RecordStatus.CONFLICT`とexecution unknownの診断/保留は、recordの
+        宛先である*束縛済みの*`ctx`（`_on_status_transition_verified`経由）
+        がそのまま担う。
+        """
+        ctx = self._bound_view()
+        if not command.code.startswith("status."):
+            return DispatchRepairExecutorAdapter({}).execute(command)
+
+        fresh_issues = _fetch_issues(self._config).filtered_by_parent(
+            self._config.parent_issue_number
+        )
+        tasks_by_issue, _, _ = _build_task_mappings(fresh_issues.all())
+        completion_evidence = ConfirmedCompletionView(
+            ctx, frozenset(self._completed_issue_numbers)
+        )
+        return execute_status_repair_command(
+            command,
+            tasks_by_issue,
+            completion_evidence=completion_evidence,
+            config=self._config,
+            on_verified=_on_status_transition_verified(ctx),
+        )
 
 
 __all__ = [
