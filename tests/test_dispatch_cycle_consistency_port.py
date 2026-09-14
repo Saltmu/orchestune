@@ -191,3 +191,42 @@ class TestReconcileRecovery:
         events = adapter.reconcile_recovery()
 
         assert events == ()
+
+    def test_uses_the_same_cycle_completions_process_active_worktrees_computed(
+        self,
+    ):
+        """#886 Codex review (P1): `record_completion`'s same-cycle side
+        effect does not substitute for the explicit `completed_issue_numbers`
+        overlay -- dry runs never call `record_completion`, and
+        `_rule_not_needed` can report an outcome-based completion without
+        recording one. `reconcile_recovery` must reuse the same set
+        `process_active_worktrees` computed this cycle, matching cycle.py's
+        existing `run_post_gc_reconciliation` call (which passes
+        `completed_in_cycle` through unchanged).
+        """
+        run_state = RunState(active_worktrees={})
+        ctx = _ctx(tasks_by_issue={}, run_state=run_state)
+        adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
+        adapter.bind_context(ctx)
+
+        with patch(
+            "orchestune.dispatch.cycle_actions._run_active_worktree_rules",
+            return_value=([], [], False, {7, 9}),
+        ):
+            adapter.process_active_worktrees()
+
+        with (
+            patch.object(ctx, "issue_records", return_value=()),
+            patch(
+                "orchestune.dispatch.cycle_actions._handle_blocked_recompute_recovery",
+                return_value=[],
+            ) as blocked_recompute,
+            patch(
+                "orchestune.dispatch.cycle_actions._handle_base_branch_red_recovery",
+                return_value=[],
+            ) as base_branch_red,
+        ):
+            adapter.reconcile_recovery()
+
+        assert blocked_recompute.call_args.args[3] == {7, 9}
+        assert base_branch_red.call_args.args[2] == {7, 9}

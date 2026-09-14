@@ -163,6 +163,7 @@ class CycleActionAdapter:
         self._config = config
         self._now = now
         self._view: CycleQueries | None = None
+        self._completed_issue_numbers: frozenset[int] = frozenset()
 
     def bind_context(self, view: CycleQueries) -> None:
         if self._view is not None:
@@ -230,9 +231,19 @@ class CycleActionAdapter:
         )
 
     def process_active_worktrees(self) -> ActivePhaseResult:
-        completion_events, deviation_events, any_forced_serial, _ = (
+        completion_events, deviation_events, any_forced_serial, completed = (
             _run_active_worktree_rules(self._execution_context())
         )
+        # #886 Codex review: `reconcile_recovery`'s Protocol signature takes
+        # no arguments (the #823-fixed API), yet cycle.py's equivalent
+        # existing call site (`run_post_gc_reconciliation`) passes this same
+        # same-cycle completion set explicitly -- `record_completion` alone
+        # does not stand in for it (dry runs never record; `_rule_not_needed`
+        # can report an outcome-based completion without recording one).
+        # Remembered here and consumed by `reconcile_recovery()` within the
+        # same bound cycle, mirroring cycle.py's own data flow without
+        # widening either method's declared signature.
+        self._completed_issue_numbers = frozenset(completed)
         return ActivePhaseResult(
             completion_events=tuple(completion_events),
             deviation_events=tuple(deviation_events),
@@ -358,19 +369,24 @@ class CycleActionAdapter:
         portとは無関係——ここで扱うのは既存`CycleContext`が存在する通常サイクル
         中のpost-GC復帰だけ。
 
-        `completed_issue_numbers`は空集合で呼ぶ: #882/#883の
-        `ctx.record_completion`/`ctx.record_transition`が既に同一サイクル内で
-        `queries.assess_dependencies`/`is_effectively_done`を最新に保つため、
-        別集合を二重に用意してoverlayする必要がない（同じ状態を通常/freshで
-        異なる母集団から誤って混ぜない）。
+        `completed_issue_numbers`は`process_active_worktrees()`が同一サイクル
+        内で計算した集合を使う（#886 Codex review: 空集合で二重にoverlayしない
+        という当初の想定は誤りだった——`record_completion`はdry runでは呼ばれず、
+        `_rule_not_needed`はrecordなしでoutcome-based completionを報告しうる
+        ため、この集合は`ctx.record_completion`の反映だけでは代替できない。
+        `cycle.py`の既存呼出し`run_post_gc_reconciliation`が
+        `completed_in_cycle`をそのまま渡すのと同じ値をここでも使う）。
+        `process_active_worktrees()`を未実行のまま呼ばれた場合は空集合の
+        まま（bind_context直後の単体呼び出しでは#884以前と同じ挙動）。
         """
         ctx = self._bound_context()
         issues = _IssueRecordsView(ctx.issue_records())
+        completed = set(self._completed_issue_numbers)
         events = _handle_blocked_recompute_recovery(
-            issues, self._run_state, ctx, set(), self._config
+            issues, self._run_state, ctx, completed, self._config
         )
         events.extend(
-            _handle_base_branch_red_recovery(issues, ctx, set(), self._config)
+            _handle_base_branch_red_recovery(issues, ctx, completed, self._config)
         )
         return tuple(events)
 
