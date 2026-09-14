@@ -174,7 +174,7 @@ def _handle_blocked_recompute_recovery(
         if not task or not task.subtask_id:
             continue
         event = _resolve_one_blocked_recompute_issue(
-            issue, task, active_conflict_subtask_ids, ctx, ctx, run_state, config
+            issue, task, active_conflict_subtask_ids, ctx, run_state, config
         )
         if event is not None:
             recompute_resolved_promoted_events.append(event)
@@ -186,7 +186,6 @@ def _resolve_one_blocked_recompute_issue(
     issue: IssueRecord,
     task: Task,
     active_conflict_subtask_ids: set[str],
-    dependencies: DependencyPolicyView,
     ctx: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
@@ -195,7 +194,7 @@ def _resolve_one_blocked_recompute_issue(
         return None
     if config.apply:
         config.resolved_forge.remove_label(issue.number, StatusLabel.BLOCKED_RECOMPUTE)
-    if _has_pending_dependencies(task, dependencies):
+    if _has_pending_dependencies(task, ctx):
         return None
     if config.apply:
         before_labels = tuple(
