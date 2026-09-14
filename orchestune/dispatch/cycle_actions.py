@@ -30,7 +30,7 @@ from orchestune.dispatch.cycle_action_contracts import (
     StackBase,
 )
 from orchestune.dispatch.cycle_context import (
-    _build_cycle_context,
+    _build_task_mappings,
     _dispatch_not_needed_review,
     _fetch_issues,
 )
@@ -68,6 +68,7 @@ from orchestune.dispatch.scoring import (
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.status_repair import execute_status_repair_command
+from orchestune.dispatch.status_repair_dependencies import ConfirmedCompletionView
 from orchestune.models import IssueRecord
 
 
@@ -391,26 +392,35 @@ class CycleActionAdapter:
         return tuple(events)
 
     def execute_repair(self, command: RepairCommand) -> RepairResult:
-        """#886: fresh consistency executor。#872のresolver/Assessment/policy
-        と`is_completion_confirmed`を使うのは、このfresh executorだけ
-        （通常/cachedのdesiredは既にqueryのAssessmentから導出しており、
-        resolverを再実行しない——`cycle.py`の`_DispatchConsistencyAdapter`が
-        既に担う既存の使い分けと同じ原則）。`status.*`以外のcommandは
+        """#886: fresh consistency executor。`status.*`以外のcommandは
         `_DispatchRepairExecutor`と同じfail-closed実装（ハンドラ0件の
         `DispatchRepairExecutorAdapter`）へ委ねる——任意commandへの汎用execや
         独自retry loopは追加しない。
 
+        `status.*`の"fresh"は`cycle.py`の`_DispatchConsistencyAdapter`
+        （`fresh=True`）と同じ意味: 再取得したIssueから`tasks_by_issue`
+        （依存解決前提のTask母集団）だけを新しく作り直す
+        （`_DispatchConsistencyAdapter.observe()`が`_build_task_mappings`で
+        行うのと同じ処理）。`is_completion_confirmed`/`assess_dependencies`
+        （completion evidence）は再構築しない——`cycle.py`のcached/fresh
+        両adapterが常に*同一の*束縛済み`ctx`を`ConfirmedCompletionView`で
+        包むのと同じで、#882/#883の`ctx.record_completion`/`record_transition`
+        が同一サイクル内で自己無矛盾に保つ状態を、独立した使い捨て
+        `CycleContext`で上書き・分岐させない。`confirmed_completion_numbers`
+        overlayは`reconcile_recovery`と同じ`self._completed_issue_numbers`
+        （#886 Codex review: `record_completion`されない同一サイクル完了
+        ——dry run/`_rule_not_needed`のoutcome-based completion——を
+        拾うため必須）。
+
         `cycle.py`は`phase_reconciliation.py`経由でこのモジュール自身を
         importする（#884の移設先）ため、`cycle.py`の`_DispatchConsistencyAdapter`
-        を再利用すると循環importになる（このモジュールの関数内importも
+        自体を再利用すると循環importになる（このモジュールの関数内importも
         `test_internal_imports_are_not_hidden_inside_functions`が禁止する）。
-        代わりに`cycle_context.py`の`_fetch_issues`/`_build_cycle_context`
-        （どちらも循環しない）でfresh観測用の使い捨て`CycleContext`を
-        自前で組み立てる。`RecordStatus.CONFLICT`とexecution unknownの
-        診断/保留は、recordの宛先である*束縛済みの*`view`
-        （`_on_status_transition_verified`経由）がそのまま担う——決定に使う
-        fresh評価と、recordする先の正本を混同しない（同じ状態を通常/freshで
-        異なる母集団から誤って混ぜない）。
+        代わりに`cycle_context.py`の`_fetch_issues`/`_build_task_mappings`
+        （どちらも循環しない）で同じ計算を自前で組み立てる。
+        `RecordStatus.CONFLICT`とexecution unknownの診断/保留は、recordの
+        宛先である*束縛済みの*`ctx`（`_on_status_transition_verified`経由）
+        がそのまま担う。
         """
         self._bound_view()
         if not command.code.startswith("status."):
@@ -423,11 +433,14 @@ class CycleActionAdapter:
         fresh_issues = _fetch_issues(self._config).filtered_by_parent(
             self._config.parent_issue_number
         )
-        fresh_ctx = _build_cycle_context(fresh_issues, self._run_state, self._config)
+        tasks_by_issue, _, _ = _build_task_mappings(fresh_issues.all())
+        completion_evidence = ConfirmedCompletionView(
+            ctx, frozenset(self._completed_issue_numbers)
+        )
         return execute_status_repair_command(
             command,
-            fresh_ctx.tasks_by_issue,
-            completion_evidence=fresh_ctx,
+            tasks_by_issue,
+            completion_evidence=completion_evidence,
             config=self._config,
             on_verified=_on_status_transition_verified(ctx),
         )

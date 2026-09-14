@@ -117,6 +117,60 @@ class TestExecuteRepair:
         # context the rest of the cycle observes -- not a throwaway fresh one.
         assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
 
+    def test_status_command_honors_same_cycle_completions_with_stale_forge_labels(
+        self, tmp_path, in_memory_forge
+    ):
+        """#886 Codex review (P1): a same-cycle completion (e.g. an
+        outcome-only `not-needed` decision, #280/#552) may not yet be
+        reflected as a terminal Forge label on the dependency issue by the
+        time `execute_repair` re-fetches state. The fresh executor's
+        completion evidence must still treat it as confirmed -- via the same
+        `self._completed_issue_numbers` overlay `reconcile_recovery` uses --
+        not just via freshly-fetched labels, matching cycle.py's
+        `ConfirmedCompletionView(ctx, confirmed_completion_numbers)` pattern.
+        """
+        dependency = make_task(
+            709, subtask_id="shadow-supervisor", status_labels=("status:in-progress",)
+        )
+        in_memory_forge.seed_issue(
+            make_issue(
+                709, labels=dependency.status_labels, subtask_id="shadow-supervisor"
+            )
+        )
+        dependent = make_task(
+            708,
+            subtask_id="status-migration",
+            status_labels=("status:blocked",),
+            depends_on=("shadow-supervisor",),
+        )
+        in_memory_forge.seed_issue(
+            make_issue(
+                708,
+                labels=dependent.status_labels,
+                subtask_id=dependent.subtask_id,
+                depends_on=dependent.depends_on,
+            )
+        )
+        tasks_by_issue = {708: dependent, 709: dependency}
+        run_state = RunState(active_worktrees={})
+        config = _config(tmp_path, in_memory_forge)
+        ctx = _ctx(tasks_by_issue=tasks_by_issue, run_state=run_state, config=config)
+        adapter = CycleActionAdapter(run_state, config, now=0.0)
+        adapter.bind_context(ctx)
+        command = _plan(tasks_by_issue, completed_subtask_ids={"shadow-supervisor"})[1][
+            0
+        ]
+
+        with patch(
+            "orchestune.dispatch.cycle_actions._run_active_worktree_rules",
+            return_value=([], [], False, {709}),
+        ):
+            adapter.process_active_worktrees()
+
+        result = adapter.execute_repair(command)
+
+        assert result.status.value == "applied"
+
     def test_conflict_becomes_failed_diagnostic_without_forge_rollback(
         self, tmp_path, in_memory_forge
     ):
