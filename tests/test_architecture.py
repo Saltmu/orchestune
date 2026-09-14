@@ -177,6 +177,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "replan",
             "replan.models",
             "setup_skills",
+            "task_metadata",
             "validation",
             "version",
         }
