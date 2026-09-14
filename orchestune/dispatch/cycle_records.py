@@ -81,20 +81,31 @@ def _authoritative_execution_active(
 ) -> bool | None:
     """#883: derive `execution_active` from `ctx`'s own authoritative launch view.
 
-    A target outside `_EXECUTION_ACTIVE_TARGETS` never claims live execution,
-    so `False` is always correct there -- no observation needed. For a target
-    that does (typically `PRIMARY_STATUS_MISSING` repairing a missing
-    `status:in-progress` label), `ctx.launch_fact` is the one authoritative
-    per-Issue execution signal `CycleContext` exposes: a single valid launch
-    handle justifies `True`; its absence could mean either "no launch" or an
-    ambiguous/indeterminate one (`CycleContext` does not distinguish these
-    over its public API), so this holds (`None`) rather than guessing.
+    Codex #899 review: a target outside `_EXECUTION_ACTIVE_TARGETS` does not
+    itself claim live execution, but that alone does not make `False` safe --
+    `False` is a positive claim that execution has *stopped*, which
+    `record_transition` uses to retire any existing launch fact. An unrelated
+    repair (e.g. resolving a `PRIMARY_STATUS_CONFLICT` down to `status:queued`
+    on an Issue whose worktree is genuinely still running) must not silently
+    reclaim that launch out from under it -- that would let
+    `ctx.queued_tasks()` offer the Issue to scheduling again while the first
+    run is still active. So: a live launch fact makes any target *outside*
+    `_EXECUTION_ACTIVE_TARGETS` unknown (hold) rather than `False`; only its
+    absence makes `False` deterministically safe. Symmetrically, a target
+    *inside* `_EXECUTION_ACTIVE_TARGETS` can assert `True` only when that
+    launch fact exists; without one, it is unknown (hold) rather than a
+    guess in either direction. `ctx.launch_fact` is the one authoritative
+    per-Issue execution signal `CycleContext` exposes; its absence could mean
+    either "no launch" or an ambiguous/indeterminate one (`CycleContext` does
+    not distinguish these over its public API), which is exactly why the
+    unknown cases hold instead of guessing.
     """
     primaries = primary_status_labels(receipt.verified_labels)
     target = primaries[0] if len(primaries) == 1 else None
-    if target not in _EXECUTION_ACTIVE_TARGETS:
-        return False
-    return True if ctx.launch_fact(receipt.issue_number) is not None else None
+    has_launch = ctx.launch_fact(receipt.issue_number) is not None
+    if target in _EXECUTION_ACTIVE_TARGETS:
+        return True if has_launch else None
+    return None if has_launch else False
 
 
 def _on_status_transition_verified(

@@ -21,6 +21,7 @@ from orchestune.dispatch.cycle_context_state import (
     RecordStatus,
 )
 from orchestune.dispatch.cycle_records import (
+    _authoritative_execution_active,
     _on_status_transition_verified,
     apply_verified_transition,
 )
@@ -29,7 +30,7 @@ from orchestune.dispatch.reconciliation import (
     _handle_blocked_recompute_recovery,
 )
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.status_repair import (
     VerifiedStatusTransition,
     execute_status_repair_command,
@@ -166,6 +167,81 @@ class TestApplyVerifiedTransition:
         assert result.status is RecordStatus.APPLIED
         # `record_transition` stores the normalized (sorted) label set.
         assert ctx.task(280).status_labels == ("priority:high", "status:blocked")
+
+
+def _ctx_with_active_launch(tmp_path, **overrides):
+    active = ActiveWorktree(
+        issue_number=280,
+        branch="claude/issue-280-task-a",
+        worktree_path="worktrees/w1",
+        pid=111,
+        started_at=1_699_999_000.0,
+        declared_footprint=(),
+    )
+    overrides.setdefault("run_state", RunState(active_worktrees={"1": active}))
+    return _ctx(tmp_path, **overrides)
+
+
+class TestAuthoritativeExecutionActive:
+    """Codex #899 review: a live launch must never be silently reclaimed by
+    an unrelated status repair whose verified target isn't a launch label.
+    """
+
+    def test_no_launch_and_non_execution_target_is_false(self, tmp_path):
+        ctx = _ctx(tmp_path, tasks_by_issue={280: _task()})
+        receipt = VerifiedStatusTransition(
+            280, ("status:blocked",), ("status:queued",), "i"
+        )
+
+        assert _authoritative_execution_active(ctx, receipt) is False
+
+    def test_active_launch_and_non_execution_target_holds(self, tmp_path):
+        ctx = _ctx_with_active_launch(tmp_path, tasks_by_issue={280: _task()})
+        receipt = VerifiedStatusTransition(
+            280, ("status:blocked",), ("status:queued",), "i"
+        )
+
+        assert _authoritative_execution_active(ctx, receipt) is None
+
+    def test_active_launch_and_execution_target_is_true(self, tmp_path):
+        ctx = _ctx_with_active_launch(tmp_path, tasks_by_issue={280: _task()})
+        receipt = VerifiedStatusTransition(
+            280, ("status:queued",), ("status:in-progress",), "i"
+        )
+
+        assert _authoritative_execution_active(ctx, receipt) is True
+
+    def test_no_launch_and_execution_target_holds(self, tmp_path):
+        ctx = _ctx(tmp_path, tasks_by_issue={280: _task()})
+        receipt = VerifiedStatusTransition(
+            280, ("status:queued",), ("status:in-progress",), "i"
+        )
+
+        assert _authoritative_execution_active(ctx, receipt) is None
+
+    def test_unrelated_repair_does_not_reclaim_a_live_launch(self, tmp_path):
+        """An unrelated PRIMARY_STATUS_CONFLICT-style repair down to
+        `status:queued` must leave a genuinely active launch's fact intact,
+        not retire it -- otherwise the Issue becomes schedulable again while
+        the original run is still active.
+        """
+        ctx = _ctx_with_active_launch(
+            tmp_path, tasks_by_issue={280: _task(status_labels=("status:queued",))}
+        )
+        assert ctx.launch_fact(280) is not None
+        receipt = VerifiedStatusTransition(
+            issue_number=280,
+            before_labels=("status:queued",),
+            verified_labels=("status:queued",),
+            intent_id="i",
+        )
+
+        result = apply_verified_transition(
+            ctx, receipt, execution_active=_authoritative_execution_active(ctx, receipt)
+        )
+
+        assert result is None
+        assert ctx.launch_fact(280) is not None
 
 
 def _remove_done_command(task):
