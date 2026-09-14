@@ -403,7 +403,6 @@ class TestHandleBlockedRecomputeRecovery:
             _IssuesStub([_issue(1, labels=("status:queued",))]),
             run_state,
             ctx,
-            set(),
             config,
         )
 
@@ -429,7 +428,6 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                set(),
                 config,
             )
 
@@ -460,7 +458,6 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                set(),
                 config,
             )
 
@@ -477,7 +474,10 @@ class TestHandleBlockedRecomputeRecovery:
         )
         dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task, 2: dep})
+        ctx = _ctx(
+            tasks_by_issue={1: task, 2: dep},
+            prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -495,7 +495,6 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                {dep.issue_number},
                 config,
             )
 
@@ -523,7 +522,11 @@ class TestHandleBlockedRecomputeRecovery:
             parent_number=100,
         )
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: subject, 2: dependency}, run_state=run_state)
+        ctx = _ctx(
+            tasks_by_issue={1: subject, 2: dependency},
+            run_state=run_state,
+            prior_parent_merge_completed_issue_numbers=frozenset(confirmed),
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -536,7 +539,6 @@ class TestHandleBlockedRecomputeRecovery:
             _IssuesStub([]),
             ctx,
             fresh=False,
-            confirmed_completion_numbers=confirmed,
         )
         desired = adapter.derive(
             ObservedRepositoryState(
@@ -588,7 +590,10 @@ class TestHandleBlockedRecomputeRecovery:
         )
         dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task, 2: dep})
+        ctx = _ctx(
+            tasks_by_issue={1: task, 2: dep},
+            prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -613,7 +618,6 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                {dep.issue_number},
                 config,
             )
 
@@ -649,7 +653,6 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                set(),
                 config,
             )
 
@@ -657,9 +660,7 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_not_called()
         assert result == []
 
-    def test_dependency_resolved_via_completed_issue_numbers(self, tmp_path):
-        """`completed_issue_numbers`（status:not-neededを含む解決経路）でも
-        依存解決とみなされることを確認する。"""
+    def test_dependency_resolved_via_confirmed_context_fact(self, tmp_path):
         task = _task(
             issue_number=1,
             subtask_id="task-a",
@@ -668,7 +669,11 @@ class TestHandleBlockedRecomputeRecovery:
         )
         dep = _dependency_task()
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task, 2: dep}, done_issue_numbers=set())
+        ctx = _ctx(
+            tasks_by_issue={1: task, 2: dep},
+            done_issue_numbers=set(),
+            prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
+        )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -686,7 +691,6 @@ class TestHandleBlockedRecomputeRecovery:
                 ),
                 run_state,
                 ctx,
-                {dep.issue_number},
                 config,
             )
 

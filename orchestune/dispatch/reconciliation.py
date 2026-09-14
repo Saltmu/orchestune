@@ -16,7 +16,6 @@ from orchestune.dispatch.dependency_policy import (
     decide_stack_target,
     has_pending_dependencies,
 )
-from orchestune.dispatch.dependency_policy_compat import with_confirmed_completions
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
@@ -40,7 +39,7 @@ def _collect_active_conflict_subtask_ids(
     """アクティブなワークツリーが持つフットプリントと競合するサブタスクIDの集合を収集する。"""
     active_conflict_subtask_ids = set()
     for active in run_state.active_worktrees.values():
-        active_task = ctx.tasks_by_issue.get(active.issue_number)
+        active_task = ctx.task(active.issue_number)
         if not active_task or not active_task.subtask_id:
             continue
 
@@ -115,6 +114,7 @@ def _live_verify_queued_transition(
 
 def _confirm_queued_recovery(
     ctx: CycleContext,
+    run_state: RunState,
     config: DispatcherConfig,
     *,
     issue_number: int,
@@ -136,7 +136,16 @@ def _confirm_queued_recovery(
     )
     if receipt is not None:
         apply_verified_transition(
-            ctx, receipt, execution_active=_authoritative_execution_active(ctx, receipt)
+            ctx,
+            receipt,
+            execution_active=_authoritative_execution_active(
+                ctx,
+                receipt,
+                has_active_entry=lambda number: any(
+                    active.issue_number == number
+                    for active in run_state.active_worktrees.values()
+                ),
+            ),
         )
 
 
@@ -144,7 +153,6 @@ def _handle_blocked_recompute_recovery(
     issues: Any,
     run_state: RunState,
     ctx: CycleContext,
-    completed_issue_numbers: set[int],
     config: DispatcherConfig,
 ) -> list[dict]:
     """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
@@ -156,18 +164,17 @@ def _handle_blocked_recompute_recovery(
     if not blocked_recompute_issues:
         return recompute_resolved_promoted_events
 
-    subtasks_for_recompute = _build_subtasks_for_recompute(ctx.tasks_by_issue)
+    tasks_by_issue = {task.issue_number: task for task in ctx.tasks()}
+    subtasks_for_recompute = _build_subtasks_for_recompute(tasks_by_issue)
     active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(
         run_state, ctx, subtasks_for_recompute, config
     )
-    dependencies = with_confirmed_completions(ctx, completed_issue_numbers)
-
     for issue in blocked_recompute_issues:
-        task = ctx.tasks_by_issue.get(issue.number)
+        task = ctx.task(issue.number)
         if not task or not task.subtask_id:
             continue
         event = _resolve_one_blocked_recompute_issue(
-            issue, task, active_conflict_subtask_ids, dependencies, ctx, config
+            issue, task, active_conflict_subtask_ids, ctx, run_state, config
         )
         if event is not None:
             recompute_resolved_promoted_events.append(event)
@@ -179,15 +186,15 @@ def _resolve_one_blocked_recompute_issue(
     issue: IssueRecord,
     task: Task,
     active_conflict_subtask_ids: set[str],
-    dependencies: DependencyPolicyView,
     ctx: CycleContext,
+    run_state: RunState,
     config: DispatcherConfig,
 ) -> dict | None:
     if task.subtask_id in active_conflict_subtask_ids:
         return None
     if config.apply:
         config.resolved_forge.remove_label(issue.number, StatusLabel.BLOCKED_RECOMPUTE)
-    if _has_pending_dependencies(task, dependencies):
+    if _has_pending_dependencies(task, ctx):
         return None
     if config.apply:
         before_labels = tuple(
@@ -202,7 +209,11 @@ def _resolve_one_blocked_recompute_issue(
             (StatusLabel.BLOCKED,),
         )
         _confirm_queued_recovery(
-            ctx, config, issue_number=issue.number, before_labels=before_labels
+            ctx,
+            run_state,
+            config,
+            issue_number=issue.number,
+            before_labels=before_labels,
         )
     return {"issue_number": issue.number, "subtask_id": task.subtask_id}
 
@@ -322,6 +333,7 @@ def _decide_base_branch_red_recovery(
 def _apply_base_branch_red_requeue(
     decision: BaseBranchRedRecoveryDecision,
     ctx: CycleContext,
+    run_state: RunState,
     config: DispatcherConfig,
     rec_sha: str,
     cur_sha: str,
@@ -338,6 +350,7 @@ def _apply_base_branch_red_requeue(
         )
         _confirm_queued_recovery(
             ctx,
+            run_state,
             config,
             issue_number=decision.issue_number,
             before_labels=before_labels,
@@ -390,12 +403,15 @@ def _apply_base_branch_red_escalate(
 def _apply_single_base_branch_red_decision(
     decision: BaseBranchRedRecoveryDecision,
     ctx: CycleContext,
+    run_state: RunState,
     config: DispatcherConfig,
 ) -> dict | None:
     rec_sha = (decision.recorded_base_sha or "")[:7]
     cur_sha = (decision.current_base_sha or "")[:7]
     if decision.action == "requeue":
-        return _apply_base_branch_red_requeue(decision, ctx, config, rec_sha, cur_sha)
+        return _apply_base_branch_red_requeue(
+            decision, ctx, run_state, config, rec_sha, cur_sha
+        )
     if decision.action == "unmark_only":
         _apply_base_branch_red_unmark(decision, config, rec_sha, cur_sha)
         return None
@@ -407,11 +423,12 @@ def _apply_single_base_branch_red_decision(
 def _apply_base_branch_red_recovery(
     decisions: list[BaseBranchRedRecoveryDecision],
     ctx: CycleContext,
+    run_state: RunState,
     config: DispatcherConfig,
 ) -> list[dict]:
     events: list[dict] = []
     for decision in decisions:
-        event = _apply_single_base_branch_red_decision(decision, ctx, config)
+        event = _apply_single_base_branch_red_decision(decision, ctx, run_state, config)
         if event is not None:
             events.append(event)
     return events
@@ -444,7 +461,7 @@ def _resolve_recovery_base_sha(
 def _handle_base_branch_red_recovery(
     issues: Any,
     ctx: CycleContext,
-    completed_issue_numbers: set[int],
+    run_state: RunState,
     config: DispatcherConfig,
 ) -> list[dict]:
     """#555: ci:base-branch-red マーカーを持つタスクのベースコミット前進検知および再キューを行う。"""
@@ -457,8 +474,6 @@ def _handle_base_branch_red_recovery(
     outcomes_by_issue: dict[int, OutcomeRecord | None] = {}
     current_base_shas: dict[int, str | None] = {}
     repo_root = config.worktree_root.parent if config.worktree_root else None
-    dependencies = with_confirmed_completions(ctx, completed_issue_numbers)
-
     for issue in base_branch_red_issues:
         try:
             comments = config.resolved_forge.list_comments(issue.number)
@@ -467,17 +482,18 @@ def _handle_base_branch_red_recovery(
             outcome = None
         outcomes_by_issue[issue.number] = outcome
 
-        task = ctx.tasks_by_issue.get(issue.number)
+        task = ctx.task(issue.number)
         if task is not None:
             current_base_shas[issue.number] = _resolve_recovery_base_sha(
-                task, config, dependencies, repo_root
+                task, config, ctx, repo_root
             )
 
+    tasks_by_issue = {task.issue_number: task for task in ctx.tasks()}
     decisions = _decide_base_branch_red_recovery(
         base_branch_red_issues,
-        ctx.tasks_by_issue,
-        dependencies,
+        tasks_by_issue,
+        ctx,
         current_base_shas,
         outcomes_by_issue,
     )
-    return _apply_base_branch_red_recovery(decisions, ctx, config)
+    return _apply_base_branch_red_recovery(decisions, ctx, run_state, config)

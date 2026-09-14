@@ -433,7 +433,7 @@ class TestRunDispatchCycleFootprintRecompute:
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch_stub,
             ),
@@ -534,7 +534,7 @@ class TestRunDispatchCycleFootprintRecompute:
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch_stub,
             ),

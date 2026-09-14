@@ -15,10 +15,10 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import _group_by_status
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.phase_reconciliation import _process_active_worktrees
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
@@ -81,7 +81,25 @@ def _ctx(**overrides):
         defaults["dependency_resolution"] = resolve_all_dependencies(
             overrides["tasks_by_issue"]
         )
-    return CycleContext(**defaults)
+    actions = CycleActionAdapter(defaults["run_state"], defaults["config"], now=0.0)
+    ctx = CycleContext(**defaults, actions=actions)
+    actions.bind_context(ctx)
+    return ctx
+
+
+def _process_active_worktrees(ctx):
+    result = ctx.process_active_worktrees()
+    completed = {
+        task.issue_number
+        for task in ctx.tasks()
+        if ctx.is_completion_confirmed(task.issue_number)
+    }
+    return (
+        list(result.completion_events),
+        list(result.deviation_events),
+        result.any_forced_serial,
+        completed,
+    )
 
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -308,22 +326,22 @@ class TestProcessActiveWorktrees:
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.phase_reconciliation._handle_blocked_recompute_recovery",
+                "orchestune.dispatch.cycle_actions._handle_blocked_recompute_recovery",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle._sync_external_locks",
+                "orchestune.dispatch.cycle_actions._sync_external_locks",
                 autospec=True,
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.cycle_actions._decide_actor_verification",
                 autospec=True,
-                return_value=([], {}, []),
+                return_value=[],
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling._finalize_launch",
+                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
                 autospec=True,
                 return_value=[],
             ),
@@ -402,22 +420,22 @@ class TestProcessActiveWorktrees:
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.phase_reconciliation._handle_blocked_recompute_recovery",
+                "orchestune.dispatch.cycle_actions._handle_blocked_recompute_recovery",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle._sync_external_locks",
+                "orchestune.dispatch.cycle_actions._sync_external_locks",
                 autospec=True,
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.cycle_actions._decide_actor_verification",
                 autospec=True,
-                return_value=([], {}, []),
+                return_value=[],
             ),
             patch(
-                "orchestune.dispatch.phase_scheduling._finalize_launch",
+                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
                 autospec=True,
                 return_value=[],
             ),
@@ -539,8 +557,8 @@ class TestProcessActiveWorktrees:
         assert len(completion_events) == 1
         assert completion_events[0]["action"] == "not_needed"
         assert deviation_events == []
-        assert completed_issue_numbers == {task.issue_number}
-        assert "1" not in ctx.run_state.active_worktrees
+        assert completed_issue_numbers == set()
+        assert "1" not in run_state.active_worktrees
 
     def test_auto_rebase_failure_discards_active_entry(self, tmp_path, fake_forge):
         active = _active(
@@ -609,7 +627,7 @@ class TestProcessActiveWorktrees:
         assert completion_events == []
         assert deviation_events == []
         assert completed_issue_numbers == set()
-        assert "1" not in ctx.run_state.active_worktrees
+        assert "1" not in run_state.active_worktrees
         mock_remove.assert_called_once_with(1, "status:in-progress")
         mock_add.assert_called_once_with(1, "status:manual-merge-required")
         mock_comment.assert_called_once_with(
@@ -655,9 +673,9 @@ class TestProcessActiveWorktrees:
         assert len(completion_events) == 1
         assert completion_events[0]["action"] == "not_needed"
         assert deviation_events == []
-        assert completed_issue_numbers == {task.issue_number}
+        assert completed_issue_numbers == set()
         assert any_forced_serial is False
-        assert "1" not in ctx.run_state.active_worktrees
+        assert "1" not in run_state.active_worktrees
 
         # 追加検証：もう1つの worktree があって、そちらは早期終了せず forced_serial=True の場合
         active_early = _active(issue_number=1, forced_serial=True)
@@ -708,4 +726,4 @@ class TestProcessActiveWorktrees:
             ) = _process_active_worktrees(ctx_two)
 
         assert any_forced_serial is True
-        assert "1" not in ctx_two.run_state.active_worktrees
+        assert "1" not in run_state_two.active_worktrees

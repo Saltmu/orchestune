@@ -52,7 +52,7 @@ class TestExecuteRepair:
         adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
         adapter.bind_context(ctx)
         command = RepairCommand(
-            code=COMMAND_BOOKKEEPING,
+            code="unsupported.repair",
             scope=ConsistencyScope.TASK,
             subject_id="1",
             idempotency_key="k",
@@ -88,18 +88,10 @@ class TestExecuteRepair:
         # context the rest of the cycle observes -- not a throwaway fresh one.
         assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
 
-    def test_status_command_honors_same_cycle_completions_with_stale_forge_labels(
+    def test_unconfirmed_rule_outcome_does_not_override_stale_forge_labels(
         self, tmp_path, in_memory_forge
     ):
-        """#886 Codex review (P1): a same-cycle completion (e.g. an
-        outcome-only `not-needed` decision, #280/#552) may not yet be
-        reflected as a terminal Forge label on the dependency issue by the
-        time `execute_repair` re-fetches state. The fresh executor's
-        completion evidence must still treat it as confirmed -- via the same
-        `self._completed_issue_numbers` overlay `reconcile_recovery` uses --
-        not just via freshly-fetched labels, matching cycle.py's
-        `ConfirmedCompletionView(ctx, confirmed_completion_numbers)` pattern.
-        """
+        """A mocked outcome alone is not confirmed completion evidence."""
         dependency = make_task(
             709, subtask_id="shadow-supervisor", status_labels=("status:in-progress",)
         )
@@ -134,13 +126,13 @@ class TestExecuteRepair:
 
         with patch(
             "orchestune.dispatch.cycle_actions._run_active_worktree_rules",
-            return_value=([], [], False, {709}),
+            return_value=([], [], False),
         ):
             adapter.process_active_worktrees()
 
         result = adapter.execute_repair(command)
 
-        assert result.status.value == "applied"
+        assert result.status.value == "skipped"
 
     def test_conflict_becomes_failed_diagnostic_without_forge_rollback(
         self, tmp_path, in_memory_forge
@@ -217,18 +209,10 @@ class TestReconcileRecovery:
 
         assert events == ()
 
-    def test_uses_the_same_cycle_completions_process_active_worktrees_computed(
+    def test_recovery_reads_confirmed_completions_from_the_bound_context(
         self,
     ):
-        """#886 Codex review (P1): `record_completion`'s same-cycle side
-        effect does not substitute for the explicit `completed_issue_numbers`
-        overlay -- dry runs never call `record_completion`, and
-        `_rule_not_needed` can report an outcome-based completion without
-        recording one. `reconcile_recovery` must reuse the same set
-        `process_active_worktrees` computed this cycle, matching cycle.py's
-        existing `run_post_gc_reconciliation` call (which passes
-        `completed_in_cycle` through unchanged).
-        """
+        """No raw completion set is threaded into recovery helpers."""
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={}, run_state=run_state)
         adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
@@ -236,7 +220,7 @@ class TestReconcileRecovery:
 
         with patch(
             "orchestune.dispatch.cycle_actions._run_active_worktree_rules",
-            return_value=([], [], False, {7, 9}),
+            return_value=([], [], False),
         ):
             adapter.process_active_worktrees()
 
@@ -253,5 +237,15 @@ class TestReconcileRecovery:
         ):
             adapter.reconcile_recovery()
 
-        assert blocked_recompute.call_args.args[3] == {7, 9}
-        assert base_branch_red.call_args.args[2] == {7, 9}
+        assert blocked_recompute.call_args.args == (
+            blocked_recompute.call_args.args[0],
+            run_state,
+            ctx,
+            ctx.config,
+        )
+        assert base_branch_red.call_args.args == (
+            base_branch_red.call_args.args[0],
+            ctx,
+            run_state,
+            ctx.config,
+        )

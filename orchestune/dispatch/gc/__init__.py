@@ -121,15 +121,11 @@ def _rule_not_needed(
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
-    completed_subtask_id = None
     if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
-        if active_task and active_task.subtask_id:
-            completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
-        completed_subtask_id=completed_subtask_id,
         terminal=True,
     )
 
@@ -324,9 +320,6 @@ def _record_completed_worktree(
 ) -> ActiveWorktreeRuleOutcome:
     """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
     action = completion_event["action"]
-    completed_subtask_id = None
-    if action == "completed" and active_task is not None and active_task.subtask_id:
-        completed_subtask_id = active_task.subtask_id
     receipt = (
         CompletionReceipt(issue_number=completion_active.issue_number)
         if action in _CONFIRMED_COMPLETION_ACTIONS
@@ -337,19 +330,10 @@ def _record_completed_worktree(
             _completed_worktree_record(completion_active, active_task, completion_event)
         )
         del ctx.run_state.active_worktrees[key]
-        if not _persist_and_confirm_completion(ctx, completion_active, receipt):
-            # Persistence failed: no confirmation signal may claim completion
-            # ahead of disk state, neither the legacy display field nor the
-            # same-cycle propagation field.
-            completed_subtask_id = None
-            receipt = None
+        _persist_and_confirm_completion(ctx, completion_active, receipt)
 
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
-        completed_subtask_id=completed_subtask_id,
-        confirmed_completion_issue_number=(
-            receipt.issue_number if receipt is not None else None
-        ),
         terminal=True,
     )
 

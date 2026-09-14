@@ -249,7 +249,7 @@ class TestBaseBranchRedRecovery:
         )
         task = _task(status_labels=("status:blocked",))
         ctx = _ctx(tasks_by_issue={1: task})
-        events = _apply_base_branch_red_recovery([decision], ctx, config)
+        events = _apply_base_branch_red_recovery([decision], ctx, RunState(), config)
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
         fake_forge.add_label.assert_called_once_with(1, "status:queued")
@@ -273,7 +273,7 @@ class TestBaseBranchRedRecovery:
             forge=fake_forge,
         )
         ctx = _ctx(tasks_by_issue={1: _task(status_labels=("status:blocked",))})
-        events = _apply_base_branch_red_recovery([decision], ctx, config)
+        events = _apply_base_branch_red_recovery([decision], ctx, RunState(), config)
         assert events == []
         fake_forge.add_label.assert_called_once_with(1, "status:blocked-human-review")
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
@@ -288,7 +288,7 @@ class TestBaseBranchRedRecovery:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
         )
-        events = _handle_base_branch_red_recovery(issues_mock, ctx, set(), config)
+        events = _handle_base_branch_red_recovery(issues_mock, ctx, RunState(), config)
         assert events == []
 
     def test_handle_base_branch_red_recovery_success(self, tmp_path):
@@ -314,19 +314,22 @@ class TestBaseBranchRedRecovery:
             apply=True,
             forge=fake_forge,
         )
-        ctx = MagicMock()
-        ctx.tasks_by_issue = {1: task}
-        ctx.done_issue_numbers = set()
-        ctx.branch_by_issue_number = {}
-        ctx.dependency_resolution = {1: TaskDependencies()}
-        ctx.assess_dependencies.return_value = DependencyAssessment()
+        run_state = RunState()
+        ctx = _ctx(
+            tasks_by_issue={1: task},
+            dependency_resolution={1: TaskDependencies()},
+            run_state=run_state,
+            config=config,
+        )
 
         with patch(
             "orchestune.dispatch.reconciliation._get_branch_commit_sha",
             autospec=True,
             return_value="2222222222222222222222222222222222222222",
         ):
-            events = _handle_base_branch_red_recovery(issues_mock, ctx, set(), config)
+            events = _handle_base_branch_red_recovery(
+                issues_mock, ctx, run_state, config
+            )
 
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
@@ -373,7 +376,9 @@ class TestBaseBranchRedRecovery:
             autospec=True,
             return_value="2222222222222222222222222222222222222222",  # parent/mainのSHA
         ):
-            events = _handle_base_branch_red_recovery(issues_mock, ctx, set(), config)
+            events = _handle_base_branch_red_recovery(
+                issues_mock, ctx, RunState(), config
+            )
 
         assert events == []
         fake_forge.remove_label.assert_not_called()

@@ -23,6 +23,8 @@ from orchestune.dispatch.cycle import (
     _pipeline_state_changes,
     _RepairCycleState,
 )
+from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult, GcPhaseResult
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
 from orchestune.dispatch.dependency_resolution import (
@@ -51,7 +53,7 @@ from orchestune.dispatch.scoring import (
 from orchestune.dispatch.state import RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import merge_skips
 from orchestune.dispatch.worktree import LaunchResult
-from tests.conftest import make_issue, make_task
+from tests.conftest import make_task
 
 
 def _task(
@@ -85,8 +87,10 @@ def _config(tmp_path, forge: MagicMock, **overrides) -> DispatcherConfig:
 
 def _context(config: DispatcherConfig, tasks: list[Task], **overrides) -> CycleContext:
     tasks_by_issue = {task.issue_number: task for task in tasks}
-    return CycleContext(
-        run_state=overrides.get("run_state", RunState()),
+    run_state = overrides.get("run_state", RunState())
+    actions = CycleActionAdapter(run_state, config, now=100.0)
+    ctx = CycleContext(
+        run_state=run_state,
         tasks_by_issue=tasks_by_issue,
         issue_number_by_subtask_id=overrides.get(
             "issue_number_by_subtask_id",
@@ -110,7 +114,10 @@ def _context(config: DispatcherConfig, tasks: list[Task], **overrides) -> CycleC
         prior_parent_merge_completed_issue_numbers=overrides.get(
             "prior_parent_merge_completed_issue_numbers", frozenset()
         ),
+        actions=actions,
     )
+    actions.bind_context(ctx)
+    return ctx
 
 
 def _empty_issues() -> IssuesByStatus:
@@ -124,51 +131,53 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
     config = _config(tmp_path, fake_forge)
     ctx = _context(
         config,
-        [],
+        [_task(5, status="status:in-progress")],
         done_issue_numbers={7},
         prior_parent_merge_completed_issue_numbers=frozenset({7}),
     )
     lock_result = ExternalLockScanResult([], [])
     scheduling = SchedulingPhaseResult([selected], 1, [])
 
-    def process(_ctx):
+    def process():
         order.append("active-completion")
-        return ([{"issue_number": 5}], [], False, {5})
+        ctx.record_completion(5)
+        return ActivePhaseResult(({"issue_number": 5},), (), False)
 
     def notify(_ctx, _config):
         order.append("pr-link-notification")
 
-    def gc(_ctx, _config, events, _repair_cycle):
+    def gc(events):
         order.append("gc-reclaim")
-        return events
+        return GcPhaseResult(tuple(events), MagicMock())
 
-    def reconcile(**kwargs):
+    def reconcile():
         order.append("pre-scheduling-reconciliation")
-        assert kwargs["completed_in_cycle"] == {5}
-        assert kwargs["ctx"].is_completion_confirmed(7)
-        return ([], lock_result)
+        assert ctx.is_completion_confirmed(5)
+        assert ctx.is_completion_confirmed(7)
+        return ()
+
+    def scan():
+        return lock_result
 
     def schedule(*args):
         order.append("scheduling-and-launch")
-        assert args[3] == {5}
-        assert args[0].done_issue_numbers == {7}
+        assert args == (ctx, lock_result, [])
         return scheduling
 
     with (
-        patch("orchestune.dispatch.cycle._process_active_worktrees", process),
+        patch.object(ctx, "process_active_worktrees", side_effect=process),
         patch("orchestune.dispatch.cycle._notify_pr_links", notify),
-        patch("orchestune.dispatch.cycle._run_gc_reclaim_phase", gc),
-        patch(
-            "orchestune.dispatch.cycle._run_pre_scheduling_reconciliation", reconcile
-        ),
+        patch.object(ctx, "run_gc", side_effect=gc),
+        patch.object(ctx, "reconcile_recovery", side_effect=reconcile),
+        patch.object(ctx, "scan_external_locks", side_effect=scan),
         patch(
             "orchestune.dispatch.cycle.run_scheduling_phase", side_effect=schedule
         ) as mocked,
     ):
-        report, completions = _execute_cycle_pipeline(
+        report = _execute_cycle_pipeline(
             ctx,
             _empty_issues(),
-            ctx.run_state,
+            RunState(),
             config,
             100.0,
             _RepairCycleState(),
@@ -184,7 +193,8 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
     ]
     assert mocked.call_count == 1
     assert report.selected == [selected]
-    assert completions == frozenset({5, 7})
+    assert ctx.is_completion_confirmed(5)
+    assert ctx.is_completion_confirmed(7)
 
 
 def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
@@ -207,22 +217,10 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
         ci_passed_pr_issue_numbers={99},
         branch_by_issue_number={99: "claude/issue-99-task-99"},
     )
-    issues = IssuesByStatus(
-        queued=[make_issue(30), make_issue(10)],
-        locked=[],
-        in_progress=[],
-        blocked=[make_issue(20, labels=("status:blocked",))],
-        done=[],
-        not_needed=[],
-    )
     lock_result = ExternalLockScanResult([], [])
 
-    population, _, skips = _determine_candidate_tasks(
-        ctx, lock_result, set(), False, 100.0
-    )
-    result = run_scheduling_phase(
-        ctx, issues, lock_result, set(), False, [], 100.0, config
-    )
+    population, _, skips = _determine_candidate_tasks(ctx, lock_result)
+    result = run_scheduling_phase(ctx, lock_result, [])
 
     assert [task.issue_number for task in population] == [10, 20, 30]
     # The selector remains free to order its selected result by score after the
@@ -249,9 +247,6 @@ def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
     _, _, phase_skips = _determine_candidate_tasks(
         skip_ctx,
         ExternalLockScanResult([], [], {40: (conflict,)}),
-        set(),
-        False,
-        100.0,
     )
 
     assert [record.issue_number for record in phase_skips] == [20, 30, 40, 40]
@@ -287,37 +282,35 @@ def test_dry_run_and_launch_failure_observation_contract(tmp_path, fake_forge) -
     """Dry-run predicts selection; an apply-time launch failure rewrites only its report."""
     task = _task(10)
     config = _config(tmp_path, fake_forge, apply=False)
-    ctx = _context(config, [task])
-    issues = IssuesByStatus([make_issue(10)], [], [], [], [], [])
+    run_state = RunState()
+    ctx = _context(config, [task], run_state=run_state)
 
     with patch(
-        "orchestune.dispatch.phase_scheduling._select_tasks_for_cycle",
+        "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
         return_value=SchedulingResult([task], [_decision(task)]),
     ):
-        preview = run_scheduling_phase(
-            ctx, issues, ExternalLockScanResult([], []), set(), False, [], 1.0, config
-        )
+        preview = run_scheduling_phase(ctx, ExternalLockScanResult([], []), [])
 
     assert preview.selected == [task]
     assert preview.decisions[0].reason == REASON_SELECTED
-    assert ctx.run_state.active_worktrees == {}
+    assert run_state.active_worktrees == {}
 
     config.apply = True
     with (
         patch(
-            "orchestune.dispatch.phase_scheduling._select_tasks_for_cycle",
+            "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
             return_value=SchedulingResult([task], [_decision(task)]),
         ),
-        patch("orchestune.dispatch.phase_scheduling._finalize_launch", return_value=[]),
+        patch(
+            "orchestune.dispatch.cycle_actions._launch_selected_tasks", return_value=[]
+        ),
     ):
-        failed = run_scheduling_phase(
-            ctx, issues, ExternalLockScanResult([], []), set(), False, [], 1.0, config
-        )
+        failed = run_scheduling_phase(ctx, ExternalLockScanResult([], []), [])
 
     assert failed.selected == []
     assert failed.decisions[0].selected is False
     assert failed.decisions[0].reason == REASON_LAUNCH_FAILED
-    assert ctx.run_state.active_worktrees == {}
+    assert run_state.active_worktrees == {}
 
 
 def test_skipped_and_failed_repairs_remain_observable_in_cycle_report() -> None:

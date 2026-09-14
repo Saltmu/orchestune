@@ -13,7 +13,7 @@ import dataclasses
 import os
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,7 +54,6 @@ from orchestune.consistency.observation import (
 )
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
-    COMMAND_RECLAIM,
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
@@ -73,13 +72,13 @@ from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import (
     _build_cycle_context,
     _build_task_mappings,
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
-from orchestune.dispatch.cycle_records import _on_status_transition_verified
 from orchestune.dispatch.cycle_report import (
     CycleReport,
     append_event_log,
@@ -89,14 +88,8 @@ from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
 )
-from orchestune.dispatch.phase_gc import build_gc_reclaim_handler, run_gc_phase
 from orchestune.dispatch.phase_rebase import (
-    _sync_external_locks,
     ensure_parent_branch_ready,
-)
-from orchestune.dispatch.phase_reconciliation import (
-    _process_active_worktrees,
-    run_post_gc_reconciliation,
 )
 from orchestune.dispatch.phase_scheduling import run_scheduling_phase
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
@@ -125,7 +118,7 @@ from orchestune.dispatch.status_repair import (
 )
 from orchestune.dispatch.status_repair_dependencies import (
     CompletionEvidenceView,
-    ConfirmedCompletionView,
+    DependencyAssessmentView,
 )
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.dispatch.worktree import file_lock
@@ -184,20 +177,23 @@ class _DispatchConsistencyAdapter:
         ctx,
         *,
         fresh: bool,
-        confirmed_completion_numbers=(),
         include_status_intents: bool = True,
     ) -> None:
         self._config = config
         self._run_state = run_state
         self._cached_issues = issues
-        self._cached_prs = ctx.prs
-        self._cached_branches = ctx.branch_by_issue_number
+        self._cached_prs = ctx.pull_requests()
+        self._cached_branches = {
+            task.issue_number: branch
+            for task in ctx.tasks()
+            if (branch := ctx.canonical_branch(task.issue_number)) is not None
+        }
         self._fresh = fresh
-        self._completion_evidence = ConfirmedCompletionView(
-            ctx, frozenset(confirmed_completion_numbers)
-        )
+        self._completion_evidence: DependencyAssessmentView = ctx
         self._include_status_intents = include_status_intents
-        self._tasks_by_issue: dict[int, Task] = ctx.tasks_by_issue
+        self._tasks_by_issue: dict[int, Task] = {
+            task.issue_number: task for task in ctx.tasks()
+        }
 
     def _source_records(self):
         if not self._fresh:
@@ -350,11 +346,6 @@ class _DispatchConsistencyAdapter:
     def completion_evidence(self) -> CompletionEvidenceView:
         return self._completion_evidence
 
-    def confirm_completions(self, issue_numbers: Iterable[int]) -> None:
-        self._completion_evidence = self._completion_evidence.with_confirmed(
-            issue_numbers
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class _DispatchRepairExecutor:
@@ -401,6 +392,16 @@ class _RepairCycleState:
         )
         if report.repair_passes or has_repair_scope:
             self.reports.append(report)
+
+
+@dataclass(frozen=True, slots=True)
+class _ContextRepairExecutor:
+    """Adapt the Supervisor's generic executor name to the v3 action port."""
+
+    ctx: CycleContext
+
+    def execute(self, command: RepairCommand) -> RepairResult:
+        return self.ctx.execute_repair(command)
 
 
 def _status_repair_supervisor() -> ConsistencySupervisor:
@@ -469,10 +470,9 @@ def _promotion_events(
 
 
 def _status_boundary_adapters(
-    *, issues, run_state, ctx, confirmed_completion_numbers, config
+    *, issues, run_state, ctx, config
 ) -> tuple[_DispatchConsistencyAdapter, _DispatchConsistencyAdapter]:
     common = {
-        "confirmed_completion_numbers": confirmed_completion_numbers,
         "include_status_intents": False,
     }
     cached = _DispatchConsistencyAdapter(
@@ -501,12 +501,7 @@ def _status_boundary_report(
         initial_scan,
         observer=fresh_adapter,
         deriver=fresh_adapter,
-        executor=_DispatchRepairExecutor(
-            config=config,
-            adapter=fresh_adapter,
-            completion_evidence=fresh_adapter.completion_evidence,
-            on_status_verified=_on_status_transition_verified(ctx),
-        ),
+        executor=_ContextRepairExecutor(ctx),
         allowlist=(
             (finding_code,)
             if config.apply and finding_code in DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST
@@ -524,7 +519,6 @@ def _run_status_repair_boundary(
     issues,
     run_state,
     ctx,
-    confirmed_completion_numbers,
     config: DispatcherConfig,
     cycle_state: _RepairCycleState,
 ) -> list[dict]:
@@ -533,7 +527,6 @@ def _run_status_repair_boundary(
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        confirmed_completion_numbers=confirmed_completion_numbers,
         config=config,
     )
     initial_scan, boundary_report = _status_boundary_report(
@@ -630,15 +623,17 @@ def _start_consistency_runtime(
     return runtime
 
 
-def _event_issue_number(event: dict, ctx) -> int | None:
+def _event_issue_number(event: dict, ctx: CycleContext) -> int | None:
     issue_number = event.get("issue_number")
     if isinstance(issue_number, int) and not isinstance(issue_number, bool):
         return issue_number
     subtask_id = event.get("subtask_id")
     if isinstance(subtask_id, str):
-        mapped = ctx.issue_number_by_subtask_id.get(subtask_id)
-        if isinstance(mapped, int) and not isinstance(mapped, bool):
-            return mapped
+        matches: list[int] = [
+            task.issue_number for task in ctx.tasks() if task.subtask_id == subtask_id
+        ]
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -752,15 +747,7 @@ def _run_final_repair_pass(
         final_scan,
         observer=runtime.fresh_adapter,
         deriver=runtime.fresh_adapter,
-        executor=_DispatchRepairExecutor(
-            config=config,
-            adapter=runtime.fresh_adapter,
-            completion_evidence=runtime.fresh_adapter.completion_evidence,
-            on_status_verified=_on_status_transition_verified(ctx),
-            execution_handlers=_final_execution_repair_handlers(
-                runtime, report, ctx, config, now=now
-            ),
-        ),
+        executor=_ContextRepairExecutor(ctx),
         allowlist=final_allowlist,
         max_passes=config.consistency_max_repair_passes,
     )
@@ -773,14 +760,12 @@ def _finish_consistency_runtime(
     now: float,
     config: DispatcherConfig,
     repair_cycle: _RepairCycleState,
-    same_cycle_completions: frozenset[int],
 ) -> None:
     if runtime is None:
         report.consistency = _merge_consistency_reports(
             ConsistencyCycleReport(mode=config.consistency_mode), repair_cycle.reports
         )
         return
-    runtime.fresh_adapter.confirm_completions(same_cycle_completions)
     runtime.supervisor.targeted_scan(
         "pipeline",
         _pipeline_state_changes(report, ctx, now),
@@ -802,49 +787,6 @@ def _finish_consistency_runtime(
         )
     main_report = runtime.supervisor.cycle_report(mode=config.consistency_mode)
     report.consistency = _merge_consistency_reports(main_report, repair_cycle.reports)
-
-
-def _execute_final_recovery_command(
-    command: RepairCommand,
-    run_state,
-    config: DispatcherConfig,
-    *,
-    now: float,
-) -> RepairResult:
-    adapter = RecoveryBookkeepingAdapter(_repository_id(), run_state, config, now=now)
-    adapter.observe()
-    if command.code == COMMAND_REQUEUE:
-        return execute_recovery_requeue_command(
-            command, run_state, adapter.snapshot, config
-        )
-    return execute_bookkeeping_repair_command(
-        command, run_state, adapter.snapshot, config
-    )
-
-
-def _final_execution_repair_handlers(
-    runtime: _ConsistencyRuntime,
-    report: CycleReport,
-    ctx,
-    config: DispatcherConfig,
-    *,
-    now: float,
-) -> Mapping[str, RepairCommandHandler]:
-    def recovery(command: RepairCommand) -> RepairResult:
-        return _execute_final_recovery_command(command, ctx.run_state, config, now=now)
-
-    return {
-        COMMAND_RECLAIM: build_gc_reclaim_handler(
-            ctx.run_state,
-            runtime.fresh_adapter.tasks_by_issue,
-            config,
-            report.completion_events,
-            ctx.prs,
-            now=now,
-        ),
-        COMMAND_REQUEUE: recovery,
-        COMMAND_BOOKKEEPING: recovery,
-    }
 
 
 def _run_recovery_bookkeeping_boundary(
@@ -920,8 +862,8 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
         return
     events = notify_open_pr_links(
         config.resolved_forge,
-        ctx.prs,
-        notice_expected_bases(ctx.tasks_by_issue.values()),
+        ctx.pull_requests(),
+        notice_expected_bases(ctx.tasks()),
     )
     for event in events:
         print(
@@ -931,55 +873,31 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
         )
 
 
-def _same_cycle_completions(ctx, completed_in_cycle: Iterable[int]) -> frozenset[int]:
-    """同一サイクル内で確定した完了を1か所で組み立てる（#859）。
-
-    確定経路は2つある。active worktreeの完了検知（`completed_in_cycle`）と、
-    検証済み先行マージ（`ctx.prior_parent_merge_completed_issue_numbers`）である。
-    後者は`_build_cycle_context`が`done_issue_numbers`へ事前合流させるが、
-    完了集合を組み立て直す消費側はそれを見ないため、両経路をここで合流させて
-    唯一の入口にする。個別の消費側で`| completed_in_cycle`を書き足す形にすると、
-    片方の経路だけを合流し忘れる余地が残る。
-    """
-    prior_merge_completions: frozenset[int] = (
-        ctx.prior_parent_merge_completed_issue_numbers
-    )
-    return frozenset(completed_in_cycle) | prior_merge_completions
-
-
 def _run_pre_scheduling_reconciliation(
     *,
     ctx,
     issues,
     run_state,
-    completed_in_cycle,
     config,
     repair_cycle,
 ):
-    confirmed_completions = _same_cycle_completions(ctx, completed_in_cycle)
     promotion_events = _run_status_repair_boundary(
         "status-blocked-promotion",
         BLOCKED_WITH_RESOLVED_DEPENDENCIES,
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        confirmed_completion_numbers=confirmed_completions,
         config=config,
         cycle_state=repair_cycle,
     )
-    promotion_events.extend(
-        run_post_gc_reconciliation(issues, run_state, ctx, completed_in_cycle, config)
-    )
-    lock_result = _sync_external_locks(
-        ctx.tasks_by_issue, ctx.prs, ctx.run_state, config, view=ctx
-    )
+    promotion_events.extend(ctx.reconcile_recovery())
+    lock_result = ctx.scan_external_locks()
     _run_status_repair_boundary(
         "status-primary-reconciliation",
         PRIMARY_STATUS_CONFLICT,
         issues=issues,
         run_state=run_state,
         ctx=ctx,
-        confirmed_completion_numbers=confirmed_completions,
         config=config,
         cycle_state=repair_cycle,
     )
@@ -1022,13 +940,7 @@ def _pipeline_report(
 
 
 def _run_gc_reclaim_phase(ctx, config, completion_events, repair_cycle):
-    gc_result = run_gc_phase(
-        ctx.run_state,
-        ctx.tasks_by_issue,
-        config,
-        completion_events,
-        open_prs=ctx.prs,
-    )
+    gc_result = ctx.run_gc(tuple(completion_events))
     repair_cycle.add_report(gc_result.consistency)
     return gc_result.completion_events
 
@@ -1041,15 +953,10 @@ def _execute_cycle_pipeline(
     now: float,
     repair_cycle: _RepairCycleState,
     prior_parent_merge_events: tuple[dict[str, object], ...] = (),
-) -> tuple[CycleReport, frozenset[int]]:
-    """1サイクル分のフェーズを実行し、レポートと同一サイクル完了を返す（#859）。"""
-    (
-        completion_events,
-        deviation_events,
-        any_forced_serial,
-        completed_issue_numbers,
-    ) = _process_active_worktrees(ctx)
-    completion_events = [*prior_parent_merge_events, *completion_events]
+) -> CycleReport:
+    """Execute the v3 phase sequence through one bound Context."""
+    active = ctx.process_active_worktrees()
+    completion_events = [*prior_parent_merge_events, *active.completion_events]
     _notify_pr_links(ctx, config)
 
     completion_events = _run_gc_reclaim_phase(
@@ -1059,29 +966,23 @@ def _execute_cycle_pipeline(
         ctx=ctx,
         issues=issues,
         run_state=run_state,
-        completed_in_cycle=completed_issue_numbers,
         config=config,
         repair_cycle=repair_cycle,
     )
     scheduling = run_scheduling_phase(
         ctx,
-        issues,
         lock_result,
-        completed_issue_numbers,
-        any_forced_serial,
-        deviation_events,
-        now,
-        config,
+        list(active.deviation_events),
     )
     report = _pipeline_report(
         scheduling,
         lock_result,
-        deviation_events=deviation_events,
+        deviation_events=list(active.deviation_events),
         completion_events=completion_events,
         promotion_events=promotion_events,
         applied=config.apply,
     )
-    return report, _same_cycle_completions(ctx, completed_issue_numbers)
+    return report
 
 
 def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
@@ -1101,13 +1002,16 @@ def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
             active.issue_number for active in run_state.active_worktrees.values()
         ),
     )
+    actions = CycleActionAdapter(run_state, config, now)
     ctx = _build_cycle_context(
         issues,
         run_state,
         config,
         prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
         prior_parent_merge_completed_issue_numbers=prior_merges.completed_issue_numbers,
+        actions=actions,
     )
+    actions.bind_context(ctx)
     return issues, ctx, recovery_report, prior_merges
 
 
@@ -1122,7 +1026,7 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
         consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
         repair_cycle = _RepairCycleState()
         repair_cycle.add_report(recovery_report)
-        report, same_cycle_completions = _execute_cycle_pipeline(
+        report = _execute_cycle_pipeline(
             ctx,
             issues,
             run_state,
@@ -1138,7 +1042,6 @@ def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
             now,
             config,
             repair_cycle,
-            same_cycle_completions,
         )
 
         if config.apply:

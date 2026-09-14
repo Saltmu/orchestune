@@ -161,6 +161,7 @@ class SchedulingDecision:
 class SchedulingResult:
     selected: list[Task]
     decisions: list[SchedulingDecision]
+    quota_slots_available: int | None = None
 
 
 def decision_to_dict(decision: SchedulingDecision) -> dict:
@@ -553,7 +554,9 @@ def _apply_resource_constraints(
         projected_tokens += cost or 0
         decisions.append(replace(decision, selected=True, reason=REASON_SELECTED))
 
-    return SchedulingResult(selected=selected, decisions=decisions)
+    return SchedulingResult(
+        selected=selected, decisions=decisions, quota_slots_available=slots
+    )
 
 
 def _prepare_ranked_candidates(
@@ -600,7 +603,11 @@ def _append_excluded_decisions(
     decisions = result.decisions + [
         _excluded_decision(task, reason, inputs) for task, reason in excluded
     ]
-    return SchedulingResult(selected=result.selected, decisions=decisions)
+    return SchedulingResult(
+        selected=result.selected,
+        decisions=decisions,
+        quota_slots_available=result.quota_slots_available,
+    )
 
 
 def select_tasks_with_decisions(

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
     UnresolvedDependency,
@@ -109,9 +110,6 @@ class TestDetermineCandidateTaskSkips:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={695: task}),
             lock_result,
-            set(),
-            False,
-            now=0.0,
         )
 
         # 生の`skips`はJSONレポートとevents.jsonlにそのまま載るため、誤った
@@ -137,9 +135,6 @@ class TestDetermineCandidateTaskSkips:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={1: task}),
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert [record.reason for record in skips] == []
@@ -164,9 +159,6 @@ class TestDetermineCandidateTaskSkips:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={695: upstream, 696: task}),
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert [(r.reason, r.detail) for r in skips] == [
@@ -188,9 +180,6 @@ class TestDetermineCandidateTaskSkips:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={696: task}),
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert [(r.reason, r.detail) for r in skips] == [
@@ -203,8 +192,6 @@ class TestDetermineCandidateTaskSkips:
         candidates, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, dependency_resolution={}),
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            set(),
-            False,
         )
 
         assert candidates == []
@@ -229,8 +216,6 @@ class TestDetermineCandidateTaskSkips:
         candidates, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, dependency_resolution=resolution),
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            set(),
-            False,
         )
 
         assert candidates == []
@@ -278,8 +263,6 @@ class TestDetermineCandidateTaskSkips:
         candidates, _, skips = _determine_candidate_tasks(
             ctx,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            set(),
-            False,
         )
 
         assert candidates == []
@@ -298,9 +281,6 @@ class TestExternalLockSkipScope:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={1: task}),
             ExternalLockScanResult(to_lock=[], to_unlock=[task], conflicts={}),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert skips == []
@@ -316,9 +296,6 @@ class TestExternalLockSkipScope:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={2: done_task}),
             ExternalLockScanResult(to_lock=[], to_unlock=[done_task], conflicts={}),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert skips == []
@@ -336,9 +313,6 @@ class TestExternalLockSkipScope:
         _, _, skips = _determine_candidate_tasks(
             _ctx(tasks_by_issue={695: task}),
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts=conflicts),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert [(r.issue_number, r.reason) for r in skips] == [
@@ -368,9 +342,6 @@ class TestInProgressTasksAreNotSkipCandidates:
             ExternalLockScanResult(
                 to_lock=[], to_unlock=[], conflicts=self._conflicts(5)
             ),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert skips == []
@@ -396,9 +367,6 @@ class TestInProgressTasksAreNotSkipCandidates:
             ExternalLockScanResult(
                 to_lock=[], to_unlock=[], conflicts=self._conflicts(5)
             ),
-            set(),
-            False,
-            now=0.0,
         )
 
         assert skips == []
@@ -424,25 +392,28 @@ class TestInProgressTasksAreNotSkipCandidates:
         )
 
         # now=50.0 (バックオフ期間中) -> スキップされる
+        ctx = _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config)
         candidates, _, skips = _determine_candidate_tasks(
-            _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config),
+            ctx,
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
-            set(),
-            False,
-            now=50.0,
         )
-        assert candidates == []
-        assert len(skips) == 1
-        assert skips[0].issue_number == 5
-        assert skips[0].reason == REASON_REVIEW_TIMEOUT_BACKOFF
+        assert candidates == [task]
+        assert skips == []
+        adapter = CycleActionAdapter(run_state, config, now=50.0)
+        adapter.bind_context(ctx)
+        selection = adapter.select_tasks(tuple(candidates))
+        assert selection.selected == []
+        backoff = [
+            decision
+            for decision in selection.decisions
+            if decision.reason == REASON_REVIEW_TIMEOUT_BACKOFF
+        ]
+        assert [decision.issue_number for decision in backoff] == [5]
 
         # now=150.0 (バックオフ経過後) -> 起動候補に残る
         candidates_after, _, skips_after = _determine_candidate_tasks(
             _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config),
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
-            set(),
-            False,
-            now=150.0,
         )
         assert len(candidates_after) == 1
         assert candidates_after[0].issue_number == 5

@@ -683,12 +683,12 @@ class TestRunDispatchCycleBlockedPromotion:
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle.execute_status_repair_command",
+                "orchestune.dispatch.cycle_actions.execute_status_repair_command",
                 autospec=True,
                 side_effect=execute,
             ),
             patch(
-                "orchestune.dispatch.cycle._sync_external_locks",
+                "orchestune.dispatch.cycle_actions._sync_external_locks",
                 autospec=True,
                 side_effect=sync_locks,
             ),

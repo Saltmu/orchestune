@@ -20,7 +20,7 @@ from orchestune.dispatch.phase_gc import (
     _GcReclaimAdapter,
     run_gc_phase,
 )
-from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.rules import CycleContext, _RuleExecutionContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
@@ -118,6 +118,48 @@ def _ctx(*, forge=None, **overrides):
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
+
+
+class _TestRuleContext(_RuleExecutionContext):
+    """Low-level Rule input with convenient semantic-query forwarding."""
+
+    def __getattr__(self, name):
+        return getattr(self.queries, name)
+
+
+def _rule_ctx(*, forge=None, **overrides):
+    run_state = overrides.get("run_state", RunState(active_worktrees={}))
+    tasks_by_issue = overrides.get("tasks_by_issue", {})
+    prs = overrides.get("prs", [])
+    config = overrides.get(
+        "config",
+        DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=forge,
+        ),
+    )
+    query = _ctx(
+        forge=forge,
+        **{
+            **overrides,
+            "run_state": run_state,
+            "tasks_by_issue": tasks_by_issue,
+            "prs": prs,
+            "config": config,
+        },
+    )
+    return _TestRuleContext(
+        run_state=run_state,
+        queries=query,
+        config=config,
+        prs=tuple(prs),
+        not_needed_review_dispatcher=query.not_needed_review_dispatcher,
+        issue_records_by_number=overrides.get("issue_records_by_number", {}),
+        tasks_by_issue=tasks_by_issue,
+        issue_number_by_subtask_id=overrides.get("issue_number_by_subtask_id", {}),
+    )
 
 
 def _active(**overrides):

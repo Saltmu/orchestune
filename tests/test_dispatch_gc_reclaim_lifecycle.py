@@ -22,7 +22,7 @@ from orchestune.dispatch.state import (
     load_run_state,
 )
 from orchestune.models import IssueRecord
-from tests.dispatch_gc_test_support import _ctx
+from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 from tests.dispatch_gc_test_support import (
     run_gc_reclaims as _collect_zombies_and_timeouts,
 )

@@ -1,10 +1,4 @@
-"""同一サイクル内で確定した完了の組み立て（#859）。
-
-`_same_cycle_completions`は、active worktreeの完了検知と検証済み先行マージという
-2つの確定経路を1か所で合流させる唯一の入口である。消費側ごとに片方だけを
-合流させる書き方に戻ると、先行マージ完了が`status_repair`系へ届かず、依存元が
-次サイクルまで`status:blocked`のまま据え置かれる回帰が再発する。
-"""
+"""Confirmed same-cycle completion facts flow through CycleContext (#873)."""
 
 from __future__ import annotations
 
@@ -15,13 +9,9 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
-    _finish_consistency_runtime,
-    _RepairCycleState,
-    _same_cycle_completions,
-)
+from orchestune.dispatch.cycle import _finish_consistency_runtime, _RepairCycleState
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_report import CycleReport
-from orchestune.dispatch.phase_reconciliation import _process_active_worktrees
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import Task
@@ -63,42 +53,23 @@ def _ctx(**overrides: Any) -> CycleContext:
         ),
     )
     defaults.update(overrides)
-    return CycleContext(**defaults)
+    actions = CycleActionAdapter(defaults["run_state"], defaults["config"], now=0.0)
+    ctx = CycleContext(**defaults, actions=actions)
+    actions.bind_context(ctx)
+    return ctx
 
 
-class TestSameCycleCompletions:
-    def test_unions_active_worktree_and_prior_parent_merge_sources(self):
-        ctx = _ctx(prior_parent_merge_completed_issue_numbers=frozenset({7}))
+class TestConfirmedCompletionFacts:
+    def test_prior_parent_merge_is_available_from_initial_context(self):
+        ctx = _ctx(
+            tasks_by_issue={7: _task(7)},
+            prior_parent_merge_completed_issue_numbers=frozenset({7}),
+        )
 
-        assert _same_cycle_completions(ctx, {3}) == frozenset({3, 7})
+        assert ctx.is_completion_confirmed(7) is True
 
-    def test_deduplicates_an_issue_confirmed_by_both_sources(self):
-        ctx = _ctx(prior_parent_merge_completed_issue_numbers=frozenset({3}))
-
-        assert _same_cycle_completions(ctx, {3}) == frozenset({3})
-
-    def test_returns_each_source_alone(self):
-        active_only = _ctx()
-        prior_only = _ctx(prior_parent_merge_completed_issue_numbers=frozenset({7}))
-
-        assert _same_cycle_completions(active_only, {3}) == frozenset({3})
-        assert _same_cycle_completions(prior_only, ()) == frozenset({7})
-
-    def test_is_empty_without_either_source(self):
-        assert _same_cycle_completions(_ctx(), ()) == frozenset()
-
-
-class TestVerifiedAlreadyMergedReachesSameCycleCompletions:
-    """#882: 検証済みalready_mergedはsubtask_idを持たないため、Issue番号を
-    直接運ぶ`confirmed_completion_issue_number`が無いと同一サイクルの依存元へ
-    完了が届かない（`completed_subtask_id`ベースの旧経路はaction=="completed"
-    かつ非空subtask_idしか拾わない）。
-    """
-
-    def test_already_merged_completion_reaches_completed_issue_numbers(self):
-        upstream = _task(280, subtask_id="", status_labels=("status:in-progress",))
-        ctx = _ctx(tasks_by_issue={280: upstream})
-        ctx.config.apply = True
+    def test_verified_active_completion_is_recorded_in_context(self):
+        task = _task(280, subtask_id="", status_labels=("status:in-progress",))
         active = ActiveWorktree(
             issue_number=280,
             branch="claude/issue-280-task-a",
@@ -107,7 +78,9 @@ class TestVerifiedAlreadyMergedReachesSameCycleCompletions:
             started_at=1_699_999_000.0,
             declared_footprint=(),
         )
-        ctx.run_state.active_worktrees["1"] = active
+        run_state = RunState(active_worktrees={"280": active})
+        ctx = _ctx(tasks_by_issue={280: task}, run_state=run_state)
+        ctx.config.apply = True
 
         with (
             patch(
@@ -115,11 +88,6 @@ class TestVerifiedAlreadyMergedReachesSameCycleCompletions:
                 autospec=True,
                 return_value=True,
             ),
-            # #898 Codex review: `_resolve_local_completion` still calls the
-            # real `_local_pr_completion_status` (default `GitHubForge`)
-            # between `_is_worktree_complete` and `_finalize_completed_worktree`
-            # — stub it too so this stays a deterministic unit test that
-            # never shells out to `gh`.
             patch(
                 "orchestune.dispatch.gc._local_pr_completion_status",
                 autospec=True,
@@ -132,17 +100,39 @@ class TestVerifiedAlreadyMergedReachesSameCycleCompletions:
             ),
             patch("orchestune.dispatch.gc.save_run_state", autospec=True),
         ):
-            _, _, _, completed_issue_numbers = _process_active_worktrees(ctx)
+            result = ctx.process_active_worktrees()
 
-        assert completed_issue_numbers == {280}
-        assert _same_cycle_completions(ctx, completed_issue_numbers) == frozenset({280})
+        assert result.completion_events[0]["action"] == "already_merged"
         assert ctx.is_completion_confirmed(280) is True
+
+    def test_unverified_completion_outcome_does_not_create_a_fact(self):
+        task = _task(280, status_labels=("status:in-progress",))
+        active = ActiveWorktree(
+            issue_number=280,
+            branch="claude/issue-280-task-a",
+            worktree_path="worktrees/w1",
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=(),
+        )
+        ctx = _ctx(
+            tasks_by_issue={280: task},
+            run_state=RunState(active_worktrees={"280": active}),
+        )
+
+        with patch(
+            "orchestune.dispatch.gc._is_worktree_complete",
+            autospec=True,
+            return_value=False,
+        ):
+            ctx.process_active_worktrees()
+
+        assert ctx.is_completion_confirmed(280) is False
 
 
 class TestFinalConsistencyRepairExecutor:
-    """サイクル終端の修復も、他の消費側と同じ実効完了を見る（#859）。"""
-
-    def _run_finish(self, ctx, same_cycle_completions):
+    def test_uses_the_same_cycle_context_as_completion_evidence(self):
+        ctx = _ctx(done_issue_numbers={1})
         runtime = MagicMock()
         report = CycleReport(
             selected=[],
@@ -160,36 +150,10 @@ class TestFinalConsistencyRepairExecutor:
             consistency_mode=ConsistencyMode.REPAIR,
             apply=False,
         )
-        with patch(
-            "orchestune.dispatch.cycle._DispatchRepairExecutor"
-        ) as executor_factory:
+
+        with patch("orchestune.dispatch.cycle._ContextRepairExecutor") as factory:
             _finish_consistency_runtime(
-                runtime,
-                report,
-                ctx,
-                0.0,
-                config,
-                _RepairCycleState(),
-                same_cycle_completions,
+                runtime, report, ctx, 0.0, config, _RepairCycleState()
             )
-        return runtime, executor_factory
 
-    def test_confirms_same_cycle_completions_on_fresh_adapter(self):
-        ctx = _ctx(done_issue_numbers={1})
-
-        runtime, executor_factory = self._run_finish(ctx, frozenset({2}))
-
-        runtime.fresh_adapter.confirm_completions.assert_called_once_with(
-            frozenset({2})
-        )
-        assert (
-            executor_factory.call_args.kwargs["completion_evidence"]
-            is runtime.fresh_adapter.completion_evidence
-        )
-
-    def test_does_not_infer_confirmation_from_initial_done_snapshot(self):
-        ctx = _ctx(done_issue_numbers={1})
-
-        runtime, _ = self._run_finish(ctx, frozenset())
-
-        runtime.fresh_adapter.confirm_completions.assert_called_once_with(frozenset())
+        factory.assert_called_once_with(ctx)
