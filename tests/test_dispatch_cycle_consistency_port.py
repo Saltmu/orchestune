@@ -1,8 +1,15 @@
 """#886: CycleActionAdapter (reconcile_recovery/execute_repair).
 
 Wiring these ports into the live `cycle.py` pipeline is #873's job; these
-tests exercise `CycleActionAdapter` directly against a bound `CycleQueries`
-view (a real `CycleContext`, which already satisfies the Protocol).
+tests exercise `CycleActionAdapter` directly against a bound `CycleContext`.
+
+#886 Codex round 6: `bind_context` takes the concrete `CycleContext`, not the
+`CycleQueries` Protocol -- `bind_context` isn't part of the #823-fixed
+`CycleActions` API, and `reconcile_recovery`/`execute_repair` genuinely need
+`CycleContext`-only fields (`tasks_by_issue`/`run_state`) that the other five
+ports don't, so narrowing the type here (rather than raising at runtime for
+two ports out of seven) keeps every port's binding contract uniform and lets
+mypy catch a wrong binding instead of a runtime check.
 """
 
 from __future__ import annotations
@@ -13,7 +20,6 @@ import pytest
 
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
-from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
@@ -37,41 +43,6 @@ class TestBindContextContractExtendsToConsistencyPorts:
                     idempotency_key="k",
                 )
             )
-
-    def test_a_non_cyclecontext_cyclequeries_binding_fails_closed_and_clearly(self):
-        """#886 Codex review: `reconcile_recovery`/`execute_repair`'s status
-        branch reuse existing helpers written against the concrete
-        `CycleContext` (not just the declared `CycleQueries` Protocol
-        surface `bind_context` accepts) -- binding anything else must raise
-        a clear `TypeError` here, not an `AttributeError` deep inside
-        `reconciliation.py`/`cycle_records.py`.
-        """
-        not_a_cycle_context = MagicMock()
-        run_state = RunState(active_worktrees={})
-        adapter = CycleActionAdapter(run_state, _ctx().config, now=0.0)
-        adapter.bind_context(not_a_cycle_context)
-
-        with pytest.raises(TypeError):
-            adapter.reconcile_recovery()
-        with pytest.raises(TypeError):
-            adapter.execute_repair(
-                RepairCommand(
-                    code=COMMAND_TRANSITION_LABEL,
-                    scope=ConsistencyScope.TASK,
-                    subject_id="1",
-                    idempotency_key="k",
-                )
-            )
-        # The non-status fail-closed path needs no concrete CycleContext.
-        result = adapter.execute_repair(
-            RepairCommand(
-                code=COMMAND_BOOKKEEPING,
-                scope=ConsistencyScope.TASK,
-                subject_id="1",
-                idempotency_key="k",
-            )
-        )
-        assert result.status.value == "failed"
 
 
 class TestExecuteRepair:

@@ -25,7 +25,6 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
-    CycleQueries,
     GcPhaseResult,
     StackBase,
 )
@@ -153,8 +152,11 @@ class CycleActionAdapter:
     """L3 `CycleActions`実装（#884: process_active_worktrees/run_gcのみ）。
 
     `run_state`/`config`/`now`をコンストラクタで1回だけ受け取り所有する。
-    `bind_context`で`CycleQueries`実装（通常は`CycleContext`自身）を1回だけ
-    接続してから各portを呼ぶ。所有する`RunState`を返すgetterは公開しない。
+    `bind_context`で`CycleContext`を1回だけ接続してから各portを呼ぶ
+    （#886 Codex round 6: `bind_context`は#823の固定APIに無いadapter内部の
+    配線であり、`reconcile_recovery`/`execute_repair`が具象`CycleContext`
+    専用フィールドを要求する以上、型を`CycleQueries`まで緩めない——7 port
+    全部が同じ束縛契約に従う）。所有する`RunState`を返すgetterは公開しない。
     """
 
     def __init__(
@@ -163,49 +165,30 @@ class CycleActionAdapter:
         self._run_state = run_state
         self._config = config
         self._now = now
-        self._view: CycleQueries | None = None
+        self._view: CycleContext | None = None
         self._completed_issue_numbers: frozenset[int] = frozenset()
 
-    def bind_context(self, view: CycleQueries) -> None:
+    def bind_context(self, view: CycleContext) -> None:
+        """#886 Codex review: `bind_context`は`CycleActions`Protocol（#823の
+        固定API）には無いadapter内部の配線であり、`view`の型を`CycleQueries`
+        まで緩める必要はない。`reconcile_recovery`/`execute_repair`は
+        `reconciliation.py`/`cycle_records.py`の既存関数（`ctx.tasks_by_issue`
+        /`ctx.run_state`のような具象`CycleContext`専用フィールドを使う）を
+        そのまま再利用するため、実際には全portが常に具象`CycleContext`で
+        束縛される（`cycle.py`側の唯一の実インスタンスも常にこれ）。型を
+        `CycleQueries`のままにして2 portだけ実行時に`TypeError`で弾く設計は、
+        「5 portは成功するのに残り2 portだけ失敗する」という一貫しない契約に
+        なる（#886 Codex round 6指摘）。`CycleContext`は`CycleQueries`を構造的に
+        満たすため、7 port全てにとってこの型で何も失わない。
+        """
         if self._view is not None:
             raise ValueError("CycleActionAdapter.bind_context called more than once")
         self._view = view
 
-    def _bound_view(self) -> CycleQueries:
+    def _bound_view(self) -> CycleContext:
         if self._view is None:
             raise ValueError("CycleActionAdapter used before bind_context")
         return self._view
-
-    def _bound_context(self) -> CycleContext:
-        """#886 Codex review: `reconcile_recovery`/`execute_repair`だけが
-        使う、`CycleQueries`より強い要求。
-
-        両者は`reconciliation.py`の`_handle_blocked_recompute_recovery`/
-        `_handle_base_branch_red_recovery`と`cycle_records.py`の
-        `_on_status_transition_verified`/`_authoritative_execution_active`を
-        そのまま再利用しており、これらは（`cycle.py`の既存呼出し専用に書か
-        れたまま）`ctx.tasks_by_issue`/`ctx.run_state`のような`CycleQueries`
-        Protocolには無い具象`CycleContext`専用のフィールドへ直接アクセスする。
-        これらの既存関数をProtocol型へ再設計するのは今回のIssueの範囲外
-        （「新しい状態モデルを設計しない」という制約に反する、より大きな
-        変更になる）ため、代わりに束縛時の型を明示的に検査し、束縛先が
-        `CycleQueries`を満たすだけの別実装だった場合に、呼び出しの奥深くで
-        不可解な`AttributeError`になる前に、ここで分かりやすく失敗させる
-        （`process_active_worktrees`/`run_gc`/`scan_external_locks`/
-        `select_tasks`/`launch_tasks`は`CycleQueries`のメソッドだけで入力を
-        組み立てるため、この強い要求を持たない——これら2つのportだけの例外）。
-        """
-        view = self._bound_view()
-        if not isinstance(view, CycleContext):
-            raise TypeError(
-                "CycleActionAdapter.reconcile_recovery/execute_repair require "
-                "bind_context to have been called with a concrete CycleContext, "
-                f"not {type(view).__name__} -- they reuse existing "
-                "reconciliation.py/cycle_records.py helpers written against "
-                "CycleContext's concrete fields, not just the CycleQueries "
-                "Protocol surface"
-            )
-        return view
 
     def _execution_context(self) -> _RuleExecutionContext:
         view = self._bound_view()
@@ -380,7 +363,7 @@ class CycleActionAdapter:
         `process_active_worktrees()`を未実行のまま呼ばれた場合は空集合の
         まま（bind_context直後の単体呼び出しでは#884以前と同じ挙動）。
         """
-        ctx = self._bound_context()
+        ctx = self._bound_view()
         issues = _IssueRecordsView(ctx.issue_records())
         completed = set(self._completed_issue_numbers)
         events = _handle_blocked_recompute_recovery(
@@ -422,14 +405,10 @@ class CycleActionAdapter:
         宛先である*束縛済みの*`ctx`（`_on_status_transition_verified`経由）
         がそのまま担う。
         """
-        self._bound_view()
+        ctx = self._bound_view()
         if not command.code.startswith("status."):
             return DispatchRepairExecutorAdapter({}).execute(command)
 
-        # Only the status.* branch needs the concrete CycleContext (see
-        # `_bound_context`'s docstring); the non-status fail-closed path
-        # above works for any CycleQueries-conforming binding.
-        ctx = self._bound_context()
         fresh_issues = _fetch_issues(self._config).filtered_by_parent(
             self._config.parent_issue_number
         )
