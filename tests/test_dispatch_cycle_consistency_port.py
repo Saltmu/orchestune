@@ -13,6 +13,7 @@ import pytest
 
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
+from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
@@ -36,6 +37,41 @@ class TestBindContextContractExtendsToConsistencyPorts:
                     idempotency_key="k",
                 )
             )
+
+    def test_a_non_cyclecontext_cyclequeries_binding_fails_closed_and_clearly(self):
+        """#886 Codex review: `reconcile_recovery`/`execute_repair`'s status
+        branch reuse existing helpers written against the concrete
+        `CycleContext` (not just the declared `CycleQueries` Protocol
+        surface `bind_context` accepts) -- binding anything else must raise
+        a clear `TypeError` here, not an `AttributeError` deep inside
+        `reconciliation.py`/`cycle_records.py`.
+        """
+        not_a_cycle_context = MagicMock()
+        run_state = RunState(active_worktrees={})
+        adapter = CycleActionAdapter(run_state, _ctx().config, now=0.0)
+        adapter.bind_context(not_a_cycle_context)
+
+        with pytest.raises(TypeError):
+            adapter.reconcile_recovery()
+        with pytest.raises(TypeError):
+            adapter.execute_repair(
+                RepairCommand(
+                    code=COMMAND_TRANSITION_LABEL,
+                    scope=ConsistencyScope.TASK,
+                    subject_id="1",
+                    idempotency_key="k",
+                )
+            )
+        # The non-status fail-closed path needs no concrete CycleContext.
+        result = adapter.execute_repair(
+            RepairCommand(
+                code=COMMAND_BOOKKEEPING,
+                scope=ConsistencyScope.TASK,
+                subject_id="1",
+                idempotency_key="k",
+            )
+        )
+        assert result.status.value == "failed"
 
 
 class TestExecuteRepair:
