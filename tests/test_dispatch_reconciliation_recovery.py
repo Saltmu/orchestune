@@ -105,10 +105,11 @@ def _ctx(**overrides):
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
         issue_number_by_subtask_id={},
-        done_subtask_ids=set(),
-        ci_passed_pr_subtask_ids=set(),
-        changes_requested_subtask_ids=set(),
-        subtask_branch_map={},
+        dependency_resolution={},
+        done_issue_numbers=set(),
+        ci_passed_pr_issue_numbers=set(),
+        changes_requested_issue_numbers=set(),
+        branch_by_issue_number={},
         prs=[],
         pr_by_branch={},
         config=DispatcherConfig(
@@ -237,6 +238,8 @@ class TestBaseBranchRedRecovery:
             attempt=1,
         )
         fake_forge = MagicMock()
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.return_value = ("status:queued",)
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -244,11 +247,15 @@ class TestBaseBranchRedRecovery:
             apply=True,
             forge=fake_forge,
         )
-        events = _apply_base_branch_red_recovery([decision], config)
+        task = _task(status_labels=("status:blocked",))
+        ctx = _ctx(tasks_by_issue={1: task})
+        events = _apply_base_branch_red_recovery([decision], ctx, config)
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
         fake_forge.add_label.assert_called_once_with(1, "status:queued")
         fake_forge.add_comment.assert_called_once()
+        # #883: the live-verified transition reaches CycleContext too.
+        assert ctx.task(1).status_labels == ("status:queued",)
 
     def test_apply_escalate_transitions_to_blocked_human_review(self, tmp_path):
         decision = BaseBranchRedRecoveryDecision(
@@ -265,7 +272,8 @@ class TestBaseBranchRedRecovery:
             apply=True,
             forge=fake_forge,
         )
-        events = _apply_base_branch_red_recovery([decision], config)
+        ctx = _ctx(tasks_by_issue={1: _task(status_labels=("status:blocked",))})
+        events = _apply_base_branch_red_recovery([decision], ctx, config)
         assert events == []
         fake_forge.add_label.assert_called_once_with(1, "status:blocked-human-review")
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")

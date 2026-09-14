@@ -79,6 +79,7 @@ from orchestune.dispatch.cycle_context import (
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
+from orchestune.dispatch.cycle_records import _on_status_transition_verified
 from orchestune.dispatch.cycle_report import (
     CycleReport,
     append_event_log,
@@ -108,6 +109,7 @@ from orchestune.dispatch.recovery import (
     plan_recovery_bookkeeping_repairs,
     recovery_bookkeeping_invariants,
 )
+from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_dependency_policy import (
@@ -488,6 +490,7 @@ def _status_boundary_report(
     *,
     cached_adapter: _DispatchConsistencyAdapter,
     fresh_adapter: _DispatchConsistencyAdapter,
+    ctx: CycleContext,
     config: DispatcherConfig,
 ):
     supervisor = _status_repair_supervisor()
@@ -502,6 +505,7 @@ def _status_boundary_report(
             config=config,
             adapter=fresh_adapter,
             completion_evidence=fresh_adapter.completion_evidence,
+            on_status_verified=_on_status_transition_verified(ctx),
         ),
         allowlist=(
             (finding_code,)
@@ -537,6 +541,7 @@ def _run_status_repair_boundary(
         finding_code,
         cached_adapter=cached_adapter,
         fresh_adapter=fresh_adapter,
+        ctx=ctx,
         config=config,
     )
     cycle_state.add_report(boundary_report)
@@ -751,6 +756,7 @@ def _run_final_repair_pass(
             config=config,
             adapter=runtime.fresh_adapter,
             completion_evidence=runtime.fresh_adapter.completion_evidence,
+            on_status_verified=_on_status_transition_verified(ctx),
             execution_handlers=_final_execution_repair_handlers(
                 runtime, report, ctx, config, now=now
             ),
