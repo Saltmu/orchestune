@@ -427,3 +427,56 @@ class TestRecomputeRecoveryWiring:
         # ctx-side confirmation is withheld.
         assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
         assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
+
+    def test_active_worktree_entry_holds_instead_of_reclaiming(self, tmp_path):
+        """Codex #899 review (round 4): the recovery must not hard-code
+        `execution_active=False` -- an Issue can still have a live
+        `run_state.active_worktrees` entry (e.g. its footprint deviation was
+        independently resolved without the worktree itself stopping), and
+        unconditionally asserting `False` would let `record_transition`
+        retire that launch, exposing it to `queued_tasks()`/scheduling again.
+        """
+        fake_forge = MagicMock()
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path="worktrees/w1",
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=(),
+        )
+        ctx = _ctx(
+            tmp_path,
+            tasks_by_issue={
+                1: _task(
+                    issue_number=1,
+                    status_labels=(StatusLabel.BLOCKED,),
+                    depends_on=(),
+                )
+            },
+            dependency_resolution={1: TaskDependencies()},
+            run_state=RunState(active_worktrees={"1": active}),
+        )
+        ctx.config.apply = True
+        ctx.config.forge = fake_forge
+
+        class _Issues:
+            def all(self):
+                return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
+
+        with patch(
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
+            autospec=True,
+            return_value=(),
+        ):
+            events = _handle_blocked_recompute_recovery(
+                _Issues(), ctx.run_state, ctx, set(), ctx.config
+            )
+
+        # The label mutation and promotion event still happen; only the
+        # ctx-side confirmation is withheld, preserving the launch fact.
+        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
+        assert ctx.launch_fact(1) is not None

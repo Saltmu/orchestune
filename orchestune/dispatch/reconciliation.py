@@ -7,7 +7,10 @@ from typing import Any
 from orchestune.consistency.invariants.status import primary_status_labels
 from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_records import apply_verified_transition
+from orchestune.dispatch.cycle_records import (
+    _authoritative_execution_active,
+    apply_verified_transition,
+)
 from orchestune.dispatch.dependency_policy import (
     DependencyPolicyView,
     decide_stack_target,
@@ -119,15 +122,22 @@ def _confirm_queued_recovery(
 ) -> None:
     """#883: apply成功後にlive検証した`VerifiedStatusTransition`を`ctx`へ反映する。
 
-    `QUEUED`は`_EXECUTION_ACTIVE_TARGETS`(cycle.py)に含まれない、すなわち
-    このrecoveryが起動を新規に主張することは構造的にないため、
-    `execution_active=False`は常に妥当（"unknown"へ倒す必要がない）。
+    `QUEUED`は`_EXECUTION_ACTIVE_TARGETS`(cycle_records.py)に含まれないため
+    `True`を主張することはないが、`False`を無条件に主張してよいわけではない
+    （Codex #899レビュー対応）: このIssueに`run_state.active_worktrees`の
+    エントリ（クリーンな単一起動、handle欠如、複数曖昧のいずれか）が残って
+    いる場合、`False`は「実行停止済み」という積極的な主張になり、
+    `record_transition`がその起動事実を退役させてしまう——このrecovery自体は
+    実行停止を検証していない。判定は`_authoritative_execution_active`
+    （status executor側と同じ関数）へ委譲し、無条件`False`は使わない。
     """
     receipt = _live_verify_queued_transition(
         config, issue_number=issue_number, before_labels=before_labels
     )
     if receipt is not None:
-        apply_verified_transition(ctx, receipt, execution_active=False)
+        apply_verified_transition(
+            ctx, receipt, execution_active=_authoritative_execution_active(ctx, receipt)
+        )
 
 
 def _handle_blocked_recompute_recovery(
