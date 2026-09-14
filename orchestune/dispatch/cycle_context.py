@@ -8,9 +8,9 @@ from dataclasses import dataclass
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_actions import _dispatch_not_needed_review
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.filters import _filter_by_parent
-from orchestune.dispatch.phase_reconciliation import _dispatch_not_needed_review
 from orchestune.dispatch.recovery import _extract_raw_subtask_id
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue

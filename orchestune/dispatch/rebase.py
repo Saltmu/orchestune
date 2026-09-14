@@ -23,7 +23,7 @@ from orchestune.dispatch.dependency_policy import (
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
-from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.worktree import _provision_and_launch
@@ -521,7 +521,10 @@ def _try_auto_rebase(ctx: RebaseContext) -> bool:
 
 
 def _rule_auto_rebase(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#201: 自動リベース判定＆実行。"""
     if not dispatch_gc.is_process_alive(active.pid):
@@ -531,7 +534,7 @@ def _rule_auto_rebase(
         active_task=active_task,
         key=key,
         run_state=ctx.run_state,
-        dependencies=ctx,
+        dependencies=ctx.queries,
         config=ctx.config,
     )
     if not _try_auto_rebase(rebase_ctx):
@@ -540,7 +543,10 @@ def _rule_auto_rebase(
 
 
 def _rule_footprint_deviation(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome:
     """フォールバックルール: 他のどのルールにも該当しなかったactive worktreeに
     ついて、footprint逸脱の有無を判定する。ルールチェーンの末尾として、常に

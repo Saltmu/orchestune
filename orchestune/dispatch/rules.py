@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_action_contracts import CycleQueries
 from orchestune.dispatch.cycle_context_state import (
     LaunchFact,
     RecordResult,
@@ -179,6 +180,68 @@ class CycleContext:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _RuleExecutionContext:
+    """#884: private input adapter for the active-worktree Rules and GC acts.
+
+    Not a public state window (`CycleActionAdapter` never returns it, and
+    neither does anything else) -- it exists only to hand Rule
+    decisions/acts exactly the three things they need: `run_state` (acts
+    mutate this directly), `queries` (a `CycleQueries`-conforming view;
+    decisions read only through this), and `config`. `prs`,
+    `not_needed_review_dispatcher`, `issue_records_by_number`,
+    `tasks_by_issue`, and `issue_number_by_subtask_id` are narrowly-scoped
+    extras existing Rule bodies already read directly that `CycleQueries` has
+    no method for -- `not_needed_review_dispatcher` in particular is L3
+    behavior injected into L2 Rule code specifically to avoid an L2->L3
+    import, the same reason `CycleContext` already carries it as a plain
+    field rather than a method. `issue_number_by_subtask_id` is never used
+    for dependency resolution itself (per `CycleContext`'s own docstring),
+    but it is not display-only either (#884 Codex review): footprint-deviation
+    handling (`rebase.notify_recompute`) uses it to find and actually
+    transition the blocked issue to `status:blocked`/`status:blocked-recompute`,
+    not just to word a notification comment. `CycleQueries` has no equivalent
+    query, so `CycleActionAdapter` reconstructs it the same way
+    `cycle_context.py` builds it for `CycleContext` (from `view.tasks()`).
+
+    Lives in `rules.py` rather than the new L3 `cycle_actions.py` because the
+    Rule functions that take it as `ctx` (`gc/__init__.py`, `rebase.py`,
+    `escalation.py`) are all L2 and cannot import from L3; `rules.py` is the
+    one L2 module all three already import `CycleContext` from without
+    creating an import cycle (`gc/__init__.py` already imports
+    `escalation.py`, so defining this in either of those, or in `rebase.py`,
+    would cycle back).
+    """
+
+    run_state: RunState
+    queries: CycleQueries
+    config: DispatcherConfig
+    prs: tuple[PrRecord, ...] = ()
+    not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
+    issue_records_by_number: dict[int, IssueRecord] = field(default_factory=dict)
+    tasks_by_issue: dict[int, Task] = field(default_factory=dict)
+    issue_number_by_subtask_id: dict[str, int] = field(default_factory=dict)
+
+    @classmethod
+    def from_cycle_context(cls, ctx: CycleContext) -> _RuleExecutionContext:
+        return cls(
+            run_state=ctx.run_state,
+            queries=ctx,
+            config=ctx.config,
+            prs=tuple(ctx.prs),
+            not_needed_review_dispatcher=ctx.not_needed_review_dispatcher,
+            issue_records_by_number=ctx.issue_records_by_number,
+            tasks_by_issue=ctx.tasks_by_issue,
+            issue_number_by_subtask_id=ctx.issue_number_by_subtask_id,
+        )
+
+    def record_completion(self, issue_number: int) -> RecordResult:
+        return self.queries.record_completion(issue_number)
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        return self.queries.assess_dependencies(issue_number)
+
+
 @dataclass
 class ActiveWorktreeRuleOutcome:
     """1つの判定ルールがactive worktreeに対して下した結果。
@@ -203,7 +266,7 @@ class ActiveWorktreeRuleOutcome:
 
 
 Rule = Callable[
-    [CycleContext, str, ActiveWorktree, "Task | None"],
+    ["_RuleExecutionContext", str, ActiveWorktree, "Task | None"],
     "ActiveWorktreeRuleOutcome | None",
 ]
 
@@ -260,7 +323,7 @@ class RuleChain:
 
     def run(
         self,
-        ctx: CycleContext,
+        ctx: _RuleExecutionContext,
         key: str,
         active: ActiveWorktree,
         active_task: Task | None,

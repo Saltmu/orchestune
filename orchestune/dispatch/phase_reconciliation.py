@@ -4,6 +4,10 @@ active worktreeごとの完了検知・CHANGES_REQUESTEDエスカレーション
 footprint逸脱検知(rule chain評価)から、run_state自己修復・依存解決による
 status:blocked-recompute自動復帰までの、1サイクル中の「整合性回復」に
 関わる処理をまとめる。status修復はcycleのConsistencySupervisorが所有する。
+
+#884: active worktreeごとのrule chainループ本体は`cycle_actions.py`の
+`_run_active_worktree_rules`へ移設した。`_process_active_worktrees`は既存の
+`CycleContext`ベース呼出し元(`cycle.py`)向けの後方互換wrapperとして残す。
 """
 
 from __future__ import annotations
@@ -11,105 +15,37 @@ from __future__ import annotations
 from typing import Any
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.escalation import _rule_changes_requested
-from orchestune.dispatch.gc import (
-    _rule_completed,
-    _rule_not_needed,
-    _rule_stale_entry_hold,
-)
-from orchestune.dispatch.rebase import (
-    _rule_auto_rebase,
-    _rule_footprint_deviation,
+from orchestune.dispatch.cycle_actions import (
+    _EARLY_ACTIVE_WORKTREE_RULES,
+    _MAIN_ACTIVE_WORKTREE_RULES,
+    _run_active_worktree_rules,
 )
 from orchestune.dispatch.reconciliation import (
     _handle_base_branch_red_recovery,
     _handle_blocked_recompute_recovery,
 )
-from orchestune.dispatch.rules import CycleContext, RuleChain, _ActiveWorktreeAggregates
-from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
-from orchestune.integrator.coordinator import (
-    IntegrationCoordinator,
-    record_pending_not_needed_review,
-)
+from orchestune.dispatch.rules import CycleContext, _RuleExecutionContext
 
-
-def _dispatch_not_needed_review(
-    issue_number: int, subtask_id: str, config: DispatcherConfig
-) -> None:
-    dispatch_target = config.dispatch_target
-    if not isinstance(dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
-        raise RuntimeError("not-needed review requires a cloud routine dispatch target")
-    coordinator = IntegrationCoordinator(dispatch_target)
-    handle = coordinator.dispatch_not_needed_review(issue_number, subtask_id)
-    record_pending_not_needed_review(
-        config.not_needed_review_state_path,
-        issue_number=issue_number,
-        subtask_id=subtask_id,
-        session_handle=handle,
-    )
-
-
-# active worktreeごとの判定は、それぞれ対応するact側モジュールに定義された
-# ruleとして実装されている(#86, dispatch_cycle.pyは条件判定そのものを持たない)。
-# ここでは、それらをどの優先順位で評価するか(early/mainの2つのRuleChain)の
-# 組み立てのみを行う。
-#
-# - status:not-neededの検知と、Supervisor-owned GCへ委譲するstale entryの
-#   非破壊holdは、他のどの判定よりも先に評価する必要があるため「早期チェーン」
-#   として分離している
-#   (該当すればそのactive worktreeへの以後の判定はすべてスキップする)。
-# - 完了検知・CHANGES_REQUESTEDエスカレーション・自動リベース・footprint逸脱
-#   検知は「主チェーン」として、この優先順位で評価する。
-_EARLY_ACTIVE_WORKTREE_RULES = RuleChain(
-    rules=[
-        _rule_not_needed,
-        _rule_stale_entry_hold,
-    ]
-)
-
-_MAIN_ACTIVE_WORKTREE_RULES = RuleChain(
-    rules=[
-        _rule_completed,
-        _rule_changes_requested,
-        _rule_auto_rebase,
-        _rule_footprint_deviation,
-    ]
-)
+# #884: re-exported for backward-compatible imports after the loop/RuleChain
+# relocation to `cycle_actions.py`.
+__all__ = [
+    "_EARLY_ACTIVE_WORKTREE_RULES",
+    "_MAIN_ACTIVE_WORKTREE_RULES",
+    "_process_active_worktrees",
+    "run_post_gc_reconciliation",
+]
 
 
 def _process_active_worktrees(
     ctx: CycleContext,
 ) -> tuple[list[dict], list[dict], bool, set[int]]:
-    """#192/#193/#200: active worktreeごとの完了検知・footprint逸脱処理。
+    """#192/#193/#200/#884: active worktreeごとの完了検知・footprint逸脱処理。
 
-    完了と判定したエントリは（apply時）run_state.active_worktreesから
-    除去してクオータを解放し、以後のfootprint逸脱チェックはスキップする。
-
-    新しい判断パターンを追加する場合、このループ自体は変更せず、対応する
-    ruleを対応するact側モジュールに書いて、`_EARLY_ACTIVE_WORKTREE_RULES`/
-    `_MAIN_ACTIVE_WORKTREE_RULES`に追加するだけでよい（#86）。
+    実体は`cycle_actions._run_active_worktree_rules`(#884で移設)。この関数は
+    既存の`CycleContext`ベース呼出し元(`cycle.py`)向けの薄いwrapperとして、
+    シグネチャ・戻り値の形を変えずに残す。
     """
-    aggregates = _ActiveWorktreeAggregates()
-
-    for key, active in list(ctx.run_state.active_worktrees.items()):
-        active_task = ctx.tasks_by_issue.get(active.issue_number)
-
-        if _EARLY_ACTIVE_WORKTREE_RULES.run(ctx, key, active, active_task, aggregates):
-            continue
-
-        if active.forced_serial:
-            aggregates.any_forced_serial = True
-
-        # _MAIN_ACTIVE_WORKTREE_RULESの末尾(_rule_footprint_deviation)は必ず
-        # 非Noneかつterminalな結果を返すため、戻り値を見る必要はない。
-        _MAIN_ACTIVE_WORKTREE_RULES.run(ctx, key, active, active_task, aggregates)
-
-    return (
-        aggregates.completion_events,
-        aggregates.deviation_events,
-        aggregates.any_forced_serial,
-        aggregates.completed_issue_numbers,
-    )
+    return _run_active_worktree_rules(_RuleExecutionContext.from_cycle_context(ctx))
 
 
 def run_post_gc_reconciliation(

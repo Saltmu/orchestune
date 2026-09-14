@@ -11,7 +11,7 @@ from orchestune.dispatch.dependency_assessment import (
     DependencyState,
 )
 from orchestune.dispatch.labels import transition_status_label
-from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
@@ -114,7 +114,10 @@ def _apply_changes_requested_escalation(
 
 
 def _rule_changes_requested(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: Task | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#185: 自動リベースや逸脱判定の前に、CHANGES_REQUESTEDになった親を持つかチェックする。"""
     assessment = (
