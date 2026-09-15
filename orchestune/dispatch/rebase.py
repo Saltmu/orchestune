@@ -24,7 +24,6 @@ from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge
@@ -32,6 +31,8 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.labels import StatusLabel
+from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class RebaseContext:
     """State shared by automatic rebase decision and application steps."""
 
     active: ActiveWorktree
-    active_task: Task | None
+    active_task: TaskMetadata | None
     key: str
     run_state: RunState
     dependencies: DependencyPolicyView
@@ -308,7 +309,7 @@ def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
 
 
 def _decide_rebase_target(
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     view: DependencyPolicyView,
 ) -> str | None:
     """共通policyが安全と判定した依存ブランチだけを返す。"""
@@ -447,7 +448,7 @@ def _run_rebase_ci_check(worktree_path: str, worktree_root: Path | str) -> None:
 
 def _relaunch_rebased_worktree(
     active: ActiveWorktree,
-    active_task: Task,
+    active_task: TaskMetadata,
     config: DispatcherConfig,
     parent_branch: str,
 ) -> None:
@@ -524,7 +525,7 @@ def _rule_auto_rebase(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#201: 自動リベース判定＆実行。"""
     if not dispatch_gc.is_process_alive(active.pid):
@@ -546,7 +547,7 @@ def _rule_footprint_deviation(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome:
     """フォールバックルール: 他のどのルールにも該当しなかったactive worktreeに
     ついて、footprint逸脱の有無を判定する。ルールチェーンの末尾として、常に

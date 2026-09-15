@@ -12,10 +12,10 @@ from orchestune.dispatch.dependency_assessment import (
 )
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 from orchestune.labels import StatusLabel
+from orchestune.task_metadata import TaskMetadata
 
 # #511: `status:not-needed`（対応不要）検証レビューのタイムアウト時にも
 # この共通処理を再利用するため対象へ含める。既存の呼び出し元（GC/actor検証/
@@ -66,7 +66,7 @@ def apply_human_review_escalation(
 
 
 def _decide_changes_requested_escalation(
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     assessment: DependencyAssessment | None,
 ) -> bool:
     """依存元PRがCHANGES_REQUESTEDを受けているかを副作用なしで判定する。
@@ -86,7 +86,7 @@ def _decide_changes_requested_escalation(
 
 def _apply_changes_requested_escalation(
     active: ActiveWorktree,
-    active_task: Task,
+    active_task: TaskMetadata,
     key: str,
     run_state: RunState,
     config: DispatcherConfig,
@@ -117,7 +117,7 @@ def _rule_changes_requested(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#185: 自動リベースや逸脱判定の前に、CHANGES_REQUESTEDになった親を持つかチェックする。"""
     assessment = (

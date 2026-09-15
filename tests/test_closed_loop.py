@@ -18,6 +18,7 @@ from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
+from orchestune.task_metadata import TaskMetadata
 from tests.conftest import get_clean_git_env
 
 pytestmark = pytest.mark.integration
@@ -297,7 +298,7 @@ class DummyAgentDispatchTarget(DispatchTarget):
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,
