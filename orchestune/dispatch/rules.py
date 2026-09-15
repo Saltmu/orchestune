@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orchestune.consistency.models import RepairCommand, RepairResult
+from orchestune.dag.models import SubTask
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
@@ -136,6 +137,9 @@ class CycleContext:
 
     def is_prior_merge_held(self, issue_number: int) -> bool:
         return self._state.is_prior_merge_held(issue_number)
+
+    def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]:
+        return self._state.dag_inputs(issue_numbers)
 
     # ---- record API (#868) --------------------------------------------------
     #
