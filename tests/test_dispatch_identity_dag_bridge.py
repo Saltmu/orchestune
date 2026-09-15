@@ -197,6 +197,89 @@ class TestBuildTaskConflictGraphDerivedInputs:
         assert graph.has_conflict("a", "b")
 
 
+class TestBuildTaskConflictGraphDerivedInputPopulation:
+    """#905レビュー指摘(Codex P2): `derived_inputs`が`tasks`に対してstale／
+    filteredなとき、本関数のfail-closed契約が黙って無効化されてはならない。
+    """
+
+    def test_derived_inputs_missing_a_task_fails_closed(self) -> None:
+        a = _task(1, "a", footprint=("x.py",))
+        b = _task(2, "b", footprint=("x.py",))
+
+        graph = build_task_conflict_graph(
+            [a, b], threshold=0.5, derived_inputs=build_legacy_dag_inputs((a,))
+        )
+
+        assert graph.has_conflict("a", "b")
+        assert [edge.reason for edge in graph.edges] == ["invalid-task-metadata"]
+
+    def test_derived_inputs_with_unknown_subtask_fails_closed(self) -> None:
+        a = _task(1, "a", footprint=("x.py",))
+        b = _task(2, "b", footprint=("y.py",))
+        ghost = _task(3, "ghost", footprint=("z.py",))
+
+        graph = build_task_conflict_graph(
+            [a, b],
+            threshold=0.5,
+            derived_inputs=build_legacy_dag_inputs((a, b, ghost)),
+        )
+
+        assert [(edge.left, edge.right, edge.reason) for edge in graph.edges] == [
+            ("a", "b", "invalid-task-metadata")
+        ]
+
+    def test_derived_input_without_id_fails_closed(self) -> None:
+        a = _task(1, "a", footprint=("x.py",))
+        b = _task(2, "b", footprint=("y.py",))
+        anonymous = SubTask(
+            id="",
+            description="",
+            footprint=("z.py",),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        )
+
+        graph = build_task_conflict_graph(
+            [a, b],
+            threshold=0.5,
+            derived_inputs=(*build_legacy_dag_inputs((a, b)), anonymous),
+        )
+
+        assert [(edge.left, edge.right, edge.reason) for edge in graph.edges] == [
+            ("a", "b", "invalid-task-metadata")
+        ]
+
+    def test_duplicate_subtask_ids_do_not_trip_the_population_check(self) -> None:
+        first = _task(1, "a", footprint=("x.py",))
+        duplicate = _task(2, "a", footprint=("x.py",))
+        other = _task(3, "b", footprint=("y.py",))
+        tasks = [first, duplicate, other]
+
+        legacy = build_task_conflict_graph(tasks, threshold=0.5)
+        derived = build_task_conflict_graph(
+            tasks, threshold=0.5, derived_inputs=build_legacy_dag_inputs(tuple(tasks))
+        )
+
+        assert derived.edges == legacy.edges
+        assert derived.edges == ()
+
+    def test_tasks_without_subtask_id_are_excluded_from_the_population(self) -> None:
+        a = _task(1, "a", footprint=("x.py",))
+        b = _task(2, "b", footprint=("y.py",))
+        unnamed = _task(3, "", footprint=("z.py",))
+        tasks = [a, b, unnamed]
+
+        legacy = build_task_conflict_graph(tasks, threshold=0.5)
+        derived = build_task_conflict_graph(
+            tasks, threshold=0.5, derived_inputs=build_legacy_dag_inputs(tuple(tasks))
+        )
+
+        assert derived.edges == legacy.edges
+        assert derived.edges == ()
+
+
 class TestCycleContextDagInputs:
     def test_returns_subtasks_for_given_issue_numbers_in_order(self) -> None:
         upstream = _task(1, "a")

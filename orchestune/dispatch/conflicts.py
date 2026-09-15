@@ -59,13 +59,36 @@ def _fail_closed_graph(tasks: list[Task]) -> ConflictGraph:
     return ConflictGraph(edges)
 
 
-def _subtasks_by_id(derived_inputs: Iterable[SubTask]) -> dict[str, SubTask]:
+def _subtasks_by_id(
+    derived_inputs: Iterable[SubTask], tasks: list[Task]
+) -> dict[str, SubTask]:
     """Collapse a possibly-duplicate `SubTask` sequence to one per id.
 
     Later entries win on a duplicate id, matching `subtasks_from_tasks`'s own
     dict-comprehension semantics (#888).
+
+    #905レビュー指摘(Codex P2): 呼び出し側が渡す`derived_inputs`が`tasks`に対して
+    stale／filteredでも黙って受け入れると、欠落したタスクには競合辺が張られず、
+    `build_task_conflict_graph`のfail-closed契約（メタデータが信用できないなら
+    全タスクを直列化する）を無言で無効化してしまう——スケジューラが競合する作業を
+    並行起動し得る。ここでID母集団を突き合わせ、差分があれば`ValueError`を送出して
+    既存のfail-closed経路へ倒す（fail-closedの出口は`build_task_conflict_graph`の
+    1箇所のまま）。
+
+    比較はsetの粒度で行う。`build_legacy_dag_inputs`は同名`subtask_id`をtuple段階で
+    潰さないが、ここでのdict化と`subtasks_from_tasks`のdict化はどちらも1件へ潰れるため、
+    setが両経路で一致する唯一の粒度になる。`derived_inputs`側は空idも除外せずに数える:
+    レガシー経路は空idの`SubTask`を生成しないので、混入は母集団の不一致そのものである。
     """
-    return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
+    subtasks = {subtask.id: subtask for subtask in derived_inputs}
+    expected_ids = {task.subtask_id for task in tasks if task.subtask_id}
+    if subtasks.keys() != expected_ids:
+        raise ValueError(
+            "derived_inputs does not cover the same subtask population as tasks: "
+            f"missing={sorted(expected_ids - subtasks.keys())}, "
+            f"unexpected={sorted(subtasks.keys() - expected_ids)}"
+        )
+    return subtasks
 
 
 def build_task_conflict_graph(
@@ -80,15 +103,17 @@ def build_task_conflict_graph(
     `derived_inputs` (#888) lets a caller pass a precomputed `SubTask` sequence
     (e.g. from `dependency_resolution.build_legacy_dag_inputs`) instead of
     having this function re-derive it from `tasks` via `subtasks_from_tasks`.
-    `tasks` is still required in that case: the `ValueError` fail-closed path
-    below needs the raw `Task.subtask_id`s, which `derived_inputs` alone does
-    not guarantee reflects the same population. Omitting `derived_inputs`
-    (the existing call sites) is unchanged by this PR.
+    `tasks` is still required in that case, and stays the authority on the
+    population: `_subtasks_by_id` rejects a `derived_inputs` whose ids do not
+    match the `tasks` ids, so a stale or filtered sequence fails closed here
+    instead of silently dropping the omitted tasks' conflict edges
+    (#905レビュー指摘). Omitting `derived_inputs` (the existing call sites) is
+    unchanged by this PR.
     """
     task_list = list(tasks)
     try:
         subtasks = (
-            _subtasks_by_id(derived_inputs)
+            _subtasks_by_id(derived_inputs, task_list)
             if derived_inputs is not None
             else subtasks_from_tasks(task_list)
         )
