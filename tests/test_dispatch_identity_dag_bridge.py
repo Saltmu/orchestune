@@ -251,6 +251,40 @@ class TestBuildTaskConflictGraphDerivedInputPopulation:
             ("a", "b", "invalid-task-metadata")
         ]
 
+    def test_extra_duplicate_in_derived_inputs_fails_closed(self) -> None:
+        """#905レビュー指摘(Codex Round 2 P2): 一意な`tasks`に対し`a, b, b`のような
+        staleな重複が混じると、last-winsのdict化で後勝ちした`b`が正しい`b`を
+        置き換え、`a`-`b`の競合辺が消える。多重度まで比較してfail closedにする。
+        """
+        a = _task(1, "a", footprint=("x.py",))
+        b = _task(2, "b", footprint=("x.py",))
+        stale_b = _task(2, "b", footprint=("z.py",))
+
+        graph = build_task_conflict_graph(
+            [a, b],
+            threshold=0.5,
+            derived_inputs=build_legacy_dag_inputs((a, b, stale_b)),
+        )
+
+        assert [(edge.left, edge.right, edge.reason) for edge in graph.edges] == [
+            ("a", "b", "invalid-task-metadata")
+        ]
+
+    def test_missing_duplicate_in_derived_inputs_fails_closed(self) -> None:
+        first = _task(1, "a", footprint=("x.py",))
+        duplicate = _task(2, "a", footprint=("x.py",))
+        other = _task(3, "b", footprint=("y.py",))
+
+        graph = build_task_conflict_graph(
+            [first, duplicate, other],
+            threshold=0.5,
+            derived_inputs=build_legacy_dag_inputs((first, other)),
+        )
+
+        assert [(edge.left, edge.right, edge.reason) for edge in graph.edges] == [
+            ("a", "b", "invalid-task-metadata")
+        ]
+
     def test_duplicate_subtask_ids_do_not_trip_the_population_check(self) -> None:
         first = _task(1, "a", footprint=("x.py",))
         duplicate = _task(2, "a", footprint=("x.py",))

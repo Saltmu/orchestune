@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterable
 
 from orchestune.dag.graph import build_conflict_graph
@@ -75,20 +76,26 @@ def _subtasks_by_id(
     既存のfail-closed経路へ倒す（fail-closedの出口は`build_task_conflict_graph`の
     1箇所のまま）。
 
-    比較はsetの粒度で行う。`build_legacy_dag_inputs`は同名`subtask_id`をtuple段階で
-    潰さないが、ここでのdict化と`subtasks_from_tasks`のdict化はどちらも1件へ潰れるため、
-    setが両経路で一致する唯一の粒度になる。`derived_inputs`側は空idも除外せずに数える:
-    レガシー経路は空idの`SubTask`を生成しないので、混入は母集団の不一致そのものである。
+    比較は**多重度込み**（`Counter`）で行う。setで比べると、`tasks`側が一意な`a, b`
+    なのに`derived_inputs`が`a, b, b`のようにstaleな重複を含む場合にkey集合が一致して
+    しまい、last-winsのdict化で後勝ちした`b`が正しい`b`を置き換えてしまう
+    （#905レビュー指摘 Round 2）。`build_legacy_dag_inputs`は`Task`1件につき`SubTask`
+    1件を出し同名`subtask_id`をtuple段階で潰さないので、多重度まで一致することが
+    レガシー経路と同じ母集団であることの正しい条件であり、`tasks`側が本当に同名
+    `subtask_id`を持つ場合の重複は引き続き許容される。`derived_inputs`側は空idも
+    除外せずに数える: レガシー経路は空idの`SubTask`を生成しないので、混入は母集団の
+    不一致そのものである。
     """
-    subtasks = {subtask.id: subtask for subtask in derived_inputs}
-    expected_ids = {task.subtask_id for task in tasks if task.subtask_id}
-    if subtasks.keys() != expected_ids:
+    derived = list(derived_inputs)
+    derived_ids = Counter(subtask.id for subtask in derived)
+    expected_ids = Counter(task.subtask_id for task in tasks if task.subtask_id)
+    if derived_ids != expected_ids:
         raise ValueError(
             "derived_inputs does not cover the same subtask population as tasks: "
-            f"missing={sorted(expected_ids - subtasks.keys())}, "
-            f"unexpected={sorted(subtasks.keys() - expected_ids)}"
+            f"missing={sorted((expected_ids - derived_ids).elements())}, "
+            f"unexpected={sorted((derived_ids - expected_ids).elements())}"
         )
-    return subtasks
+    return {subtask.id: subtask for subtask in derived}
 
 
 def build_task_conflict_graph(
@@ -104,11 +111,11 @@ def build_task_conflict_graph(
     (e.g. from `dependency_resolution.build_legacy_dag_inputs`) instead of
     having this function re-derive it from `tasks` via `subtasks_from_tasks`.
     `tasks` is still required in that case, and stays the authority on the
-    population: `_subtasks_by_id` rejects a `derived_inputs` whose ids do not
-    match the `tasks` ids, so a stale or filtered sequence fails closed here
-    instead of silently dropping the omitted tasks' conflict edges
-    (#905レビュー指摘). Omitting `derived_inputs` (the existing call sites) is
-    unchanged by this PR.
+    population: `_subtasks_by_id` rejects a `derived_inputs` whose id multiset
+    does not match the `tasks` ids, so a stale, filtered or duplicate-padded
+    sequence fails closed here instead of silently dropping the affected
+    tasks' conflict edges (#905レビュー指摘). Omitting `derived_inputs` (the
+    existing call sites) is unchanged by this PR.
     """
     task_list = list(tasks)
     try:
