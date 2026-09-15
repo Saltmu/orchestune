@@ -17,6 +17,7 @@ from typing import Protocol
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.consistency.supervisor import ConsistencyCycleReport
+from orchestune.dag.models import SubTask
 from orchestune.dispatch.cycle_context_state import LaunchFact, RecordResult
 from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
@@ -92,6 +93,8 @@ class CycleQueries(Protocol):
     def pull_requests(self) -> tuple[PrRecord, ...]: ...
 
     def is_prior_merge_held(self, issue_number: int) -> bool: ...
+
+    def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]: ...
 
     def record_completion(self, issue_number: int) -> RecordResult: ...
 

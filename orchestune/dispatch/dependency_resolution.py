@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from orchestune.dag.models import SubTask
 from orchestune.models import Task
 
 REASON_UNKNOWN_PARENT = "unknown-parent"
@@ -201,6 +202,42 @@ def resolve_task_dependencies(
     return TaskDependencies(resolved=tuple(resolved), unresolved=tuple(unresolved))
 
 
+@dataclass(frozen=True, slots=True)
+class DependencyDeclarations:
+    """1タスクのraw依存宣言を所有する、frozen tuple限定の値型（#888）。
+
+    `Task.depends_on`（本文由来の文字列）と`Task.native_depends_on`
+    （ネイティブ`blocked_by`のIssue番号）をそのままコピーして保持する。
+    本モジュール（identity境界）とそれを直接消費する`legacy_merged_depends_on`
+    ／`build_legacy_dag_inputs`だけがraw宣言を読む場所であり続けるよう、
+    `Task`からraw値を取り出す経路をこの`from_task`ひとつに集約する
+    （#874で追加予定の境界lintが検知する対象を、この型を経由しない
+    直接アクセスに絞り込める）。
+    """
+
+    body: tuple[str, ...] = ()
+    native: tuple[int, ...] = ()
+
+    @classmethod
+    def from_task(cls, task: Task) -> DependencyDeclarations:
+        return cls(body=tuple(task.depends_on), native=tuple(task.native_depends_on))
+
+
+def _merge_declarations(
+    declarations: DependencyDeclarations, issue_to_subtask_id: Mapping[int, str]
+) -> tuple[str, ...]:
+    native = tuple(
+        issue_to_subtask_id[num]
+        for num in declarations.native
+        if num in issue_to_subtask_id
+    )
+    merged = native
+    for dep in declarations.body:
+        if dep not in merged:
+            merged += (dep,)
+    return merged
+
+
 def legacy_merged_depends_on(
     task: Task, issue_to_subtask_id: Mapping[int, str]
 ) -> tuple[str, ...]:
@@ -218,16 +255,46 @@ def legacy_merged_depends_on(
     `issue_to_subtask_id`で変換してunionしてよい
     （本resolverが防ぐ別EPIC横断の衝突はそもそも起こらない）。
     """
-    native = tuple(
-        issue_to_subtask_id[num]
-        for num in task.native_depends_on
-        if num in issue_to_subtask_id
+    return _merge_declarations(
+        DependencyDeclarations.from_task(task), issue_to_subtask_id
     )
-    merged = native
-    for dep in task.depends_on:
-        if dep not in merged:
-            merged += (dep,)
-    return merged
+
+
+def build_legacy_dag_inputs(tasks: tuple[Task, ...]) -> tuple[SubTask, ...]:
+    """`tasks`をレガシーDAG消費者（Conflict Graph・critical-path）向けの
+    `SubTask`列へ変換する、identity境界の唯一の変換窓口（#888）。
+
+    `legacy_merged_depends_on`と全く同じunion規則（ネイティブ→本文、
+    Issue番号→subtask_id変換、重複排除）をそのまま使う。`subtask_id`を
+    持たない`Task`はスキップするが、同名`subtask_id`が複数あっても
+    このtupleの段階では**潰さない**——`Task`ごとに1件、入力順を保つ
+    （`conflicts.subtasks_from_tasks`のような`dict[str, SubTask]`化は、
+    それを必要とする消費者側の責務として残す）。`issue_to_subtask_id`は
+    渡された`tasks`だけで閉じたスコープで構築するため、
+    cross-EPICの衝突安全性は元々の`legacy_merged_depends_on`と同様に対象外。
+    """
+    issue_to_subtask_id = {
+        task.issue_number: task.subtask_id for task in tasks if task.subtask_id
+    }
+    return tuple(
+        SubTask(
+            id=task.subtask_id,
+            description="",
+            footprint=task.footprint,
+            symbols=task.symbols,
+            depends_on=_merge_declarations(
+                DependencyDeclarations.from_task(task), issue_to_subtask_id
+            ),
+            risk=task.risk,
+            risk_reasons=(),
+            priority=task.priority,
+            shared_contract=task.shared_contract,
+            writes_shared_contract=task.writes_shared_contract,
+            issue_number=task.issue_number,
+        )
+        for task in tasks
+        if task.subtask_id
+    )
 
 
 def describe_unresolved_dependency(dependency: UnresolvedDependency) -> str:
@@ -305,8 +372,10 @@ __all__ = [
     "REASON_MISSING",
     "REASON_UNKNOWN_PARENT",
     "EMPTY_DEPENDENCIES",
+    "DependencyDeclarations",
     "TaskDependencies",
     "UnresolvedDependency",
+    "build_legacy_dag_inputs",
     "describe_unresolved_dependency",
     "legacy_merged_depends_on",
     "resolve_all_dependencies",

@@ -59,16 +59,39 @@ def _fail_closed_graph(tasks: list[Task]) -> ConflictGraph:
     return ConflictGraph(edges)
 
 
+def _subtasks_by_id(derived_inputs: Iterable[SubTask]) -> dict[str, SubTask]:
+    """Collapse a possibly-duplicate `SubTask` sequence to one per id.
+
+    Later entries win on a duplicate id, matching `subtasks_from_tasks`'s own
+    dict-comprehension semantics (#888).
+    """
+    return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
+
+
 def build_task_conflict_graph(
     tasks: Iterable[Task],
     *,
     threshold: float,
     ignore_patterns: Iterable[re.Pattern[str]] = (),
+    derived_inputs: Iterable[SubTask] | None = None,
 ) -> ConflictGraph:
-    """Build scheduling exclusions, serializing all tasks if metadata is invalid."""
+    """Build scheduling exclusions, serializing all tasks if metadata is invalid.
+
+    `derived_inputs` (#888) lets a caller pass a precomputed `SubTask` sequence
+    (e.g. from `dependency_resolution.build_legacy_dag_inputs`) instead of
+    having this function re-derive it from `tasks` via `subtasks_from_tasks`.
+    `tasks` is still required in that case: the `ValueError` fail-closed path
+    below needs the raw `Task.subtask_id`s, which `derived_inputs` alone does
+    not guarantee reflects the same population. Omitting `derived_inputs`
+    (the existing call sites) is unchanged by this PR.
+    """
     task_list = list(tasks)
     try:
-        subtasks = subtasks_from_tasks(task_list)
+        subtasks = (
+            _subtasks_by_id(derived_inputs)
+            if derived_inputs is not None
+            else subtasks_from_tasks(task_list)
+        )
         return build_conflict_graph(
             list(subtasks.values()),
             threshold=threshold,
