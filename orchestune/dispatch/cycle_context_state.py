@@ -39,13 +39,17 @@ from orchestune.consistency.invariants.status import (
     PRIMARY_STATUS_LABELS,
     primary_status_labels,
 )
+from orchestune.dag.models import SubTask
 from orchestune.dispatch.dependency_assessment import (
     DependencyAssessment,
 )
 from orchestune.dispatch.dependency_assessment import (
     assess_dependencies as assess_dependency_lifecycle,
 )
-from orchestune.dispatch.dependency_resolution import TaskDependencies
+from orchestune.dispatch.dependency_resolution import (
+    TaskDependencies,
+    build_legacy_dag_inputs,
+)
 from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.status_repair_dependencies import task_lifecycle
 from orchestune.labels import StatusLabel
@@ -545,6 +549,21 @@ class _CycleState:
         Issueの保留も保留として扱う（判定条件を増やさない）。
         """
         return issue_number in self._prior_held
+
+    def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]:
+        """指定順のIssue番号を実効`Task`へ解決し、レガシーDAG入力へ変換する（#888）。
+
+        `task()`と同じ実効値（record反映後）を使う。未知のIssue番号は母集団を
+        黙って縮めず`ValueError`にする。raw宣言を返すqueryではない
+        （`build_legacy_dag_inputs`がidentity境界内だけでraw値を扱う）。
+        """
+        tasks: list[Task] = []
+        for issue_number in issue_numbers:
+            task = self.task(issue_number)
+            if task is None:
+                raise ValueError(f"unknown issue number: {issue_number}")
+            tasks.append(task)
+        return build_legacy_dag_inputs(tuple(tasks))
 
     # ---- record APIs --------------------------------------------------------
 
