@@ -285,6 +285,26 @@ class TestBuildTaskConflictGraphDerivedInputPopulation:
             ("a", "b", "invalid-task-metadata")
         ]
 
+    def test_reordered_duplicate_entries_keep_the_legacy_winner(self) -> None:
+        """#905レビュー指摘(Codex Round 3 P2): 同名`subtask_id`が複数あるとき、
+        `derived_inputs`の並び順でlast-winsの勝者が変わってはならない。
+        `dag_inputs`はIssue番号の指定順で返すため、`tasks`と異なる順序が実際に起こり得る。
+        """
+        first = _task(1, "a", footprint=("x.py",))
+        duplicate = _task(2, "a", footprint=("y.py",))
+        other = _task(3, "b", footprint=("y.py",))
+        tasks = [first, duplicate, other]
+
+        legacy = build_task_conflict_graph(tasks, threshold=0.5)
+        derived = build_task_conflict_graph(
+            tasks,
+            threshold=0.5,
+            derived_inputs=build_legacy_dag_inputs((duplicate, first, other)),
+        )
+
+        assert legacy.has_conflict("a", "b")
+        assert derived.edges == legacy.edges
+
     def test_duplicate_subtask_ids_do_not_trip_the_population_check(self) -> None:
         first = _task(1, "a", footprint=("x.py",))
         duplicate = _task(2, "a", footprint=("x.py",))
