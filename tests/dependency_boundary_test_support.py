@@ -210,8 +210,9 @@ PRODUCTION_EXCEPTIONS = frozenset(
 
 
 class _BoundaryVisitor(ast.NodeVisitor):
-    def __init__(self, module: str) -> None:
+    def __init__(self, module: str, *, is_package: bool) -> None:
         self.module = module
+        self.is_package = is_package
         self.functions = ["<module>"]
         self.violations: list[BoundaryViolation] = []
 
@@ -249,7 +250,9 @@ class _BoundaryVisitor(ast.NodeVisitor):
             self._record("Task", "raw-task-import", node.lineno)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        source_module = _resolved_import_from(self.module, node)
+        source_module = _resolved_import_from(
+            self.module, node, is_package=self.is_package
+        )
         imports_task = source_module in RAW_TASK_EXPORT_MODULES and any(
             alias.name == "Task" for alias in node.names
         )
@@ -273,10 +276,13 @@ def _literal_getattr_attribute(node: ast.Call) -> str | None:
     return literal.value
 
 
-def _resolved_import_from(current_module: str, node: ast.ImportFrom) -> str:
+def _resolved_import_from(
+    current_module: str, node: ast.ImportFrom, *, is_package: bool
+) -> str:
     if node.level == 0:
         return node.module or ""
-    package = current_module.split(".")[:-1]
+    module_parts = current_module.split(".")
+    package = module_parts if is_package else module_parts[:-1]
     parent_hops = node.level - 1
     if parent_hops > len(package):
         return ""
@@ -291,8 +297,9 @@ def boundary_violations(
     *,
     module: str,
     exceptions: frozenset[BoundaryException] = frozenset(),
+    is_package: bool = False,
 ) -> tuple[BoundaryViolation, ...]:
-    visitor = _BoundaryVisitor(module)
+    visitor = _BoundaryVisitor(module, is_package=is_package)
     visitor.visit(ast.parse(source))
     allowed = {(item.module, item.function, item.attribute) for item in exceptions}
     return tuple(
@@ -301,6 +308,34 @@ def boundary_violations(
         if item.kind == "literal-getattr"
         or (item.module, item.function, item.attribute) not in allowed
     )
+
+
+def typing_escape_names(source: str) -> frozenset[str]:
+    tree = ast.parse(source)
+    typing_aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "typing"
+    }
+    direct = {
+        escape
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "typing"
+        for alias in node.names
+        for escape in ({"Any", "cast"} if alias.name == "*" else {alias.name})
+        if escape in {"Any", "cast"}
+    }
+    qualified = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in typing_aliases
+        and node.attr in {"Any", "cast"}
+    }
+    return frozenset(direct | qualified)
 
 
 def _module_name(package_root: Path, path: Path) -> str:
@@ -320,6 +355,7 @@ def _production_observations(repo_root: Path) -> tuple[BoundaryViolation, ...]:
         for violation in boundary_violations(
             path.read_text(encoding="utf-8"),
             module=_module_name(package_root, path),
+            is_package=path.name == "__init__.py",
         )
     ]
     return tuple(

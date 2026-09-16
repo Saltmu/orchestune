@@ -7,6 +7,7 @@ from pathlib import Path
 from dependency_boundary_test_support import (
     BoundaryException,
     boundary_violations,
+    typing_escape_names,
 )
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -72,6 +73,18 @@ def test_reexported_and_relative_raw_task_imports_are_rejected() -> None:
         assert {(item.attribute, item.kind) for item in violations} == {
             ("Task", "raw-task-import")
         }
+
+
+def test_package_initializer_relative_raw_task_import_is_rejected() -> None:
+    violations = boundary_violations(
+        "from .scoring import Task",
+        module="orchestune.dispatch",
+        is_package=True,
+    )
+
+    assert {(item.attribute, item.kind) for item in violations} == {
+        ("Task", "raw-task-import")
+    }
 
 
 def test_literal_getattr_cannot_bypass_the_boundary() -> None:
@@ -169,24 +182,24 @@ def test_metadata_and_policy_protocols_declare_no_raw_fields_or_escape_types() -
             for node in ast.walk(tree)
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
         )
-        imported_escapes = {
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module == "typing"
-            for alias in node.names
-            if alias.name in {"Any", "cast"}
-        }
-        qualified_escapes = {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "typing"
-            and node.attr in {"Any", "cast"}
-        }
         assert declarations.isdisjoint(raw_names), path
-        assert not imported_escapes, path
-        assert not qualified_escapes, path
+        assert not typing_escape_names(path.read_text(encoding="utf-8")), path
+
+
+def test_typing_escape_detector_tracks_aliases_without_text_false_positives() -> None:
+    source = """
+import typing as t
+from typing import Any as Dynamic
+from typing import cast as force_type
+
+DOCUMENTATION = "typing.Any and t.cast are only text here"
+
+def policy(value: t.Any):
+    return t.cast(str, value), Dynamic, force_type
+"""
+
+    assert typing_escape_names(source) == frozenset({"Any", "cast"})
+    assert not typing_escape_names('MARKER = "typing.Any and t.cast"')
 
 
 def test_ruff_enables_slf001_with_tests_only_ignore() -> None:
