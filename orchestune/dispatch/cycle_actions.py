@@ -13,6 +13,7 @@ raises `ValueError`.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from orchestune.consistency.models import RepairCommand, RepairResult
@@ -21,12 +22,14 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_RECLAIM,
     COMMAND_REQUEUE,
 )
+from orchestune.dag.models import SubTask
 from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
+from orchestune.dispatch.critical_path import pending_tasks
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
     GcPhaseResult,
@@ -80,7 +83,6 @@ from orchestune.dispatch.scoring import (
     SchedulingDecision,
     SchedulingResult,
     ScoreComponents,
-    Task,
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
@@ -94,6 +96,7 @@ from orchestune.dispatch.summary import (
 )
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,10 +174,10 @@ def _run_active_worktree_rules(
 
 
 def _filter_retry_backoffs(
-    candidates: tuple[Task, ...], run_state: RunState, now: float
-) -> tuple[list[Task], list[tuple[Task, str]]]:
-    eligible: list[Task] = []
-    excluded: list[tuple[Task, str]] = []
+    candidates: tuple[TaskMetadata, ...], run_state: RunState, now: float
+) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
+    eligible: list[TaskMetadata] = []
+    excluded: list[tuple[TaskMetadata, str]] = []
     for task in candidates:
         record = run_state.task_reclaim_counts.get(task.issue_number)
         if record is not None and record.early_death_retry_at > now:
@@ -187,8 +190,8 @@ def _filter_retry_backoffs(
 
 
 def _filter_actor_permissions(
-    candidates: list[Task], config: DispatcherConfig
-) -> tuple[list[Task], list[tuple[Task, str]]]:
+    candidates: list[TaskMetadata], config: DispatcherConfig
+) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
     queued = [task for task in candidates if StatusLabel.QUEUED in task.status_labels]
     nonqueued = [
         task for task in candidates if StatusLabel.QUEUED not in task.status_labels
@@ -205,11 +208,11 @@ def _filter_actor_permissions(
 
 
 def _filter_duplicate_candidates(
-    candidates: list[Task],
+    candidates: list[TaskMetadata],
     view: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
-) -> tuple[list[Task], list[tuple[Task, str]]]:
+) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
     decisions = _decide_duplicate_candidates(
         candidates, view, run_state.completed_worktrees
     )
@@ -224,8 +227,8 @@ def _filter_duplicate_candidates(
 
 
 def _filter_forced_serial_candidates(
-    candidates: list[Task], run_state: RunState, view: CycleContext
-) -> tuple[list[Task], list[tuple[Task, str]]]:
+    candidates: list[TaskMetadata], run_state: RunState, view: CycleContext
+) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
     survivors = _filter_candidates_for_forced_serial(candidates, run_state, view)
     survivor_numbers = {task.issue_number for task in survivors}
     excluded = [
@@ -237,7 +240,7 @@ def _filter_forced_serial_candidates(
 
 
 def _preselection_decisions(
-    excluded: list[tuple[Task, str]],
+    excluded: list[tuple[TaskMetadata, str]],
 ) -> list[SchedulingDecision]:
     return [
         SchedulingDecision(
@@ -250,6 +253,16 @@ def _preselection_decisions(
         )
         for task, reason in sorted(excluded, key=lambda item: item[0].issue_number)
     ]
+
+
+def _scheduling_dag_inputs(
+    view: CycleContext, tasks: Sequence[TaskMetadata]
+) -> tuple[tuple[SubTask, ...], tuple[SubTask, ...]]:
+    rank_inputs = view.dag_inputs(
+        tuple(task.issue_number for task in pending_tasks(tasks))
+    )
+    conflict_inputs = view.dag_inputs(tuple(task.issue_number for task in tasks))
+    return rank_inputs, conflict_inputs
 
 
 class CycleActionAdapter:
@@ -306,6 +319,9 @@ class CycleActionAdapter:
                 record.number: record for record in view.issue_records()
             },
             tasks_by_issue={task.issue_number: task for task in view.tasks()},
+            dag_inputs=view.dag_inputs(
+                tuple(task.issue_number for task in view.tasks())
+            ),
             # #884 Codex review: not display-only -- `notify_recompute`
             # (rebase.py) uses this to look up the blocked issue and actually
             # transition it to status:blocked/status:blocked-recompute, not
@@ -359,7 +375,7 @@ class CycleActionAdapter:
             view=view,
         )
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
         """#885: `scoring.select_tasks_with_decisions`のact/portラッパー。
 
         `select_tasks_with_decisions`は既存selectorへの1回きりの呼出しで、
@@ -383,6 +399,7 @@ class CycleActionAdapter:
         )
         excluded.extend(serial_excluded)
         all_tasks = view.tasks()
+        rank_inputs, conflict_inputs = _scheduling_dag_inputs(view, all_tasks)
         active_subtask_ids = {
             active_task.subtask_id
             for active in self._run_state.active_worktrees.values()
@@ -401,9 +418,11 @@ class CycleActionAdapter:
                 all_tasks,
                 threshold=self._config.dag_similarity_threshold,
                 ignore_patterns=self._config.dag_ignore_patterns,
+                derived_inputs=conflict_inputs,
             ),
             active_subtask_ids=active_subtask_ids,
             known_tasks=all_tasks,
+            derived_inputs=rank_inputs,
         )
         preselection = _preselection_decisions(excluded)
         return SchedulingResult(
@@ -414,10 +433,10 @@ class CycleActionAdapter:
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]:
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
         """#885: `launch._launch_selected_tasks`のact/portラッパー。
 
         `bases`(選出済み実行計画のtuple、`Context`のbranch map公開ではない)

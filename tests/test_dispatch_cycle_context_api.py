@@ -31,6 +31,7 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
+from orchestune.task_metadata import CycleTask
 
 _TMP = Path(tempfile.mkdtemp(prefix="orchestune-test-cycle-context-api-"))
 
@@ -207,9 +208,8 @@ class TestQueries:
         result = ctx.task(1)
         assert result.issue_number == 1
         assert set(result.status_labels) == {StatusLabel.QUEUED, "priority:high"}
-        # 変更がなければ同一オブジェクトを返す(新たなdataclasses.replaceを
-        # 挟まない)。
-        assert ctx.task(1) is base
+        assert isinstance(result, CycleTask)
+        assert result is not base
 
     def test_dependencies_of_distinguishes_unknown_from_no_dependencies(self):
         ctx = _ctx(

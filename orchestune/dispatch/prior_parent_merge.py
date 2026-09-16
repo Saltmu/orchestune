@@ -15,11 +15,11 @@ from enum import StrEnum
 
 from orchestune.branch_naming import branch_matches_task, parse_task_branch_name
 from orchestune.dispatch.labels import PRIMARY_STATUS_LABELS, transition_status_label
-from orchestune.dispatch.scoring import Task
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.pr_link_notice import ensure_pr_merged_notice
+from orchestune.task_metadata import TaskMetadata
 
 
 class PriorParentMergeStatus(StrEnum):
@@ -185,7 +185,7 @@ def evaluate_prior_parent_merge(
 
 
 def inspect_prior_parent_merge(
-    forge, issue_number: int, task: Task, issue: IssueRecord | None = None
+    forge, issue_number: int, task: TaskMetadata, issue: IssueRecord | None = None
 ) -> tuple[PriorParentMergeEvidence, IssueRecord | None]:
     """Read a current Issue and its parent-scoped PR history without mutation."""
     try:
@@ -289,7 +289,7 @@ def _evidence_event(
 
 
 def _apply_or_preview_verified_repair(
-    forge, issue_number: int, task: Task, *, apply: bool
+    forge, issue_number: int, task: TaskMetadata, *, apply: bool
 ) -> tuple[dict[str, object], bool]:
     """Re-verify a successful scan, then apply its idempotent repair."""
     fresh, fresh_issue = inspect_prior_parent_merge(forge, issue_number, task)
@@ -319,7 +319,7 @@ def _apply_or_preview_verified_repair(
 
 def reconcile_prior_parent_merges(
     forge,
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: dict[int, TaskMetadata],
     *,
     apply: bool,
     issues_by_number: dict[int, IssueRecord] | None = None,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from orchestune.bounded_limit import exceeds_limit
@@ -31,7 +31,6 @@ from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
@@ -41,6 +40,7 @@ from orchestune.dispatch.state import (
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 @dataclass
@@ -72,7 +72,7 @@ def _resolve_reclaim_count(run_state: RunState, issue_number: int) -> int:
 def _build_reclaim_candidate(
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     finding_codes: tuple[str, ...],
     process_alive: bool,
     reclaim_count: int,
@@ -111,7 +111,7 @@ def _build_reclaim_candidate(
 def _reclaim_candidate_from_command(
     command: RepairCommand,
     active_by_subject: dict[str, tuple[str, ActiveWorktree]],
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     run_state: RunState,
     max_task_reclaims: int,
     now: float,

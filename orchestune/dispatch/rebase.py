@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -121,9 +122,17 @@ def notify_force_serial(
 
 
 def _build_subtasks_for_recompute(
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> dict[str, SubTask]:
-    return subtasks_from_tasks(tasks_by_issue.values())
+    if derived_inputs is not None:
+        return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
+    legacy_tasks: list[Task] = []
+    for task in tasks_by_issue.values():
+        if not isinstance(task, Task):
+            raise TypeError("derived_inputs is required for TaskMetadata")
+        legacy_tasks.append(task)
+    return subtasks_from_tasks(legacy_tasks)
 
 
 @dataclass
@@ -159,8 +168,9 @@ def _persist_recovery_counters(
 def _decide_footprint_deviation_outcome(
     active: ActiveWorktree,
     deviated: list[str],
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> FootprintDeviationDecision:
     """#192/#200: footprint逸脱への対応方針を判定する（githubへの通知・
     active/run_stateの変更は行わない）。Conflict Graph再計算自体は純粋な計算のためここに含む。
@@ -185,7 +195,7 @@ def _decide_footprint_deviation_outcome(
 
     merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
     _, conflicts = recompute_dag_for_footprint_change(
-        _build_subtasks_for_recompute(tasks_by_issue),
+        _build_subtasks_for_recompute(tasks_by_issue, derived_inputs),
         active_task.subtask_id,
         updated_footprint=merged_footprint,
         threshold=config.dag_similarity_threshold,
@@ -270,13 +280,14 @@ def _apply_footprint_deviation_outcome(
 def _handle_footprint_deviation(
     active: ActiveWorktree,
     deviated: list[str],
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> dict:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     decision = _decide_footprint_deviation_outcome(
-        active, deviated, tasks_by_issue, config
+        active, deviated, tasks_by_issue, config, derived_inputs
     )
     return _apply_footprint_deviation_outcome(
         active, deviated, decision, issue_number_by_subtask_id, config
@@ -565,7 +576,12 @@ def _rule_footprint_deviation(
         return ActiveWorktreeRuleOutcome(terminal=True)
 
     event = _handle_footprint_deviation(
-        active, deviated, ctx.tasks_by_issue, ctx.issue_number_by_subtask_id, ctx.config
+        active,
+        deviated,
+        ctx.tasks_by_issue,
+        ctx.issue_number_by_subtask_id,
+        ctx.config,
+        ctx.dag_inputs,
     )
     forced_serial = event["action"] in ("forced_serial", "already_forced_serial")
     return ActiveWorktreeRuleOutcome(

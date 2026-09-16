@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,13 +22,13 @@ from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState
 from orchestune.dispatch.status_repair import VerifiedStatusTransition
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
+from orchestune.task_metadata import TaskMetadata
 
 
 def _collect_active_conflict_subtask_ids(
@@ -165,7 +166,10 @@ def _handle_blocked_recompute_recovery(
         return recompute_resolved_promoted_events
 
     tasks_by_issue = {task.issue_number: task for task in ctx.tasks()}
-    subtasks_for_recompute = _build_subtasks_for_recompute(tasks_by_issue)
+    subtasks_for_recompute = _build_subtasks_for_recompute(
+        tasks_by_issue,
+        ctx.dag_inputs(tuple(task.issue_number for task in ctx.tasks())),
+    )
     active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(
         run_state, ctx, subtasks_for_recompute, config
     )
@@ -184,7 +188,7 @@ def _handle_blocked_recompute_recovery(
 
 def _resolve_one_blocked_recompute_issue(
     issue: IssueRecord,
-    task: Task,
+    task: TaskMetadata,
     active_conflict_subtask_ids: set[str],
     ctx: CycleContext,
     run_state: RunState,
@@ -242,7 +246,7 @@ def _get_branch_commit_sha(
 
 
 def _resolve_base_branch_for_task(
-    task: Task,
+    task: TaskMetadata,
     config: DispatcherConfig,
     view: DependencyPolicyView,
 ) -> str:
@@ -256,7 +260,7 @@ def _resolve_base_branch_for_task(
 
 
 def _has_pending_dependencies(
-    task: Task,
+    task: TaskMetadata,
     view: DependencyPolicyView,
 ) -> bool:
     """Delegate completion waiting to the common assessment-based predicate."""
@@ -265,7 +269,7 @@ def _has_pending_dependencies(
 
 def _decide_single_base_branch_red_recovery(
     issue: IssueRecord,
-    task: Task,
+    task: TaskMetadata,
     outcome: OutcomeRecord,
     current_base_shas: dict[int, str | None],
     dependencies: DependencyPolicyView,
@@ -304,7 +308,7 @@ def _decide_single_base_branch_red_recovery(
 
 def _decide_base_branch_red_recovery(
     base_branch_red_issues: list[IssueRecord],
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     dependencies: DependencyPolicyView,
     current_base_shas: dict[int, str | None],
     outcomes_by_issue: dict[int, OutcomeRecord | None],
@@ -435,7 +439,7 @@ def _apply_base_branch_red_recovery(
 
 
 def _resolve_recovery_base_sha(
-    task: Task,
+    task: TaskMetadata,
     config: DispatcherConfig,
     dependencies: DependencyPolicyView,
     repo_root: Path | None,

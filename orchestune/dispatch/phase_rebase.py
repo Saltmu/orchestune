@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.locks import (
     NOTICE_KIND_EXTERNAL_LOCK,
@@ -16,7 +18,6 @@ from orchestune.dispatch.locks import (
     render_external_lock_release_notice,
     scan_external_locks,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import MAX_PENDING_LOCK_RELEASE_NOTICES, RunState
 from orchestune.infra.git_cli import (
     branch_changed_files,
@@ -27,6 +28,7 @@ from orchestune.issue_notice import post_notice_if_changed
 from orchestune.issue_parsing import is_epic_issue
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 def _is_base_or_parent_branch(
@@ -44,7 +46,7 @@ def _is_base_or_parent_branch(
 
 
 def _decide_external_lock_sync(
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     prs: list[PrRecord],
     run_state: RunState,
     config: DispatcherConfig | None = None,
@@ -167,7 +169,7 @@ def _apply_external_lock_sync(
 
 
 def _sync_external_locks(
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     prs: list[PrRecord],
     run_state: RunState,
     config: DispatcherConfig,

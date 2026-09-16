@@ -28,9 +28,10 @@ from orchestune.dispatch.cycle_context_state import (
 )
 from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
-from orchestune.dispatch.scoring import SchedulingResult, Task
+from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_metadata import CycleTask, TaskMetadata
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
@@ -88,7 +89,7 @@ class CycleContext:
     # 実効状態を返す。取得済みの戻り値(Task/tuple/Assessment)は後からContextが
     # 更新されても変化しない——再問い合わせで最新状態を反映する。
 
-    def task(self, issue_number: int) -> Task | None:
+    def task(self, issue_number: int) -> CycleTask | None:
         return self._state.task(issue_number)
 
     def dependencies_of(self, issue_number: int) -> TaskDependencies | None:
@@ -115,10 +116,10 @@ class CycleContext:
     def launch_fact(self, issue_number: int) -> LaunchFact | None:
         return self._state.launch_fact(issue_number)
 
-    def queued_tasks(self) -> tuple[Task, ...]:
+    def queued_tasks(self) -> tuple[CycleTask, ...]:
         return self._state.queued_tasks()
 
-    def blocked_tasks(self) -> tuple[Task, ...]:
+    def blocked_tasks(self) -> tuple[CycleTask, ...]:
         return self._state.blocked_tasks()
 
     # ---- all-task / observation queries (#881) ------------------------------
@@ -126,7 +127,7 @@ class CycleContext:
     # `tasks`はrecord反映後の実効値、`issue_records`/`pull_requests`は初期Forge
     # 観測。いずれもIssue/PR番号昇順で、取得済みのtupleは後から変化しない。
 
-    def tasks(self) -> tuple[Task, ...]:
+    def tasks(self) -> tuple[CycleTask, ...]:
         return self._state.tasks()
 
     def issue_records(self) -> tuple[IssueRecord, ...]:
@@ -185,15 +186,15 @@ class CycleContext:
     def scan_external_locks(self):
         return self._action_port().scan_external_locks()
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
         return self._action_port().select_tasks(candidates)
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]:
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
         return self._action_port().launch_tasks(selected, bases, candidates)
 
     def execute_repair(self, command: RepairCommand) -> RepairResult:
@@ -239,7 +240,8 @@ class _RuleExecutionContext:
     prs: tuple[PrRecord, ...] = ()
     not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
     issue_records_by_number: dict[int, IssueRecord] = field(default_factory=dict)
-    tasks_by_issue: dict[int, Task] = field(default_factory=dict)
+    tasks_by_issue: dict[int, TaskMetadata] = field(default_factory=dict)
+    dag_inputs: tuple[SubTask, ...] = ()
     issue_number_by_subtask_id: dict[str, int] = field(default_factory=dict)
 
     def record_completion(self, issue_number: int) -> RecordResult:
@@ -266,7 +268,7 @@ class ActiveWorktreeRuleOutcome:
 
 
 Rule = Callable[
-    ["_RuleExecutionContext", str, ActiveWorktree, "Task | None"],
+    ["_RuleExecutionContext", str, ActiveWorktree, "TaskMetadata | None"],
     "ActiveWorktreeRuleOutcome | None",
 ]
 
@@ -310,7 +312,7 @@ class RuleChain:
         ctx: _RuleExecutionContext,
         key: str,
         active: ActiveWorktree,
-        active_task: Task | None,
+        active_task: TaskMetadata | None,
         aggregates: _ActiveWorktreeAggregates,
     ) -> bool:
         for rule in self.rules:

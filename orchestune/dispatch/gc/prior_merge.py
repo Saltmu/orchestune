@@ -8,9 +8,9 @@ from orchestune.dispatch.prior_parent_merge import (
     PriorParentMergeStatus,
     inspect_prior_parent_merge,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.forge import Forge
 from orchestune.models import IssueRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +21,7 @@ class PriorMergeCompletion:
 
 def decide_prior_parent_merge_completion(
     active_issue_number: int,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     forge: Forge | None,
     issue: IssueRecord | None,
 ) -> PriorMergeCompletion | None:

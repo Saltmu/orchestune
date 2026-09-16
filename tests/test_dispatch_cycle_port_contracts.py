@@ -45,6 +45,7 @@ from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_metadata import TaskMetadata
 
 _TMP = Path(tempfile.mkdtemp(prefix="orchestune-test-cycle-port-contracts-"))
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -131,15 +132,15 @@ class _FakeCycleActions:
     def scan_external_locks(self) -> ExternalLockScanResult:
         return ExternalLockScanResult(to_lock=[], to_unlock=[])
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
         return SchedulingResult(selected=[], decisions=[])
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]:
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
         return ()
 
     def execute_repair(self, command: RepairCommand) -> RepairResult:
@@ -242,7 +243,8 @@ from orchestune.dispatch.cycle_action_contracts import (
     StackBase,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.scoring import SchedulingResult, Task
+from orchestune.dispatch.scoring import SchedulingResult
+from orchestune.task_metadata import TaskMetadata
 
 
 class CompliantActions:
@@ -258,15 +260,15 @@ class CompliantActions:
     def scan_external_locks(self) -> ExternalLockScanResult:
         raise NotImplementedError
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
         raise NotImplementedError
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]:
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
         raise NotImplementedError
 
     def execute_repair(self, command: RepairCommand) -> RepairResult:
@@ -286,15 +288,15 @@ class MissingMethodActions:
     def scan_external_locks(self) -> ExternalLockScanResult:
         raise NotImplementedError
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
         raise NotImplementedError
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]:
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
         raise NotImplementedError
 
 
@@ -311,15 +313,15 @@ class WrongReturnActions:
     def scan_external_locks(self) -> ExternalLockScanResult:
         raise NotImplementedError
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult:
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
         raise NotImplementedError
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]:
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
         raise NotImplementedError
 
     def execute_repair(self, command: RepairCommand) -> RepairResult:

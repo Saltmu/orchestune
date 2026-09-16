@@ -160,8 +160,11 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 ### 3.4 CycleContextの観測所有と成功後の記録
 
-`CycleContext`は、構築時に不変化したTask・依存診断・Issue・PR・起動観測を
-privateに所有します。consumerは意味付きqueryだけを通じて参照し、旧来の
+`CycleContext`はraw依存宣言を含む`Task`観測・依存診断・Issue・PR・起動観測を
+privateに所有します。task queryはfrozenな`CycleTask` metadataだけを公開し、
+DAG consumerには`dag_inputs`経由で派生済み`SubTask`入力を明示的に渡します。
+これによりscoring/conflict policyはraw依存宣言を参照できません。consumerは
+意味付きqueryだけを通じて参照し、旧来の
 tasks/dependencies/CI/branch/RunState mutable属性は公開しません。`record_*`が
 記録するラベル差分は観測を上書きせず、queryが差分を優先します。サイクルが
 所有するaction adapterを1回だけbindし、7つのphase actionはすべてContext経由で

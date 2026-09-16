@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from orchestune.dag.models import ConflictGraph
+from orchestune.dag.models import ConflictGraph, SubTask
 from orchestune.dispatch.cost_model import (
     ESTIMATE_SOURCE_DEFAULT,
     CostEstimate,
@@ -33,6 +33,7 @@ from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata
 
 # 以下3つは#286/#287(rewire-dispatch-imports/rewire-integrator-imports)で
 # 呼び出し側の付け替えが完了するまでの後方互換再エクスポート。実体は
@@ -159,7 +160,7 @@ class SchedulingDecision:
 
 @dataclass(frozen=True)
 class SchedulingResult:
-    selected: list[Task]
+    selected: list[TaskMetadata]
     decisions: list[SchedulingDecision]
     quota_slots_available: int | None = None
 
@@ -170,7 +171,7 @@ def decision_to_dict(decision: SchedulingDecision) -> dict:
 
 
 def reconcile_decisions_with_launches(
-    decisions: list[SchedulingDecision], launched: Iterable[Task]
+    decisions: list[SchedulingDecision], launched: Iterable[TaskMetadata]
 ) -> list[SchedulingDecision]:
     """実起動に失敗したタスクの判定を`launch-failed`へ落とす。
 
@@ -286,7 +287,7 @@ def quota_available(
     return min(concurrent_remaining, rate_remaining)
 
 
-def _last_attempt_at(task: Task, run_state: RunState) -> float | None:
+def _last_attempt_at(task: TaskMetadata, run_state: RunState) -> float | None:
     """このタスクが直近に試行完了(成功/失敗問わず)した時刻。履歴が無ければNone。"""
     timestamps = [
         w.completed_at
@@ -296,7 +297,7 @@ def _last_attempt_at(task: Task, run_state: RunState) -> float | None:
     return max(timestamps) if timestamps else None
 
 
-def _wait_seconds(task: Task, run_state: RunState, now: float) -> float:
+def _wait_seconds(task: TaskMetadata, run_state: RunState, now: float) -> float:
     # #299: created_at（Issue作成時刻、不変値）だけを基準にすると、
     # ほぼ同時刻に作成された同priorityのタスク同士が恒常的に同点になり、
     # issue番号の小さい方がタイブレークで勝ち続けて番号の大きい方が
@@ -328,13 +329,14 @@ def _normalized(value: float, maximum: float) -> float:
 
 
 def _build_scoring_inputs(
-    eligible: list[Task],
-    candidate_tasks: list[Task],
+    eligible: Sequence[TaskMetadata],
+    candidate_tasks: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,
     window_seconds: int,
-    known_tasks: Iterable[Task] | None,
+    known_tasks: Iterable[TaskMetadata] | None,
     cost_model: CostModel,
+    derived_inputs: tuple[SubTask, ...] | None,
 ) -> _ScoringInputs:
     graph_tasks_by_id = {
         task.subtask_id: task
@@ -349,6 +351,7 @@ def _build_scoring_inputs(
             subtask_id: estimate.duration_seconds
             for subtask_id, estimate in estimates.items()
         },
+        derived_inputs=derived_inputs,
     )
     token_values = [
         estimate.tokens
@@ -396,7 +399,7 @@ def _token_penalty_factor(estimate: CostEstimate, max_tokens: float) -> float:
 
 
 def _critical_path_decision(
-    task: Task, run_state: RunState, now: float, inputs: _ScoringInputs
+    task: TaskMetadata, run_state: RunState, now: float, inputs: _ScoringInputs
 ) -> SchedulingDecision:
     estimate = inputs.estimates.get(task.subtask_id) or inputs.cost_model.estimate(task)
     bottom_level = inputs.ranks.bottom_level_of(task.subtask_id)
@@ -439,11 +442,11 @@ def _critical_path_decision(
 
 
 def _rank_candidates(
-    eligible: list[Task],
+    eligible: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,
     inputs: _ScoringInputs,
-) -> list[tuple[Task, SchedulingDecision]]:
+) -> list[tuple[TaskMetadata, SchedulingDecision]]:
     """候補をスコア降順（同点はissue番号昇順）に並べる。"""
     decisions = [_critical_path_decision(t, run_state, now, inputs) for t in eligible]
     return sorted(
@@ -452,7 +455,9 @@ def _rank_candidates(
     )
 
 
-def _ineligibility_reason(task: Task, active_issue_numbers: set[int]) -> str | None:
+def _ineligibility_reason(
+    task: TaskMetadata, active_issue_numbers: set[int]
+) -> str | None:
     """スコアリング以前に候補から外れる理由。外れないなら`None`。"""
     if task.yaml_error:
         return REASON_YAML_ERROR
@@ -466,8 +471,8 @@ def _ineligibility_reason(task: Task, active_issue_numbers: set[int]) -> str | N
 
 
 def _partition_candidates(
-    candidate_tasks: list[Task], run_state: RunState
-) -> tuple[list[Task], list[tuple[Task, str]]]:
+    candidate_tasks: Sequence[TaskMetadata], run_state: RunState
+) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
     """候補を「スコアリング対象」と「対象外＋その理由」に分ける。
 
     PR#665レビュー指摘(Codex P2): 対象外の候補を単に捨てると、`yaml_error`の
@@ -477,8 +482,8 @@ def _partition_candidates(
     追えるよう、対象外も理由付きの未選出判定として残す。
     """
     active_issue_numbers = {int(k) for k in run_state.active_worktrees}
-    eligible: list[Task] = []
-    excluded: list[tuple[Task, str]] = []
+    eligible: list[TaskMetadata] = []
+    excluded: list[tuple[TaskMetadata, str]] = []
     for task in candidate_tasks:
         reason = _ineligibility_reason(task, active_issue_numbers)
         if reason is None:
@@ -489,7 +494,7 @@ def _partition_candidates(
 
 
 def _excluded_decision(
-    task: Task, reason: str, inputs: _ScoringInputs
+    task: TaskMetadata, reason: str, inputs: _ScoringInputs
 ) -> SchedulingDecision:
     """スコア対象外でも、診断に使うrankとcostは実値を保持する。"""
     estimate = inputs.estimates.get(task.subtask_id) or inputs.cost_model.estimate(task)
@@ -512,7 +517,7 @@ def _excluded_decision(
 
 
 def _apply_resource_constraints(
-    ranked: list[tuple[Task, SchedulingDecision]],
+    ranked: list[tuple[TaskMetadata, SchedulingDecision]],
     slots: int,
     token_budget: _TokenBudget,
     conflict_graph: ConflictGraph | None,
@@ -521,7 +526,7 @@ def _apply_resource_constraints(
 ) -> SchedulingResult:
     """クオータ・競合・トークン予算の順に制約を当てて貪欲に選ぶ。"""
     unavailable = set(active_subtask_ids or ())
-    selected: list[Task] = []
+    selected: list[TaskMetadata] = []
     decisions: list[SchedulingDecision] = []
     projected_tokens = 0
 
@@ -560,13 +565,14 @@ def _apply_resource_constraints(
 
 
 def _prepare_ranked_candidates(
-    eligible: list[Task],
-    candidate_tasks: list[Task],
+    eligible: Sequence[TaskMetadata],
+    candidate_tasks: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,
     window_seconds: int,
-    known_tasks: Iterable[Task] | None,
-) -> tuple[list[tuple[Task, SchedulingDecision]], _ScoringInputs, CostModel]:
+    known_tasks: Iterable[TaskMetadata] | None,
+    derived_inputs: tuple[SubTask, ...] | None,
+) -> tuple[list[tuple[TaskMetadata, SchedulingDecision]], _ScoringInputs, CostModel]:
     cost_model = build_cost_model(run_state)
     inputs = _build_scoring_inputs(
         eligible,
@@ -576,6 +582,7 @@ def _prepare_ranked_candidates(
         window_seconds,
         known_tasks,
         cost_model,
+        derived_inputs,
     )
     ranked = _rank_candidates(eligible, run_state, now, inputs)
     return ranked, inputs, cost_model
@@ -597,7 +604,7 @@ def _slot_exhausted_reason(
 
 def _append_excluded_decisions(
     result: SchedulingResult,
-    excluded: list[tuple[Task, str]],
+    excluded: list[tuple[TaskMetadata, str]],
     inputs: _ScoringInputs,
 ) -> SchedulingResult:
     decisions = result.decisions + [
@@ -611,7 +618,7 @@ def _append_excluded_decisions(
 
 
 def select_tasks_with_decisions(
-    candidate_tasks: list[Task],
+    candidate_tasks: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,
     max_concurrent: int,
@@ -620,7 +627,8 @@ def select_tasks_with_decisions(
     max_tokens_per_window: int | None = None,
     conflict_graph: ConflictGraph | None = None,
     active_subtask_ids: set[str] | None = None,
-    known_tasks: Iterable[Task] | None = None,
+    known_tasks: Iterable[TaskMetadata] | None = None,
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> SchedulingResult:
     """起動するタスクを選び、全候補分の選定理由付き内訳を併せて返す。
 
@@ -643,6 +651,7 @@ def select_tasks_with_decisions(
         now,
         window_seconds,
         known_tasks,
+        derived_inputs,
     )
     result = _apply_resource_constraints(
         ranked,
@@ -661,7 +670,7 @@ def select_tasks_with_decisions(
 
 
 def select_next_tasks(
-    candidate_tasks: list[Task],
+    candidate_tasks: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,
     max_concurrent: int,
@@ -670,8 +679,9 @@ def select_next_tasks(
     max_tokens_per_window: int | None = None,
     conflict_graph: ConflictGraph | None = None,
     active_subtask_ids: set[str] | None = None,
-    known_tasks: Iterable[Task] | None = None,
-) -> list[Task]:
+    known_tasks: Iterable[TaskMetadata] | None = None,
+    derived_inputs: tuple[SubTask, ...] | None = None,
+) -> list[TaskMetadata]:
     """選出されたタスクだけを返す薄いラッパー（選定理由が不要な呼び出し向け）。"""
     return select_tasks_with_decisions(
         candidate_tasks,
@@ -684,4 +694,5 @@ def select_next_tasks(
         conflict_graph=conflict_graph,
         active_subtask_ids=active_subtask_ids,
         known_tasks=known_tasks,
+        derived_inputs=derived_inputs,
     ).selected

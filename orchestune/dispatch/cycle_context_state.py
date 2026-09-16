@@ -54,6 +54,7 @@ from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.status_repair_dependencies import task_lifecycle
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_metadata import CycleTask
 
 # record_*が返す競合理由の固定文字列（Issue本文セクションD/E）。
 REASON_UNKNOWN_ISSUE = "unknown-issue"
@@ -429,7 +430,7 @@ class _CycleState:
         task = self._tasks.get(issue_number)
         return () if task is None else tuple(task.status_labels)
 
-    def task(self, issue_number: int) -> Task | None:
+    def _effective_task(self, issue_number: int) -> Task | None:
         base = self._tasks.get(issue_number)
         if base is None:
             return None
@@ -437,6 +438,10 @@ class _CycleState:
         if labels == base.status_labels:
             return base
         return dataclasses.replace(base, status_labels=labels)
+
+    def task(self, issue_number: int) -> CycleTask | None:
+        task = self._effective_task(issue_number)
+        return None if task is None else CycleTask.from_task(task)
 
     def dependencies_of(self, issue_number: int) -> TaskDependencies | None:
         if issue_number not in self._tasks:
@@ -493,8 +498,8 @@ class _CycleState:
         primaries = primary_status_labels(labels)
         return primaries[0] if len(primaries) == 1 else None
 
-    def _candidate_tasks(self, wanted: str) -> tuple[Task, ...]:
-        matches: list[Task] = []
+    def _candidate_tasks(self, wanted: str) -> tuple[CycleTask, ...]:
+        matches: list[CycleTask] = []
         for issue_number, base in self._tasks.items():
             if base.issue_state != "OPEN":
                 continue
@@ -510,20 +515,20 @@ class _CycleState:
         matches.sort(key=lambda t: t.issue_number)
         return tuple(matches)
 
-    def queued_tasks(self) -> tuple[Task, ...]:
+    def queued_tasks(self) -> tuple[CycleTask, ...]:
         return self._candidate_tasks(StatusLabel.QUEUED)
 
-    def blocked_tasks(self) -> tuple[Task, ...]:
+    def blocked_tasks(self) -> tuple[CycleTask, ...]:
         return self._candidate_tasks(StatusLabel.BLOCKED)
 
-    def tasks(self) -> tuple[Task, ...]:
+    def tasks(self) -> tuple[CycleTask, ...]:
         """全タスクの実効値をIssue番号昇順で返す（#881）。
 
         `queued_tasks`/`blocked_tasks`は起動候補のviewなので実効完了・実行中・
         非OPENを除外するが、こちらはquota・critical path・conflictが必要とする
         全件母集団であり、除外しない。各要素は`task()`と同じ実効値。
         """
-        effective: list[Task] = []
+        effective: list[CycleTask] = []
         for issue_number in sorted(self._tasks):
             task = self.task(issue_number)
             assert task is not None
@@ -559,7 +564,7 @@ class _CycleState:
         """
         tasks: list[Task] = []
         for issue_number in issue_numbers:
-            task = self.task(issue_number)
+            task = self._effective_task(issue_number)
             if task is None:
                 raise ValueError(f"unknown issue number: {issue_number}")
             tasks.append(task)
