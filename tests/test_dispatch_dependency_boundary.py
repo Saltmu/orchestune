@@ -87,6 +87,22 @@ def test_package_initializer_relative_raw_task_import_is_rejected() -> None:
     }
 
 
+def test_qualified_package_task_reexport_and_wildcards_are_rejected() -> None:
+    sources = (
+        "import orchestune as package\nvalue: package.Task",
+        "import orchestune\nvalue: orchestune.Task",
+        'import orchestune as package\nvalue = getattr(package, "Task")',
+        "from orchestune import *",
+        "from orchestune.models import *",
+    )
+
+    for source in sources:
+        violations = boundary_violations(source, module="orchestune.dispatch.policy")
+        assert {(item.attribute, item.kind) for item in violations} == {
+            ("Task", "raw-task-import")
+        }
+
+
 def test_literal_getattr_cannot_bypass_the_boundary() -> None:
     source = """
 def policy(task, ctx):

@@ -214,6 +214,7 @@ class _BoundaryVisitor(ast.NodeVisitor):
         self.module = module
         self.is_package = is_package
         self.functions = ["<module>"]
+        self.raw_task_export_aliases: set[str] = set()
         self.violations: list[BoundaryViolation] = []
 
     def _record(self, attribute: str, kind: str, line: int) -> None:
@@ -232,7 +233,13 @@ class _BoundaryVisitor(ast.NodeVisitor):
         self.functions.pop()
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr in RAW_DEPENDENCY_ATTRIBUTES:
+        if (
+            node.attr == "Task"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in self.raw_task_export_aliases
+        ):
+            self._record("Task", "raw-task-import", node.lineno)
+        elif node.attr in RAW_DEPENDENCY_ATTRIBUTES:
             self._record(node.attr, "raw-attribute", node.lineno)
         elif node.attr in REMOVED_CONTEXT_ATTRIBUTES:
             self._record(node.attr, "removed-context-attribute", node.lineno)
@@ -240,12 +247,23 @@ class _BoundaryVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         attribute = _literal_getattr_attribute(node)
-        if attribute is not None:
+        if (
+            attribute == "Task"
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in self.raw_task_export_aliases
+        ):
+            self._record("Task", "raw-task-import", node.lineno)
+        elif attribute is not None:
             if attribute in RAW_DEPENDENCY_ATTRIBUTES | REMOVED_CONTEXT_ATTRIBUTES:
                 self._record(attribute, "literal-getattr", node.lineno)
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
+        self.raw_task_export_aliases.update(
+            alias.asname or "orchestune"
+            for alias in node.names
+            if alias.name == "orchestune"
+        )
         if any(alias.name in RAW_TASK_MODULES for alias in node.names):
             self._record("Task", "raw-task-import", node.lineno)
 
@@ -254,7 +272,7 @@ class _BoundaryVisitor(ast.NodeVisitor):
             self.module, node, is_package=self.is_package
         )
         imports_task = source_module in RAW_TASK_EXPORT_MODULES and any(
-            alias.name == "Task" for alias in node.names
+            alias.name in {"Task", "*"} for alias in node.names
         )
         imports_raw_module = any(
             f"{source_module}.{alias.name}" in RAW_TASK_MODULES for alias in node.names
