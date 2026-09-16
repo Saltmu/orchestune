@@ -243,10 +243,18 @@ class _BoundaryVisitor(ast.NodeVisitor):
                 self._record(attribute, "literal-getattr", node.lineno)
         self.generic_visit(node)
 
+    def visit_Import(self, node: ast.Import) -> None:
+        if any(alias.name in RAW_TASK_MODULES for alias in node.names):
+            self._record("Task", "raw-task-import", node.lineno)
+
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.module in RAW_TASK_MODULES and any(
+        imports_task = node.module in RAW_TASK_MODULES and any(
             alias.name == "Task" for alias in node.names
-        ):
+        )
+        imports_raw_module = node.module is not None and any(
+            f"{node.module}.{alias.name}" in RAW_TASK_MODULES for alias in node.names
+        )
+        if imports_task or imports_raw_module:
             self._record("Task", "raw-task-import", node.lineno)
 
 

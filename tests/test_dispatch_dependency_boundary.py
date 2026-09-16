@@ -30,6 +30,35 @@ def policy(task, ctx):
     }
 
 
+def test_qualified_raw_task_module_imports_are_rejected() -> None:
+    sources = (
+        """
+import orchestune.models as models
+
+def policy(task: models.Task):
+    return task.issue_number
+""",
+        """
+from orchestune import models
+
+def policy(task: models.Task):
+    return task.issue_number
+""",
+        """
+from orchestune.dispatch import scoring
+
+def policy(task: scoring.Task):
+    return task.issue_number
+""",
+    )
+
+    for source in sources:
+        violations = boundary_violations(source, module="orchestune.dispatch.policy")
+        assert {(item.attribute, item.kind) for item in violations} == {
+            ("Task", "raw-task-import")
+        }
+
+
 def test_literal_getattr_cannot_bypass_the_boundary() -> None:
     source = """
 def policy(task, ctx):
