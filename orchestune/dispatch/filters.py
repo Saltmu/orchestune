@@ -1,27 +1,29 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord
+from orchestune.task_metadata import TaskMetadata
+
+TTask = TypeVar("TTask", bound=TaskMetadata)
 
 
 class ForcedSerialDependencyView(Protocol):
-    def task(self, issue_number: int) -> Task | None: ...
+    def task(self, issue_number: int) -> TaskMetadata | None: ...
 
     def dependencies_of(self, issue_number: int) -> TaskDependencies | None: ...
 
 
 def _candidate_conflicts_with_forced_serial_active(
-    candidate: Task,
+    candidate: TaskMetadata,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     view: ForcedSerialDependencyView,
 ) -> bool:
     """#799: タスク間依存判定はsubtask_idの文字列一致ではなく、親Issueで
@@ -48,10 +50,10 @@ def _candidate_conflicts_with_forced_serial_active(
 
 
 def _filter_candidates_for_forced_serial(
-    candidate_tasks: list[Task],
+    candidate_tasks: list[TTask],
     run_state: RunState,
     view: ForcedSerialDependencyView,
-) -> list[Task]:
+) -> list[TTask]:
     forced_serial_actives = [
         (active, view.task(active.issue_number))
         for active in run_state.active_worktrees.values()
@@ -73,10 +75,10 @@ def _filter_candidates_for_forced_serial(
 
 
 def _filter_deviation_blocked_candidates(
-    candidate_tasks: list[Task],
+    candidate_tasks: list[TTask],
     deviation_events: list[dict],
     issue_number_by_subtask_id: dict[str, int],
-) -> list[Task]:
+) -> list[TTask]:
     """同一サイクルのfootprint逸脱でブロックされた候補を除外する。"""
     newly_blocked_recompute_issues = set()
     for event in deviation_events:

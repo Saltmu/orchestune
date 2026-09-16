@@ -26,12 +26,12 @@ from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
 from orchestune.issue_parsing import recovery_counters_from_body
 from orchestune.labels import StatusLabel
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
     from orchestune.dispatch.execution_profiles import ExecutionSelection
     from orchestune.forge import Forge
-    from orchestune.models import Task
 
 
 class LaunchOutcomeUnknown(RuntimeError):
@@ -39,12 +39,14 @@ class LaunchOutcomeUnknown(RuntimeError):
 
 
 class LaunchPlan(Protocol):
-    task: Task
+    @property
+    def task(self) -> TaskMetadata: ...
+
     branch_name: str
     base_branch_for_state: str
 
 
-def _recovery_allowed(task: Task, config: DispatcherConfig) -> bool:
+def _recovery_allowed(task: TaskMetadata, config: DispatcherConfig) -> bool:
     issue = config.resolved_forge.get_issue(task.issue_number)
     terminal = (*TERMINAL_ESCALATION_LABELS, StatusLabel.DONE, StatusLabel.NOT_NEEDED)
     return (
@@ -55,7 +57,7 @@ def _recovery_allowed(task: Task, config: DispatcherConfig) -> bool:
 
 
 def active_from_attempt(
-    attempt: LaunchAttempt, task: Task, config: DispatcherConfig
+    attempt: LaunchAttempt, task: TaskMetadata, config: DispatcherConfig
 ) -> ActiveWorktree:
     issue = config.resolved_forge.get_issue(task.issue_number)
     count, serial = recovery_counters_from_body(issue.body) if issue else (0, False)
@@ -83,7 +85,7 @@ def active_from_attempt(
     )
 
 
-def _hold(task: Task, config: DispatcherConfig, reason: str) -> None:
+def _hold(task: TaskMetadata, config: DispatcherConfig, reason: str) -> None:
     print(
         f"Holding cloud launch for issue #{task.issue_number}: {reason}",
         file=sys.stderr,
@@ -100,7 +102,7 @@ def _hold(task: Task, config: DispatcherConfig, reason: str) -> None:
 
 
 def _lookup_attempt(
-    attempt: LaunchAttempt, task: Task, config: DispatcherConfig
+    attempt: LaunchAttempt, task: TaskMetadata, config: DispatcherConfig
 ) -> LaunchAttempt:
     target = config.dispatch_target
     assert target is not None
@@ -121,7 +123,10 @@ def _lookup_attempt(
 
 
 def reconcile_attempt(
-    attempt: LaunchAttempt, task: Task, state: RunState, config: DispatcherConfig
+    attempt: LaunchAttempt,
+    task: TaskMetadata,
+    state: RunState,
+    config: DispatcherConfig,
 ) -> bool:
     """True means the journal consumed the task; never launch it as queued."""
     if not _recovery_allowed(task, config):
@@ -181,7 +186,7 @@ class JournaledDispatchTarget(DispatchTarget):
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,

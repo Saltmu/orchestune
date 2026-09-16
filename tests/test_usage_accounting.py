@@ -21,13 +21,14 @@ from orchestune.dispatch.targets import (
 )
 from orchestune.models import Task, Usage
 from orchestune.outcome_record import OutcomeRecord
+from orchestune.task_metadata import TaskMetadata
 from tests.dispatch_gc_test_support import _rule_ctx
 
 
 class _DummyDispatchTarget(DispatchTarget):
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,

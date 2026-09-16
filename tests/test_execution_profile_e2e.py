@@ -43,6 +43,7 @@ from orchestune.dispatch.targets import (
 from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.provisioning.flow import provision_issues
+from orchestune.task_metadata import TaskMetadata
 from tests.conftest import FakeForge
 
 pytestmark = pytest.mark.e2e
@@ -54,13 +55,13 @@ class RecordingDispatchTarget(DispatchTarget):
     def __init__(self, target_name: str = "claude-cli") -> None:
         self.target_name = target_name
         self.launched_tasks: list[
-            tuple[Task, str, Path, ExecutionSelection | None]
+            tuple[TaskMetadata, str, Path, ExecutionSelection | None]
         ] = []
         self.completed_handles: set[str] = set()
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,

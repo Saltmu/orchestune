@@ -22,11 +22,11 @@ from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
     resolve_all_dependencies,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
-from orchestune.models import PrRecord
+from orchestune.models import PrRecord, Task
 from orchestune.pr_link_notice import pr_matches_issue
+from orchestune.task_metadata import TaskMetadata
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -100,7 +100,7 @@ class LockDependencyView(Protocol):
     として使うため実装側に継承も`@runtime_checkable`も要求しない。
     """
 
-    def task(self, issue_number: int) -> Task | None: ...
+    def task(self, issue_number: int) -> TaskMetadata | None: ...
 
     def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None: ...
 
@@ -123,7 +123,7 @@ class _DefaultLockDependencyView:
     _tasks_by_issue: dict[int, Task]
     _dependency_resolution: dict[int, TaskDependencies]
 
-    def task(self, issue_number: int) -> Task | None:
+    def task(self, issue_number: int) -> TaskMetadata | None:
         return self._tasks_by_issue.get(issue_number)
 
     def is_effectively_done(self, issue_number: int) -> bool:
@@ -160,7 +160,7 @@ def _default_lock_dependency_view(queued_tasks: list[Task]) -> LockDependencyVie
 
 
 def _direct_dependency_canonical_branches(
-    task: Task,
+    task: TaskMetadata,
     view: LockDependencyView,
 ) -> frozenset[str]:
     """taskの直接の`depends_on`が指す依存元タスクの正規ブランチ名の集合。
@@ -260,7 +260,7 @@ def _is_dependency_branch(branch: str, dependency_branches: frozenset[str]) -> b
 
 
 def _external_prs(
-    task: Task,
+    task: TaskMetadata,
     prs: list[PrRecord],
     active_set: set[str],
     dependency_branches: frozenset[str],
@@ -285,7 +285,7 @@ def _overlapping_files(
 
 
 def _collect_task_conflicts(
-    task: Task,
+    task: TaskMetadata,
     active_set: set[str],
     prs: list[PrRecord],
     branch_footprints: list[tuple[str, set[str]]],

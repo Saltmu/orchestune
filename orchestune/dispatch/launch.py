@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from orchestune.branch_naming import branch_matches_task, build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
@@ -26,7 +26,6 @@ from orchestune.dispatch.launch_attempts import (
     LaunchOutcomeUnknown,
     prepare_journaled_target,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
@@ -42,6 +41,7 @@ from orchestune.issue_parsing import (
 )
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
@@ -49,16 +49,19 @@ if TYPE_CHECKING:
 
 
 LaunchCommitted = Callable[[ActiveWorktree], None]
+TTask = TypeVar("TTask", bound=TaskMetadata)
 
 
-def _is_task_stack_eligible(task: Task, view: DependencyPolicyView) -> StackDecision:
+def _is_task_stack_eligible(
+    task: TaskMetadata, view: DependencyPolicyView
+) -> StackDecision:
     """Delegate launch eligibility and base selection to the shared policy."""
     return decide_stack_target(task.issue_number, view)
 
 
 def _get_stack_eligible_tasks(
-    tasks: Sequence[Task], view: DependencyPolicyView
-) -> tuple[list[Task], dict[int, str]]:
+    tasks: Sequence[TTask], view: DependencyPolicyView
+) -> tuple[list[TTask], dict[int, str]]:
     stack_eligible_tasks = []
     task_to_base_branch = {}
 
@@ -77,8 +80,8 @@ def _get_stack_eligible_tasks(
 
 
 @dataclass
-class DuplicateCandidateDecision:
-    task: Task
+class DuplicateCandidateDecision(Generic[TTask]):
+    task: TTask
     is_duplicate: bool
     existing_pr: PrRecord | None = None
 
@@ -94,7 +97,9 @@ def _is_orchestune_issue_branch(head_ref: str, issue_number: int) -> bool:
     return branch_matches_task(head_ref, issue_number)
 
 
-def _find_existing_pr_for_task(task: Task, view: CycleQueries) -> PrRecord | None:
+def _find_existing_pr_for_task(
+    task: TaskMetadata, view: CycleQueries
+) -> PrRecord | None:
     expected_branch = build_task_branch_name(task.issue_number, task.subtask_id)
     prs = view.pull_requests()
     existing_pr = next((pr for pr in prs if pr.head_ref == expected_branch), None)
@@ -110,7 +115,7 @@ def _find_existing_pr_for_task(task: Task, view: CycleQueries) -> PrRecord | Non
 
 def _is_pr_duplicate_update(
     existing_pr: PrRecord,
-    task: Task,
+    task: TaskMetadata,
     completed_worktrees: list[CompletedWorktree],
 ) -> bool:
     last_completed = None
@@ -142,10 +147,10 @@ def _is_pr_duplicate_update(
 
 
 def _decide_duplicate_candidates(
-    candidate_tasks: list[Task],
+    candidate_tasks: Sequence[TTask],
     view: CycleQueries,
     completed_worktrees: list[CompletedWorktree] | None = None,
-) -> list[DuplicateCandidateDecision]:
+) -> list[DuplicateCandidateDecision[TTask]]:
     decisions = []
     for task in candidate_tasks:
         existing_pr = _find_existing_pr_for_task(task, view)
@@ -163,9 +168,9 @@ def _decide_duplicate_candidates(
 
 
 def _apply_duplicate_skip(
-    decisions: list[DuplicateCandidateDecision],
+    decisions: Sequence[DuplicateCandidateDecision[TTask]],
     config: DispatcherConfig,
-) -> list[Task]:
+) -> list[TTask]:
     """decide層が判定した重複候補をstatus:blocked-human-reviewへ遷移させ、
     重複でないタスクのみを起動候補として返す。"""
     valid_candidate_tasks = []
@@ -192,21 +197,21 @@ def _apply_duplicate_skip(
 
 
 @dataclass
-class TaskLaunchPlan:
-    task: Task
+class TaskLaunchPlan(Generic[TTask]):
+    task: TTask
     branch_name: str
     base_branch_for_launch: str | None
     base_branch_for_state: str
     execution_selection: ExecutionSelection | None = None
 
 
-def _decide_yaml_error_tasks(candidate_tasks: list[Task]) -> list[Task]:
+def _decide_yaml_error_tasks(candidate_tasks: Sequence[TTask]) -> list[TTask]:
     """YAMLパースに失敗しているタスクを判定する（副作用なし）。"""
     return [task for task in candidate_tasks if task.yaml_error]
 
 
 def _apply_yaml_error_blocking(
-    yaml_error_tasks: list[Task], config: DispatcherConfig
+    yaml_error_tasks: Sequence[TaskMetadata], config: DispatcherConfig
 ) -> None:
     for task in yaml_error_tasks:
         transition_status_label(
@@ -222,10 +227,10 @@ def _apply_yaml_error_blocking(
 
 
 def _decide_task_launch_plan(
-    selected: list[Task],
+    selected: Sequence[TTask],
     task_to_base_branch: dict[int, str],
     config: DispatcherConfig,
-) -> list[TaskLaunchPlan]:
+) -> list[TaskLaunchPlan[TTask]]:
     """選出されたタスクごとに、起動時のブランチ名・ベースブランチを決定する（副作用なし）。"""
     plans = []
     for task in selected:
@@ -329,7 +334,9 @@ def _launch_reservation(
             _release_launch_reservation(now, config)
 
 
-def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None:
+def _handle_launch_failure(
+    task: TaskMetadata, launch, config: DispatcherConfig
+) -> None:
     old_labels = tuple(
         label
         for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED)
@@ -362,7 +369,7 @@ def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None
 
 
 def _build_active_worktree_from_launch(
-    task: Task,
+    task: TaskMetadata,
     plan: TaskLaunchPlan,
     launch,
     run_state: RunState,
@@ -398,7 +405,7 @@ def _build_active_worktree_from_launch(
 
 
 def _record_successful_launch(
-    task: Task,
+    task: TaskMetadata,
     plan: TaskLaunchPlan,
     launch,
     run_state: RunState,
@@ -437,7 +444,7 @@ def _record_successful_launch(
 
 
 def _try_planned_launch(
-    plan: TaskLaunchPlan, target: DispatchTarget, config: DispatcherConfig
+    plan: TaskLaunchPlan[TTask], target: DispatchTarget, config: DispatcherConfig
 ) -> LaunchResult | None:
     try:
         return create_worktree_and_launch(
@@ -458,14 +465,14 @@ def _try_planned_launch(
 
 
 def _apply_task_launches(
-    plans: list[TaskLaunchPlan],
+    plans: Sequence[TaskLaunchPlan[TTask]],
     run_state: RunState,
     now: float,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
     on_launch_committed: LaunchCommitted | None = None,
-) -> list[Task]:
-    actually_selected = []
+) -> list[TTask]:
+    actually_selected: list[TTask] = []
     for plan in plans:
         task = plan.task
         assert config.dispatch_target is not None
@@ -514,12 +521,12 @@ def _apply_task_launches(
 
 
 @dataclass
-class LaunchContext:
+class LaunchContext(Generic[TTask]):
     """#476: `_launch_selected_tasks`の7引数を集約するDTO。"""
 
-    selected: list[Task]
+    selected: Sequence[TTask]
     task_to_base_branch: dict[int, str]
-    candidate_tasks: list[Task]
+    candidate_tasks: Sequence[TTask]
     run_state: RunState
     now: float
     config: DispatcherConfig
@@ -527,7 +534,7 @@ class LaunchContext:
     on_launch_committed: LaunchCommitted | None = None
 
 
-def _launch_selected_tasks(ctx: LaunchContext) -> list[Task]:
+def _launch_selected_tasks(ctx: LaunchContext[TTask]) -> list[TTask]:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     yaml_error_tasks = _decide_yaml_error_tasks(ctx.candidate_tasks)
     _apply_yaml_error_blocking(yaml_error_tasks, ctx.config)

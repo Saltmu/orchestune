@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from orchestune.dispatch import gc as dispatch_gc
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.targets import (
     BranchReachabilityError,
     DispatchHandle,
@@ -18,6 +17,7 @@ from orchestune.dispatch.targets import (
 )
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import file_lock as file_lock
+from orchestune.task_metadata import TaskMetadata
 from orchestune.validation import validate_ref_name
 
 if TYPE_CHECKING:
@@ -145,7 +145,7 @@ def _target_supports_param(dispatch_target: DispatchTarget, param_name: str) -> 
 
 def _provision_and_launch(
     dispatch_target: DispatchTarget,
-    task: Task,
+    task: TaskMetadata,
     branch_name: str,
     worktree_path: Path,
     *,
@@ -181,7 +181,7 @@ def _cleanup_failed_worktree(worktree_path: Path) -> None:
 
 def _handle_launch_error(
     e: Exception,
-    task: Task,
+    task: TaskMetadata,
     branch_name: str,
     worktree_path: Path,
     worktree_created: bool,
@@ -208,7 +208,7 @@ def _handle_launch_error(
 
 
 def _prepare_and_launch(
-    task: Task,
+    task: TaskMetadata,
     branch_name: str,
     worktree_path: Path,
     worktree_root: str | Path,
@@ -274,7 +274,7 @@ def _handle_backup_error(
 
 
 def create_worktree_and_launch(
-    task: Task,
+    task: TaskMetadata,
     branch_name: str,
     worktree_root: str | Path,
     dispatch_target: DispatchTarget,
