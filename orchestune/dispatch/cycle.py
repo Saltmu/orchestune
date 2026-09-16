@@ -103,7 +103,6 @@ from orchestune.dispatch.recovery import (
     recovery_bookkeeping_invariants,
 )
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_dependency_policy import (
     completed_dependency_ids,
@@ -128,6 +127,7 @@ from orchestune.pr_link_notice import (
     notice_expected_bases,
     notify_open_pr_links,
 )
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 __all__ = ["CycleReport", "run_dispatch_cycle"]
 
@@ -191,7 +191,7 @@ class _DispatchConsistencyAdapter:
         self._fresh = fresh
         self._completion_evidence: DependencyAssessmentView = ctx
         self._include_status_intents = include_status_intents
-        self._tasks_by_issue: dict[int, Task] = {
+        self._tasks_by_issue: dict[int, TaskMetadata] = {
             task.issue_number: task for task in ctx.tasks()
         }
 
@@ -339,7 +339,7 @@ class _DispatchConsistencyAdapter:
         )
 
     @property
-    def tasks_by_issue(self) -> dict[int, Task]:
+    def tasks_by_issue(self) -> dict[int, TaskMetadata]:
         return self._tasks_by_issue
 
     @property
@@ -363,9 +363,13 @@ class _DispatchRepairExecutor:
                     status=RepairStatus.FAILED,
                     diagnostics=("status completion evidence is unavailable",),
                 )
+            raw_tasks = require_raw_tasks(
+                self.adapter.tasks_by_issue.values(),
+                operation="_DispatchRepairExecutor.execute",
+            )
             return execute_status_repair_command(
                 command,
-                self.adapter.tasks_by_issue,
+                {task.issue_number: task for task in raw_tasks},
                 completion_evidence=self.completion_evidence,
                 config=self.config,
                 on_verified=self.on_status_verified,

@@ -41,7 +41,7 @@ from orchestune.dag.models import SubTask
 from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
-from orchestune.task_metadata import TaskMetadata
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 # 推定所要時間が渡されなかったノードの既定値。1.0にすることで、履歴が無い
 # （＝全ノードが既定値になる）状況ではbottom levelがそのまま「残りチェーン長」
@@ -226,11 +226,7 @@ def compute_precedence_ranks(
     if derived_inputs is not None:
         node_ids, successors = _successor_map_from_subtasks(derived_inputs)
     else:
-        legacy_tasks: list[Task] = []
-        for task in tasks:
-            if not isinstance(task, Task):
-                raise TypeError("derived_inputs is required for TaskMetadata")
-            legacy_tasks.append(task)
+        legacy_tasks = require_raw_tasks(tasks, operation="compute_precedence_ranks")
         node_ids, successors = _successor_map(legacy_tasks)
     order, has_cycle = _topological_order(node_ids, successors)
     exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES and not has_cycle

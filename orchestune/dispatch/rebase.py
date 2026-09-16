@@ -32,8 +32,7 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.labels import StatusLabel
-from orchestune.models import Task
-from orchestune.task_metadata import TaskMetadata
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +126,9 @@ def _build_subtasks_for_recompute(
 ) -> dict[str, SubTask]:
     if derived_inputs is not None:
         return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
-    legacy_tasks: list[Task] = []
-    for task in tasks_by_issue.values():
-        if not isinstance(task, Task):
-            raise TypeError("derived_inputs is required for TaskMetadata")
-        legacy_tasks.append(task)
+    legacy_tasks = require_raw_tasks(
+        tasks_by_issue.values(), operation="_build_subtasks_for_recompute"
+    )
     return subtasks_from_tasks(legacy_tasks)
 
 

@@ -26,7 +26,7 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Task
 from orchestune.pr_link_notice import pr_matches_issue
-from orchestune.task_metadata import TaskMetadata
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -347,11 +347,7 @@ def scan_external_locks(
         remote_branches, active_set
     )
     if view is None:
-        legacy_tasks: list[Task] = []
-        for task in queued_tasks:
-            if not isinstance(task, Task):
-                raise TypeError("view is required for TaskMetadata")
-            legacy_tasks.append(task)
+        legacy_tasks = require_raw_tasks(queued_tasks, operation="scan_external_locks")
         resolved_view: LockDependencyView = _default_lock_dependency_view(legacy_tasks)
     else:
         resolved_view = view

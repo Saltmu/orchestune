@@ -9,7 +9,7 @@ from orchestune.dag.graph import build_conflict_graph
 from orchestune.dag.models import ConflictEdge, ConflictGraph, SubTask
 from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.models import Task
-from orchestune.task_metadata import TaskMetadata
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 
 def subtasks_from_tasks(tasks: Iterable[Task]) -> dict[str, SubTask]:
@@ -142,16 +142,14 @@ def build_task_conflict_graph(
         if derived_inputs is not None:
             subtasks = _subtasks_by_id(derived_inputs, task_list)
         else:
-            legacy_tasks: list[Task] = []
-            for task in task_list:
-                if not isinstance(task, Task):
-                    raise ValueError("derived_inputs is required for TaskMetadata")
-                legacy_tasks.append(task)
+            legacy_tasks = require_raw_tasks(
+                task_list, operation="build_task_conflict_graph"
+            )
             subtasks = subtasks_from_tasks(legacy_tasks)
         return build_conflict_graph(
             list(subtasks.values()),
             threshold=threshold,
             ignore_patterns=ignore_patterns,
         )
-    except ValueError:
+    except (TypeError, ValueError):
         return _fail_closed_graph(task_list)

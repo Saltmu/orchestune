@@ -9,6 +9,7 @@ frozen/slotsの値型`CycleTask`を提供する。raw宣言の保持・DAG変換
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -99,3 +100,36 @@ class CycleTask:
             execution_profile=task.execution_profile,
             model_tier=task.model_tier,
         )
+
+
+def require_raw_tasks(tasks: Iterable[TaskMetadata], *, operation: str) -> list[Task]:
+    """Materialize the compatibility-only raw Task boundary without casts."""
+    raw_tasks: list[Task] = []
+    for task in tasks:
+        if not isinstance(task, Task):
+            raise TypeError(f"{operation} requires derived inputs for TaskMetadata")
+        raw_tasks.append(task)
+    return raw_tasks
+
+
+def task_metadata_to_dict(task: TaskMetadata) -> dict[str, object]:
+    """Serialize only the public metadata contract, never raw declarations."""
+    return {
+        "issue_number": task.issue_number,
+        "subtask_id": task.subtask_id,
+        "footprint": task.footprint,
+        "symbols": task.symbols,
+        "risk": task.risk,
+        "priority": task.priority,
+        "progress_partial": task.progress_partial,
+        "status_labels": task.status_labels,
+        "created_at": task.created_at,
+        "yaml_error": task.yaml_error,
+        "parent_number": task.parent_number,
+        "issue_state": task.issue_state,
+        "parent_state": task.parent_state,
+        "shared_contract": task.shared_contract,
+        "writes_shared_contract": task.writes_shared_contract,
+        "execution_profile": task.execution_profile,
+        "model_tier": task.model_tier,
+    }

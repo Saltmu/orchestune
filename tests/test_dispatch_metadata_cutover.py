@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.critical_path import compute_precedence_ranks
+from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
+from orchestune.dispatch.report import _report_to_dict
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import select_tasks_with_decisions
 from orchestune.dispatch.state import RunState
@@ -175,3 +177,22 @@ def test_empty_subtask_id_is_ignored_for_rank_and_conflicts() -> None:
 
     assert "" not in ranks.bottom_level
     assert conflicts.edges == ()
+
+
+def test_cycle_report_serializes_metadata_without_raw_dependency_fields() -> None:
+    task = CycleTask.from_task(_task(1, "one", depends_on=("raw",)))
+    report = CycleReport(
+        selected=[task],
+        quota_slots_available=1,
+        lock_changes={"to_lock": [task], "to_unlock": []},
+        deviation_events=[],
+        completion_events=[],
+        promotion_events=[],
+        applied=False,
+    )
+
+    payload = _report_to_dict(report)
+
+    assert "depends_on" not in payload["selected"][0]
+    assert "native_depends_on" not in payload["selected"][0]
+    assert payload["lock_changes"]["to_lock"][0] == payload["selected"][0]

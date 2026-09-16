@@ -12,8 +12,9 @@ from orchestune.consistency.supervisor import (
     ConsistencyMode,
     consistency_cycle_to_dict,
 )
-from orchestune.dispatch.scoring import SchedulingDecision, Task, decision_to_dict
+from orchestune.dispatch.scoring import SchedulingDecision, decision_to_dict
 from orchestune.dispatch.summary import SkipRecord, skip_record_to_dict
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.execution_profiles import ExecutionSelection
@@ -21,9 +22,9 @@ if TYPE_CHECKING:
 
 @dataclass
 class CycleReport:
-    selected: list[Task]
+    selected: list[TaskMetadata]
     quota_slots_available: int
-    lock_changes: dict[str, list[Task]]
+    lock_changes: dict[str, list[TaskMetadata]]
     deviation_events: list[dict]
     completion_events: list[dict]
     promotion_events: list[dict]
