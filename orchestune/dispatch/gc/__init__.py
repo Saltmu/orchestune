@@ -49,7 +49,6 @@ from orchestune.dispatch.gc.zombies import (
     _apply_zombie_or_timeout_reclaim,
 )
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
@@ -61,6 +60,7 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
+from orchestune.task_metadata import TaskMetadata
 
 __all__ = [
     "CompletedWorktreeDecision",
@@ -93,7 +93,7 @@ def _rule_not_needed(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#280/#552: status:not-neededラベルまたはoutcome(not-needed)検知による即時完了処理。
 
@@ -134,7 +134,7 @@ def _rule_stale_entry_hold(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """Leave cached stale entries untouched until Supervisor-owned GC runs.
 
@@ -179,7 +179,7 @@ def _escalate_held_dirty_worktree(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     hold_count: int,
 ) -> str:
     """保留上限を超えたdirty worktreeをエスカレーションする。"""
@@ -227,7 +227,7 @@ def _apply_dirty_worktree_hold(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> str:
     """#212のdirty worktree保留にも`max_task_reclaims`の上限を効かせる。"""
     if not ctx.config.apply:
@@ -248,7 +248,7 @@ _CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged"})
 
 def _completed_worktree_record(
     completion_active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     completion_event: dict,
 ) -> CompletedWorktree:
     raw_usage = completion_event.get("usage")
@@ -315,7 +315,7 @@ def _record_completed_worktree(
     ctx: _RuleExecutionContext,
     key: str,
     completion_active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     completion_event: dict,
 ) -> ActiveWorktreeRuleOutcome:
     """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
@@ -429,7 +429,7 @@ def _abandoned_worktree_outcome(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome:
     release_entry, reserve_reclaim, is_released = _create_abandonment_callbacks(
         ctx, key, active
@@ -551,7 +551,7 @@ def _resolve_recovered_completion(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """run_stateに起動時刻もexternal idも無い項目を、PRから復元して解決する。"""
     try:
@@ -584,7 +584,7 @@ def _resolve_cloud_completion(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     failures: list[ForgeFailure] = []
     status = _cloud_worktree_completion_status(active, ctx.config, failures)
@@ -609,7 +609,7 @@ def _resolve_local_completion(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     if not _is_worktree_complete(active, ctx.config):
         return CompletionResolution.pending()
@@ -636,7 +636,7 @@ def _resolve_completion(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
     if active.started_at is None and active.external_id is None:
@@ -650,7 +650,7 @@ def _handle_completed_event_outcome(
     ctx: _RuleExecutionContext,
     key: str,
     completion_active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     completion_event: dict,
 ) -> ActiveWorktreeRuleOutcome | None:
     """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
@@ -691,7 +691,7 @@ def _rule_completed(
     ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     resolution = _resolve_completion(ctx, key, active, active_task)
     if resolution.state == "pending":

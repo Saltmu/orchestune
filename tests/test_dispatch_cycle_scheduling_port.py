@@ -14,6 +14,7 @@ import pytest
 from orchestune.dispatch.cycle_action_contracts import StackBase
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _ctx, _task
 
 
@@ -43,7 +44,7 @@ class TestScanExternalLocks:
             result = adapter.scan_external_locks()
 
         args, kwargs = mock_sync.call_args
-        assert args[0] == {280: task}
+        assert args[0] == {280: CycleTask.from_task(task)}
         assert args[1] == []
         assert args[2] is run_state
         assert args[3] is ctx.config
@@ -100,7 +101,10 @@ class TestSelectTasks:
             adapter.select_tasks((candidate,))
 
         _, kwargs = mock_select.call_args
-        assert set(kwargs["known_tasks"]) == {candidate, downstream}
+        assert set(kwargs["known_tasks"]) == {
+            CycleTask.from_task(candidate),
+            CycleTask.from_task(downstream),
+        }
 
 
 class TestLaunchTasks:

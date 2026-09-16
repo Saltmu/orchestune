@@ -9,6 +9,7 @@ from orchestune.dag.graph import build_conflict_graph
 from orchestune.dag.models import ConflictEdge, ConflictGraph, SubTask
 from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 
 def subtasks_from_tasks(tasks: Iterable[Task]) -> dict[str, SubTask]:
@@ -44,7 +45,7 @@ def subtasks_from_tasks(tasks: Iterable[Task]) -> dict[str, SubTask]:
     }
 
 
-def _fail_closed_graph(tasks: list[Task]) -> ConflictGraph:
+def _fail_closed_graph(tasks: list[TaskMetadata]) -> ConflictGraph:
     ids = sorted({task.subtask_id for task in tasks if task.subtask_id})
     edges = tuple(
         ConflictEdge(
@@ -60,7 +61,7 @@ def _fail_closed_graph(tasks: list[Task]) -> ConflictGraph:
 
 
 def _subtasks_by_id(
-    derived_inputs: Iterable[SubTask], tasks: list[Task]
+    derived_inputs: Iterable[SubTask], tasks: list[TaskMetadata]
 ) -> dict[str, SubTask]:
     """Key a caller-supplied `SubTask` sequence by id, the way `subtasks_from_tasks` would.
 
@@ -117,7 +118,7 @@ def _subtasks_by_id(
 
 
 def build_task_conflict_graph(
-    tasks: Iterable[Task],
+    tasks: Iterable[TaskMetadata],
     *,
     threshold: float,
     ignore_patterns: Iterable[re.Pattern[str]] = (),
@@ -138,15 +139,17 @@ def build_task_conflict_graph(
     """
     task_list = list(tasks)
     try:
-        subtasks = (
-            _subtasks_by_id(derived_inputs, task_list)
-            if derived_inputs is not None
-            else subtasks_from_tasks(task_list)
-        )
+        if derived_inputs is not None:
+            subtasks = _subtasks_by_id(derived_inputs, task_list)
+        else:
+            legacy_tasks = require_raw_tasks(
+                task_list, operation="build_task_conflict_graph"
+            )
+            subtasks = subtasks_from_tasks(legacy_tasks)
         return build_conflict_graph(
             list(subtasks.values()),
             threshold=threshold,
             ignore_patterns=ignore_patterns,
         )
-    except ValueError:
+    except (TypeError, ValueError):
         return _fail_closed_graph(task_list)

@@ -26,7 +26,7 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Task
 from orchestune.pr_link_notice import pr_matches_issue
-from orchestune.task_metadata import TaskMetadata
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 _HOTSPOT_PATTERNS = (
     re.compile(
@@ -68,8 +68,8 @@ class ExternalLockConflict:
 
 @dataclass
 class ExternalLockScanResult:
-    to_lock: list[Task]
-    to_unlock: list[Task]
+    to_lock: list[TaskMetadata]
+    to_unlock: list[TaskMetadata]
     # #787: 新規ロック(to_lock)だけでなく「前サイクルから継続してロック中の
     # タスク」も収録する。継続ロックはto_lock/to_unlockのどちらにも現れず、
     # 理由を引ける場所が他に無いため（#695の実例）。
@@ -329,7 +329,7 @@ def _collect_task_conflicts(
 
 
 def scan_external_locks(
-    queued_tasks: list[Task],
+    queued_tasks: list[TaskMetadata],
     remote_branches: Iterable[tuple[str, tuple[str, ...] | None]],
     prs: list[PrRecord],
     active_branches: Iterable[str],
@@ -346,11 +346,13 @@ def scan_external_locks(
     branch_footprints, unknown_branches = _collect_branch_footprints(
         remote_branches, active_set
     )
-    resolved_view = (
-        view if view is not None else _default_lock_dependency_view(queued_tasks)
-    )
-    to_lock: list[Task] = []
-    to_unlock: list[Task] = []
+    if view is None:
+        legacy_tasks = require_raw_tasks(queued_tasks, operation="scan_external_locks")
+        resolved_view: LockDependencyView = _default_lock_dependency_view(legacy_tasks)
+    else:
+        resolved_view = view
+    to_lock: list[TaskMetadata] = []
+    to_unlock: list[TaskMetadata] = []
     conflicts_by_issue: dict[int, tuple[ExternalLockConflict, ...]] = {}
     for task in queued_tasks:
         currently_locked = StatusLabel.EXTERNAL_LOCK in task.status_labels

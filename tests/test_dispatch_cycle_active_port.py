@@ -10,6 +10,7 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.gc.completion import is_completion_hold_event
 from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
+from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _active, _ctx, _task
 
 
@@ -171,7 +172,7 @@ class TestRunGc:
 
         args, kwargs = mock_run_gc.call_args
         assert args[0] is run_state
-        assert args[1] == {280: task}
+        assert args[1] == {280: CycleTask.from_task(task)}
         assert args[2] is ctx.config
         assert args[3] == list(events)
         assert args[4] == (pr,)

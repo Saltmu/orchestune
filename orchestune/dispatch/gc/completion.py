@@ -32,7 +32,6 @@ from orchestune.dispatch.labels import (
     transition_status_label,
 )
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
@@ -57,6 +56,7 @@ from orchestune.outcome_record import (
     parse_from_comments,
 )
 from orchestune.pr_link_notice import pr_matches_issue
+from orchestune.task_metadata import TaskMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +73,7 @@ class CompletedWorktreeDecision:
 
 class _CompletionContext(NamedTuple):
     active: ActiveWorktree
-    active_task: Task | None
+    active_task: TaskMetadata | None
     config: DispatcherConfig
     dispatch_not_needed_review: NotNeededReviewDispatcher | None
     run_state: RunState | None
@@ -211,7 +211,7 @@ def _detect_worktree_commits(
 
 def _prior_merge_decision(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     forge: Forge | None,
     issue: IssueRecord | None,
 ) -> CompletedWorktreeDecision | None:
@@ -230,7 +230,7 @@ def _prior_merge_decision(
 
 def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     repository_root: str | Path | None = None,
     forge: Forge | None = None,
     run_state: RunState | None = None,
@@ -277,7 +277,7 @@ def _decide_completed_worktree_outcome(
     )
 
 
-def _stale_status_labels(active_task: Task | None) -> tuple[str, ...]:
+def _stale_status_labels(active_task: TaskMetadata | None) -> tuple[str, ...]:
     if active_task is not None:
         return tuple(
             label
@@ -290,7 +290,7 @@ def _stale_status_labels(active_task: Task | None) -> tuple[str, ...]:
 def _prepare_apply_escalation(
     active: ActiveWorktree,
     config: DispatcherConfig,
-    active_task: Task | None = None,
+    active_task: TaskMetadata | None = None,
 ) -> tuple[str, ...] | None:
     if not config.apply:
         return None
@@ -302,7 +302,7 @@ def _apply_escalation(
     active: ActiveWorktree,
     config: DispatcherConfig,
     message: str,
-    active_task: Task | None = None,
+    active_task: TaskMetadata | None = None,
 ) -> None:
     stale_labels = _prepare_apply_escalation(active, config, active_task)
     if stale_labels is not None:
@@ -317,7 +317,7 @@ def _apply_escalation(
 def _apply_blocked_hold(
     active: ActiveWorktree,
     config: DispatcherConfig,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     comment: str,
     extra_label: str | None = None,
 ) -> None:
@@ -459,7 +459,7 @@ def _reserve_backoff_retry(
 
 def _publish_requeue(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     run_state: RunState,
     now: float,
@@ -487,7 +487,7 @@ def _publish_requeue(
 
 def _apply_backoff_retry(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     run_state: RunState,
     now: float,
@@ -528,7 +528,7 @@ def _apply_backoff_retry(
 
 def _apply_early_death_retry(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     run_state: RunState,
     now: float,
@@ -557,7 +557,7 @@ def _apply_early_death_retry(
 
 def _apply_review_timeout_retry(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     run_state: RunState,
     now: float,
@@ -757,7 +757,7 @@ def _apply_completed_worktree_outcome(
     active: ActiveWorktree,
     decision: CompletedWorktreeDecision,
     config: DispatcherConfig,
-    active_task: Task | None = None,
+    active_task: TaskMetadata | None = None,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
     run_state: RunState | None = None,
     now: float | None = None,
@@ -781,7 +781,7 @@ def _apply_completed_worktree_outcome(
 
 def _finalize_completed_worktree(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
     run_state: RunState | None = None,
@@ -829,7 +829,7 @@ def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
 
 def _finalize_not_needed_worktree(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
 ) -> dict:
@@ -1074,7 +1074,7 @@ def _handle_abandoned_cloud_reclaim(
 
 def _finalize_abandoned_cloud_worktree(
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     config: DispatcherConfig,
     run_state: RunState | None = None,
     on_label_applied: Callable[[], None] | None = None,

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from orchestune.dispatch.cycle_action_contracts import StackBase
@@ -34,7 +35,6 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import (
     SchedulingDecision,
     SchedulingResult,
-    Task,
     reconcile_decisions_with_launches,
 )
 from orchestune.dispatch.summary import (
@@ -49,6 +49,7 @@ from orchestune.dispatch.summary import (
     SkipRecord,
 )
 from orchestune.labels import StatusLabel
+from orchestune.task_metadata import TaskMetadata
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,7 @@ class SchedulingPhaseResult:
     `decisions`として持ち帰り、cycle reportとイベントログから観測できるようにする。
     """
 
-    selected: list[Task]
+    selected: list[TaskMetadata]
     quota_slots_available: int
     decisions: list[SchedulingDecision]
     execution_selections: dict[int, ExecutionSelection] = field(default_factory=dict)
@@ -73,15 +74,15 @@ def _filter_queued_candidates(
     ctx: CycleContext,
     lock_result: ExternalLockScanResult,
     view: DependencyPolicyView,
-) -> tuple[list[Task], list[Task]]:
+) -> tuple[list[TaskMetadata], list[TaskMetadata]]:
     newly_locked = {t.issue_number for t in lock_result.to_lock}
-    queued_candidates = [
+    queued_candidates: list[TaskMetadata] = [
         task
         for task in ctx.queued_tasks()
         if task.issue_number not in newly_locked
         and not ctx.is_prior_merge_held(task.issue_number)
     ]
-    dependency_rejected = [
+    dependency_rejected: list[TaskMetadata] = [
         task
         for task in queued_candidates
         if (assessment := view.assess_dependencies(task.issue_number)) is None
@@ -94,7 +95,7 @@ def _filter_queued_candidates(
     return queued_candidates, dependency_rejected
 
 
-def _skip_record(task: Task, reason: str, detail: str = "") -> SkipRecord:
+def _skip_record(task: TaskMetadata, reason: str, detail: str = "") -> SkipRecord:
     return SkipRecord(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id,
@@ -103,7 +104,9 @@ def _skip_record(task: Task, reason: str, detail: str = "") -> SkipRecord:
     )
 
 
-def _dropped_tasks(before: list[Task], after: list[Task]) -> list[Task]:
+def _dropped_tasks(
+    before: list[TaskMetadata], after: list[TaskMetadata]
+) -> list[TaskMetadata]:
     """フィルタ適用の前後差分。フィルタ関数自体は純粋なまま理由を取り出す。"""
     survivors = {task.issue_number for task in after}
     return [task for task in before if task.issue_number not in survivors]
@@ -154,9 +157,9 @@ def _external_lock_skips(
 
 
 def _dependency_skips(
-    blocked_tasks: tuple[Task, ...],
-    queued_dependency_rejected: list[Task],
-    stack_eligible: list[Task],
+    blocked_tasks: tuple[TaskMetadata, ...],
+    queued_dependency_rejected: Sequence[TaskMetadata],
+    stack_eligible: Sequence[TaskMetadata],
     view: DependencyPolicyView,
 ) -> list[SkipRecord]:
     """Assessment/policyが拒否したqueued/blockedタスクの依存診断を記録する。
@@ -208,7 +211,7 @@ def _waiting_detail(assessment: DependencyAssessment) -> str | None:
 
 
 def _dependency_detail(
-    task: Task,
+    task: TaskMetadata,
     assessment: DependencyAssessment | None,
     decision: StackDecision,
 ) -> str | None:
@@ -239,16 +242,16 @@ def _dependency_detail(
 
 def _combine_candidate_sources(
     ctx: CycleContext,
-    queued_candidates: list[Task],
-    stack_eligible_tasks: list[Task],
+    queued_candidates: Sequence[TaskMetadata],
+    stack_eligible_tasks: Sequence[TaskMetadata],
     task_to_base_branch: dict[int, str],
-) -> tuple[list[Task], dict[int, str]]:
+) -> tuple[list[TaskMetadata], dict[int, str]]:
     """Prefer queued tasks on overlap and return the canonical sorted population."""
     queued_numbers = {task.issue_number for task in queued_candidates}
     candidate_numbers = queued_numbers | {
         task.issue_number for task in stack_eligible_tasks
     }
-    candidates = [
+    candidates: list[TaskMetadata] = [
         task
         for issue_number in sorted(candidate_numbers)
         if (task := ctx.task(issue_number)) is not None
@@ -265,7 +268,7 @@ def _combine_candidate_sources(
 def _determine_candidate_tasks(
     ctx: CycleContext,
     lock_result: ExternalLockScanResult,
-) -> tuple[list[Task], dict[int, str], list[SkipRecord]]:
+) -> tuple[list[TaskMetadata], dict[int, str], list[SkipRecord]]:
     """起動候補タスクを、外部ロック・actor権限・スタッキング可否・重複起動・
     強制直列化の各観点で絞り込んで確定させる。
 
@@ -320,7 +323,7 @@ def _duplicate_detail(ctx: CycleContext, issue_number: int) -> str:
 
 def _collect_selection_skips(
     ctx: CycleContext,
-    candidate_tasks: list[Task],
+    candidate_tasks: list[TaskMetadata],
     scheduling: SchedulingResult,
     skips: list[SkipRecord],
 ) -> list[SchedulingDecision]:
@@ -345,10 +348,10 @@ def _collect_selection_skips(
 
 def _filter_deviated_candidates(
     ctx: CycleContext,
-    candidates: list[Task],
+    candidates: list[TaskMetadata],
     deviation_events: list[dict],
     skips: list[SkipRecord],
-) -> list[Task]:
+) -> list[TaskMetadata]:
     undeviated = _filter_deviation_blocked_candidates(
         candidates,
         deviation_events,

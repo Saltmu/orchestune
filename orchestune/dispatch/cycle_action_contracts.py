@@ -22,9 +22,10 @@ from orchestune.dispatch.cycle_context_state import LaunchFact, RecordResult
 from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.scoring import SchedulingResult, Task
+from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree
 from orchestune.models import IssueRecord, PrRecord
+from orchestune.task_metadata import CycleTask, TaskMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,10 +62,10 @@ class CycleQueries(Protocol):
 
     `task`/`tasks`はrecord反映後の実効値、`issue_records`/`pull_requests`は
     初期Forge観測を返す。全件queryはIssue/PR番号昇順。Taskの返却型は
-    metadata consumerの移行完了まで既存`Task`のままとする（切替は#890）。
+    raw依存宣言を持たない不変な`CycleTask`として返す。
     """
 
-    def task(self, issue_number: int) -> Task | None: ...
+    def task(self, issue_number: int) -> CycleTask | None: ...
 
     def dependencies_of(self, issue_number: int) -> TaskDependencies | None: ...
 
@@ -82,11 +83,11 @@ class CycleQueries(Protocol):
 
     def launch_fact(self, issue_number: int) -> LaunchFact | None: ...
 
-    def queued_tasks(self) -> tuple[Task, ...]: ...
+    def queued_tasks(self) -> tuple[CycleTask, ...]: ...
 
-    def blocked_tasks(self) -> tuple[Task, ...]: ...
+    def blocked_tasks(self) -> tuple[CycleTask, ...]: ...
 
-    def tasks(self) -> tuple[Task, ...]: ...
+    def tasks(self) -> tuple[CycleTask, ...]: ...
 
     def issue_records(self) -> tuple[IssueRecord, ...]: ...
 
@@ -121,14 +122,16 @@ class CycleActions(Protocol):
 
     def scan_external_locks(self) -> ExternalLockScanResult: ...
 
-    def select_tasks(self, candidates: tuple[Task, ...]) -> SchedulingResult: ...
+    def select_tasks(
+        self, candidates: tuple[TaskMetadata, ...]
+    ) -> SchedulingResult: ...
 
     def launch_tasks(
         self,
-        selected: tuple[Task, ...],
+        selected: tuple[TaskMetadata, ...],
         bases: tuple[StackBase, ...],
-        candidates: tuple[Task, ...],
-    ) -> tuple[Task, ...]: ...
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]: ...
 
     def execute_repair(self, command: RepairCommand) -> RepairResult: ...
 

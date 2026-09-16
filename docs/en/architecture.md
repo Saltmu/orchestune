@@ -158,8 +158,12 @@ Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration
 
 ### 3.4 CycleContext observation ownership and recording successful actions
 
-`CycleContext` privately owns frozen Task, dependency-diagnostic, Issue, PR, and
-launch observations. Consumers read them only through semantic query methods;
+`CycleContext` privately owns raw `Task` observations (including dependency
+declarations), dependency diagnostics, Issues, PRs, and launch observations.
+Its task queries expose only frozen `CycleTask` metadata values. DAG consumers
+receive explicit derived `SubTask` inputs through `dag_inputs`, so scoring and
+conflict policy cannot read raw dependency declarations. Consumers otherwise read
+state only through semantic query methods;
 the former mutable tasks/dependencies/CI/branch/RunState attributes are not exposed.
 Labels recorded by `record_*` remain separate deltas that queries prefer over
 observations. One cycle-owned action adapter is bound exactly once, and all seven

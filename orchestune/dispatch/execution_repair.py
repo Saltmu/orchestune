@@ -52,12 +52,12 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 class RepairCommandDomain(StrEnum):
@@ -191,7 +191,7 @@ def _repository_id() -> str:
     return os.environ.get("GITHUB_REPOSITORY") or "orchestune-repository"
 
 
-def _task_issue(task: Task) -> IssueRecord:
+def _task_issue(task: TaskMetadata) -> IssueRecord:
     parent: dict[str, int | str] | None = None
     if task.parent_number is not None:
         parent = {"number": task.parent_number}
@@ -208,7 +208,7 @@ def _task_issue(task: Task) -> IssueRecord:
     )
 
 
-def _task_lifecycle(task: Task) -> TaskLifecycle:
+def _task_lifecycle(task: TaskMetadata) -> TaskLifecycle:
     if StatusLabel.DONE in task.status_labels:
         return TaskLifecycle.DONE
     if StatusLabel.NOT_NEEDED in task.status_labels:
@@ -224,7 +224,9 @@ def _task_lifecycle(task: Task) -> TaskLifecycle:
     return TaskLifecycle.OPEN
 
 
-def _desired_tasks(tasks_by_issue: Mapping[int, Task]) -> tuple[DesiredTaskInput, ...]:
+def _desired_tasks(
+    tasks_by_issue: Mapping[int, TaskMetadata],
+) -> tuple[DesiredTaskInput, ...]:
     return tuple(
         DesiredTaskInput(
             task_id=f"issue-{task.issue_number}",
@@ -236,7 +238,7 @@ def _desired_tasks(tasks_by_issue: Mapping[int, Task]) -> tuple[DesiredTaskInput
     )
 
 
-def _active_task_ids(tasks_by_issue: Mapping[int, Task]) -> tuple[str, ...]:
+def _active_task_ids(tasks_by_issue: Mapping[int, TaskMetadata]) -> tuple[str, ...]:
     return tuple(
         f"issue-{task.issue_number}"
         for task in sorted(tasks_by_issue.values(), key=lambda item: item.issue_number)
@@ -393,7 +395,7 @@ def revalidate_reclaim_preconditions(
 
 def collect_execution_observed_state(
     run_state: RunState,
-    tasks_by_issue: Mapping[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord],
     branches_by_issue: Mapping[int, str] | None,
@@ -423,7 +425,7 @@ def collect_execution_observed_state(
 
 
 def derive_execution_desired_state(
-    tasks_by_issue: Mapping[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
     repository_id: str,
     observed_at: datetime,

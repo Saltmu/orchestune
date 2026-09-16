@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from statistics import median
 
 from orchestune.dispatch.state import CompletedWorktree, RunState
-from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata
 
 # 履歴が全く無いときの推定所要時間（30分）。bottom levelは相対比較にしか使わない
 # ため、全タスクが同じ既定値になる状況では順位に影響しない。
@@ -56,7 +56,7 @@ class CostModel:
     fleet_duration: float | None = None
     fleet_tokens: int | None = None
 
-    def estimate(self, task: Task) -> CostEstimate:
+    def estimate(self, task: TaskMetadata) -> CostEstimate:
         duration = self.durations.get(task.issue_number)
         tokens = self.tokens.get(task.issue_number)
         return CostEstimate(

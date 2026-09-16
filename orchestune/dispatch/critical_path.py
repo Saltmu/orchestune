@@ -41,6 +41,7 @@ from orchestune.dag.models import SubTask
 from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 # 推定所要時間が渡されなかったノードの既定値。1.0にすることで、履歴が無い
 # （＝全ノードが既定値になる）状況ではbottom levelがそのまま「残りチェーン長」
@@ -55,7 +56,7 @@ MAX_TRANSITIVE_CLOSURE_NODES = 512
 _FINISHED_STATUS_LABELS = frozenset({StatusLabel.DONE, StatusLabel.NOT_NEEDED})
 
 
-def pending_tasks(tasks: Iterable[Task]) -> list[Task]:
+def pending_tasks(tasks: Iterable[TaskMetadata]) -> list[TaskMetadata]:
     """rank計算の対象となる「まだ残っている」タスクだけを入力順に返す。"""
     return [
         task
@@ -207,7 +208,7 @@ def _downstream_counts(
 
 
 def compute_precedence_ranks(
-    tasks: Iterable[Task] = (),
+    tasks: Iterable[TaskMetadata] = (),
     durations: Mapping[str, float] | None = None,
     *,
     derived_inputs: tuple[SubTask, ...] | None = None,
@@ -225,8 +226,8 @@ def compute_precedence_ranks(
     if derived_inputs is not None:
         node_ids, successors = _successor_map_from_subtasks(derived_inputs)
     else:
-        task_list = list(tasks)
-        node_ids, successors = _successor_map(task_list)
+        legacy_tasks = require_raw_tasks(tasks, operation="compute_precedence_ranks")
+        node_ids, successors = _successor_map(legacy_tasks)
     order, has_cycle = _topological_order(node_ids, successors)
     exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES and not has_cycle
     return PrecedenceRanks(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
@@ -49,16 +49,16 @@ from orchestune.dispatch.gc.zombies import (
     _reclaim_candidate_from_command,
     execute_reclaim_repair_command,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 @dataclass(frozen=True, slots=True)
 class _GcReclaimAdapter:
     run_state: RunState
-    tasks_by_issue: dict[int, Task]
+    tasks_by_issue: Mapping[int, TaskMetadata]
     config: DispatcherConfig
     open_prs: tuple[PrRecord, ...]
     now: float | None
@@ -111,7 +111,7 @@ def _held_worktree_paths(completion_events: Sequence[dict]) -> frozenset[str]:
 def _planned_reclaims(
     commands: Sequence[RepairCommand],
     run_state: RunState,
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
     now: float | None,
 ) -> dict[str, ZombieOrTimeoutReclaim]:
@@ -191,7 +191,9 @@ def _stale_active_entry(
     )
 
 
-def _stale_discard_event(active: ActiveWorktree, task: Task, reason: str) -> dict:
+def _stale_discard_event(
+    active: ActiveWorktree, task: TaskMetadata, reason: str
+) -> dict:
     return {
         "issue_number": active.issue_number,
         "subtask_id": task.subtask_id,
@@ -203,7 +205,7 @@ def _stale_discard_event(active: ActiveWorktree, task: Task, reason: str) -> dic
 def _execute_stale_reclaim(
     command: RepairCommand,
     run_state: RunState,
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
     events: list[dict],
 ) -> RepairResult | None:
@@ -252,7 +254,7 @@ def _execute_stale_reclaim(
 
 def build_gc_reclaim_handler(
     run_state: RunState,
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
     completion_events: list[dict],
     open_prs: Sequence[PrRecord] | None = None,
@@ -290,7 +292,7 @@ def build_gc_reclaim_handler(
 
 def run_gc_phase(
     run_state: RunState,
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
     completion_events: list[dict],
     open_prs: Sequence[PrRecord] | None = None,

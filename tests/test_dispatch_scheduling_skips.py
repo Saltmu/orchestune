@@ -26,6 +26,7 @@ from orchestune.dispatch.summary import (
     merge_skips,
 )
 from orchestune.models import IssueRecord, Task
+from orchestune.task_metadata import CycleTask
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -397,7 +398,7 @@ class TestInProgressTasksAreNotSkipCandidates:
             ctx,
             ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={}),
         )
-        assert candidates == [task]
+        assert candidates == [CycleTask.from_task(task)]
         assert skips == []
         adapter = CycleActionAdapter(run_state, config, now=50.0)
         adapter.bind_context(ctx)
