@@ -24,6 +24,7 @@ REMOVED_CONTEXT_ATTRIBUTES = frozenset(
     }
 )
 RAW_TASK_MODULES = frozenset({"orchestune.models", "orchestune.dispatch.scoring"})
+RAW_TASK_EXPORT_MODULES = RAW_TASK_MODULES | {"orchestune"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,11 +249,12 @@ class _BoundaryVisitor(ast.NodeVisitor):
             self._record("Task", "raw-task-import", node.lineno)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        imports_task = node.module in RAW_TASK_MODULES and any(
+        source_module = _resolved_import_from(self.module, node)
+        imports_task = source_module in RAW_TASK_EXPORT_MODULES and any(
             alias.name == "Task" for alias in node.names
         )
-        imports_raw_module = node.module is not None and any(
-            f"{node.module}.{alias.name}" in RAW_TASK_MODULES for alias in node.names
+        imports_raw_module = any(
+            f"{source_module}.{alias.name}" in RAW_TASK_MODULES for alias in node.names
         )
         if imports_task or imports_raw_module:
             self._record("Task", "raw-task-import", node.lineno)
@@ -269,6 +271,19 @@ def _literal_getattr_attribute(node: ast.Call) -> str | None:
     if not isinstance(literal, ast.Constant) or not isinstance(literal.value, str):
         return None
     return literal.value
+
+
+def _resolved_import_from(current_module: str, node: ast.ImportFrom) -> str:
+    if node.level == 0:
+        return node.module or ""
+    package = current_module.split(".")[:-1]
+    parent_hops = node.level - 1
+    if parent_hops > len(package):
+        return ""
+    base = package[: len(package) - parent_hops] if parent_hops else package
+    if node.module:
+        base.extend(node.module.split("."))
+    return ".".join(base)
 
 
 def boundary_violations(
