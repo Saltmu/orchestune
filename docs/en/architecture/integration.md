@@ -11,22 +11,31 @@ When multiple agents complete their tasks, downstream tasks must integrate those
 ```mermaid
 sequenceDiagram
     participant AG as Agent (Subtask B)
-    participant DP as Orchestune Integrator
+    participant IG as Orchestune Integrator
+    participant DP as Orchestune Dispatcher
+    participant CB as GitHub (child branches B / C)
     participant PB as GitHub (parent/issue-{N})
     participant GH as GitHub (main)
+    participant HU as Human
 
-    Note over DP: Detect completed Subtask B (status:done)
-    DP->>PB: Create temporary integration merge + run CI
+    AG->>CB: Push Subtask B's branch and open its PR
+    Note over DP: B's PR has passed CI and is still unmerged (CI_PASSED_UNMERGED)
+    DP->>CB: Auto-rebase downstream Subtask C onto B's branch (stack)
+    Note over IG: Detect completed Subtask B (status:done)
+    IG->>PB: Create temporary integration branch off parent/issue-{N}
+    IG->>IG: Run CI verification
     alt CI Passes
-        DP->>PB: Auto-merge integration PR into parent/issue-{N}
-        DP->>GH: Auto-close Subtask B's Issue ("completed")
+        IG->>PB: Auto-merge integration PR into parent/issue-{N}
+        IG->>GH: Auto-close Subtask B's Issue ("completed")
+        Note over DP: Once merged, B becomes COMPLETED and the stack target disappears,<br/>so C is no longer auto-rebased (never onto parent/issue-{N})
     else CI Fails
-        DP->>PB: Reset merge & report CI logs to Subtask B's Issue
+        IG->>PB: Reset temp branch & report CI logs to Subtask B's Issue
     end
-    Note over DP: Once every child Issue under #N is closed
-    DP->>GH: Open final PR: parent/issue-{N} -> main
-    Note over GH: Human reviews and merges (the only merge gate)
-    DP->>GH: Detect the merge, auto-close parent Issue #N ("completed")
+    Note over IG: Once every child Issue under #N is closed
+    IG->>GH: Open final PR: parent/issue-{N} -> main
+    HU->>GH: Review & merge PR into main (acceptance gate, the only human click)
+    Note over IG: Detect the final PR merge
+    IG->>GH: Auto-close parent Issue #N ("completed")
 ```
 
 ---
@@ -36,9 +45,11 @@ sequenceDiagram
 1. **Child branches off the parent branch**: when the dispatcher is run with `--parent-issue <N>`, the parent Issue gets its own long-lived branch (`parent/issue-{N}`, created from `main`), and every child subtask branches off it instead of off `main`.
 2. **Pre-merge CI Verification**: when a child Issue reaches `status:done`, the integrator creates a temporary merge branch off `parent/issue-{N}`, merges the child's commits into it, and runs the local CI.
 3. **Automatic child merge & close**: once CI passes, the integrator merges that temporary branch's PR into `parent/issue-{N}` **without waiting for a human** and closes the child Issue (`reason: completed`). No per-child review gate exists at this tier — CI is the quality gate (see [Architecture & Design §0.2](../architecture.md#02-human-approval-points)).
-4. **Final PR, once every child is done**: when all child Issues under a parent are closed, the integrator opens a PR from `parent/issue-{N}` to `main`. This PR is never auto-merged.
-5. **Acceptance merge & parent close**: a human reviews and merges that final PR. Once merged, the integrator detects it and closes the parent Issue automatically.
-6. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR — it never blocks or reverses the automatic child merge, and Python does not track its result either.
+4. **Auto-rebase (the dispatcher's job, on a separate track from this pipeline)**: this phase is not part of the integrator's merge sequence, and a merge into `parent/issue-{N}` is not what triggers it. On every cycle, for each active worktree whose process is still alive, the dispatcher asks the [shared stack-target policy](#dependency-target-fallback) for a target; only when that policy returns **the branch of a single dependency whose PR has passed CI and is still unmerged** does `orchestune/dispatch/rebase.py` `git rebase` the downstream in-flight branch onto that target (it never merges instead). When no target comes back — the dependency has not passed CI yet, several CI-passed unmerged dependencies exist, the dependency's own dependencies are not all complete, its branch name is unknown, or the dependency is already merged and therefore `COMPLETED` — the auto-rebase is skipped. After a rebase the dispatcher runs the local CI in that worktree and, on success, relaunches the agent with the target as its base branch; a conflict or a CI failure moves the Issue to `status:manual-merge-required` and hands it to a human.
+   Picking up a dependency's work *after* it has been merged into `parent/issue-{N}` is not this auto-rebase but **base selection at launch time** (child branches off `parent/issue-{N}`, phase 1 above). [§4's shared stack-target policy](#dependency-target-fallback) is canonical for that split.
+5. **Final PR, once every child is done**: when all child Issues under a parent are closed, the integrator opens a PR from `parent/issue-{N}` to `main`. This PR is never auto-merged.
+6. **Acceptance merge & parent close**: a human reviews and merges that final PR. Once merged, the integrator detects it and closes the parent Issue automatically.
+7. **Semantic Review**: alongside each child-level integration, an LLM reviews the combined diff to check for logical inconsistencies (e.g. interface changes not propagated to downstream modules) and leaves comments on the integration PR — it never blocks or reverses the automatic child merge, and Python does not track its result either.
    **Whether the acceptance reviewer sees those findings depends on the mode**: in flat mode the integration PR *is* the acceptance PR a human merges, so they sit on the same PR; under this two-tier model they land on the *child* integration PR and are neither copied nor linked onto the acceptance PR (parent branch → `main`). An asynchronous finding can even land after the child PR is closed, so reading them means going to each child PR by hand.
 
 ### Flat Mode (Fallback)
