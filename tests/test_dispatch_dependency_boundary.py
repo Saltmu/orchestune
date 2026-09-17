@@ -90,8 +90,10 @@ def test_package_initializer_relative_raw_task_import_is_rejected() -> None:
 def test_qualified_package_task_reexport_and_wildcards_are_rejected() -> None:
     sources = (
         "import orchestune as package\nvalue: package.Task",
+        "import orchestune as package\nvalue: package.models.Task",
         "import orchestune\nvalue: orchestune.Task",
         'import orchestune as package\nvalue = getattr(package, "Task")',
+        'import orchestune as package\nvalue = getattr(package.models, "Task")',
         "from orchestune import *",
         "from orchestune.models import *",
     )

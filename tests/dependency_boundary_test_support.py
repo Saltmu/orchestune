@@ -235,8 +235,7 @@ class _BoundaryVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if (
             node.attr == "Task"
-            and isinstance(node.value, ast.Name)
-            and node.value.id in self.raw_task_export_aliases
+            and _attribute_root_name(node.value) in self.raw_task_export_aliases
         ):
             self._record("Task", "raw-task-import", node.lineno)
         elif node.attr in RAW_DEPENDENCY_ATTRIBUTES:
@@ -249,8 +248,7 @@ class _BoundaryVisitor(ast.NodeVisitor):
         attribute = _literal_getattr_attribute(node)
         if (
             attribute == "Task"
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id in self.raw_task_export_aliases
+            and _attribute_root_name(node.args[0]) in self.raw_task_export_aliases
         ):
             self._record("Task", "raw-task-import", node.lineno)
         elif attribute is not None:
@@ -279,6 +277,12 @@ class _BoundaryVisitor(ast.NodeVisitor):
         )
         if imports_task or imports_raw_module:
             self._record("Task", "raw-task-import", node.lineno)
+
+
+def _attribute_root_name(node: ast.expr) -> str | None:
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
 
 
 def _literal_getattr_attribute(node: ast.Call) -> str | None:
