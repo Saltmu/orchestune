@@ -450,7 +450,11 @@ def _config_defaults(
     parser: argparse.ArgumentParser, config_data: dict[str, Any]
 ) -> dict[str, Any]:
     """Validate TOML values before using them as argparse defaults."""
-    actions = {action.dest: action for action in parser._actions}
+    actions = {
+        # argparse has no public API for enumerating its registered actions.
+        action.dest: action
+        for action in parser._actions  # noqa: SLF001 - argparse has no public registry
+    }
     defaults: dict[str, Any] = {}
 
     for key, value in config_data.items():
