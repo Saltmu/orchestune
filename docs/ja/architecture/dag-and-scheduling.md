@@ -176,3 +176,52 @@ graph LR
 また、収集対象は定義（`class`/`def`）と代入（`x = ...` / `x: T = ...`）のみで、**`import`による束縛は収集しません**。`try: import fast as impl except ImportError: import slow as impl`のようにimport経由でのみ定義される名前を`symbols`に書くと、実在していても未検出として注記されます。注記は中立で非ブロッキングなので実害は小さいものの、この検証の既知の限界です。
 
 **この検証はブロッキングではありません。** 未検出は「リファクタで陳腐化した」とも「このサブタスクがこれから新規に追加する」とも解釈できるため、断定せずIssue本文へ中立な注記として残し、判断は実装するエージェントと人間に委ねます——[0.1 決定論](../architecture.md#01-決定論-llmは判断共有状態の自動遷移はpython)の「LLMは判断、共有状態の自動遷移はPython」の適用例のひとつです。
+
+---
+
+<a id="dependency-three-layers"></a>
+
+## 7. 実行時依存評価の3層
+
+Dispatcherの実行時依存評価は、次の3層を混ぜずに順番に適用します。
+
+1. **Identity Resolution** (`dependency_resolution`): Issue本文の`depends_on`と
+   native `blocked_by`を依存先Issue番号へ解決します。本文の`subtask_id`は親Issueで
+   scopeし、missing、ambiguous、unknown-parentを`unresolved`診断として保持します。
+   未解決依存を「依存なし」へ変換しません。raw `Task`はこの宣言境界だけで扱い、
+   consumerへ公開するfrozen `CycleTask`にはraw依存宣言を含めません。
+2. **Lifecycle Assessment** (`dependency_assessment`): 解決済みIssueを
+   `COMPLETED > CHANGES_REQUESTED > CI_PASSED_UNMERGED > WAITING`の優先順位で
+   一度だけ分類します。`CI_PASSED_UNMERGED`は観測事実であってstack許可ではなく、
+   解決済み分類と未解決依存（unresolved dependency）の診断は別に保持します。
+3. **Use-case Policy** (`dependency_policy`): launch、rebase、base recoveryなどの
+   用途が同じAssessmentから安全なtargetを決定します。IdentityやLifecycleの意味を
+   各consumerで再実装せず、判断不能時はfail-closedにします。
+
+実効完了（effective completion）は`DONE`、`NOT_NEEDED`、同一サイクルで
+`record_completion`された確定完了、検証済み先行マージを含み、`subtask_id`の有無を
+条件にしません。開始時観測が`DONE`と`QUEUED`を同時に持つ競合は未完了ですが、
+成功確認済みの同一サイクル完了または先行マージ証拠はその競合より優先します。
+
+<a id="dependency-stack-contract"></a>
+
+### 7.1 1段だけのstack契約
+
+方向は常に **A depends on B**、すなわちAが依存元、Bが依存先です。AをBへstack
+できるのは、Aの未完了な直接依存が`CI_PASSED_UNMERGED`のBちょうど1件で、B自身の
+全依存が`COMPLETED`、かつBのcanonical branchが既知の場合だけです。AまたはBの
+Assessment欠落、どちらかの未解決診断、Bのbranch欠落、あるいはBが依存するCの
+未完了は拒否します。これはA→B→Cを任意深さで再帰的にstackして救済する契約では
+ありません。共通policyがtargetを返さない場合のconsumer別の扱いは
+[統合文書のfallback表](integration.md#dependency-target-fallback)を参照してください。
+
+<a id="dependency-ordering"></a>
+
+### 7.2 候補、Skip、selectedの決定論的順序
+
+候補母集団はqueued候補と安全なstack候補を統合し、Issue番号昇順に正規化します。
+preselectionで除外した理由を含む`SkipRecord`も
+`(issue_number, reason, detail)`順に安定化します。selectorが返す最終`selected`だけは
+スコア順位（同点はIssue番号昇順）であり、候補のIssue番号順とは別です。同じbatchで
+1件をlaunchした後に候補を再選定しないため、そのlaunchで記録された状態は次の
+dispatch cycleの選定から観測されます。

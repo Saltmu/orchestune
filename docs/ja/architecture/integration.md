@@ -69,3 +69,26 @@ sequenceDiagram
 > この制約に対する緩和策として、`orchestune dispatch`をGitHub Actions上で定期実行する場合は`concurrency`グループの設定を強く推奨します（設定例は[セットアップガイド §6](../setup.md#6-github-actions上での定期実行とcross-runner直列化)を参照）。`concurrency`グループはコード変更を伴わない予防策です。
 >
 > さらにこれとは独立に、一時ブランチのラン別分離と親ブランチ更新のcompare-and-swap化（#435）が施されています。そのため、万一この制約下で衝突が発生しても、無言のデータレースにはならず必ずpush失敗として検出できる多層防御構造になっています。
+
+---
+
+<a id="dependency-target-fallback"></a>
+
+## 4. 共通stack target policyとfallback
+
+launch、auto-rebase、base-branch-red recoveryは、いずれも
+`dependency_policy.decide_stack_target`へ同じ`DependencyAssessment` viewを渡します。
+安全なtargetがある場合だけ、その依存先のcanonical branchを使います。consumer別の
+targetなしの扱いは次の表が正本です。
+
+| 安定ID | 経路 | targetなしの意味 |
+| --- | --- | --- |
+| `dependency-fallback-launch` | launch | **no stack launch**: 依存先ブランチへstackしない。依存待ちタスクをfallback baseで起動可能にする意味ではない |
+| `dependency-fallback-rebase` | rebase | **no stack rebase**: auto-rebaseを見送る |
+| `dependency-fallback-base` | base selection | 親Issueがあれば`parent/issue-{N}`、なければ`origin/main`へfallbackする |
+
+base selectionのfallbackは、起動許可や依存充足の証明ではありません。launch候補化は
+AssessmentとUse-case Policyが別途許可する必要があります。またcanonical branch名は
+Contextが保持する意味付き識別子であって、localまたはremote Git refの実在保証では
+ありません。実際のGit操作境界で`resolve_local_or_remote_branch`等により存在を確認し、
+不明・欠落は安全側に倒します。

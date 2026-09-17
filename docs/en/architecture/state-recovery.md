@@ -52,3 +52,53 @@ The backward-compatible built-in allowlist consists of the status findings `stat
 With `--apply`, built-in boundaries may mutate and `repair` mode may also execute user-allowlisted codes. With `--no-apply`, no external or durable repair side effect is made: candidates are reported as deferred, GC events are previews, and recovery bookkeeping may update only the ephemeral in-memory preview used by that cycle. This gives the migration path `off` (established behavior) → `shadow` (inspect the additional reports) → `repair` with an empty allowlist (same mutations, explicit repair outcomes) → `repair` with a limited allowlist.
 
 Repair mode executes at most the configured number of passes (1–5). Each pass rechecks live preconditions, records an Intent before a non-atomic status transition, executes an idempotent command key at most once per cycle, and performs a fresh full observation afterward. Unknown or stale observations, ambiguous ownership, manual/non-repairable findings, and non-allowlisted findings remain report-only. A command whose typed handler is unexpectedly absent fails closed; it is never delegated through a phase-owned `SKIPPED` fallback. Boundary and final-loop reports are merged into the final cycle JSON and `events.jsonl`, which distinguish `resolved`, `unresolved`, `deferred`, `failed`, and `observation-unknown`. A failed attempt remains visible after aggregation, and a failed authoritative re-observation is `observation-unknown`, not `resolved`; task- or parent-scoped unknown facts affect only outcomes with the same scope and subject, while a repository-scoped failure conservatively affects every outcome. Every pass also includes command status and diagnostics. New observers, invariants, planners, or executors extend their Protocol boundary rather than adding callbacks to the immutable state models.
+
+---
+
+<a id="dependency-record-postconditions"></a>
+
+## 4. Cycle order and successful postconditions for record APIs
+
+Dependency-related phases run in the following order. A later phase can re-query
+the same `CycleContext` and observe the confirmed facts that an earlier phase
+reflected through `CycleContext.record_*`.
+
+```mermaid
+flowchart LR
+    A[pre-construction recovery / prior merge] --> B[active rules]
+    B --> C[GC]
+    C --> D[promotion / recovery / locks / status repair]
+    D --> E[scheduling / launch]
+    E --> F[final consistency]
+```
+
+| Operation | When it may be recorded | When it is not recorded |
+| --- | --- | --- |
+| completion (`record_completion`) | After required Forge work and persistence succeed and GC emits a `CompletionReceipt` for normal completion or a verified prior merge | Dry run, dirty hold, Forge error, token-limit escalation, or another non-completion exit |
+| launch (`record_launch`) | After the process / external execution starts and the first `RunState` save succeeds | Reservation only, unknown outcome, launch failure, or save failure |
+| transition (`record_transition`) | After live verification of the expected primary state, required `TransitionIntent` journal settlement, and an authoritative execution-state observation | `SKIPPED`, `FAILED`, verification mismatch, or unknown execution state |
+
+`RecordResult.status` is `APPLIED` for a new confirmed change, `NOOP` for an
+identical retry, and `CONFLICT` for an unknown Issue, stale premise,
+contradiction, or attempted rollback of completion. Record APIs update only
+in-memory confirmed changes; they perform no external I/O, distributed
+transaction, or automatic rollback. If the Issue-label update fails after a
+launch and its first `RunState` save, the persisted launch is retained as recovery
+evidence. Likewise, a record `CONFLICT` after an external action does not pretend
+that the external action was rolled back.
+
+<a id="dependency-fresh-validation"></a>
+
+## 5. The status-repair pre-execution validation exception
+
+Fresh status-repair pre-execution validation is an intentional exception to the
+single-`CycleContext`-port rule. Immediately before a non-atomic Forge mutation,
+`evaluate_fresh_dependencies` re-fetches the subject Issue and dependency labels,
+then evaluates preconditions with the same Identity Resolution, Lifecycle
+Assessment, and Use-case Policy as the normal path. A dependency missing from the
+fresh population or failing re-resolution never becomes an empty dependency set;
+it remains unresolved and fails closed. The check also distinguishes an initially
+observed `DONE` label from confirmed completion evidence created by a successful
+same-cycle action or verified prior merge. Only live verification and journal
+settlement bridge the result to `record_transition`; unknown execution liveness
+holds the record instead of guessing.

@@ -156,7 +156,9 @@ Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration
 
 ---
 
-### 3.4 CycleContext observation ownership and recording successful actions
+<a id="dependency-cycle-context"></a>
+
+### 3.4 CycleContext Session / Unit of Work and the single dependency-state port
 
 `CycleContext` privately owns raw `Task` observations (including dependency
 declarations), dependency diagnostics, Issues, PRs, and launch observations.
@@ -184,6 +186,20 @@ and terminal/transition rules, in that order. Verified DONE/NOT_NEEDED labels ma
 catch up with prior completion; a new update to stale nonterminal labels is rejected.
 An identical retry with no active execution returns NOOP without changing state.
 These APIs perform no external I/O; callers record only confirmed successful actions.
+`CycleContext` is therefore the Session / Unit of Work for one dispatch cycle: it
+combines initial observations, confirmed changes, and persisted `RunState` behind
+one semantic public query port. It does not replace durable GitHub or `RunState`
+data and performs no external I/O, distributed transaction, or automatic rollback.
+Previously returned `CycleTask`, `DependencyAssessment`, and view values are
+immutable; consumers re-query the context after `record_*` to observe a confirmed
+change. The dispatcher introduces neither a public `DispatchSnapshot` nor a cycle
+freeze point.
+
+The canonical dependency contracts are split across these detail documents:
+
+- [Identity / Lifecycle / Policy and the stack contract](architecture/dag-and-scheduling.md#dependency-three-layers)
+- [Successful postconditions for record APIs](architecture/state-recovery.md#dependency-record-postconditions)
+- [Shared target policy and fallback](architecture/integration.md#dependency-target-fallback)
 
 ## 4. Module Layers & Package Boundary
 
