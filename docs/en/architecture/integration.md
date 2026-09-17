@@ -19,15 +19,15 @@ sequenceDiagram
     participant HU as Human
 
     AG->>CB: Push Subtask B's branch and open its PR
-    Note over DP: B's PR has passed CI and is still unmerged (CI_PASSED_UNMERGED)
+    Note over DP: B has passed CI but is not yet effectively complete (CI_PASSED_UNMERGED)
     DP->>CB: Auto-rebase downstream Subtask C onto B's branch (stack)
     Note over IG: Detect completed Subtask B (status:done)
+    Note over DP: B counts as effectively complete (COMPLETED) from here, so the stack target<br/>disappears and C is no longer auto-rebased — independently of the merge
     IG->>PB: Create temporary integration branch off parent/issue-{N}
     IG->>IG: Run CI verification
     alt CI Passes
         IG->>PB: Auto-merge integration PR into parent/issue-{N}
         IG->>GH: Auto-close Subtask B's Issue ("completed")
-        Note over DP: Once merged, B becomes COMPLETED and the stack target disappears,<br/>so C is no longer auto-rebased (never onto parent/issue-{N})
     else CI Fails
         IG->>PB: Reset temp branch & report CI logs to Subtask B's Issue
     end
@@ -45,7 +45,7 @@ sequenceDiagram
 1. **Child branches off the parent branch**: when the dispatcher is run with `--parent-issue <N>`, the parent Issue gets its own long-lived branch (`parent/issue-{N}`, created from `main`), and every child subtask branches off it instead of off `main`.
 2. **Pre-merge CI Verification**: when a child Issue reaches `status:done`, the integrator creates a temporary merge branch off `parent/issue-{N}`, merges the child's commits into it, and runs the local CI.
 3. **Automatic child merge & close**: once CI passes, the integrator merges that temporary branch's PR into `parent/issue-{N}` **without waiting for a human** and closes the child Issue (`reason: completed`). No per-child review gate exists at this tier — CI is the quality gate (see [Architecture & Design §0.2](../architecture.md#02-human-approval-points)).
-4. **Auto-rebase (the dispatcher's job, on a separate track from this pipeline)**: this phase is not part of the integrator's merge sequence, and a merge into `parent/issue-{N}` is not what triggers it. On every cycle, for each active worktree whose process is still alive, the dispatcher asks the [shared stack-target policy](#dependency-target-fallback) for a target; only when that policy returns **the branch of a single dependency whose PR has passed CI and is still unmerged** does `orchestune/dispatch/rebase.py` `git rebase` the downstream in-flight branch onto that target (it never merges instead). When no target comes back — the dependency has not passed CI yet, several CI-passed unmerged dependencies exist, the dependency's own dependencies are not all complete, its branch name is unknown, or the dependency is already merged and therefore `COMPLETED` — the auto-rebase is skipped. After a rebase the dispatcher runs the local CI in that worktree and, on success, relaunches the agent with the target as its base branch; a conflict or a CI failure moves the Issue to `status:manual-merge-required` and hands it to a human.
+4. **Auto-rebase (the dispatcher's job, on a separate track from this pipeline)**: this phase is not part of the integrator's merge sequence, and a merge into `parent/issue-{N}` is not what triggers it. On every cycle, for each active worktree whose process is still alive, the dispatcher asks the [shared stack-target policy](#dependency-target-fallback) for a target; only when that policy returns **the branch of a single dependency that has passed CI but is not yet effectively complete** does `orchestune/dispatch/rebase.py` `git rebase` the downstream in-flight branch onto that target (it never merges instead). When no target comes back — the dependency has not passed CI yet, several CI-passed, not-yet-complete dependencies exist, the dependency's own dependencies are not all complete, its branch name is unknown, or the dependency is effectively complete and therefore `COMPLETED` — the auto-rebase is skipped. Effective completion here covers `status:done` (unless it still carries `status:queued`), `status:not-needed`, and completion confirmed within the cycle; it does not require an actual merge into `parent/issue-{N}`. So the stack target disappears the moment the child Issue reaches `status:done`, and the auto-rebase does not resume if the integration that follows is delayed or fails its CI. After a rebase the dispatcher runs the local CI in that worktree and, on success, relaunches the agent with the target as its base branch; a conflict or a CI failure moves the Issue to `status:manual-merge-required` and hands it to a human.
    Picking up a dependency's work *after* it has been merged into `parent/issue-{N}` is not this auto-rebase but **base selection at launch time** (child branches off `parent/issue-{N}`, phase 1 above). [§4's shared stack-target policy](#dependency-target-fallback) is canonical for that split.
 5. **Final PR, once every child is done**: when all child Issues under a parent are closed, the integrator opens a PR from `parent/issue-{N}` to `main`. This PR is never auto-merged.
 6. **Acceptance merge & parent close**: a human reviews and merges that final PR. Once merged, the integrator detects it and closes the parent Issue automatically.
