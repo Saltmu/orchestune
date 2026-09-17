@@ -176,3 +176,61 @@ Note, though, that **right after a refactor splits or renames files, the `footpr
 Only definitions (`class` / `def`) and assignments (`x = ...`, `x: T = ...`) are collected — **bindings introduced by `import` are not**. A name that exists only via an import, as in `try: import fast as impl except ImportError: import slow as impl`, will be reported as missing if a plan declares it in `symbols`. The note is neutral and non-blocking so the practical cost is small, but it is a known limit of this check.
 
 **This check does not block.** A symbol that isn't found may mean "the plan went stale in a refactor" or "this subtask is about to create it", so Orchestune does not decide: it leaves a neutral note in the Issue body and lets the implementing agent and the human judge — one application of [0.1 Determinism](../architecture.md#01-determinism-the-llm-judges-python-owns-the-automated-shared-state-transitions)'s "the LLM judges, Python owns the automated shared-state transitions".
+
+---
+
+<a id="dependency-three-layers"></a>
+
+## 7. Three layers of runtime dependency evaluation
+
+The dispatcher applies three runtime dependency layers in order without merging
+their responsibilities:
+
+1. **Identity Resolution** (`dependency_resolution`) resolves body `depends_on`
+   and native `blocked_by` declarations to dependency Issue numbers. Body
+   `subtask_id` values are scoped by parent Issue; missing, ambiguous, and
+   unknown-parent cases remain `unresolved` diagnostics. An unresolved dependency
+   never becomes “no dependency.” Raw `Task` declarations stay inside this identity
+   boundary, while the frozen `CycleTask` exposed to consumers contains no raw
+   dependency declarations.
+2. **Lifecycle Assessment** (`dependency_assessment`) classifies resolved Issues
+   once in the priority order
+   `COMPLETED > CHANGES_REQUESTED > CI_PASSED_UNMERGED > WAITING`.
+   `CI_PASSED_UNMERGED` is an observed fact, not stack permission. Resolved
+   classifications and unresolved dependency diagnostics remain separate.
+3. **Use-case Policy** (`dependency_policy`) lets launch, rebase, base recovery,
+   and other consumers select a safe target from the same assessment. Consumers
+   do not reimplement Identity or Lifecycle meaning, and uncertainty fails closed.
+
+Effective completion includes `DONE`, `NOT_NEEDED`, a completion confirmed by
+`record_completion` in the current cycle, and a verified prior merge. It never
+depends on whether `subtask_id` is present. An initially observed `DONE` + `QUEUED`
+primary-label conflict is incomplete, while confirmed same-cycle completion or
+verified prior-merge evidence takes precedence over that initial conflict.
+
+<a id="dependency-stack-contract"></a>
+
+### 7.1 One-level stack contract
+
+The direction is always **A depends on B**: A is the dependent and B is the
+dependency. A may stack on B only when A has exactly one unfinished direct
+dependency, that dependency B is `CI_PASSED_UNMERGED`, every dependency of B is
+`COMPLETED`, and B has a known canonical branch. A missing Assessment for A or B,
+an unresolved diagnostic at either level, a missing B branch, or an unfinished C
+on which B depends rejects the target. This is not an arbitrary-depth recursive
+stack rescue for A → B → C. See the
+[consumer fallback table](integration.md#dependency-target-fallback) for what each
+caller does when the shared policy returns no target.
+
+<a id="dependency-ordering"></a>
+
+### 7.2 Deterministic candidate, Skip, and selected ordering
+
+The candidate population combines queued candidates and safe stack candidates,
+then normalizes them in ascending Issue-number order. `SkipRecord` values,
+including preselection exclusions, are stabilized by
+`(issue_number, reason, detail)`. Only the selector's final `selected` sequence is
+in score order, with ascending Issue number as the tie-breaker; it is distinct from
+candidate order. The dispatcher does not reselect after each launch in one batch,
+so a launch recorded during that batch affects selection in the next dispatch
+cycle.

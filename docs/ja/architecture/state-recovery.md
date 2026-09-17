@@ -52,3 +52,49 @@ Supervisorはcycle開始時と終了時にauthoritativeなfull scanを実行し�
 `--apply`では組み込み境界が変更を適用でき、`repair` modeはuser allowlistのcodeも実行できます。`--no-apply`では外部または永続的な修復副作用を発生させません。候補は`deferred`として報告され、GC eventはpreviewとなり、recovery bookkeepingはそのcycleのpreviewに使う一時的なmemory上の状態だけを更新する場合があります。移行は`off`（既存動作）→`shadow`（追加reportを確認）→空allowlistの`repair`（変更内容は同じまま明示的なrepair outcomeを確認）→限定allowlistの`repair`の順で行えます。
 
 Repair modeのpass数は設定値（1～5）を超えません。各passはlive preconditionを再検証し、非atomicなstatus遷移の前にIntentを記録し、同じidempotency keyをcycle内で一度だけ実行して、その後に新しいfull observationを行います。unknown／staleな観測、曖昧なownership、manual／non-repairable finding、allowlist外のfindingはreport-onlyです。typed handlerが予期せず未接続のcommandはfail-closedとなり、phase所有の`SKIPPED` fallbackへ委譲されることはありません。境界reportと最終loop reportは最終cycle JSONおよび`events.jsonl`へ集約され、`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。失敗した試行は集約後も残り、authoritativeな再観測失敗は`resolved`ではなく`observation-unknown`になります。task／parent scopeのunknown factは同じscope／subjectのoutcomeだけに影響し、repository scopeの失敗は安全側に倒してすべてのoutcomeへ影響します。各passもcommand statusと診断を保持します。Observer、Invariant、Planner、Executorの拡張は各Protocol境界で行い、不変state modelへcallbackを追加しません。
+
+---
+
+<a id="dependency-record-postconditions"></a>
+
+## 4. サイクル順序とrecord APIの成功postcondition
+
+1サイクルの依存関連フェーズは次の順序です。矢印の後段は、前段が
+`CycleContext.record_*`へ反映した成功確認済み事実を同じContextへの再queryで
+観測できます。
+
+```mermaid
+flowchart LR
+    A[構築前 recovery / prior merge] --> B[active rules]
+    B --> C[GC]
+    C --> D[promotion / recovery / locks / status repair]
+    D --> E[scheduling / launch]
+    E --> F[final consistency]
+```
+
+| 操作 | 記録できる時点 | 記録しない場合 |
+| --- | --- | --- |
+| completion (`record_completion`) | 必要なForge処理と保存を終え、GCが通常完了または検証済み先行マージの`CompletionReceipt`を発行した後 | dry-run、dirty hold、Forge error、token上限escalationなどの非完了終了 |
+| launch (`record_launch`) | process / external executionを起動し、最初の`RunState`保存に成功した後 | 予約だけ、結果不明、起動失敗、保存失敗 |
+| transition (`record_transition`) | 期待する主状態をlive verificationし、必要な`TransitionIntent` journalを確定し、実行状態も既知になった後 | `SKIPPED`、`FAILED`、検証不一致、execution unknown |
+
+戻り値`RecordResult.status`は新しい確定差分を反映した`APPLIED`、完全同値の
+再試行である`NOOP`、未知Issue・古い前提・矛盾・完了巻戻しを拒否する`CONFLICT`
+です。record APIはメモリ内の確定済み差分だけを更新し、外部I/O、分散transaction、
+自動rollbackを行いません。起動と最初の`RunState`保存後にIssueラベル更新が失敗しても、
+保存済み起動を消さず、次サイクルが回復できる情報を保持します。外部処理が成功した
+後にrecordが`CONFLICT`となっても、外部変更を巻き戻したように見せません。
+
+<a id="dependency-fresh-validation"></a>
+
+## 5. status repairの実行直前検証例外
+
+status repairのfresh実行直前検証（pre-execution validation）は、
+`CycleContext`単一窓口原則の意図的な例外です。非atomicなForge変更の直前に
+`evaluate_fresh_dependencies`が対象Issueと依存ラベルを再取得し、通常経路と同じ
+Identity Resolution、Lifecycle Assessment、Use-case Policyでpreconditionを評価します。
+fresh母集団から依存先が欠ける場合や再解決できない場合を空依存として許可せず、
+未解決依存としてfail-closedにします。また開始時の`DONE`ラベルと、同一サイクルの
+成功処理や検証済み先行マージによる確定完了証拠を区別します。live verificationと
+journal確定後にだけ`record_transition`へ橋渡しし、executionの生死が不明なら記録を
+保留します。

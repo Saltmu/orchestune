@@ -158,7 +158,9 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 ---
 
-### 3.4 CycleContextの観測所有と成功後の記録
+<a id="dependency-cycle-context"></a>
+
+### 3.4 CycleContext Session / Unit of Workと依存状態の単一窓口
 
 `CycleContext`はraw依存宣言を含む`Task`観測・依存診断・Issue・PR・起動観測を
 privateに所有します。task queryはfrozenな`CycleTask` metadataだけを公開し、
@@ -183,6 +185,19 @@ NOOP判定より先に確認します。その後、同値再試行、expected�
 NOT_NEEDEDラベルは反映できますが、古い非終端ラベルへの新しい更新は拒否します。
 完全同値かつ実行中でない再試行は状態を変えずNOOPになります。
 これらは外部I/Oを行わず、呼出側が成功を確認してから記録するAPIです。
+つまり`CycleContext`は1 dispatch cycleのSession / Unit of Workであり、開始時の
+観測、成功確認済みの確定済み差分（confirmed changes）、永続化済み`RunState`を
+意味付きqueryへ束ねる単一の公開窓口です。ただしGitHubと`RunState`の永続データを
+置き換えず、外部I/O、分散transaction、自動rollbackも担いません。取得済みの
+`CycleTask`、`DependencyAssessment`、viewは不変であり、更新後を読むには
+`record_*`後にContextへ再queryします。Dispatcher向けの公開`DispatchSnapshot`や
+サイクル凍結点は導入しません。
+
+依存契約の正本は次の詳細文書に分割しています。
+
+- [Identity / Lifecycle / Policyとstack契約](architecture/dag-and-scheduling.md#dependency-three-layers)
+- [record APIの成功postcondition](architecture/state-recovery.md#dependency-record-postconditions)
+- [共通target policyとfallback](architecture/integration.md#dependency-target-fallback)
 
 ## 4. モジュール層構造とパッケージ境界
 
