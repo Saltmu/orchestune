@@ -51,3 +51,27 @@ If the dispatcher is run without `--parent-issue`, Orchestune falls back to the 
 > **Design assumption (#377)**: writes to the integrator's temporary integration branch (including `git push --force`) are serialized only by a same-machine file lock (`file_lock` in `orchestune/infra/process_utils.py`). That lock is a process-level lock and provides no protection across multiple CI runners/machines. The integrator assumes it always runs serially on a single runner; running it concurrently against the same `temp_branch` from multiple runners (e.g. a parallel build matrix) is not supported.
 >
 > The recommended mitigation for this constraint is a `concurrency` group when running `orchestune dispatch` on a GitHub Actions schedule (see [Setup Guide §6](../setup.md#6-scheduled-runs-on-github-actions-and-cross-runner-serialization) for an example). A `concurrency` group is a preventive measure that requires no code changes; independently of it, per-run temp branch names and a compare-and-swap on the parent branch update (#435) ensure that, even under this constraint, a collision is never a silent data race — it is always surfaced as a push failure (defense in depth).
+
+---
+
+<a id="dependency-target-fallback"></a>
+
+## 4. Shared stack-target policy and fallback
+
+Launch, auto-rebase, and base-branch-red recovery all pass the same
+`DependencyAssessment` view to `dependency_policy.decide_stack_target`. They use
+the dependency's canonical branch only when the shared policy returns a safe
+target. This table is the canonical per-consumer behavior when no target exists.
+
+| Stable ID | Path | Meaning when there is no target |
+| --- | --- | --- |
+| `dependency-fallback-launch` | launch | **no stack launch**: do not stack on a dependency branch; this does not authorize launching a dependency-waiting task from a fallback base |
+| `dependency-fallback-rebase` | rebase | **no stack rebase**: skip auto-rebase |
+| `dependency-fallback-base` | base selection | fall back to `parent/issue-{N}` when configured, otherwise `origin/main` |
+
+Base-selection fallback is not launch authorization or proof that dependencies are
+satisfied. Candidate admission still requires a separate Assessment and Use-case
+Policy decision. A canonical branch name is also a semantic identifier held by the
+context, not proof that a local or remote Git ref exists. The Git-operation boundary
+checks it with `resolve_local_or_remote_branch` or an equivalent probe and fails
+closed when the ref is absent or unknown.

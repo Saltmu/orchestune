@@ -6,13 +6,15 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from orchestune.branch_naming import branch_matches_task, build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
-from orchestune.dispatch.dependency_resolution import (
-    TaskDependencies,
-    resolve_task_dependencies,
+from orchestune.dispatch.cycle_action_contracts import CycleQueries
+from orchestune.dispatch.dependency_policy import (
+    DependencyPolicyView,
+    StackDecision,
+    decide_stack_target,
 )
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import (
@@ -24,8 +26,12 @@ from orchestune.dispatch.launch_attempts import (
     LaunchOutcomeUnknown,
     prepare_journaled_target,
 )
-from orchestune.dispatch.scoring import Task, parse_task_from_issue
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import (
+    ActiveWorktree,
+    CompletedWorktree,
+    RunState,
+    save_run_state,
+)
 from orchestune.dispatch.worktree import LaunchResult, create_worktree_and_launch
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
@@ -34,101 +40,48 @@ from orchestune.issue_parsing import (
     launch_history_in_window,
 )
 from orchestune.labels import StatusLabel
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import PrRecord
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.rules import CycleContext
     from orchestune.dispatch.targets import DispatchTarget
 
 
-def _is_task_stack_eligible(
-    task: Task,
-    dependency_resolution: dict[int, TaskDependencies],
-    done_issue_numbers: set[int],
-    ci_passed_pr_issue_numbers: set[int],
-    resolved_grand_deps: set[int],
-) -> tuple[bool, list[int]]:
-    """#799: `task.depends_on`（subtask_id文字列）を直接見るのではなく、
-    親Issueでスコープ済みに解決されたIssue番号（`dependency_resolution`）を
-    見る。未解決の依存が1件でもあれば、他の依存がどれだけ揃っていても
-    スタック不可（未解決を「依存なし」として読み飛ばしてはならない）。
-    """
-    deps = dependency_resolution.get(task.issue_number, TaskDependencies())
-    if deps.unresolved:
-        return False, []
+LaunchCommitted = Callable[[ActiveWorktree], None]
+TTask = TypeVar("TTask", bound=TaskMetadata)
 
-    # NOTE: Keep loop condition in sync with resolve_stackable_dependency_issue;
-    # enforced by test_dispatch_stackable_dependency_consistency.py (#860).
-    all_resolved_or_stackable = True
-    stackable_deps: list[int] = []
-    for dep_issue in deps.resolved:
-        if dep_issue in done_issue_numbers:
-            continue
-        elif dep_issue in ci_passed_pr_issue_numbers:
-            # 孫依存（依存元タスク自身の依存）も、分かる範囲では検証する
-            # （#799受け入れ基準）。依存元タスクの解決結果が無い場合は
-            # 従来通り検証不能として素通しする。
-            grand_deps = dependency_resolution.get(dep_issue)
-            if grand_deps is not None and (
-                grand_deps.unresolved
-                or not all(
-                    grand_dep in resolved_grand_deps
-                    for grand_dep in grand_deps.resolved
-                )
-            ):
-                all_resolved_or_stackable = False
-                break
-            stackable_deps.append(dep_issue)
-        else:
-            all_resolved_or_stackable = False
-            break
-    return all_resolved_or_stackable, stackable_deps
+
+def _is_task_stack_eligible(
+    task: TaskMetadata, view: DependencyPolicyView
+) -> StackDecision:
+    """Delegate launch eligibility and base selection to the shared policy."""
+    return decide_stack_target(task.issue_number, view)
 
 
 def _get_stack_eligible_tasks(
-    blocked_issues: list[IssueRecord],
-    tasks_by_issue: dict[int, Task],
-    done_issue_numbers: set[int],
-    ci_passed_pr_issue_numbers: set[int],
-    branch_by_issue_number: dict[int, str],
-    dependency_resolution: dict[int, TaskDependencies],
-    completed_issue_numbers: set[int] | None = None,
-) -> tuple[list[Task], dict[int, str]]:
+    tasks: Sequence[TTask], view: DependencyPolicyView
+) -> tuple[list[TTask], dict[int, str]]:
     stack_eligible_tasks = []
     task_to_base_branch = {}
-    resolved_grand_deps = done_issue_numbers | (completed_issue_numbers or set())
 
-    for issue in blocked_issues:
-        task = tasks_by_issue.get(issue.number) or parse_task_from_issue(issue)
+    for task in sorted(tasks, key=lambda candidate: candidate.issue_number):
         if not task.subtask_id:
-            continue
-        deps = dependency_resolution.get(
-            task.issue_number
-        ) or resolve_task_dependencies(task, tasks_by_issue)
-        if deps.is_empty:
             continue
         if StatusLabel.IN_PROGRESS in task.status_labels:
             continue
-
-        all_ok, stackable_deps = _is_task_stack_eligible(
-            task,
-            dependency_resolution,
-            done_issue_numbers,
-            ci_passed_pr_issue_numbers,
-            resolved_grand_deps,
-        )
-        if all_ok and len(stackable_deps) == 1:
-            stack_eligible_tasks.append(task)
-            dep_issue = stackable_deps[0]
-            task_to_base_branch[task.issue_number] = branch_by_issue_number[dep_issue]
+        decision = _is_task_stack_eligible(task, view)
+        if decision.target is None:
+            continue
+        stack_eligible_tasks.append(task)
+        task_to_base_branch[task.issue_number] = decision.target.branch
 
     return stack_eligible_tasks, task_to_base_branch
 
 
 @dataclass
-class DuplicateCandidateDecision:
-    task: Task
+class DuplicateCandidateDecision(Generic[TTask]):
+    task: TTask
     is_duplicate: bool
     existing_pr: PrRecord | None = None
 
@@ -144,11 +97,14 @@ def _is_orchestune_issue_branch(head_ref: str, issue_number: int) -> bool:
     return branch_matches_task(head_ref, issue_number)
 
 
-def _find_existing_pr_for_task(task: Task, ctx: CycleContext) -> PrRecord | None:
+def _find_existing_pr_for_task(
+    task: TaskMetadata, view: CycleQueries
+) -> PrRecord | None:
     expected_branch = build_task_branch_name(task.issue_number, task.subtask_id)
-    existing_pr = ctx.pr_by_branch.get(expected_branch)
+    prs = view.pull_requests()
+    existing_pr = next((pr for pr in prs if pr.head_ref == expected_branch), None)
     if not existing_pr:
-        for pr in ctx.prs:
+        for pr in prs:
             if (
                 task.issue_number in pr.closes_issue_numbers
                 and _is_orchestune_issue_branch(pr.head_ref, task.issue_number)
@@ -158,10 +114,12 @@ def _find_existing_pr_for_task(task: Task, ctx: CycleContext) -> PrRecord | None
 
 
 def _is_pr_duplicate_update(
-    existing_pr: PrRecord, task: Task, ctx: CycleContext
+    existing_pr: PrRecord,
+    task: TaskMetadata,
+    completed_worktrees: list[CompletedWorktree],
 ) -> bool:
     last_completed = None
-    for cw in reversed(ctx.run_state.completed_worktrees):
+    for cw in reversed(completed_worktrees):
         if cw.issue_number == task.issue_number:
             last_completed = cw
             break
@@ -189,15 +147,18 @@ def _is_pr_duplicate_update(
 
 
 def _decide_duplicate_candidates(
-    candidate_tasks: list[Task],
-    ctx: CycleContext,
-) -> list[DuplicateCandidateDecision]:
+    candidate_tasks: Sequence[TTask],
+    view: CycleQueries,
+    completed_worktrees: list[CompletedWorktree] | None = None,
+) -> list[DuplicateCandidateDecision[TTask]]:
     decisions = []
     for task in candidate_tasks:
-        existing_pr = _find_existing_pr_for_task(task, ctx)
+        existing_pr = _find_existing_pr_for_task(task, view)
         is_duplicate = False
         if existing_pr:
-            is_duplicate = _is_pr_duplicate_update(existing_pr, task, ctx)
+            is_duplicate = _is_pr_duplicate_update(
+                existing_pr, task, completed_worktrees or []
+            )
         decisions.append(
             DuplicateCandidateDecision(
                 task=task, is_duplicate=is_duplicate, existing_pr=existing_pr
@@ -207,9 +168,9 @@ def _decide_duplicate_candidates(
 
 
 def _apply_duplicate_skip(
-    decisions: list[DuplicateCandidateDecision],
-    ctx: CycleContext,
-) -> list[Task]:
+    decisions: Sequence[DuplicateCandidateDecision[TTask]],
+    config: DispatcherConfig,
+) -> list[TTask]:
     """decide層が判定した重複候補をstatus:blocked-human-reviewへ遷移させ、
     重複でないタスクのみを起動候補として返す。"""
     valid_candidate_tasks = []
@@ -221,14 +182,14 @@ def _apply_duplicate_skip(
                 f"Skipping task {task.subtask_id} (Issue #{task.issue_number}) because an open PR #{existing_pr.number} already exists on branch '{existing_pr.head_ref}' and has been updated.",
                 file=sys.stderr,
             )
-            if ctx.config.apply:
+            if config.apply:
                 apply_human_review_escalation(
                     task.issue_number,
                     task.status_labels,
                     f"重複起動防止: このサブタスクに対応するオープンなPR #{existing_pr.number} (ブランチ: `{existing_pr.head_ref}`) が既に検出され、更新されています。\n"
                     f"重複したエージェントセッションの起動を防ぐため、自動起動をスキップし、ステータスを `status:blocked-human-review` に変更しました。\n"
                     f"必要に応じて手動でPRをマージするか、再起動したい場合は既存のPRをクローズした上で再度 `status:queued` に設定してください。",
-                    forge=ctx.config.resolved_forge,
+                    forge=config.resolved_forge,
                 )
         else:
             valid_candidate_tasks.append(task)
@@ -236,21 +197,21 @@ def _apply_duplicate_skip(
 
 
 @dataclass
-class TaskLaunchPlan:
-    task: Task
+class TaskLaunchPlan(Generic[TTask]):
+    task: TTask
     branch_name: str
     base_branch_for_launch: str | None
     base_branch_for_state: str
     execution_selection: ExecutionSelection | None = None
 
 
-def _decide_yaml_error_tasks(candidate_tasks: list[Task]) -> list[Task]:
+def _decide_yaml_error_tasks(candidate_tasks: Sequence[TTask]) -> list[TTask]:
     """YAMLパースに失敗しているタスクを判定する（副作用なし）。"""
     return [task for task in candidate_tasks if task.yaml_error]
 
 
 def _apply_yaml_error_blocking(
-    yaml_error_tasks: list[Task], config: DispatcherConfig
+    yaml_error_tasks: Sequence[TaskMetadata], config: DispatcherConfig
 ) -> None:
     for task in yaml_error_tasks:
         transition_status_label(
@@ -266,10 +227,10 @@ def _apply_yaml_error_blocking(
 
 
 def _decide_task_launch_plan(
-    selected: list[Task],
+    selected: Sequence[TTask],
     task_to_base_branch: dict[int, str],
     config: DispatcherConfig,
-) -> list[TaskLaunchPlan]:
+) -> list[TaskLaunchPlan[TTask]]:
     """選出されたタスクごとに、起動時のブランチ名・ベースブランチを決定する（副作用なし）。"""
     plans = []
     for task in selected:
@@ -373,7 +334,9 @@ def _launch_reservation(
             _release_launch_reservation(now, config)
 
 
-def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None:
+def _handle_launch_failure(
+    task: TaskMetadata, launch, config: DispatcherConfig
+) -> None:
     old_labels = tuple(
         label
         for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED)
@@ -406,7 +369,7 @@ def _handle_launch_failure(task: Task, launch, config: DispatcherConfig) -> None
 
 
 def _build_active_worktree_from_launch(
-    task: Task,
+    task: TaskMetadata,
     plan: TaskLaunchPlan,
     launch,
     run_state: RunState,
@@ -442,17 +405,17 @@ def _build_active_worktree_from_launch(
 
 
 def _record_successful_launch(
-    task: Task,
+    task: TaskMetadata,
     plan: TaskLaunchPlan,
     launch,
     run_state: RunState,
     now: float,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None,
+    on_launch_committed: LaunchCommitted | None = None,
 ) -> None:
-    run_state.active_worktrees[str(task.issue_number)] = (
-        _build_active_worktree_from_launch(task, plan, launch, run_state, now)
-    )
+    active = _build_active_worktree_from_launch(task, plan, launch, run_state, now)
+    run_state.active_worktrees[str(task.issue_number)] = active
     run_state.launch_history.append(now)
     reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)
     if reclaim_record is not None and reclaim_record.pending:
@@ -466,6 +429,8 @@ def _record_successful_launch(
         launch_window_seconds=config.window_seconds,
         open_prs=open_prs,
     )
+    if on_launch_committed is not None:
+        on_launch_committed(active)
     transition_status_label(
         config.resolved_forge,
         task.issue_number,
@@ -479,7 +444,7 @@ def _record_successful_launch(
 
 
 def _try_planned_launch(
-    plan: TaskLaunchPlan, target: DispatchTarget, config: DispatcherConfig
+    plan: TaskLaunchPlan[TTask], target: DispatchTarget, config: DispatcherConfig
 ) -> LaunchResult | None:
     try:
         return create_worktree_and_launch(
@@ -500,13 +465,14 @@ def _try_planned_launch(
 
 
 def _apply_task_launches(
-    plans: list[TaskLaunchPlan],
+    plans: Sequence[TaskLaunchPlan[TTask]],
     run_state: RunState,
     now: float,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
-) -> list[Task]:
-    actually_selected = []
+    on_launch_committed: LaunchCommitted | None = None,
+) -> list[TTask]:
+    actually_selected: list[TTask] = []
     for plan in plans:
         task = plan.task
         assert config.dispatch_target is not None
@@ -533,7 +499,14 @@ def _apply_task_launches(
 
             commit_reservation()
             _record_successful_launch(
-                task, plan, launch, run_state, now, config, open_prs
+                task,
+                plan,
+                launch,
+                run_state,
+                now,
+                config,
+                open_prs,
+                on_launch_committed,
             )
             actually_selected.append(task)
 
@@ -548,24 +521,30 @@ def _apply_task_launches(
 
 
 @dataclass
-class LaunchContext:
+class LaunchContext(Generic[TTask]):
     """#476: `_launch_selected_tasks`の7引数を集約するDTO。"""
 
-    selected: list[Task]
+    selected: Sequence[TTask]
     task_to_base_branch: dict[int, str]
-    candidate_tasks: list[Task]
+    candidate_tasks: Sequence[TTask]
     run_state: RunState
     now: float
     config: DispatcherConfig
     open_prs: Sequence[PrRecord] | None = None
+    on_launch_committed: LaunchCommitted | None = None
 
 
-def _launch_selected_tasks(ctx: LaunchContext) -> list[Task]:
+def _launch_selected_tasks(ctx: LaunchContext[TTask]) -> list[TTask]:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     yaml_error_tasks = _decide_yaml_error_tasks(ctx.candidate_tasks)
     _apply_yaml_error_blocking(yaml_error_tasks, ctx.config)
 
     plans = _decide_task_launch_plan(ctx.selected, ctx.task_to_base_branch, ctx.config)
     return _apply_task_launches(
-        plans, ctx.run_state, ctx.now, ctx.config, open_prs=ctx.open_prs
+        plans,
+        ctx.run_state,
+        ctx.now,
+        ctx.config,
+        open_prs=ctx.open_prs,
+        on_launch_committed=ctx.on_launch_committed,
     )

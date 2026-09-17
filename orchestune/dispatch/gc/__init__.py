@@ -14,6 +14,7 @@ from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
@@ -47,8 +48,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
 )
-from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
@@ -60,6 +60,7 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
+from orchestune.task_metadata import TaskMetadata
 
 __all__ = [
     "CompletedWorktreeDecision",
@@ -89,7 +90,10 @@ __all__ = [
 
 
 def _rule_not_needed(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#280/#552: status:not-neededラベルまたはoutcome(not-needed)検知による即時完了処理。
 
@@ -117,21 +121,20 @@ def _rule_not_needed(
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
-    completed_subtask_id = None
     if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
-        if active_task and active_task.subtask_id:
-            completed_subtask_id = active_task.subtask_id
         if ctx.config.apply:
             del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
-        completed_subtask_id=completed_subtask_id,
         terminal=True,
     )
 
 
 def _rule_stale_entry_hold(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """Leave cached stale entries untouched until Supervisor-owned GC runs.
 
@@ -146,7 +149,7 @@ def _rule_stale_entry_hold(
     return ActiveWorktreeRuleOutcome(terminal=True)
 
 
-def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
+def _persist_run_state_best_effort(ctx: _RuleExecutionContext, what: str) -> None:
     """run_stateをその場で永続化する（失敗はサイクル終端の保存に委ねて警告のみ）。"""
     try:
         save_run_state(
@@ -159,7 +162,7 @@ def _persist_run_state_best_effort(ctx: CycleContext, what: str) -> None:
         print(f"Warning: failed to persist {what}: {e}", file=sys.stderr)
 
 
-def _update_hold_record(ctx: CycleContext, active: ActiveWorktree) -> int:
+def _update_hold_record(ctx: _RuleExecutionContext, active: ActiveWorktree) -> int:
     """dirty worktreeの保留回数を記録・永続化して返す。"""
     previous = ctx.run_state.task_reclaim_counts.get(active.issue_number)
     hold_count = (previous.count if previous else 0) + 1
@@ -173,10 +176,10 @@ def _update_hold_record(ctx: CycleContext, active: ActiveWorktree) -> int:
 
 
 def _escalate_held_dirty_worktree(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     hold_count: int,
 ) -> str:
     """保留上限を超えたdirty worktreeをエスカレーションする。"""
@@ -221,7 +224,10 @@ def _escalate_held_dirty_worktree(
 
 
 def _apply_dirty_worktree_hold(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: TaskMetadata | None,
 ) -> str:
     """#212のdirty worktree保留にも`max_task_reclaims`の上限を効かせる。"""
     if not ctx.config.apply:
@@ -232,44 +238,102 @@ def _apply_dirty_worktree_hold(
     return _escalate_held_dirty_worktree(ctx, key, active, active_task, hold_count)
 
 
+# GC completion actions confirmed enough to mint a `CompletionReceipt` (#882).
+# Exact membership only: several other actions share the `completed`-prefix
+# (`completed_no_commits`, `completed_without_outcome`) without being a
+# genuine confirmed completion, and `escalated_token_limit_exceeded` is still
+# recorded to history below but must never confirm completion.
+_CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged"})
+
+
+def _completed_worktree_record(
+    completion_active: ActiveWorktree,
+    active_task: TaskMetadata | None,
+    completion_event: dict,
+) -> CompletedWorktree:
+    raw_usage = completion_event.get("usage")
+    usage_obj = Usage(**raw_usage) if raw_usage else None
+    return CompletedWorktree(
+        issue_number=completion_active.issue_number,
+        subtask_id=active_task.subtask_id if active_task else "",
+        branch=completion_active.branch,
+        started_at=completion_active.started_at,
+        completed_at=time.time(),
+        recompute_count=completion_active.recompute_count,
+        forced_serial=completion_active.forced_serial,
+        commit_sha=completion_event.get("commit_sha"),
+        base_branch=completion_active.base_branch,
+        usage=usage_obj,
+        profile=completion_active.profile,
+        model=completion_active.model,
+        reasoning_effort=completion_active.reasoning_effort,
+        selection_reason=completion_active.selection_reason,
+    )
+
+
+def _persist_and_confirm_completion(
+    ctx: _RuleExecutionContext,
+    completion_active: ActiveWorktree,
+    receipt: CompletionReceipt | None,
+) -> bool:
+    """#882: save_run_stateの成功を境界に、receiptの消費(ctx.record_completion)を
+    続ける。保存前・保存例外時はContextへ一切反映しない——保存に追いつく前の
+    完了をConsumerへ見せてしまうと、再起動でrun_state.jsonから消えるはずの完了が
+    同一サイクル中だけ他タスクの依存解決を進めてしまう。戻り値は保存が成功した
+    かどうかで、呼出側はこれに応じて`ActiveWorktreeRuleOutcome`の確認フィールド
+    自体を取り消す（Codex #898レビュー対応: `ctx.record_completion`だけでなく、
+    `completed_issue_numbers`へ伝搬する確認フィールドも保存失敗時は立てない）。
+    """
+    try:
+        save_run_state(
+            ctx.run_state,
+            ctx.config.run_state_path,
+            launch_window_seconds=ctx.config.window_seconds,
+            open_prs=ctx.prs,
+        )
+    except Exception as e:  # noqa: BLE001 - 保存失敗はrecordを止めるだけ
+        print(
+            "Warning: failed to persist the completion of issue "
+            f"#{completion_active.issue_number}: {e}",
+            file=sys.stderr,
+        )
+        return False
+    if receipt is not None:
+        # CONFLICT here means the issue fell out of `ctx.tasks_by_issue` scope
+        # (closed/reparented/filtered) by completion time — unlike
+        # `record_launch`'s CONFLICT (always a genuine bug, since a launch
+        # only ever targets a freshly selected in-scope task), there is no
+        # in-cycle lifecycle left to update, so this is an expected no-op, not
+        # an invariant violation worth raising on. NOOP (already effectively
+        # done, e.g. a concurrently confirmed prior merge) is likewise a
+        # harmless no-op.
+        ctx.record_completion(receipt.issue_number)
+    return True
+
+
 def _record_completed_worktree(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     completion_active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     completion_event: dict,
 ) -> ActiveWorktreeRuleOutcome:
     """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
     action = completion_event["action"]
-    completed_subtask_id = None
-    if action == "completed" and active_task is not None and active_task.subtask_id:
-        completed_subtask_id = active_task.subtask_id
+    receipt = (
+        CompletionReceipt(issue_number=completion_active.issue_number)
+        if action in _CONFIRMED_COMPLETION_ACTIONS
+        else None
+    )
     if ctx.config.apply:
-        raw_usage = completion_event.get("usage")
-        usage_obj = Usage(**raw_usage) if raw_usage else None
         ctx.run_state.completed_worktrees.append(
-            CompletedWorktree(
-                issue_number=completion_active.issue_number,
-                subtask_id=active_task.subtask_id if active_task else "",
-                branch=completion_active.branch,
-                started_at=completion_active.started_at,
-                completed_at=time.time(),
-                recompute_count=completion_active.recompute_count,
-                forced_serial=completion_active.forced_serial,
-                commit_sha=completion_event.get("commit_sha"),
-                base_branch=completion_active.base_branch,
-                usage=usage_obj,
-                profile=completion_active.profile,
-                model=completion_active.model,
-                reasoning_effort=completion_active.reasoning_effort,
-                selection_reason=completion_active.selection_reason,
-            )
+            _completed_worktree_record(completion_active, active_task, completion_event)
         )
         del ctx.run_state.active_worktrees[key]
+        _persist_and_confirm_completion(ctx, completion_active, receipt)
 
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
-        completed_subtask_id=completed_subtask_id,
         terminal=True,
     )
 
@@ -328,7 +392,7 @@ def _apply_stale_active_entry_discard(
 
 
 def _create_abandonment_callbacks(
-    ctx: CycleContext, key: str, active: ActiveWorktree
+    ctx: _RuleExecutionContext, key: str, active: ActiveWorktree
 ) -> tuple[Callable[[], None], Callable[[], None], Callable[[], bool]]:
     """放棄worktree処理時の永続化・解放コールバック群を生成する。"""
     released = False
@@ -362,10 +426,10 @@ def _create_abandonment_callbacks(
 
 
 def _abandoned_worktree_outcome(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome:
     release_entry, reserve_reclaim, is_released = _create_abandonment_callbacks(
         ctx, key, active
@@ -484,10 +548,10 @@ def _completion_forge_error_hold(
 
 
 def _resolve_recovered_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """run_stateに起動時刻もexternal idも無い項目を、PRから復元して解決する。"""
     try:
@@ -517,10 +581,10 @@ def _resolve_recovered_completion(
 
 
 def _resolve_cloud_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     failures: list[ForgeFailure] = []
     status = _cloud_worktree_completion_status(active, ctx.config, failures)
@@ -542,10 +606,10 @@ def _resolve_cloud_completion(
 
 
 def _resolve_local_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     if not _is_worktree_complete(active, ctx.config):
         return CompletionResolution.pending()
@@ -569,10 +633,10 @@ def _resolve_local_completion(
 
 
 def _resolve_completion(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
     if active.started_at is None and active.external_id is None:
@@ -583,10 +647,10 @@ def _resolve_completion(
 
 
 def _handle_completed_event_outcome(
-    ctx: CycleContext,
+    ctx: _RuleExecutionContext,
     key: str,
     completion_active: ActiveWorktree,
-    active_task: Task | None,
+    active_task: TaskMetadata | None,
     completion_event: dict,
 ) -> ActiveWorktreeRuleOutcome | None:
     """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
@@ -624,7 +688,10 @@ def _handle_completed_event_outcome(
 
 
 def _rule_completed(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     resolution = _resolve_completion(ctx, key, active, active_task)
     if resolution.state == "pending":

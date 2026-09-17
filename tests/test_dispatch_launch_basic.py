@@ -13,7 +13,7 @@ from orchestune.dispatch.launch import (
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import CompletedWorktree, RunState
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import PrRecord
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -38,6 +38,20 @@ def _ctx(**overrides):
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
+
+
+def _stack_view(
+    tasks_by_issue,
+    dependency_resolution,
+    ci_passed_pr_issue_numbers,
+    branch_by_issue_number,
+):
+    return _ctx(
+        tasks_by_issue=tasks_by_issue,
+        dependency_resolution=dependency_resolution,
+        ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+        branch_by_issue_number=branch_by_issue_number,
+    )
 
 
 def _task(issue_number, subtask_id=None, yaml_error=False):
@@ -841,20 +855,6 @@ class TestGetStackEligibleTasks:
         """Issue #252: _get_stack_eligible_tasks が parse_task_from_issue で raw YAML を
         再パースせず、tasks_by_issue の context 済み Task（GitHub native blocked_by が反映されたもの）
         を優先して採用することを検証する。"""
-        raw_body = """```yaml
-subtask_id: task-2
-depends_on:
-  - yaml-dep
-```"""
-        issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body=raw_body,
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-            blocked_by=(1,),
-        )
-
         task1 = _task(1, subtask_id="gh-native-dep")
         task2 = Task(
             issue_number=2,
@@ -877,12 +877,13 @@ depends_on:
         dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
-            blocked_issues=[issue2],
-            tasks_by_issue=tasks_by_issue,
-            done_issue_numbers=set(),
-            ci_passed_pr_issue_numbers={1},
-            branch_by_issue_number={1: "claude/issue-1-gh-native-dep"},
-            dependency_resolution=dependency_resolution,
+            [task2],
+            _stack_view(
+                tasks_by_issue,
+                dependency_resolution,
+                {1},
+                {1: "claude/issue-1-gh-native-dep"},
+            ),
         )
 
         assert eligible_tasks == [task2]
@@ -894,13 +895,6 @@ depends_on:
         # Issueがstatus:blocked/status:in-progressを同時に持つ中断状態のまま
         # 残りうる。稼働中セッションを新たなstack候補として二重に扱わないよう
         # 除外しなければならない。
-        issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body="",
-            labels=("status:blocked", "status:in-progress"),
-            created_at="2026-01-01T00:00:00Z",
-        )
         task1 = _task(1, subtask_id="dep-task")
         dual_status_task = Task(
             issue_number=2,
@@ -920,12 +914,13 @@ depends_on:
         dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, _ = _get_stack_eligible_tasks(
-            blocked_issues=[issue2],
-            tasks_by_issue=tasks_by_issue,
-            done_issue_numbers=set(),
-            ci_passed_pr_issue_numbers={1},
-            branch_by_issue_number={1: "claude/issue-1-dep-task"},
-            dependency_resolution=dependency_resolution,
+            [dual_status_task],
+            _stack_view(
+                tasks_by_issue,
+                dependency_resolution,
+                {1},
+                {1: "claude/issue-1-dep-task"},
+            ),
         )
 
         assert eligible_tasks == []
@@ -933,20 +928,6 @@ depends_on:
     def test_respects_unpassed_native_blocked_by_even_if_yaml_dep_passed(self):
         """GitHub blocked_byの依存先がCI未通過の場合、YAMLの依存先がCI通過していても
         スタッキング対象外となることを検証する。"""
-        raw_body = """```yaml
-subtask_id: task-2
-depends_on:
-  - yaml-passed-dep
-```"""
-        issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body=raw_body,
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-            blocked_by=(1,),
-        )
-
         task1 = _task(1, subtask_id="gh-unpassed-dep")
         # #799: 本文の`depends_on`（"yaml-passed-dep"）は自タスクと同じ親配下で
         # 解決される必要があるため、その依存先タスクも用意する。
@@ -982,15 +963,13 @@ depends_on:
         dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
-            blocked_issues=[issue2],
-            tasks_by_issue=tasks_by_issue,
-            done_issue_numbers=set(),
-            ci_passed_pr_issue_numbers={3},
-            branch_by_issue_number={
-                3: "claude/issue-0-yaml",
-                1: "claude/issue-1-gh",
-            },
-            dependency_resolution=dependency_resolution,
+            [task2],
+            _stack_view(
+                tasks_by_issue,
+                dependency_resolution,
+                {3},
+                {3: "claude/issue-0-yaml", 1: "claude/issue-1-gh"},
+            ),
         )
 
         assert eligible_tasks == []
@@ -1000,15 +979,6 @@ depends_on:
         """Codex Review 指摘: blocked_by に複数Issue (例: 1, 3) が含まれるが、
         一部のIssue (3) が cycle context / mapping に含まれず省略されている場合、
         既知のblocker (1) が CI 通過していても fail closed となりスタッキング対象外となることを検証する。"""
-        issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body="subtask_id: task-2",
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-            blocked_by=(1, 3),
-        )
-
         task1 = _task(1, subtask_id="dep-1")
         task2 = Task(
             issue_number=2,
@@ -1031,12 +1001,13 @@ depends_on:
         dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
-            blocked_issues=[issue2],
-            tasks_by_issue=tasks_by_issue,
-            done_issue_numbers=set(),
-            ci_passed_pr_issue_numbers={1},
-            branch_by_issue_number={1: "claude/issue-1-dep-1"},
-            dependency_resolution=dependency_resolution,
+            [task2],
+            _stack_view(
+                tasks_by_issue,
+                dependency_resolution,
+                {1},
+                {1: "claude/issue-1-dep-1"},
+            ),
         )
 
         assert eligible_tasks == []
@@ -1045,14 +1016,6 @@ depends_on:
     def test_same_subtask_id_in_different_epic_does_not_stack_across_epics(self):
         """#799: 別EPIC（別parent）が同名subtask_idを使っていても、
         スタッキング起動のbase選定が取り違わない。"""
-        issue2 = IssueRecord(
-            number=2,
-            title="Task 2",
-            body="",
-            labels=("status:blocked",),
-            created_at="2026-01-01T00:00:00Z",
-        )
-
         # Two different EPICs (parent 100 and parent 200) each have their own
         # "backend-api" subtask. Only the one under parent 100 is the real
         # dependency of task2 (also under parent 100).
@@ -1099,17 +1062,18 @@ depends_on:
         dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
         eligible_tasks, base_branches = _get_stack_eligible_tasks(
-            blocked_issues=[issue2],
-            tasks_by_issue=tasks_by_issue,
-            done_issue_numbers=set(),
-            # Both "backend-api" tasks have a CI-passed PR; if the resolver
-            # mixed them up, task2 could stack onto the wrong EPIC's branch.
-            ci_passed_pr_issue_numbers={900, 1},
-            branch_by_issue_number={
-                900: "claude/issue-900-backend-api",
-                1: "claude/issue-1-backend-api",
-            },
-            dependency_resolution=dependency_resolution,
+            [task2],
+            _stack_view(
+                tasks_by_issue,
+                dependency_resolution,
+                # Both "backend-api" tasks have a CI-passed PR; if the resolver
+                # mixed them up, task2 could stack onto the wrong EPIC's branch.
+                {900, 1},
+                {
+                    900: "claude/issue-900-backend-api",
+                    1: "claude/issue-1-backend-api",
+                },
+            ),
         )
 
         assert eligible_tasks == [task2]

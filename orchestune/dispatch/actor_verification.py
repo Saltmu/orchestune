@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from orchestune.dispatch.escalation import apply_human_review_escalation
-from orchestune.dispatch.scoring import Task
 from orchestune.forge import Forge, GitHubForge
 from orchestune.labels import StatusLabel
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
@@ -19,14 +19,14 @@ _AUTHORIZED_PERMISSIONS = frozenset({"admin", "maintain", "write", "triage"})
 
 @dataclass
 class ActorVerificationDecision:
-    task: Task
+    task: TaskMetadata
     actor: str
     permission: str
     is_authorized: bool
 
 
 def _decide_actor_verification(
-    candidate_tasks: list[Task],
+    candidate_tasks: list[TaskMetadata],
     forge: Forge | None = None,
 ) -> list[ActorVerificationDecision]:
     """`status:queued`を付与したactorのリポジトリ権限を判定する（読み取りのみ）。
@@ -62,7 +62,7 @@ def _decide_actor_verification(
 def _apply_actor_verification(
     decisions: list[ActorVerificationDecision],
     config: DispatcherConfig,
-) -> list[Task]:
+) -> list[TaskMetadata]:
     """権限不足のタスクを起動候補から除外し、`config.apply`時のみ
     `status:blocked-human-review`へエスカレーションする。"""
     authorized_tasks = []

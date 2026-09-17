@@ -16,6 +16,7 @@ from orchestune.dispatch.summary import (
     render_skipped_markdown,
     skip_record_to_dict,
 )
+from orchestune.task_metadata import task_metadata_to_dict
 
 
 def _format_post_cycle_summary(
@@ -201,11 +202,13 @@ def _report_to_dict(report: CycleReport) -> dict:
     return {
         "applied": report.applied,
         "quota_slots_available": report.quota_slots_available,
-        "selected": [dataclasses.asdict(t) for t in report.selected],
+        "selected": [task_metadata_to_dict(t) for t in report.selected],
         "lock_changes": {
-            "to_lock": [dataclasses.asdict(t) for t in report.lock_changes["to_lock"]],
+            "to_lock": [
+                task_metadata_to_dict(t) for t in report.lock_changes["to_lock"]
+            ],
             "to_unlock": [
-                dataclasses.asdict(t) for t in report.lock_changes["to_unlock"]
+                task_metadata_to_dict(t) for t in report.lock_changes["to_unlock"]
             ],
         },
         "deviation_events": report.deviation_events,

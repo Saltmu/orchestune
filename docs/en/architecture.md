@@ -156,6 +156,51 @@ Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration
 
 ---
 
+<a id="dependency-cycle-context"></a>
+
+### 3.4 CycleContext Session / Unit of Work and the single dependency-state port
+
+`CycleContext` privately owns raw `Task` observations (including dependency
+declarations), dependency diagnostics, Issues, PRs, and launch observations.
+Its task queries expose only frozen `CycleTask` metadata values. DAG consumers
+receive explicit derived `SubTask` inputs through `dag_inputs`, so scoring and
+conflict policy cannot read raw dependency declarations. Consumers otherwise read
+state only through semantic query methods;
+the former mutable tasks/dependencies/CI/branch/RunState attributes are not exposed.
+Labels recorded by `record_*` remain separate deltas that queries prefer over
+observations. One cycle-owned action adapter is bound exactly once, and all seven
+phase actions are invoked through the context without passing raw state maps or
+same-cycle completion overlays between phases.
+
+Initial launch observations and `record_launch` share handle validation and
+normalization. A usable PID is a positive integer excluding bool; an external ID
+is a nonempty string. Each unusable handle becomes None, and no definite launch
+is exposed when both are unusable. Nonnumeric and nonfinite start times also become
+None so retry identity remains stable. Effective completion rejects
+`execution_active=true` even when launch history remains. Launch recording cannot
+automatically clear human-review holds contained in conflicting primary labels.
+
+`record_transition` validates the issue, target primary status, and active-execution
+claim before considering NOOP. It then checks an identical retry, expected labels,
+and terminal/transition rules, in that order. Verified DONE/NOT_NEEDED labels may
+catch up with prior completion; a new update to stale nonterminal labels is rejected.
+An identical retry with no active execution returns NOOP without changing state.
+These APIs perform no external I/O; callers record only confirmed successful actions.
+`CycleContext` is therefore the Session / Unit of Work for one dispatch cycle: it
+combines initial observations, confirmed changes, and persisted `RunState` behind
+one semantic public query port. It does not replace durable GitHub or `RunState`
+data and performs no external I/O, distributed transaction, or automatic rollback.
+Previously returned `CycleTask`, `DependencyAssessment`, and view values are
+immutable; consumers re-query the context after `record_*` to observe a confirmed
+change. The dispatcher introduces neither a public `DispatchSnapshot` nor a cycle
+freeze point.
+
+The canonical dependency contracts are split across these detail documents:
+
+- [Identity / Lifecycle / Policy and the stack contract](architecture/dag-and-scheduling.md#dependency-three-layers)
+- [Successful postconditions for record APIs](architecture/state-recovery.md#dependency-record-postconditions)
+- [Shared target policy and fallback](architecture/integration.md#dependency-target-fallback)
+
 ## 4. Module Layers & Package Boundary
 
 `orchestune/__init__.py` declares the package's public API in `__all__`. Anything
@@ -170,10 +215,10 @@ from its own layer or from any layer below it, never from a layer above.
 | Layer | Role | Modules |
 | --- | --- | --- |
 | **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning.cli`, `replan.cli` |
-| **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.status_repair`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification` |
+| **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `dispatch.cycle`, `dispatch.cycle_actions`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification` |
 | **L1** | **Adapters**<br/>the modules that run external developer tools | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.python_env` |
-| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `branch_naming`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `validation`, `version` |
+| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `branch_naming`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
 Pure data-transfer modules (`models`, `dag.models`, `dispatch.result`) sit at
 **L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and

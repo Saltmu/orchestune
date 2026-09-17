@@ -6,7 +6,7 @@
 """
 
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rebase import RebaseContext
@@ -55,10 +55,7 @@ def _context(
         active_task=task,
         key="1",
         run_state=run_state,
-        done_issue_numbers=set(),
-        ci_passed_pr_issue_numbers=set(),
-        branch_by_issue_number={},
-        dependency_resolution={},
+        dependencies=MagicMock(),
         config=config,
     )
 

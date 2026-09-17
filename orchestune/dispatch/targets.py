@@ -41,10 +41,11 @@ from orchestune.outcome_record import (
     RESULT_NOT_NEEDED,
     parse_from_comments,
 )
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.execution_profiles import ExecutionSelection
-    from orchestune.models import PrRecord, Task
+    from orchestune.models import PrRecord
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ class DispatchTarget(ABC):
     def launch_attempt(
         self,
         attempt_id: str,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,
@@ -219,7 +220,7 @@ class DispatchTarget(ABC):
     @abstractmethod
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,
@@ -359,7 +360,9 @@ def _task_pr_completion_status(
     return "pending"
 
 
-def default_dry_run_command_builder(task: Task, worktree_path: Path) -> list[str]:
+def default_dry_run_command_builder(
+    task: TaskMetadata, worktree_path: Path
+) -> list[str]:
     return ["true"]
 
 
@@ -423,7 +426,7 @@ def _local_cli_name(command: list[str]) -> str | None:
 
 def _format_local_cmd(
     local_cmd: str,
-    task: Task,
+    task: TaskMetadata,
     branch_name: str,
     worktree_path: Path,
     model: str | None,
@@ -475,7 +478,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
     def __init__(
         self,
         command_builder: Callable[
-            [Task, Path], list[str]
+            [TaskMetadata, Path], list[str]
         ] = default_dry_run_command_builder,
         log_dir: str | Path = Path("logs"),
         local_cmd: str | None = None,
@@ -490,7 +493,7 @@ class LocalProcessDispatchTarget(DispatchTarget):
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,
@@ -647,7 +650,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self._reviewer_bot = reviewer_bot
 
     def _build_text(
-        self, task: Task, branch_name: str, base_branch: str | None = None
+        self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
         base_branch_val = _resolve_base_branch_val(base_branch)
@@ -695,7 +698,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,
@@ -901,7 +904,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self._reviewer_bot = reviewer_bot
 
     def _build_prompt(
-        self, task: Task, branch_name: str, base_branch: str | None = None
+        self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
         base_branch_val = _resolve_base_branch_val(base_branch)
@@ -921,7 +924,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,

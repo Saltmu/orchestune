@@ -19,6 +19,7 @@ from orchestune.dispatch.targets import (
     resolve_default_dispatch_target_name,
 )
 from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata
 
 
 def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):
@@ -53,7 +54,7 @@ class _IsCompleteOnlyTarget(DispatchTarget):
 
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path,
         *,
@@ -76,7 +77,7 @@ class _LegacySignatureTarget(DispatchTarget):
         self.complete = complete
 
     def launch(  # type: ignore[override]
-        self, task: Task, branch_name: str, worktree_path, *, force_push=False
+        self, task: TaskMetadata, branch_name: str, worktree_path, *, force_push=False
     ):
         return DispatchHandle(branch_name=branch_name)
 

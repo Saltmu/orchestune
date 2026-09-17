@@ -11,56 +11,244 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from orchestune.consistency.models import RepairCommand, RepairResult
+from orchestune.dag.models import SubTask
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_action_contracts import (
+    ActivePhaseResult,
+    CycleActions,
+    CycleQueries,
+    GcPhaseResult,
+    StackBase,
+)
+from orchestune.dispatch.cycle_context_state import (
+    LaunchFact,
+    RecordResult,
+    _CycleState,
+)
+from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_metadata import CycleTask, TaskMetadata
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
 
-@dataclass
 class CycleContext:
-    """1サイクル分の読み取り専用データをまとめたコンテキスト。
+    """One cycle's semantic query/record/action boundary.
 
-    decide/act関数の引数を位置引数の羅列にせず、新しい判断パターンが追加の
-    データを必要とする場合の引数伝播を、このコンテキストへの1フィールド追加に
-    閉じ込めることを目的とする（#86）。
+    The constructor still accepts the observation containers produced by
+    ``cycle_context.py`` so the ownership boundary stays explicit, but none of
+    them is retained as a public attribute.  Phases can observe state only via
+    semantic queries and perform effects only through the seven delegated
+    action ports.
+    """
 
-    #799: 依存解決に関わるフィールド（`dependency_resolution`
-    `done_issue_numbers` `ci_passed_pr_issue_numbers`
-    `changes_requested_issue_numbers` `branch_by_issue_number`）は、
-    すべてIssue番号をキー・値の同一性とする。`subtask_id`は1つの分解計画
-    （EPIC）内でしか一意性が保証されないため、`--parent-issue`を指定しない
-    複数EPIC横断のサイクルでは同名subtask_idが衝突しうる。
-    `issue_number_by_subtask_id`のみ、footprint逸脱によるConflict Graph
-    再計算通知（`dispatch.rebase.notify_recompute`等）が使う別関心事の
-    表示用マップとして維持する（依存解決には使わない）。
+    def __init__(
+        self,
+        run_state: RunState,
+        tasks_by_issue: dict[int, Task],
+        issue_number_by_subtask_id: dict[str, int],
+        dependency_resolution: dict[int, TaskDependencies],
+        done_issue_numbers: set[int],
+        ci_passed_pr_issue_numbers: set[int],
+        changes_requested_issue_numbers: set[int],
+        branch_by_issue_number: dict[int, str],
+        prs: list[PrRecord],
+        pr_by_branch: dict[str, PrRecord],
+        config: DispatcherConfig,
+        not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None,
+        issue_records_by_number: dict[int, IssueRecord] | None = None,
+        prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
+        prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
+        actions: CycleActions | None = None,
+    ) -> None:
+        # Compatibility constructor inputs that are now derivable or owned by
+        # the state/action boundaries are intentionally not retained.
+        del issue_number_by_subtask_id, done_issue_numbers, pr_by_branch
+        self.config = config
+        self.not_needed_review_dispatcher = not_needed_review_dispatcher
+        self._actions = actions
+        self._state = _CycleState.from_observations(
+            tasks_by_issue=tasks_by_issue,
+            dependency_resolution=dependency_resolution,
+            ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
+            changes_requested_issue_numbers=changes_requested_issue_numbers,
+            branch_by_issue_number=branch_by_issue_number,
+            active_worktrees=run_state.active_worktrees,
+            prior_parent_merge_completed_issue_numbers=prior_parent_merge_completed_issue_numbers,
+            prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
+            issue_records_by_number=issue_records_by_number or {},
+            prs=prs,
+        )
+
+    # ---- semantic query API (#868) ------------------------------------------
+    #
+    # 実効状態を返す。取得済みの戻り値(Task/tuple/Assessment)は後からContextが
+    # 更新されても変化しない——再問い合わせで最新状態を反映する。
+
+    def task(self, issue_number: int) -> CycleTask | None:
+        return self._state.task(issue_number)
+
+    def dependencies_of(self, issue_number: int) -> TaskDependencies | None:
+        return self._state.dependencies_of(issue_number)
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        return self._state.assess_dependencies(issue_number)
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        return self._state.is_effectively_done(issue_number)
+
+    def is_completion_confirmed(self, issue_number: int) -> bool:
+        return self._state.is_completion_confirmed(issue_number)
+
+    def has_changes_requested(self, issue_number: int) -> bool:
+        return self._state.has_changes_requested(issue_number)
+
+    def is_ci_passed(self, issue_number: int) -> bool:
+        return self._state.is_ci_passed(issue_number)
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        return self._state.canonical_branch(issue_number)
+
+    def launch_fact(self, issue_number: int) -> LaunchFact | None:
+        return self._state.launch_fact(issue_number)
+
+    def queued_tasks(self) -> tuple[CycleTask, ...]:
+        return self._state.queued_tasks()
+
+    def blocked_tasks(self) -> tuple[CycleTask, ...]:
+        return self._state.blocked_tasks()
+
+    # ---- all-task / observation queries (#881) ------------------------------
+    #
+    # `tasks`はrecord反映後の実効値、`issue_records`/`pull_requests`は初期Forge
+    # 観測。いずれもIssue/PR番号昇順で、取得済みのtupleは後から変化しない。
+
+    def tasks(self) -> tuple[CycleTask, ...]:
+        return self._state.tasks()
+
+    def issue_records(self) -> tuple[IssueRecord, ...]:
+        return self._state.issue_records()
+
+    def pull_requests(self) -> tuple[PrRecord, ...]:
+        return self._state.pull_requests()
+
+    def is_prior_merge_held(self, issue_number: int) -> bool:
+        return self._state.is_prior_merge_held(issue_number)
+
+    def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]:
+        return self._state.dag_inputs(issue_numbers)
+
+    # ---- record API (#868) --------------------------------------------------
+    #
+    # 外部I/Oを行わない。呼出側が既に成功を確認した事実だけを反映する。
+
+    def record_completion(self, issue_number: int) -> RecordResult:
+        return self._state.record_completion(issue_number)
+
+    def record_launch(self, active: ActiveWorktree) -> RecordResult:
+        return self._state.record_launch(active)
+
+    def record_transition(
+        self,
+        issue_number: int,
+        *,
+        expected_labels: tuple[str, ...],
+        verified_labels: tuple[str, ...],
+        execution_active: bool,
+    ) -> RecordResult:
+        return self._state.record_transition(
+            issue_number,
+            expected_labels=expected_labels,
+            verified_labels=verified_labels,
+            execution_active=execution_active,
+        )
+
+    # ---- action API (#873) -------------------------------------------------
+
+    def _action_port(self) -> CycleActions:
+        if self._actions is None:
+            raise ValueError("CycleContext has no bound action adapter")
+        return self._actions
+
+    def process_active_worktrees(self) -> ActivePhaseResult:
+        return self._action_port().process_active_worktrees()
+
+    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+        return self._action_port().run_gc(events)
+
+    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+        return self._action_port().reconcile_recovery()
+
+    def scan_external_locks(self):
+        return self._action_port().scan_external_locks()
+
+    def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
+        return self._action_port().select_tasks(candidates)
+
+    def launch_tasks(
+        self,
+        selected: tuple[TaskMetadata, ...],
+        bases: tuple[StackBase, ...],
+        candidates: tuple[TaskMetadata, ...],
+    ) -> tuple[TaskMetadata, ...]:
+        return self._action_port().launch_tasks(selected, bases, candidates)
+
+    def execute_repair(self, command: RepairCommand) -> RepairResult:
+        return self._action_port().execute_repair(command)
+
+
+@dataclass(frozen=True, slots=True)
+class _RuleExecutionContext:
+    """#884: private input adapter for the active-worktree Rules and GC acts.
+
+    Not a public state window (`CycleActionAdapter` never returns it, and
+    neither does anything else) -- it exists only to hand Rule
+    decisions/acts exactly the three things they need: `run_state` (acts
+    mutate this directly), `queries` (a `CycleQueries`-conforming view;
+    decisions read only through this), and `config`. `prs`,
+    `not_needed_review_dispatcher`, `issue_records_by_number`,
+    `tasks_by_issue`, and `issue_number_by_subtask_id` are narrowly-scoped
+    extras existing Rule bodies already read directly that `CycleQueries` has
+    no method for -- `not_needed_review_dispatcher` in particular is L3
+    behavior injected into L2 Rule code specifically to avoid an L2->L3
+    import, the same reason `CycleContext` already carries it as a plain
+    field rather than a method. `issue_number_by_subtask_id` is never used
+    for dependency resolution itself (per `CycleContext`'s own docstring),
+    but it is not display-only either (#884 Codex review): footprint-deviation
+    handling (`rebase.notify_recompute`) uses it to find and actually
+    transition the blocked issue to `status:blocked`/`status:blocked-recompute`,
+    not just to word a notification comment. `CycleQueries` has no equivalent
+    query, so `CycleActionAdapter` reconstructs it the same way
+    `cycle_context.py` builds it for `CycleContext` (from `view.tasks()`).
+
+    Lives in `rules.py` rather than the new L3 `cycle_actions.py` because the
+    Rule functions that take it as `ctx` (`gc/__init__.py`, `rebase.py`,
+    `escalation.py`) are all L2 and cannot import from L3; `rules.py` is the
+    one L2 module all three already import `CycleContext` from without
+    creating an import cycle (`gc/__init__.py` already imports
+    `escalation.py`, so defining this in either of those, or in `rebase.py`,
+    would cycle back).
     """
 
     run_state: RunState
-    tasks_by_issue: dict[int, Task]
-    issue_number_by_subtask_id: dict[str, int]
-    dependency_resolution: dict[int, TaskDependencies]
-    done_issue_numbers: set[int]
-    ci_passed_pr_issue_numbers: set[int]
-    changes_requested_issue_numbers: set[int]
-    branch_by_issue_number: dict[int, str]
-    prs: list[PrRecord]
-    pr_by_branch: dict[str, PrRecord]
+    queries: CycleQueries
     config: DispatcherConfig
+    prs: tuple[PrRecord, ...] = ()
     not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
     issue_records_by_number: dict[int, IssueRecord] = field(default_factory=dict)
-    # #791: verified historical merges and indeterminate evidence are both
-    # excluded from launch; only the former is a same-cycle dependency result.
-    prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset()
-    # #859: 検証済み先行マージによる同一サイクル完了。`done_issue_numbers`へ
-    # 事前合流させたものと同じ集合を、合流前の形でも保持する。完了集合を
-    # 組み立て直す消費側（`cycle._same_cycle_completions`）は`tasks_by_issue`の
-    # ラベルを見るが、`tasks_by_issue`は先行マージが`status:done`を付与する前の
-    # Issueから構築されるため、この集合が無いと同一サイクル内では観測できない。
-    prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset()
+    tasks_by_issue: dict[int, TaskMetadata] = field(default_factory=dict)
+    dag_inputs: tuple[SubTask, ...] = ()
+    issue_number_by_subtask_id: dict[str, int] = field(default_factory=dict)
+
+    def record_completion(self, issue_number: int) -> RecordResult:
+        return self.queries.record_completion(issue_number)
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        return self.queries.assess_dependencies(issue_number)
 
 
 @dataclass
@@ -75,13 +263,12 @@ class ActiveWorktreeRuleOutcome:
 
     completion_event: dict | None = None
     deviation_event: dict | None = None
-    completed_subtask_id: str | None = None
     forced_serial: bool = False
     terminal: bool = True
 
 
 Rule = Callable[
-    [CycleContext, str, ActiveWorktree, "Task | None"],
+    ["_RuleExecutionContext", str, ActiveWorktree, "TaskMetadata | None"],
     "ActiveWorktreeRuleOutcome | None",
 ]
 
@@ -91,28 +278,16 @@ class _ActiveWorktreeAggregates:
     completion_events: list[dict] = field(default_factory=list)
     deviation_events: list[dict] = field(default_factory=list)
     any_forced_serial: bool = False
-    completed_subtask_ids: set[str] = field(default_factory=set)
-    # #799: `completed_subtask_ids`は表示・後方互換用に維持しつつ、依存解決
-    # （「このサイクル内で完了したタスクを、他タスクの依存先としてどう扱うか」）
-    # にはこちらのIssue番号集合を使う。`active.issue_number`は個々のRuleが
-    # 常に1つの確定したActiveWorktreeに対して動作した結果すでに分かっている値
-    # なので、`ActiveWorktreeRuleOutcome`自体にIssue番号を持たせ直さなくても
-    # ここで衝突なく集約できる。
-    completed_issue_numbers: set[int] = field(default_factory=set)
 
 
 def _merge_active_worktree_outcome(
     aggregates: _ActiveWorktreeAggregates,
     outcome: ActiveWorktreeRuleOutcome,
-    issue_number: int,
 ) -> None:
     if outcome.completion_event is not None:
         aggregates.completion_events.append(outcome.completion_event)
     if outcome.deviation_event is not None:
         aggregates.deviation_events.append(outcome.deviation_event)
-    if outcome.completed_subtask_id is not None:
-        aggregates.completed_subtask_ids.add(outcome.completed_subtask_id)
-        aggregates.completed_issue_numbers.add(issue_number)
     if outcome.forced_serial:
         aggregates.any_forced_serial = True
 
@@ -134,17 +309,17 @@ class RuleChain:
 
     def run(
         self,
-        ctx: CycleContext,
+        ctx: _RuleExecutionContext,
         key: str,
         active: ActiveWorktree,
-        active_task: Task | None,
+        active_task: TaskMetadata | None,
         aggregates: _ActiveWorktreeAggregates,
     ) -> bool:
         for rule in self.rules:
             outcome = rule(ctx, key, active, active_task)
             if outcome is None:
                 continue
-            _merge_active_worktree_outcome(aggregates, outcome, active.issue_number)
+            _merge_active_worktree_outcome(aggregates, outcome)
             if outcome.terminal:
                 return True
         return False

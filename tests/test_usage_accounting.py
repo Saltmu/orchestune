@@ -21,12 +21,14 @@ from orchestune.dispatch.targets import (
 )
 from orchestune.models import Task, Usage
 from orchestune.outcome_record import OutcomeRecord
+from orchestune.task_metadata import TaskMetadata
+from tests.dispatch_gc_test_support import _rule_ctx
 
 
 class _DummyDispatchTarget(DispatchTarget):
     def launch(
         self,
-        task: Task,
+        task: TaskMetadata,
         branch_name: str,
         worktree_path: Path,
         *,
@@ -393,7 +395,6 @@ class TestTaskTokenLimitEscalation:
         self, tmp_path
     ):
         from orchestune.dispatch.gc import _rule_completed
-        from orchestune.dispatch.rules import CycleContext
 
         active = ActiveWorktree(
             issue_number=42,
@@ -442,7 +443,7 @@ class TestTaskTokenLimitEscalation:
         run_state = RunState(
             active_worktrees={"42": active}, launch_history=[], completed_worktrees=[]
         )
-        ctx = CycleContext(
+        ctx = _rule_ctx(
             config=config,
             run_state=run_state,
             tasks_by_issue={42: task},

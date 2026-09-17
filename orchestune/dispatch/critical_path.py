@@ -37,9 +37,11 @@ import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from orchestune.dag.models import SubTask
 from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 # 推定所要時間が渡されなかったノードの既定値。1.0にすることで、履歴が無い
 # （＝全ノードが既定値になる）状況ではbottom levelがそのまま「残りチェーン長」
@@ -54,7 +56,7 @@ MAX_TRANSITIVE_CLOSURE_NODES = 512
 _FINISHED_STATUS_LABELS = frozenset({StatusLabel.DONE, StatusLabel.NOT_NEEDED})
 
 
-def pending_tasks(tasks: Iterable[Task]) -> list[Task]:
+def pending_tasks(tasks: Iterable[TaskMetadata]) -> list[TaskMetadata]:
     """rank計算の対象となる「まだ残っている」タスクだけを入力順に返す。"""
     return [
         task
@@ -112,6 +114,26 @@ def _successor_map(tasks: list[Task]) -> tuple[list[str], dict[str, list[str]]]:
         for dependency in legacy_merged_depends_on(task, issue_to_subtask_id):
             if dependency in known and dependency != task.subtask_id:
                 successors[dependency].add(task.subtask_id)
+    return node_ids, {node: sorted(targets) for node, targets in successors.items()}
+
+
+def _successor_map_from_subtasks(
+    subtasks: tuple[SubTask, ...],
+) -> tuple[list[str], dict[str, list[str]]]:
+    """`_successor_map`のSubTask版（#888）。派生DAG入力を直接使う消費者向けに、
+    `Task`から`legacy_merged_depends_on`で再導出せず`SubTask.depends_on`を
+    そのまま辺として使う。既知ノードだけを採用し自己参照は捨てる規則は
+    `_successor_map`と同一。
+    """
+    node_ids = sorted({subtask.id for subtask in subtasks if subtask.id})
+    known = set(node_ids)
+    successors: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    for subtask in subtasks:
+        if not subtask.id:
+            continue
+        for dependency in subtask.depends_on:
+            if dependency in known and dependency != subtask.id:
+                successors[dependency].add(subtask.id)
     return node_ids, {node: sorted(targets) for node, targets in successors.items()}
 
 
@@ -186,15 +208,26 @@ def _downstream_counts(
 
 
 def compute_precedence_ranks(
-    tasks: Iterable[Task], durations: Mapping[str, float] | None = None
+    tasks: Iterable[TaskMetadata] = (),
+    durations: Mapping[str, float] | None = None,
+    *,
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> PrecedenceRanks:
     """Precedence DAGのbottom level・直接後続数・到達可能後続数を求める。
 
     `durations`はsubtask_id -> 推定所要時間（秒）。欠けているノードは
     `DEFAULT_UNIT_DURATION`として扱う。同じ入力からは常に同じ結果を返す。
+
+    `derived_inputs`（#888）を渡すと、`tasks`からの`legacy_merged_depends_on`
+    再導出をせず、その`SubTask`列を直接ノード・辺として使う。省略時（既存の
+    Task-onlyな呼び出し）の挙動はこのPRで変更しない——互換用の呼び出し経路
+    として残す。
     """
-    task_list = list(tasks)
-    node_ids, successors = _successor_map(task_list)
+    if derived_inputs is not None:
+        node_ids, successors = _successor_map_from_subtasks(derived_inputs)
+    else:
+        legacy_tasks = require_raw_tasks(tasks, operation="compute_precedence_ranks")
+        node_ids, successors = _successor_map(legacy_tasks)
     order, has_cycle = _topological_order(node_ids, successors)
     exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES and not has_cycle
     return PrecedenceRanks(

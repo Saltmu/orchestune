@@ -20,15 +20,15 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import (
-    IssuesByStatus,
     _fetch_issues,
     _group_by_status,
 )
+from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import (
     _determine_candidate_tasks,
-    _finalize_launch,
     run_scheduling_phase,
 )
 from orchestune.dispatch.rules import CycleContext
@@ -93,6 +93,7 @@ def _task(**overrides):
 
 
 def _ctx(**overrides):
+    action_now = overrides.pop("action_now", 2.0)
     defaults = dict(
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
@@ -111,7 +112,16 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
-    return CycleContext(**defaults)
+    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
+        defaults["dependency_resolution"] = resolve_all_dependencies(
+            overrides["tasks_by_issue"]
+        )
+    actions = CycleActionAdapter(
+        defaults["run_state"], defaults["config"], now=action_now
+    )
+    ctx = CycleContext(**defaults, actions=actions)
+    actions.bind_context(ctx)
+    return ctx
 
 
 def _issue(number, labels=(), state="OPEN"):
@@ -219,27 +229,10 @@ class TestConflictAwareSchedulingPhase:
             },
             config=config,
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(2, labels=("status:queued",)),
-                _issue(3, labels=("status:queued",)),
-            ],
-            locked=[],
-            in_progress=[_issue(1, labels=("status:in-progress",))],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
-
         scheduling = run_scheduling_phase(
             ctx,
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            completed_issue_numbers=set(),
-            any_forced_serial=False,
             deviation_events=[],
-            now=2.0,
-            config=config,
         )
 
         assert scheduling.quota_slots_available == 2
@@ -278,26 +271,10 @@ class TestConflictAwareSchedulingPhase:
             tasks_by_issue={task.issue_number: task for task in tasks},
             config=config,
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(task.issue_number, labels=("status:queued",)) for task in tasks
-            ],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
-
         scheduling = run_scheduling_phase(
             ctx,
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            completed_issue_numbers=set(),
-            any_forced_serial=False,
             deviation_events=[],
-            now=2.0,
-            config=config,
         )
 
         assert [task.subtask_id for task in scheduling.selected] == [
@@ -345,26 +322,10 @@ class TestConflictAwareSchedulingPhase:
             tasks_by_issue={task.issue_number: task for task in tasks},
             config=config,
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(task.issue_number, labels=("status:queued",)) for task in tasks
-            ],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
-
         scheduling = run_scheduling_phase(
             ctx,
-            issues,
             ExternalLockScanResult(to_lock=[], to_unlock=[]),
-            completed_issue_numbers=set(),
-            any_forced_serial=False,
             deviation_events=[],
-            now=2.0,
-            config=config,
         )
 
         by_subtask = {d.subtask_id: d for d in scheduling.decisions}
@@ -385,14 +346,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         task = _task(
             issue_number=1, subtask_id="task-a", status_labels=("status:queued",)
         )
-        issues = IssuesByStatus(
-            queued=[_issue(1, labels=("status:queued",))],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         ctx = _ctx(
             tasks_by_issue={1: task},
             run_state=RunState(
@@ -402,18 +355,22 @@ class TestDetermineCandidateTasksExcludesDualStatus:
                     )
                 }
             ),
+            action_now=119.0,
         )
-        lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
+        assert ctx.select_tasks((task,)).selected == []
 
-        candidate_tasks, _, _ = _determine_candidate_tasks(
-            ctx, issues, lock_result, set(), False, now=119.0
+        ctx = _ctx(
+            tasks_by_issue={1: task},
+            run_state=RunState(
+                task_reclaim_counts={
+                    1: TaskReclaimRecord(
+                        early_death_retry_count=1, early_death_retry_at=120.0
+                    )
+                }
+            ),
+            action_now=120.0,
         )
-        assert candidate_tasks == []
-
-        candidate_tasks, _, _ = _determine_candidate_tasks(
-            ctx, issues, lock_result, set(), False, now=120.0
-        )
-        assert candidate_tasks == [task]
+        assert ctx.select_tasks((task,)).selected == [task]
 
     def test_excludes_queued_candidate_that_still_has_status_done(self, fake_forge):
         dual_status_task = _task(
@@ -426,17 +383,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
             subtask_id="task-b",
             status_labels=("status:queued",),
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(1, labels=("status:done", "status:queued")),
-                _issue(2, labels=("status:queued",)),
-            ],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         ctx = _ctx(tasks_by_issue={1: dual_status_task, 2: normal_task})
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
 
@@ -446,10 +392,7 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         fake_forge.get_actor_permission.return_value = "write"
         candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx,
-            issues,
             lock_result,
-            completed_issue_numbers=set(),
-            any_forced_serial=False,
         )
 
         assert [t.issue_number for t in candidate_tasks] == [2]
@@ -473,17 +416,6 @@ class TestDetermineCandidateTasksExcludesDualStatus:
             subtask_id="task-b",
             status_labels=("status:queued",),
         )
-        issues = IssuesByStatus(
-            queued=[
-                _issue(1, labels=("status:in-progress", "status:queued")),
-                _issue(2, labels=("status:queued",)),
-            ],
-            locked=[],
-            in_progress=[],
-            blocked=[],
-            done=[],
-            not_needed=[],
-        )
         ctx = _ctx(tasks_by_issue={1: dual_status_task, 2: normal_task})
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[])
 
@@ -493,10 +425,7 @@ class TestDetermineCandidateTasksExcludesDualStatus:
         fake_forge.get_actor_permission.return_value = "write"
         candidate_tasks, _, _ = _determine_candidate_tasks(
             ctx,
-            issues,
             lock_result,
-            completed_issue_numbers=set(),
-            any_forced_serial=False,
         )
 
         assert [t.issue_number for t in candidate_tasks] == [2]
@@ -642,14 +571,14 @@ class TestFinalizeLaunch:
         ctx = _ctx(run_state=RunState(active_worktrees={}), prs=[pr], config=config)
 
         with patch(
-            "orchestune.dispatch.phase_scheduling._launch_selected_tasks",
+            "orchestune.dispatch.cycle_actions._launch_selected_tasks",
             autospec=True,
             return_value=[],
         ) as mock_launch:
-            _finalize_launch([], {}, [], ctx, 1000.0, config)
+            ctx.launch_tasks((), (), ())
 
         launch_ctx = mock_launch.call_args.args[0]
-        assert launch_ctx.open_prs == [pr]
+        assert launch_ctx.open_prs == (pr,)
 
 
 class TestRunDispatchCycle:

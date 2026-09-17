@@ -1,23 +1,33 @@
 from __future__ import annotations
 
+from typing import Protocol, TypeVar
+
 from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.models import IssueRecord
+from orchestune.task_metadata import TaskMetadata
+
+TTask = TypeVar("TTask", bound=TaskMetadata)
+
+
+class ForcedSerialDependencyView(Protocol):
+    def task(self, issue_number: int) -> TaskMetadata | None: ...
+
+    def dependencies_of(self, issue_number: int) -> TaskDependencies | None: ...
 
 
 def _candidate_conflicts_with_forced_serial_active(
-    candidate: Task,
+    candidate: TaskMetadata,
     active: ActiveWorktree,
-    active_task: Task | None,
-    dependency_resolution: dict[int, TaskDependencies],
+    active_task: TaskMetadata | None,
+    view: ForcedSerialDependencyView,
 ) -> bool:
     """#799: タスク間依存判定はsubtask_idの文字列一致ではなく、親Issueで
-    スコープ済みに解決されたIssue番号（`dependency_resolution`）で行う。
+    スコープ済みに解決されたIssue番号（`view.dependencies_of`）で行う。
     `active_task`が特定できない場合は、従来通り依存関係による判定は行わず
     footprintの重なりのみで判定する。
     """
@@ -31,26 +41,21 @@ def _candidate_conflicts_with_forced_serial_active(
     if active_task is None:
         return False
 
-    active_deps = dependency_resolution.get(
-        active_task.issue_number, EMPTY_DEPENDENCIES
-    )
+    active_deps = view.dependencies_of(active_task.issue_number) or EMPTY_DEPENDENCIES
     if candidate.issue_number in active_deps.resolved:
         return True
 
-    candidate_deps = dependency_resolution.get(
-        candidate.issue_number, EMPTY_DEPENDENCIES
-    )
+    candidate_deps = view.dependencies_of(candidate.issue_number) or EMPTY_DEPENDENCIES
     return active_task.issue_number in candidate_deps.resolved
 
 
 def _filter_candidates_for_forced_serial(
-    candidate_tasks: list[Task],
+    candidate_tasks: list[TTask],
     run_state: RunState,
-    tasks_by_issue: dict[int, Task],
-    dependency_resolution: dict[int, TaskDependencies],
-) -> list[Task]:
+    view: ForcedSerialDependencyView,
+) -> list[TTask]:
     forced_serial_actives = [
-        (active, tasks_by_issue.get(active.issue_number))
+        (active, view.task(active.issue_number))
         for active in run_state.active_worktrees.values()
         if active.forced_serial
     ]
@@ -62,7 +67,7 @@ def _filter_candidates_for_forced_serial(
         for candidate in candidate_tasks
         if not any(
             _candidate_conflicts_with_forced_serial_active(
-                candidate, active, active_task, dependency_resolution
+                candidate, active, active_task, view
             )
             for active, active_task in forced_serial_actives
         )
@@ -70,10 +75,10 @@ def _filter_candidates_for_forced_serial(
 
 
 def _filter_deviation_blocked_candidates(
-    candidate_tasks: list[Task],
+    candidate_tasks: list[TTask],
     deviation_events: list[dict],
     issue_number_by_subtask_id: dict[str, int],
-) -> list[Task]:
+) -> list[TTask]:
     """同一サイクルのfootprint逸脱でブロックされた候補を除外する。"""
     newly_blocked_recompute_issues = set()
     for event in deviation_events:

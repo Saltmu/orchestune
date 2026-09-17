@@ -216,11 +216,16 @@ independently of the lifecycle above (see "External lock" below).
     task is normally expected to have every dependency already resolved,
     it can transiently end up `status:queued` with an unresolved
     dependency — the exact anomaly
-    `QUEUED_WITH_UNRESOLVED_DEPENDENCIES` detects and repairs. Stacked launches
+    `QUEUED_WITH_UNRESOLVED_DEPENDENCIES` detects and repairs. Scheduling also
+    rechecks each queued candidate's dependency assessment and reports it as
+    dependency-waiting instead of launching when the assessment is missing or
+    unresolved. Stacked launches
     (`_get_stack_eligible_tasks` in `orchestune/dispatch/launch.py`) build
     on top of the dependency's branch, so that overlap is not an
-    "Orchestune-unmanaged conflict." This does not walk further up the
-    dependency chain (a dependency's own dependency is not excluded). A
+    "Orchestune-unmanaged conflict." The lock exemption does not walk further
+    up the dependency chain. Stack selection itself uses the shared policy to
+    assess the dependency's own dependencies and fails closed when that
+    assessment is incomplete or unavailable. A
     branch that merely looks like `issue-{N}-{subtask_id}` under a
     different prefix (e.g. one a human or another agent created) is not
     exempted, even though it has the same shape. The exemption also stops

@@ -132,7 +132,6 @@ class TestRuleChainRun:
             return ActiveWorktreeRuleOutcome(
                 completion_event={"action": "done"},
                 deviation_event={"action": "recomputed"},
-                completed_subtask_id="task-a",
                 forced_serial=True,
                 terminal=True,
             )
@@ -143,8 +142,4 @@ class TestRuleChainRun:
         )
         assert aggregates.completion_events == [{"action": "done"}]
         assert aggregates.deviation_events == [{"action": "recomputed"}]
-        assert aggregates.completed_subtask_ids == {"task-a"}
-        # #799: 集約時のissue_numberの同一性は`active.issue_number`から取る
-        # （`ActiveWorktreeRuleOutcome`自体はsubtask_idしか持たない）。
-        assert aggregates.completed_issue_numbers == {42}
         assert aggregates.any_forced_serial is True

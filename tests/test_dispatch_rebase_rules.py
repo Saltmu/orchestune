@@ -9,6 +9,10 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.dag.models import compile_extra_ignore_patterns
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    assess_dependencies,
+)
 from orchestune.dispatch.dependency_resolution import (
     REASON_MISSING,
     TaskDependencies,
@@ -25,6 +29,39 @@ from orchestune.dispatch.rebase import (
 )
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+
+
+class _PolicyView:
+    def __init__(
+        self,
+        dependency_resolution: dict[int, TaskDependencies],
+        *,
+        done: set[int] | None = None,
+        ci_passed: set[int] | None = None,
+        branches: dict[int, str] | None = None,
+    ) -> None:
+        self.dependency_resolution = dependency_resolution
+        self.done = done or set()
+        self.ci_passed = ci_passed or set()
+        self.branches = branches or {}
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        dependencies = self.dependency_resolution.get(issue_number)
+        if dependencies is None:
+            return None
+        return assess_dependencies(dependencies, self)
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        return issue_number in self.done
+
+    def has_changes_requested(self, issue_number: int) -> bool:
+        return False
+
+    def is_ci_passed(self, issue_number: int) -> bool:
+        return issue_number in self.ci_passed
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        return self.branches.get(issue_number)
 
 
 def _task(**overrides):
@@ -67,15 +104,17 @@ def _context(
     branch_by_issue_number: dict[int, str],
     dependency_resolution: dict[int, TaskDependencies] | None = None,
 ) -> RebaseContext:
+    dependencies = _PolicyView(
+        dependency_resolution or {},
+        ci_passed=ci_passed_pr_issue_numbers,
+        branches=branch_by_issue_number,
+    )
     return RebaseContext(
         active=active,
         active_task=task,
         key="1",
         run_state=run_state,
-        done_issue_numbers=set(),
-        ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
-        branch_by_issue_number=branch_by_issue_number,
-        dependency_resolution=dependency_resolution or {},
+        dependencies=dependencies,
         config=config,
     )
 
@@ -199,24 +238,29 @@ class TestDecideRebaseTarget:
     def test_no_depends_on_returns_none(self):
         task = _task(depends_on=())
         deps = {1: TaskDependencies()}
-        assert _decide_rebase_target(task, set(), set(), {}, deps) is None
+        assert _decide_rebase_target(task, _PolicyView(deps)) is None
 
     def test_returns_branch_when_exactly_one_ci_passed_dependency_exists(self):
         task = _task(depends_on=("task-x", "task-y"))
-        deps = {1: TaskDependencies(resolved=(2, 3))}
+        deps = {
+            1: TaskDependencies(resolved=(2, 3)),
+            3: TaskDependencies(),
+        }
         branch = _decide_rebase_target(
             task,
-            {2},
-            {3},
-            {3: "claude/issue-2-task-y"},
-            deps,
+            _PolicyView(
+                deps,
+                done={2},
+                ci_passed={3},
+                branches={3: "claude/issue-2-task-y"},
+            ),
         )
         assert branch == "claude/issue-2-task-y"
 
     def test_no_ci_passed_dependency_returns_none(self):
         task = _task(depends_on=("task-x",))
         deps = {1: TaskDependencies(resolved=(2,))}
-        assert _decide_rebase_target(task, set(), set(), {}, deps) is None
+        assert _decide_rebase_target(task, _PolicyView(deps)) is None
 
     def test_multiple_ci_passed_dependencies_return_none(self):
         task = _task(depends_on=("task-x", "task-y"))
@@ -224,13 +268,14 @@ class TestDecideRebaseTarget:
         assert (
             _decide_rebase_target(
                 task,
-                set(),
-                {2, 3},
-                {
-                    2: "claude/issue-2-task-x",
-                    3: "claude/issue-3-task-y",
-                },
-                deps,
+                _PolicyView(
+                    deps,
+                    ci_passed={2, 3},
+                    branches={
+                        2: "claude/issue-2-task-x",
+                        3: "claude/issue-3-task-y",
+                    },
+                ),
             )
             is None
         )
@@ -247,23 +292,29 @@ class TestDecideRebaseTarget:
         assert (
             _decide_rebase_target(
                 task,
-                set(),
-                {3},
-                {3: "claude/issue-3-task-y"},
-                deps,
+                _PolicyView(
+                    deps,
+                    ci_passed={3},
+                    branches={3: "claude/issue-3-task-y"},
+                ),
             )
             is None
         )
 
     def test_done_dependencies_are_ignored_when_exactly_one_ci_passed(self):
         task = _task(depends_on=("task-x", "task-y"))
-        deps = {1: TaskDependencies(resolved=(2, 3))}
+        deps = {
+            1: TaskDependencies(resolved=(2, 3)),
+            3: TaskDependencies(),
+        }
         branch = _decide_rebase_target(
             task,
-            {2},
-            {3},
-            {3: "claude/issue-3-task-y"},
-            deps,
+            _PolicyView(
+                deps,
+                done={2},
+                ci_passed={3},
+                branches={3: "claude/issue-3-task-y"},
+            ),
         )
         assert branch == "claude/issue-3-task-y"
 
@@ -361,7 +412,10 @@ class TestTryAutoRebase:
 
         ci_passed_pr_issue_numbers = {2}
         branch_by_issue_number = {2: "parent-branch"}
-        dependency_resolution = {1: TaskDependencies(resolved=(2,))}
+        dependency_resolution = {
+            1: TaskDependencies(resolved=(2,)),
+            2: TaskDependencies(),
+        }
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
@@ -401,7 +455,10 @@ class TestTryAutoRebase:
 
         ci_passed_pr_issue_numbers = {2}
         branch_by_issue_number = {2: "parent-branch"}
-        dependency_resolution = {1: TaskDependencies(resolved=(2,))}
+        dependency_resolution = {
+            1: TaskDependencies(resolved=(2,)),
+            2: TaskDependencies(),
+        }
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(

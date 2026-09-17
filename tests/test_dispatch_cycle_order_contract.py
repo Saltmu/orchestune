@@ -1,0 +1,394 @@
+"""Issue #866: characterize dispatch phase, ordering, and failure visibility."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from orchestune.consistency.models import (
+    ConsistencyScope,
+    RepairCommand,
+    RepairResult,
+    RepairStatus,
+)
+from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
+    ConsistencyMode,
+    ConsistencyRepairPass,
+)
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import (
+    _execute_cycle_pipeline,
+    _pipeline_state_changes,
+    _RepairCycleState,
+)
+from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult, GcPhaseResult
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
+from orchestune.dispatch.dependency_resolution import (
+    REASON_MISSING,
+    TaskDependencies,
+    UnresolvedDependency,
+    resolve_all_dependencies,
+)
+from orchestune.dispatch.launch import TaskLaunchPlan, _record_successful_launch
+from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
+from orchestune.dispatch.phase_scheduling import (
+    SchedulingPhaseResult,
+    _determine_candidate_tasks,
+    run_scheduling_phase,
+)
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import (
+    REASON_LAUNCH_FAILED,
+    REASON_SELECTED,
+    SCHEDULING_MODE_CRITICAL_PATH,
+    SchedulingDecision,
+    SchedulingResult,
+    ScoreComponents,
+    Task,
+)
+from orchestune.dispatch.state import RunState, TaskReclaimRecord
+from orchestune.dispatch.summary import merge_skips
+from orchestune.dispatch.worktree import LaunchResult
+from tests.conftest import make_task
+
+
+def _task(
+    issue_number: int,
+    *,
+    status: str = "status:queued",
+    subtask_id: str | None = None,
+) -> Task:
+    return make_task(
+        issue_number,
+        subtask_id=(subtask_id if subtask_id is not None else f"task-{issue_number}"),
+        footprint=(f"src/{issue_number}.py",),
+        status_labels=(status,),
+        parent_number=823,
+    )
+
+
+def _config(tmp_path, forge: MagicMock, **overrides) -> DispatcherConfig:
+    values = {
+        "apply": False,
+        "max_concurrent": 10,
+        "max_launches_per_window": 10,
+        "run_state_path": tmp_path / "run_state.json",
+        "events_log_path": tmp_path / "events.jsonl",
+        "worktree_root": tmp_path / "worktrees",
+        "forge": forge,
+    }
+    values.update(overrides)
+    return DispatcherConfig(**values)
+
+
+def _context(config: DispatcherConfig, tasks: list[Task], **overrides) -> CycleContext:
+    tasks_by_issue = {task.issue_number: task for task in tasks}
+    run_state = overrides.get("run_state", RunState())
+    actions = CycleActionAdapter(run_state, config, now=100.0)
+    ctx = CycleContext(
+        run_state=run_state,
+        tasks_by_issue=tasks_by_issue,
+        issue_number_by_subtask_id=overrides.get(
+            "issue_number_by_subtask_id",
+            {task.subtask_id: task.issue_number for task in tasks},
+        ),
+        dependency_resolution=overrides.get(
+            "dependency_resolution", resolve_all_dependencies(tasks_by_issue)
+        ),
+        done_issue_numbers=overrides.get("done_issue_numbers", set()),
+        ci_passed_pr_issue_numbers=overrides.get("ci_passed_pr_issue_numbers", set()),
+        changes_requested_issue_numbers=overrides.get(
+            "changes_requested_issue_numbers", set()
+        ),
+        branch_by_issue_number=overrides.get("branch_by_issue_number", {}),
+        prs=overrides.get("prs", []),
+        pr_by_branch=overrides.get("pr_by_branch", {}),
+        config=config,
+        prior_parent_merge_hold_issue_numbers=overrides.get(
+            "prior_parent_merge_hold_issue_numbers", frozenset()
+        ),
+        prior_parent_merge_completed_issue_numbers=overrides.get(
+            "prior_parent_merge_completed_issue_numbers", frozenset()
+        ),
+        actions=actions,
+    )
+    actions.bind_context(ctx)
+    return ctx
+
+
+def _empty_issues() -> IssuesByStatus:
+    return IssuesByStatus([], [], [], [], [], [])
+
+
+def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) -> None:
+    """Completion facts reach reconciliation before the cycle's sole selection pass."""
+    order: list[str] = []
+    selected = _task(20)
+    config = _config(tmp_path, fake_forge)
+    ctx = _context(
+        config,
+        [_task(5, status="status:in-progress")],
+        done_issue_numbers={7},
+        prior_parent_merge_completed_issue_numbers=frozenset({7}),
+    )
+    lock_result = ExternalLockScanResult([], [])
+    scheduling = SchedulingPhaseResult([selected], 1, [])
+
+    def process():
+        order.append("active-completion")
+        ctx.record_completion(5)
+        return ActivePhaseResult(({"issue_number": 5},), (), False)
+
+    def notify(_ctx, _config):
+        order.append("pr-link-notification")
+
+    def gc(events):
+        order.append("gc-reclaim")
+        return GcPhaseResult(tuple(events), MagicMock())
+
+    def reconcile():
+        order.append("pre-scheduling-reconciliation")
+        assert ctx.is_completion_confirmed(5)
+        assert ctx.is_completion_confirmed(7)
+        return ()
+
+    def scan():
+        return lock_result
+
+    def schedule(*args):
+        order.append("scheduling-and-launch")
+        assert args == (ctx, lock_result, [])
+        return scheduling
+
+    with (
+        patch.object(ctx, "process_active_worktrees", side_effect=process),
+        patch("orchestune.dispatch.cycle._notify_pr_links", notify),
+        patch.object(ctx, "run_gc", side_effect=gc),
+        patch.object(ctx, "reconcile_recovery", side_effect=reconcile),
+        patch.object(ctx, "scan_external_locks", side_effect=scan),
+        patch(
+            "orchestune.dispatch.cycle.run_scheduling_phase", side_effect=schedule
+        ) as mocked,
+    ):
+        report = _execute_cycle_pipeline(
+            ctx,
+            _empty_issues(),
+            RunState(),
+            config,
+            100.0,
+            _RepairCycleState(),
+            ({"issue_number": 7},),
+        )
+
+    assert order == [
+        "active-completion",
+        "pr-link-notification",
+        "gc-reclaim",
+        "pre-scheduling-reconciliation",
+        "scheduling-and-launch",
+    ]
+    assert mocked.call_count == 1
+    assert report.selected == [selected]
+    assert ctx.is_completion_confirmed(5)
+    assert ctx.is_completion_confirmed(7)
+
+
+def test_candidate_and_skip_order_contract(tmp_path, fake_forge) -> None:
+    """Population, scoring, pre-filter skips, and reported skips have distinct order."""
+    forge = fake_forge
+    forge.get_label_actor.return_value = "trusted"
+    forge.get_actor_permission.return_value = "write"
+    config = _config(tmp_path, forge)
+    candidates = [_task(30), _task(10), _task(20, status="status:blocked")]
+    dependency_resolution = {
+        10: TaskDependencies(),
+        20: TaskDependencies(resolved=(99,)),
+        30: TaskDependencies(),
+        99: TaskDependencies(),
+    }
+    ctx = _context(
+        config,
+        [*candidates, _task(99, status="status:in-progress")],
+        dependency_resolution=dependency_resolution,
+        ci_passed_pr_issue_numbers={99},
+        branch_by_issue_number={99: "claude/issue-99-task-99"},
+    )
+    lock_result = ExternalLockScanResult([], [])
+
+    population, _, skips = _determine_candidate_tasks(ctx, lock_result)
+    result = run_scheduling_phase(ctx, lock_result, [])
+
+    assert [task.issue_number for task in population] == [10, 20, 30]
+    # The selector remains free to order its selected result by score after the
+    # input population has been normalized by Issue number.
+    assert [task.issue_number for task in result.selected] == [10, 20, 30]
+    assert skips == []
+
+    held = _task(40, status="status:blocked")
+    backing_off = _task(30)
+    unresolved = _task(20, status="status:blocked")
+    skip_ctx = _context(
+        config,
+        [held, backing_off, unresolved],
+        run_state=RunState(
+            task_reclaim_counts={30: TaskReclaimRecord(early_death_retry_at=200.0)}
+        ),
+        dependency_resolution={
+            20: TaskDependencies(
+                unresolved=(UnresolvedDependency("missing", REASON_MISSING),)
+            )
+        },
+    )
+    conflict = ExternalLockConflict("branch", "external/topic")
+    _, _, phase_skips = _determine_candidate_tasks(
+        skip_ctx,
+        ExternalLockScanResult([], [], {40: (conflict,)}),
+    )
+
+    assert [record.issue_number for record in phase_skips] == [20, 30, 40, 40]
+    assert [record.issue_number for record in merge_skips(phase_skips)] == [20, 30, 40]
+
+
+def test_initial_status_labels_are_not_completion_confirmation_issue_872(
+    tmp_path, fake_forge
+) -> None:
+    """Initial DONE/NOT_NEEDED labels are observations, not confirmed evidence."""
+    not_needed = _task(10, status="status:not-needed")
+    missing_id = _task(20, status="status:done", subtask_id="")
+    config = _config(tmp_path, fake_forge)
+    ctx = _context(config, [not_needed, missing_id])
+
+    assert not ctx.is_completion_confirmed(10)
+    assert not ctx.is_completion_confirmed(20)
+
+
+def _decision(task: Task) -> SchedulingDecision:
+    return SchedulingDecision(
+        task.issue_number,
+        task.subtask_id,
+        SCHEDULING_MODE_CRITICAL_PATH,
+        1.0,
+        ScoreComponents(),
+        selected=True,
+        reason=REASON_SELECTED,
+    )
+
+
+def test_dry_run_and_launch_failure_observation_contract(tmp_path, fake_forge) -> None:
+    """Dry-run predicts selection; an apply-time launch failure rewrites only its report."""
+    task = _task(10)
+    config = _config(tmp_path, fake_forge, apply=False)
+    run_state = RunState()
+    ctx = _context(config, [task], run_state=run_state)
+
+    with patch(
+        "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
+        return_value=SchedulingResult([task], [_decision(task)]),
+    ):
+        preview = run_scheduling_phase(ctx, ExternalLockScanResult([], []), [])
+
+    assert preview.selected == [task]
+    assert preview.decisions[0].reason == REASON_SELECTED
+    assert run_state.active_worktrees == {}
+
+    config.apply = True
+    with (
+        patch(
+            "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
+            return_value=SchedulingResult([task], [_decision(task)]),
+        ),
+        patch(
+            "orchestune.dispatch.cycle_actions._launch_selected_tasks", return_value=[]
+        ),
+    ):
+        failed = run_scheduling_phase(ctx, ExternalLockScanResult([], []), [])
+
+    assert failed.selected == []
+    assert failed.decisions[0].selected is False
+    assert failed.decisions[0].reason == REASON_LAUNCH_FAILED
+    assert run_state.active_worktrees == {}
+
+
+def test_skipped_and_failed_repairs_remain_observable_in_cycle_report() -> None:
+    """SKIPPED/FAILED are diagnostics, not proof that the desired state was applied."""
+    command = RepairCommand(
+        code="test.repair",
+        scope=ConsistencyScope.TASK,
+        subject_id="10",
+        idempotency_key="test:10",
+    )
+    consistency = ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        repair_passes=(
+            ConsistencyRepairPass(
+                1,
+                (
+                    RepairResult(command, RepairStatus.SKIPPED, ("dry-run",)),
+                    RepairResult(command, RepairStatus.FAILED, ("forge failed",)),
+                ),
+            ),
+        ),
+    )
+    report = CycleReport([], 0, {}, [], [], [], False, consistency=consistency)
+
+    serialized = build_event_log_entry(report, 1.0)
+
+    results = serialized["consistency"]["repair_passes"][0]["results"]
+    assert [result["status"] for result in results] == ["skipped", "failed"]
+    assert _pipeline_state_changes(report, MagicMock(), 1.0) == ()
+
+
+@pytest.mark.parametrize("failure_surface", ["run-state", "forge-label"])
+def test_successful_launch_partial_update_contract(
+    tmp_path, fake_forge, failure_surface
+) -> None:
+    """Memory precedes RunState persistence, which precedes the Forge label update."""
+    task = _task(10)
+    plan = TaskLaunchPlan(task, "claude/issue-10-task-10", None, "origin/main")
+    launch = LaunchResult(
+        issue_number=10,
+        branch=plan.branch_name,
+        worktree_path=str(tmp_path / "worktrees" / "task-10"),
+        pid=123,
+        launched=True,
+    )
+    forge = fake_forge
+    config = _config(tmp_path, forge, apply=True)
+    run_state = RunState()
+    save_error = RuntimeError("run-state failed")
+    label_error = RuntimeError("forge label failed")
+    committed = MagicMock()
+
+    with patch("orchestune.dispatch.launch.save_run_state") as save:
+        if failure_surface == "run-state":
+            save.side_effect = save_error
+            expected = save_error
+        else:
+            forge.add_label.side_effect = label_error
+            expected = label_error
+        with pytest.raises(RuntimeError, match=str(expected)):
+            _record_successful_launch(
+                task,
+                plan,
+                launch,
+                run_state,
+                100.0,
+                config,
+                open_prs=[],
+                on_launch_committed=committed,
+            )
+
+    assert set(run_state.active_worktrees) == {"10"}
+    assert run_state.launch_history == [100.0]
+    if failure_surface == "run-state":
+        committed.assert_not_called()
+        forge.add_label.assert_not_called()
+    else:
+        save.assert_called_once()
+        committed.assert_called_once_with(run_state.active_worktrees["10"])
+        forge.add_label.assert_called_once_with(10, "status:in-progress")
+        forge.remove_label.assert_not_called()

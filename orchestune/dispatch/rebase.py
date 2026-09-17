@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,15 +17,14 @@ from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import subtasks_from_tasks
-from orchestune.dispatch.dependency_resolution import (
-    TaskDependencies,
-    resolve_stackable_dependency_issue,
+from orchestune.dispatch.dependency_policy import (
+    DependencyPolicyView,
+    decide_stack_target,
 )
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
-from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, CycleContext
-from orchestune.dispatch.scoring import Task
+from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge
@@ -32,6 +32,7 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.labels import StatusLabel
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +42,10 @@ class RebaseContext:
     """State shared by automatic rebase decision and application steps."""
 
     active: ActiveWorktree
-    active_task: Task | None
+    active_task: TaskMetadata | None
     key: str
     run_state: RunState
-    done_issue_numbers: set[int]
-    ci_passed_pr_issue_numbers: set[int]
-    branch_by_issue_number: dict[int, str]
-    dependency_resolution: dict[int, TaskDependencies]
+    dependencies: DependencyPolicyView
     config: DispatcherConfig
 
 
@@ -123,9 +121,15 @@ def notify_force_serial(
 
 
 def _build_subtasks_for_recompute(
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> dict[str, SubTask]:
-    return subtasks_from_tasks(tasks_by_issue.values())
+    if derived_inputs is not None:
+        return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
+    legacy_tasks = require_raw_tasks(
+        tasks_by_issue.values(), operation="_build_subtasks_for_recompute"
+    )
+    return subtasks_from_tasks(legacy_tasks)
 
 
 @dataclass
@@ -161,8 +165,9 @@ def _persist_recovery_counters(
 def _decide_footprint_deviation_outcome(
     active: ActiveWorktree,
     deviated: list[str],
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> FootprintDeviationDecision:
     """#192/#200: footprint逸脱への対応方針を判定する（githubへの通知・
     active/run_stateの変更は行わない）。Conflict Graph再計算自体は純粋な計算のためここに含む。
@@ -187,7 +192,7 @@ def _decide_footprint_deviation_outcome(
 
     merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
     _, conflicts = recompute_dag_for_footprint_change(
-        _build_subtasks_for_recompute(tasks_by_issue),
+        _build_subtasks_for_recompute(tasks_by_issue, derived_inputs),
         active_task.subtask_id,
         updated_footprint=merged_footprint,
         threshold=config.dag_similarity_threshold,
@@ -272,13 +277,14 @@ def _apply_footprint_deviation_outcome(
 def _handle_footprint_deviation(
     active: ActiveWorktree,
     deviated: list[str],
-    tasks_by_issue: dict[int, Task],
+    tasks_by_issue: Mapping[int, TaskMetadata],
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
+    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> dict:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     decision = _decide_footprint_deviation_outcome(
-        active, deviated, tasks_by_issue, config
+        active, deviated, tasks_by_issue, config, derived_inputs
     )
     return _apply_footprint_deviation_outcome(
         active, deviated, decision, issue_number_by_subtask_id, config
@@ -311,30 +317,14 @@ def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
 
 
 def _decide_rebase_target(
-    active_task: Task | None,
-    done_issue_numbers: set[int],
-    ci_passed_pr_issue_numbers: set[int],
-    branch_by_issue_number: dict[int, str],
-    dependency_resolution: dict[int, TaskDependencies],
+    active_task: TaskMetadata | None,
+    view: DependencyPolicyView,
 ) -> str | None:
-    """起動時のスタッキング制約に合わせて、自動リベース対象を1件に絞れる場合のみ
-    その依存先ブランチを返す（副作用なし）。
-
-    #799: 依存元は`dependency_resolution`が解決済みのIssue番号で判定する。
-    未解決の依存が1件でもあれば、依存先を推測せずリベースを見送る。
-    #860: 単一未完了依存の抽出は共通ヘルパ`resolve_stackable_dependency_issue`に統一。
-    """
+    """共通policyが安全と判定した依存ブランチだけを返す。"""
     if active_task is None:
         return None
-    dep_issue = resolve_stackable_dependency_issue(
-        active_task,
-        dependency_resolution,
-        done_issue_numbers,
-        ci_passed_pr_issue_numbers,
-    )
-    if dep_issue is None:
-        return None
-    return branch_by_issue_number.get(dep_issue)
+    decision = decide_stack_target(active_task.issue_number, view)
+    return decision.target.branch if decision.target is not None else None
 
 
 def _decide_rebase_needed(
@@ -466,7 +456,7 @@ def _run_rebase_ci_check(worktree_path: str, worktree_root: Path | str) -> None:
 
 def _relaunch_rebased_worktree(
     active: ActiveWorktree,
-    active_task: Task,
+    active_task: TaskMetadata,
     config: DispatcherConfig,
     parent_branch: str,
 ) -> None:
@@ -527,13 +517,7 @@ def _try_auto_rebase(ctx: RebaseContext) -> bool:
     実行した場合は True を返す。リベースが不要、あるいは対象がない場合は
     False を返す（呼び出し元が footprint 逸脱チェック等の後続処理へ
     フォールスルーできるようにするため）。"""
-    parent_branch = _decide_rebase_target(
-        ctx.active_task,
-        ctx.done_issue_numbers,
-        ctx.ci_passed_pr_issue_numbers,
-        ctx.branch_by_issue_number,
-        ctx.dependency_resolution,
-    )
+    parent_branch = _decide_rebase_target(ctx.active_task, ctx.dependencies)
     if parent_branch is None:
         return False
 
@@ -546,7 +530,10 @@ def _try_auto_rebase(ctx: RebaseContext) -> bool:
 
 
 def _rule_auto_rebase(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#201: 自動リベース判定＆実行。"""
     if not dispatch_gc.is_process_alive(active.pid):
@@ -556,10 +543,7 @@ def _rule_auto_rebase(
         active_task=active_task,
         key=key,
         run_state=ctx.run_state,
-        done_issue_numbers=ctx.done_issue_numbers,
-        ci_passed_pr_issue_numbers=ctx.ci_passed_pr_issue_numbers,
-        branch_by_issue_number=ctx.branch_by_issue_number,
-        dependency_resolution=ctx.dependency_resolution,
+        dependencies=ctx.queries,
         config=ctx.config,
     )
     if not _try_auto_rebase(rebase_ctx):
@@ -568,7 +552,10 @@ def _rule_auto_rebase(
 
 
 def _rule_footprint_deviation(
-    ctx: CycleContext, key: str, active: ActiveWorktree, active_task: Task | None
+    ctx: _RuleExecutionContext,
+    key: str,
+    active: ActiveWorktree,
+    active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome:
     """フォールバックルール: 他のどのルールにも該当しなかったactive worktreeに
     ついて、footprint逸脱の有無を判定する。ルールチェーンの末尾として、常に
@@ -586,7 +573,12 @@ def _rule_footprint_deviation(
         return ActiveWorktreeRuleOutcome(terminal=True)
 
     event = _handle_footprint_deviation(
-        active, deviated, ctx.tasks_by_issue, ctx.issue_number_by_subtask_id, ctx.config
+        active,
+        deviated,
+        ctx.tasks_by_issue,
+        ctx.issue_number_by_subtask_id,
+        ctx.config,
+        ctx.dag_inputs,
     )
     forced_serial = event["action"] in ("forced_serial", "already_forced_serial")
     return ActiveWorktreeRuleOutcome(

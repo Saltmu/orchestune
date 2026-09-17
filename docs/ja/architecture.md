@@ -158,6 +158,47 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 ---
 
+<a id="dependency-cycle-context"></a>
+
+### 3.4 CycleContext Session / Unit of Workと依存状態の単一窓口
+
+`CycleContext`はraw依存宣言を含む`Task`観測・依存診断・Issue・PR・起動観測を
+privateに所有します。task queryはfrozenな`CycleTask` metadataだけを公開し、
+DAG consumerには`dag_inputs`経由で派生済み`SubTask`入力を明示的に渡します。
+これによりscoring/conflict policyはraw依存宣言を参照できません。consumerは
+意味付きqueryだけを通じて参照し、旧来の
+tasks/dependencies/CI/branch/RunState mutable属性は公開しません。`record_*`が
+記録するラベル差分は観測を上書きせず、queryが差分を優先します。サイクルが
+所有するaction adapterを1回だけbindし、7つのphase actionはすべてContext経由で
+呼び出します。phase間でraw state mapや同一サイクル完了overlayは渡しません。
+
+起動の初期観測と`record_launch`は同じハンドル検証・正規化を使います。
+PIDは正の整数（boolを除く）、外部IDは非空文字列が有効で、無効な側は
+Noneにします。両方とも無効なら確定起動を公開しません。開始時刻の非数値・
+非有限値もNoneにし、再試行時の同一性を安定させます。起動履歴が残っていても、
+実効完了後の`execution_active=true`は拒否します。複数主状態に含まれる
+人手判断待ちラベルも、起動による自動解除の対象にはしません。
+
+`record_transition`は未知Issue、遷移先の主状態、実行中の主張の整合性を
+NOOP判定より先に確認します。その後、同値再試行、expectedラベルの一致、
+終端規則・遷移表を順に検証します。先行完了に遅れて届いた確認済みDONE/
+NOT_NEEDEDラベルは反映できますが、古い非終端ラベルへの新しい更新は拒否します。
+完全同値かつ実行中でない再試行は状態を変えずNOOPになります。
+これらは外部I/Oを行わず、呼出側が成功を確認してから記録するAPIです。
+つまり`CycleContext`は1 dispatch cycleのSession / Unit of Workであり、開始時の
+観測、成功確認済みの確定済み差分（confirmed changes）、永続化済み`RunState`を
+意味付きqueryへ束ねる単一の公開窓口です。ただしGitHubと`RunState`の永続データを
+置き換えず、外部I/O、分散transaction、自動rollbackも担いません。取得済みの
+`CycleTask`、`DependencyAssessment`、viewは不変であり、更新後を読むには
+`record_*`後にContextへ再queryします。Dispatcher向けの公開`DispatchSnapshot`や
+サイクル凍結点は導入しません。
+
+依存契約の正本は次の詳細文書に分割しています。
+
+- [Identity / Lifecycle / Policyとstack契約](architecture/dag-and-scheduling.md#dependency-three-layers)
+- [record APIの成功postcondition](architecture/state-recovery.md#dependency-record-postconditions)
+- [共通target policyとfallback](architecture/integration.md#dependency-target-fallback)
+
 ## 4. モジュール層構造とパッケージ境界
 
 `orchestune/__init__.py` は、パッケージの公開APIを `__all__` で宣言します。
@@ -172,10 +213,10 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 | 層 | 役割 | モジュール |
 | --- | --- | --- |
 | **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `cli`, `dag.cli`, `dispatch.dispatcher`, `monitor`, `provisioning.cli`, `replan.cli` |
-| **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch.cycle`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
-| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.status_repair`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification` |
+| **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `dispatch.cycle`, `dispatch.cycle_actions`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
+| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification` |
 | **L1** | **アダプタ**<br/>外部開発ツールを実行するモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.python_env` |
-| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `validation`, `version` |
+| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
 純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch.result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /

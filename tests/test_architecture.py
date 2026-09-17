@@ -11,6 +11,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from dependency_boundary_test_support import (
+    production_boundary_violations,
+    unused_production_boundary_exceptions,
+)
+
 PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 TESTS_ROOT = Path(__file__).parent
 REPO_ROOT = Path(__file__).parents[1]
@@ -23,6 +28,13 @@ DOC_LANGUAGES = ("en", "ja")
 # ship in the distributed package either.
 PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
 PACKAGE_NAME = "orchestune"
+
+
+def test_dispatch_dependency_boundary() -> None:
+    assert production_boundary_violations(REPO_ROOT) == ()
+    assert unused_production_boundary_exceptions(REPO_ROOT) == ()
+
+
 # The layer assignment is a design decision, so it lives here rather than being
 # parsed back out of the architecture documents. `_module_layer()` reads this,
 # which keeps `test_no_module_imports_a_strictly_higher_layer` independent of
@@ -44,6 +56,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     3: frozenset(
         {
             "dispatch.cycle",
+            "dispatch.cycle_actions",
             "dispatch.cycle_context",
             "dispatch.cycle_report",
             "dispatch.phase_gc",
@@ -85,6 +98,11 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.conflicts",
             "dispatch.cost_model",
             "dispatch.critical_path",
+            "dispatch.cycle_action_contracts",
+            "dispatch.cycle_context_state",
+            "dispatch.cycle_records",
+            "dispatch.dependency_assessment",
+            "dispatch.dependency_policy",
             "dispatch.dependency_resolution",
             "dispatch.escalation",
             "dispatch.execution_profiles",
@@ -109,6 +127,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.scoring",
             "dispatch.state",
             "dispatch.status_repair",
+            "dispatch.status_dependency_policy",
+            "dispatch.status_repair_dependencies",
             "dispatch.summary",
             "dispatch.targets",
             "dispatch.worktree",
@@ -169,6 +189,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "replan",
             "replan.models",
             "setup_skills",
+            "task_metadata",
             "validation",
             "version",
         }
