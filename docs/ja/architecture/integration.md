@@ -86,11 +86,11 @@ launch、auto-rebase、base-branch-red recoveryは、いずれも
 安全なtargetがある場合だけ、その依存先のcanonical branchを使います。consumer別の
 targetなしの扱いは次の表が正本です。
 
-| 安定ID | 経路 | targetなしの意味 |
-| --- | --- | --- |
-| `dependency-fallback-launch` | launch | **no stack launch**: 依存先ブランチへstackしない。依存待ちタスクをfallback baseで起動可能にする意味ではない |
-| `dependency-fallback-rebase` | rebase | **no stack rebase**: auto-rebaseを見送る |
-| `dependency-fallback-base` | base selection | 親Issueがあれば`parent/issue-{N}`、なければ`origin/main`へfallbackする |
+| 安定ID | 経路 | targetなしの意味 | 条件→target（安定表現） |
+| --- | --- | --- | --- |
+| `dependency-fallback-launch` | launch | **no stack launch**: 依存先ブランチへstackしない。依存待ちタスクをfallback baseで起動可能にする意味ではない | `no-stack-launch` |
+| `dependency-fallback-rebase` | rebase | **no stack rebase**: auto-rebaseを見送る | `no-stack-rebase` |
+| `dependency-fallback-base` | base selection | 親Issueがあれば`parent/issue-{N}`、なければ`origin/main`へfallbackする | `parent-configured=parent/issue-{N}; no-parent=origin/main` |
 
 base selectionのfallbackは、起動許可や依存充足の証明ではありません。launch候補化は
 AssessmentとUse-case Policyが別途許可する必要があります。またcanonical branch名は

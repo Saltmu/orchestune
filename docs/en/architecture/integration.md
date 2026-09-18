@@ -75,11 +75,11 @@ Launch, auto-rebase, and base-branch-red recovery all pass the same
 the dependency's canonical branch only when the shared policy returns a safe
 target. This table is the canonical per-consumer behavior when no target exists.
 
-| Stable ID | Path | Meaning when there is no target |
-| --- | --- | --- |
-| `dependency-fallback-launch` | launch | **no stack launch**: do not stack on a dependency branch; this does not authorize launching a dependency-waiting task from a fallback base |
-| `dependency-fallback-rebase` | rebase | **no stack rebase**: skip auto-rebase |
-| `dependency-fallback-base` | base selection | fall back to `parent/issue-{N}` when configured, otherwise `origin/main` |
+| Stable ID | Path | Meaning when there is no target | Condition → target (stable form) |
+| --- | --- | --- | --- |
+| `dependency-fallback-launch` | launch | **no stack launch**: do not stack on a dependency branch; this does not authorize launching a dependency-waiting task from a fallback base | `no-stack-launch` |
+| `dependency-fallback-rebase` | rebase | **no stack rebase**: skip auto-rebase | `no-stack-rebase` |
+| `dependency-fallback-base` | base selection | fall back to `parent/issue-{N}` when configured, otherwise `origin/main` | `parent-configured=parent/issue-{N}; no-parent=origin/main` |
 
 Base-selection fallback is not launch authorization or proof that dependencies are
 satisfied. Candidate admission still requires a separate Assessment and Use-case

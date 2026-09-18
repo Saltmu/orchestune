@@ -126,27 +126,41 @@ SECTION_CONTRACTS = (
 class _FallbackRow:
     """The meaning of one consumer row in the shared stack-target fallback table.
 
-    `ordered` names code spans whose order encodes the meaning: for base
-    selection, the parent branch is the configured case and `origin/main` the
-    fallback, so swapping the two conditions reorders them and is rejected.
+    `stable` is the row's language-neutral condition-to-target form, compared by
+    exact equality: no paraphrase can satisfy it, and inverting which condition
+    selects which branch has to edit it. `ja` / `en` bind the same condition to
+    the same target in prose, so a reversal that leaves the stable cell intact
+    still fails. Token order is deliberately not used: it does not say which
+    condition selects which branch.
     """
 
     path: str
-    required: tuple[str, ...]
-    ordered: tuple[str, ...] = field(default=())
+    stable: str
+    ja: tuple[str, ...] = field(default=())
+    en: tuple[str, ...] = field(default=())
+
+    def prose(self, language: str) -> tuple[str, ...]:
+        return self.ja if language == "ja" else self.en
 
 
 FALLBACK_CONTRACT = {
     "dependency-fallback-launch": _FallbackRow(
-        path="launch", required=("no stack launch",)
+        path="launch",
+        stable="`no-stack-launch`",
+        ja=("**no stack launch**",),
+        en=("**no stack launch**",),
     ),
     "dependency-fallback-rebase": _FallbackRow(
-        path="rebase", required=("no stack rebase",)
+        path="rebase",
+        stable="`no-stack-rebase`",
+        ja=("**no stack rebase**",),
+        en=("**no stack rebase**",),
     ),
     "dependency-fallback-base": _FallbackRow(
         path="base selection",
-        required=("`parent/issue-{N}`", "`origin/main`"),
-        ordered=("`parent/issue-{N}`", "`origin/main`"),
+        stable="`parent-configured=parent/issue-{N}; no-parent=origin/main`",
+        ja=("親Issueがあれば`parent/issue-{N}`", "なければ`origin/main`"),
+        en=("`parent/issue-{N}` when configured", "otherwise `origin/main`"),
     ),
 }
 
@@ -204,7 +218,13 @@ def _normalized(text: str) -> str:
 
 
 def _fallback_row_line(text: str, row_id: str) -> str:
-    matching = [line for line in text.splitlines() if f"`{row_id}`" in line]
+    """Return the row within the section that owns the fallback table.
+
+    Scoping to the section matters: a row parked in an appendix would otherwise
+    satisfy the contract while the documented table no longer carries it.
+    """
+    section = _anchor_section(text, "dependency-target-fallback")
+    matching = [line for line in section.splitlines() if f"`{row_id}`" in line]
     assert len(matching) == 1, (row_id, len(matching))
     return matching[0]
 
@@ -231,18 +251,17 @@ def _check_section_contracts(language: str, documents: dict[str, str]) -> None:
             assert phrase in section, (language, contract.anchor, phrase)
 
 
-def _check_fallback_rows(integration: str) -> None:
+def _check_fallback_rows(language: str, integration: str) -> None:
     """Assert each fallback row still carries the meaning defined above."""
     for row_id, contract in FALLBACK_CONTRACT.items():
         cells = _fallback_cells(integration, row_id)
-        assert len(cells) == 3, (row_id, cells)
+        assert len(cells) == 4, (row_id, cells)
         assert cells[0] == f"`{row_id}`", (row_id, cells[0])
         assert cells[1] == contract.path, (row_id, cells[1])
+        assert cells[3] == contract.stable, (row_id, cells[3], contract.stable)
         meaning = _normalized(cells[2])
-        for phrase in contract.required:
+        for phrase in contract.prose(language):
             assert phrase in meaning, (row_id, phrase, meaning)
-        positions = [meaning.index(token) for token in contract.ordered]
-        assert positions == sorted(positions), (row_id, contract.ordered, meaning)
 
 
 @pytest.mark.parametrize("language", sorted(DOCUMENTS))
@@ -252,7 +271,7 @@ def test_dependency_architecture_contract_is_documented(language: str) -> None:
 
 @pytest.mark.parametrize("language", sorted(DOCUMENTS))
 def test_dependency_fallback_rows_have_stable_meanings(language: str) -> None:
-    _check_fallback_rows(_read(DOCUMENTS[language]["integration"]))
+    _check_fallback_rows(language, _read(DOCUMENTS[language]["integration"]))
 
 
 @pytest.mark.parametrize("language", sorted(DOCUMENTS))
@@ -318,19 +337,67 @@ def test_gutted_ordering_section_is_rejected(language: str) -> None:
         _check_section_contracts(language, mutated)
 
 
+# Two spellings of the parent/main inversion, written in the document's own
+# language so the mutation fails on the inversion rather than on the wording
+# being foreign. Index 1 keeps the branch names in their documented order, so a
+# check that compares only token order accepts it.
+_REVERSED_BASE_MEANINGS = {
+    "ja": (
+        "親Issueがあれば`origin/main`、なければ`parent/issue-{N}`へfallbackする",
+        "親Issueがなければ`parent/issue-{N}`、あれば`origin/main`へfallbackする",
+    ),
+    "en": (
+        "fall back to `origin/main` when configured, otherwise `parent/issue-{N}`",
+        "fall back to `parent/issue-{N}` when no parent Issue is configured, "
+        "otherwise `origin/main`",
+    ),
+}
+
+
 @pytest.mark.parametrize("language", sorted(DOCUMENTS))
-def test_reversed_base_fallback_row_is_rejected(language: str) -> None:
-    """#911(2): swapping the parent/main fallback conditions must fail."""
+@pytest.mark.parametrize("variant", (0, 1))
+def test_reversed_base_fallback_row_is_rejected(language: str, variant: int) -> None:
+    """#911(2): swapping the parent/main fallback conditions must fail.
+
+    The stable cell is left untouched, so only the prose binding can catch it.
+    """
     documents = _load_documents(language)
     row = _fallback_row_line(documents["integration"], "dependency-fallback-base")
+    meaning = _REVERSED_BASE_MEANINGS[language][variant]
     reversed_row = (
-        "| `dependency-fallback-base` | base selection | "
-        "fall back to `origin/main` when a parent Issue is configured, "
-        "otherwise `parent/issue-{N}` |"
+        f"| `dependency-fallback-base` | base selection | {meaning} | "
+        "`parent-configured=parent/issue-{N}; no-parent=origin/main` |"
     )
     mutated = _mutate(documents, "integration", row, reversed_row)
     with pytest.raises(AssertionError):
-        _check_fallback_rows(mutated["integration"])
+        _check_fallback_rows(language, mutated["integration"])
+
+
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_rewritten_stable_fallback_cell_is_rejected(language: str) -> None:
+    """Inverting the stable condition-to-target cell must fail on its own."""
+    documents = _load_documents(language)
+    row = _fallback_row_line(documents["integration"], "dependency-fallback-base")
+    mutated = _mutate(
+        documents,
+        "integration",
+        "`parent-configured=parent/issue-{N}; no-parent=origin/main`",
+        "`parent-configured=origin/main; no-parent=parent/issue-{N}`",
+    )
+    assert row in documents["integration"]
+    with pytest.raises(AssertionError):
+        _check_fallback_rows(language, mutated["integration"])
+
+
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_fallback_row_outside_its_section_is_rejected(language: str) -> None:
+    """A fallback row moved out of the table's section must fail."""
+    documents = _load_documents(language)
+    row = _fallback_row_line(documents["integration"], "dependency-fallback-base")
+    mutated = _mutate(documents, "integration", row + "\n", "")
+    mutated["integration"] += f"\n## Appendix\n\n{row}\n"
+    with pytest.raises(AssertionError):
+        _check_fallback_rows(language, mutated["integration"])
 
 
 @pytest.mark.parametrize("language", sorted(DOCUMENTS))
