@@ -14,7 +14,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import StrEnum
 
-from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.dispatch.worktree import file_lock
@@ -45,6 +44,7 @@ from orchestune.pr_link_notice import (
     ensure_pr_merged_notice,
     render_merged_notice,
 )
+from orchestune.task_branch_resolution import BranchCapability, TaskBranchResolver
 
 
 @contextmanager
@@ -78,6 +78,7 @@ def _retry_file_lock(lock_path, attempts: int = 3) -> Iterator[None]:
 
 class PrepareTasksStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+        ctx.task_branch_resolver = TaskBranchResolver(ctx.forge.list_open_prs())
         sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
             ctx.config.parent_issue_number,
             forge=ctx.config.forge,
@@ -182,19 +183,20 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             ctx.forge,
             task.issue_number,
             task.subtask_id,
-            build_task_branch_name(task.issue_number, task.subtask_id),
+            None,
             ctx.base_branch,
         )
         if proof is None or not self._proof_reaches_parent(ctx, proof):
             return _ReceiptRecovery.UNRECOVERED
-        deletion = delete_remote_branch_if_matches(
-            ctx.original_root, proof.branch_name, proof.source_sha
-        )
-        if deletion not in {
-            ConditionalBranchDeletionResult.DELETED,
-            ConditionalBranchDeletionResult.ALREADY_ABSENT,
-        }:
-            return _ReceiptRecovery.UNRECOVERED
+        if proof.merge_receipt.allows(BranchCapability.DELETE):
+            deletion = delete_remote_branch_if_matches(
+                ctx.original_root, proof.branch_name, proof.source_sha
+            )
+            if deletion not in {
+                ConditionalBranchDeletionResult.DELETED,
+                ConditionalBranchDeletionResult.ALREADY_ABSENT,
+            }:
+                return _ReceiptRecovery.UNRECOVERED
         try:
             ctx.forge.add_label(task.issue_number, "integration:included")
         except Exception as error:
@@ -317,13 +319,14 @@ class MergeAndTestStep(IntegrationComponent):
             ctx.original_root,
             ctx.config.ci_command or default_ci_command(),
             ctx.config.forge,
+            branch_resolver=ctx.task_branch_resolver,
         )
 
     @staticmethod
     def _record_merge_results(
         ctx: IntegrationContext,
         results: tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]],
-        proofs: dict[str, TaskIntegrationProof],
+        proofs: dict[int, TaskIntegrationProof],
     ) -> IntegrationReport:
         merged, failed, blocked, failed_reasons, blocked_reasons = results
         ctx.merged_tasks.extend(merged)
@@ -332,6 +335,12 @@ class MergeAndTestStep(IntegrationComponent):
         ctx.failed_reasons.update(failed_reasons)
         ctx.blocked_reasons.update(blocked_reasons)
         ctx.merged_task_proofs.update(proofs)
+        ctx.task_merge_receipts.update(
+            {
+                issue_number: proof.merge_receipt
+                for issue_number, proof in proofs.items()
+            }
+        )
         if not failed and merged:
             return {"status": IntegrationStatus.SUCCESS}
         return {
@@ -636,8 +645,14 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     def _finalize_merged_child_tasks(self, ctx: IntegrationContext) -> set[str]:
         """Finalize only children whose proven branch tip was safely removed."""
         finalized: set[str] = set()
+        tasks_by_subtask = {
+            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
+        }
         for subtask_id in ctx.merged_tasks:
-            proof = ctx.merged_task_proofs.get(subtask_id)
+            task = tasks_by_subtask.get(subtask_id)
+            if task is None:
+                continue
+            proof = ctx.merged_task_proofs.get(task.issue_number)
             if proof is None:
                 continue
             if not ensure_integration_receipt(ctx.forge, proof, ctx.base_branch):
@@ -646,8 +661,14 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
                 continue
+            receipt = ctx.task_merge_receipts.get(
+                task.issue_number, proof.merge_receipt
+            )
+            if not receipt.allows(BranchCapability.DELETE):
+                finalized.add(subtask_id)
+                continue
             result = delete_remote_branch_if_matches(
-                ctx.repository_root, proof.branch_name, proof.source_sha
+                ctx.repository_root, receipt.branch_name, receipt.fetched_commit_oid
             )
             if result in {
                 ConditionalBranchDeletionResult.DELETED,
@@ -686,16 +707,18 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
                 return False
-            branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
+            receipt = ctx.task_merge_receipts.get(task.issue_number)
+            if receipt is None or not receipt.allows(BranchCapability.VERIFY_MERGED):
+                return False
             try:
-                if not ctx.forge.is_current_branch_tip_merged_into(
-                    branch_name, base_branch_name
+                if not ctx.forge.is_merge_commit_reachable_from(
+                    receipt.fetched_commit_oid, base_branch_name
                 ):
                     return False
             except Exception as error:
                 print(
-                    "Warning: Failed to verify whether "
-                    f"{branch_name} was already integrated into "
+                    "Warning: Failed to verify whether fetched commit "
+                    f"{receipt.fetched_commit_oid} was already integrated into "
                     f"{base_branch_name}: {error}",
                     file=sys.stderr,
                 )

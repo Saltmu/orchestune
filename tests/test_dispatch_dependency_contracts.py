@@ -25,6 +25,7 @@ from orchestune.dispatch.phase_reconciliation import _MAIN_ACTIVE_WORKTREE_RULES
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_branch_resolution import ResolutionSource
 from tests.conftest import make_issue, make_pr, make_task
 
 
@@ -269,6 +270,26 @@ def test_grand_dependency_contract_issue_870_871(
     assert rebase is None
 
 
+def test_resolver_selected_fallback_propagates_to_stack_rebase_and_recovery_base(
+    tmp_path,
+) -> None:
+    task = _task(3, "consumer", ("dependency",))
+    resolution = {
+        3: TaskDependencies(resolved=(2,)),
+        2: TaskDependencies(),
+    }
+    fallback = "feat/issue-2-dependency"
+
+    launch, base, rebase = _stack_consumer_results(
+        task, resolution, {2: fallback}, tmp_path
+    )
+
+    assert launch.target is not None
+    assert launch.target.branch == fallback
+    assert base == fallback
+    assert rebase == fallback
+
+
 def test_status_priority_is_derived_from_issue_and_pr_inputs() -> None:
     """DONE is independent; completion precedes review, and review excludes CI-pass."""
     issues = [
@@ -281,24 +302,27 @@ def test_status_priority_is_derived_from_issue_and_pr_inputs() -> None:
         make_pr(
             11,
             head_ref="claude/issue-1-done-and-reviewed",
+            is_cross_repository=False,
             review_decision="CHANGES_REQUESTED",
             is_ci_passing=True,
         ),
         make_pr(
             12,
             head_ref="claude/issue-2-reviewed",
+            is_cross_repository=False,
             review_decision="CHANGES_REQUESTED",
             is_ci_passing=True,
         ),
         make_pr(
             13,
             head_ref="claude/issue-3-ci-only",
+            is_cross_repository=False,
             review_decision="",
             is_ci_passing=True,
         ),
     ]
 
-    _, ci_passed, changes_requested, _ = _build_pr_mappings(tasks, prs)
+    ci_passed, changes_requested, _, _ = _build_pr_mappings(tasks, prs)
 
     assert done == {1}
     assert changes_requested == {1, 2}
@@ -307,3 +331,37 @@ def test_status_priority_is_derived_from_issue_and_pr_inputs() -> None:
         "_rule_completed",
         "_rule_changes_requested",
     ]
+
+
+def test_pr_mapping_uses_one_verified_fallback_resolution() -> None:
+    tasks, _, _ = _build_task_mappings(
+        [_issue(42, "task-a", labels=("status:in-progress",))]
+    )
+    fallback = make_pr(
+        10,
+        head_ref="feat/issue-42-task-a",
+        closes_issue_numbers=(42,),
+        is_cross_repository=False,
+        review_decision="",
+        is_ci_passing=True,
+    )
+    fork = make_pr(
+        11,
+        head_ref="feat/issue-42-task-a",
+        closes_issue_numbers=(42,),
+        is_cross_repository=True,
+        review_decision="CHANGES_REQUESTED",
+        is_ci_passing=False,
+    )
+
+    ci_passed, changes_requested, branches, resolutions = _build_pr_mappings(
+        tasks,
+        [fork, fallback],
+        canonical_state=lambda _branch: False,
+    )
+
+    assert branches == {42: fallback.head_ref}
+    assert ci_passed == {42}
+    assert changes_requested == set()
+    assert resolutions[42].source is ResolutionSource.PR_FALLBACK
+    assert resolutions[42].pr is fallback

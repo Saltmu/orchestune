@@ -31,6 +31,7 @@ from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import CycleTask, TaskMetadata
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
@@ -59,6 +60,7 @@ class CycleContext:
         prs: list[PrRecord],
         pr_by_branch: dict[str, PrRecord],
         config: DispatcherConfig,
+        branch_resolutions_by_issue: dict[int, TaskBranchResolution] | None = None,
         not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None,
         issue_records_by_number: dict[int, IssueRecord] | None = None,
         prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
@@ -82,6 +84,7 @@ class CycleContext:
             prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
             issue_records_by_number=issue_records_by_number or {},
             prs=prs,
+            branch_resolutions_by_issue=branch_resolutions_by_issue or {},
         )
 
     # ---- semantic query API (#868) ------------------------------------------
@@ -112,6 +115,9 @@ class CycleContext:
 
     def canonical_branch(self, issue_number: int) -> str | None:
         return self._state.canonical_branch(issue_number)
+
+    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None:
+        return self._state.branch_resolution(issue_number)
 
     def launch_fact(self, issue_number: int) -> LaunchFact | None:
         return self._state.launch_fact(issue_number)

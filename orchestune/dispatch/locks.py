@@ -26,6 +26,10 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Task
 from orchestune.pr_link_notice import pr_matches_issue
+from orchestune.task_branch_resolution import (
+    BranchCapability,
+    TaskBranchResolution,
+)
 from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 _HOTSPOT_PATTERNS = (
@@ -106,6 +110,8 @@ class LockDependencyView(Protocol):
 
     def canonical_branch(self, issue_number: int) -> str | None: ...
 
+    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None: ...
+
 
 @dataclass(frozen=True)
 class _DefaultLockDependencyView:
@@ -151,6 +157,9 @@ class _DefaultLockDependencyView:
             return None
         return build_task_branch_name(issue_number, dep_task.subtask_id)
 
+    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None:
+        return None
+
 
 def _default_lock_dependency_view(queued_tasks: list[Task]) -> LockDependencyView:
     tasks_by_issue = {task.issue_number: task for task in queued_tasks}
@@ -176,15 +185,10 @@ def _direct_dependency_canonical_branches(
     baseへ入るのが直接依存1本だけであることを前提にしているため、除外もそれに
     揃えて直接依存に限る（祖先依存はここでは解決しない）。
 
-    Codexレビュー対応(PR#797 P2): `orchestune.branch_naming.branch_matches_task`
-    は任意のprefix（`fix/issue-N-x`等）を受理する設計だが、スタッキング
-    起動や`_build_pr_mappings`の`branch_by_issue_number`が実際に使うのは
-    `build_task_branch_name`が生成する既定prefixのブランチそのもの。
-    見た目が同じ形状でも別prefixのブランチ・PRはスタッキングの取り込み対象
-    ではないため、比較は既定prefixの完全一致に限定する。`view.canonical_branch`
-    が返す実際の起動branch（記録済みLaunchFact由来）が既定prefixの名前と
-    食い違う場合も同様に除外しない(#869)——依存元が既定と異なるbranchで実際に
-    走っている以上、既定名PRとの一致はスタッキング取り込みの証拠にならない。
+    Codexレビュー対応(PR#797 P2): 既定prefixと食い違う任意の実行中branchは
+    スタッキング取り込みの証拠にならないため除外しない。ただし#783の共通
+    Resolverが正規branch不在と一意なupstream OPEN PRを検証し、FETCH_MERGE能力を
+    与えたfallback branchは実際のstacking baseなので除外対象に含める。
 
     `depends_on`が指す依存が1件でも未解決（親不明・曖昧・候補集合に見つからない
     等）の場合は、他の依存が解決済みでも一切除外しない。fail closedのまま、
@@ -227,17 +231,20 @@ def _direct_dependency_canonical_branches(
         if dep.state is DependencyState.COMPLETED:
             continue
         dep_task = view.task(dep.issue_number)
-        default_branch = (
-            None
-            if dep_task is None
-            else build_task_branch_name(dep.issue_number, dep_task.subtask_id)
-        )
         actual_branch = view.canonical_branch(dep.issue_number)
-        if default_branch is None or actual_branch is None:
+        if dep_task is None or actual_branch is None:
             continue
-        if actual_branch != default_branch:
+        canonical_branch = build_task_branch_name(dep.issue_number, dep_task.subtask_id)
+        if actual_branch == canonical_branch:
+            excluded.add(actual_branch)
             continue
-        excluded.add(default_branch)
+        resolution = view.branch_resolution(dep.issue_number)
+        if (
+            resolution is not None
+            and resolution.branch_name == actual_branch
+            and resolution.allows(BranchCapability.FETCH_MERGE)
+        ):
+            excluded.add(actual_branch)
     return frozenset(excluded)
 
 

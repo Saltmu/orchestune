@@ -16,6 +16,7 @@ from orchestune.forge import Forge, GitHubForge
 from orchestune.integrator.coordinator import IntegrationCoordinator
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.models import Task
+from orchestune.task_branch_resolution import TaskBranchResolver, TaskMergeReceipt
 
 
 def _default_integration_run_id() -> str:
@@ -100,7 +101,9 @@ class IntegrationContext:
     base_branch: str
     temp_branch: str
     merged_tasks: list[str] = field(default_factory=list)
-    merged_task_proofs: dict[str, TaskIntegrationProof] = field(default_factory=dict)
+    merged_task_proofs: dict[int, TaskIntegrationProof] = field(default_factory=dict)
+    task_merge_receipts: dict[int, TaskMergeReceipt] = field(default_factory=dict)
+    task_branch_resolver: TaskBranchResolver | None = None
     failed_tasks: list[str] = field(default_factory=list)
     blocked_tasks: list[str] = field(default_factory=list)
     failed_reasons: dict[str, str] = field(default_factory=dict)

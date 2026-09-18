@@ -267,6 +267,7 @@ class TestRestorationCandidateProjection:
             head_ref="agent/issue-101-task-a",
             changed_files=(),
             closes_issue_numbers=(101,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -274,8 +275,14 @@ class TestRestorationCandidateProjection:
             worktree_root=tmp_path / "worktrees",
         )
 
-        with patch(
-            "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
+        with (
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
+            ),
+            patch(
+                "fake_forge_proxy.active_fake_forge.branch_exists",
+                return_value=False,
+            ),
         ):
             result = _project_restoration_candidates(run_state, [issue], config)
 
@@ -338,6 +345,7 @@ class TestRestorationCandidateProjection:
             head_ref="claude/issue-101-task-a",
             changed_files=(),
             closes_issue_numbers=(101,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -373,12 +381,14 @@ class TestRestorationCandidateProjection:
             head_ref="claude/issue-101-task-a",
             changed_files=(),
             closes_issue_numbers=(101,),
+            is_cross_repository=False,
         )
         native_dependency_pr = PrRecord(
             number=43,
             head_ref="claude/issue-103-task-c",
             changed_files=(),
             closes_issue_numbers=(103,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -448,12 +458,14 @@ class TestRestorationCandidateProjection:
             head_ref="claude/issue-201-task-a",
             changed_files=(),
             closes_issue_numbers=(201,),
+            is_cross_repository=False,
         )
         epic_b_pr = PrRecord(
             number=42,
             head_ref="claude/issue-301-task-a",
             changed_files=(),
             closes_issue_numbers=(301,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -497,6 +509,7 @@ class TestRestorationCandidateProjection:
             head_ref="claude/issue-101-task-a",
             changed_files=(),
             closes_issue_numbers=(101,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -517,18 +530,9 @@ class TestRestorationCandidateProjection:
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
 
-    def test_native_blocked_by_restores_pr_even_when_blocker_issue_is_out_of_population(
-        self, tmp_path
-    ):
-        """#886 review fix: startup recoveryの母集団（`_refresh_snapshot`）は
-        in-progress/queued-attemptのIssueに限られるため、`status:done`等で
-        既に外れたnative blockerはそこに含まれない。この場合でも、その
-        blockerを閉じるPRがまだopenなら（例: stacking PRが未マージ）base
-        branchとして採用しなければならない——resolverの`.resolved`は候補
-        集合に無いnative依存を（状態確認不能という別の理由で）未解決扱いに
-        するが、ここでは単にPR探索の手掛かりとして番号を使うだけなので、
-        母集団の有無に関わらずnative番号をそのまま信頼してよい（旧実装の
-        `issue.blocked_by`直接使用と同じ前提）。
+    def test_native_blocked_by_without_subtask_identity_fails_closed(self, tmp_path):
+        """#783: blockerのsubtask identityが母集団から取得できない場合、
+        Issue番号だけでPRを採用せず既定baseへfail closedする。
         """
         run_state = RunState(active_worktrees={})
         # blocker issue 103 is intentionally NOT included in `issues` below --
@@ -543,6 +547,7 @@ class TestRestorationCandidateProjection:
             head_ref="claude/issue-103-task-c",
             changed_files=(),
             closes_issue_numbers=(103,),
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -561,7 +566,7 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["102"].base_branch == "claude/issue-103-task-c"
+        assert active_by_key["102"].base_branch == "origin/main"
 
     def test_restores_active_worktree_from_open_pr_with_empty_closes_issues_via_head_ref(
         self, tmp_path
@@ -579,6 +584,7 @@ class TestRestorationCandidateProjection:
             changed_files=("src/foo.py",),
             closes_issue_numbers=(),
             base_ref="parent/issue-700",
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -586,8 +592,14 @@ class TestRestorationCandidateProjection:
             worktree_root=tmp_path / "worktrees",
         )
 
-        with patch(
-            "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
+        with (
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[pr]
+            ),
+            patch(
+                "fake_forge_proxy.active_fake_forge.branch_exists",
+                return_value=False,
+            ),
         ):
             result = _project_restoration_candidates(run_state, [issue], config)
 
@@ -622,6 +634,7 @@ class TestRestorationCandidateProjection:
             changed_files=(),
             closes_issue_numbers=(),
             base_ref="parent/issue-700",
+            is_cross_repository=False,
         )
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -629,9 +642,15 @@ class TestRestorationCandidateProjection:
             worktree_root=tmp_path / "worktrees",
         )
 
-        with patch(
-            "fake_forge_proxy.active_fake_forge.list_open_prs",
-            return_value=[dependency_pr],
+        with (
+            patch(
+                "fake_forge_proxy.active_fake_forge.list_open_prs",
+                return_value=[dependency_pr],
+            ),
+            patch(
+                "fake_forge_proxy.active_fake_forge.branch_exists",
+                return_value=False,
+            ),
         ):
             result = _project_restoration_candidates(
                 run_state,

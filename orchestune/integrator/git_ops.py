@@ -20,6 +20,13 @@ from orchestune.infra.python_env import install_dependencies, resolve_virtualenv
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.models import Task
+from orchestune.task_branch_resolution import (
+    BranchCapability,
+    CanonicalBranchState,
+    TaskBranchResolution,
+    TaskBranchResolver,
+    probe_canonical_state,
+)
 
 
 class IntegrationMerger:
@@ -31,12 +38,15 @@ class IntegrationMerger:
         original_root: Path,
         ci_command: list[str],
         forge: Forge | None = None,
+        *,
+        branch_resolver: TaskBranchResolver | None = None,
     ):
         self.repository_root = repository_root
         self.original_root = original_root
         self.ci_command = ci_command
         self.forge = forge or GitHubForge()
-        self.merged_task_proofs: dict[str, TaskIntegrationProof] = {}
+        self.branch_resolver = branch_resolver or TaskBranchResolver(())
+        self.merged_task_proofs: dict[int, TaskIntegrationProof] = {}
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
@@ -240,6 +250,79 @@ class IntegrationMerger:
             fetch_error = getattr(e, "stderr", None) or str(e)
             return False, False, None, f"Failed to fetch branch: {fetch_error}"
 
+    def _fetch_branch_tip(self, branch_name: str) -> tuple[str | None, str]:
+        try:
+            remote_ref = fetch_remote_branch(self.repository_root, branch_name)
+            return resolve_commit_sha(self.repository_root, remote_ref), ""
+        except (subprocess.CalledProcessError, ValueError, OSError) as error:
+            detail = getattr(error, "stderr", None) or str(error)
+            return None, f"Failed to fetch branch: {detail}"
+
+    def _canonical_state(self, canonical_branch: str) -> CanonicalBranchState:
+        state = probe_canonical_state(canonical_branch, self.forge.branch_exists)
+        if state is CanonicalBranchState.INDETERMINATE:
+            print(
+                "Warning: canonical branch state is indeterminate for "
+                f"{canonical_branch}",
+                file=sys.stderr,
+            )
+        return state
+
+    def _already_merged_canonical(
+        self, resolution: TaskBranchResolution, base_branch: str
+    ) -> str | None:
+        try:
+            return self.forge.get_current_branch_tip_sha_if_merged_into(
+                resolution.canonical_branch, base_branch.removeprefix("origin/")
+            )
+        except Exception as error:
+            print(
+                "Warning: failed to verify canonical branch containment for "
+                f"{resolution.canonical_branch}: {error}",
+                file=sys.stderr,
+            )
+            return None
+
+    def _resolve_and_fetch_task_branch(
+        self, task: Task, base_branch: str
+    ) -> tuple[TaskBranchResolution | None, bool, str | None, str]:
+        canonical = build_task_branch_name(task.issue_number, task.subtask_id)
+        source_sha, fetch_error = self._fetch_branch_tip(canonical)
+        if source_sha is not None:
+            resolution = self.branch_resolver.resolve(
+                task.issue_number, task.subtask_id, CanonicalBranchState.PRESENT
+            )
+            return resolution, False, source_sha, ""
+
+        state = self._canonical_state(canonical)
+        if state is CanonicalBranchState.INDETERMINATE:
+            return (
+                None,
+                False,
+                None,
+                f"Canonical branch state indeterminate: {fetch_error}",
+            )
+        resolution = self.branch_resolver.resolve(
+            task.issue_number, task.subtask_id, state
+        )
+        if state is CanonicalBranchState.PRESENT:
+            merged_sha = self._already_merged_canonical(resolution, base_branch)
+            if merged_sha is not None:
+                return resolution, True, merged_sha, ""
+            return None, False, None, fetch_error
+        if not resolution.allows(BranchCapability.FETCH_MERGE):
+            return None, False, None, f"No unique verified fallback PR: {fetch_error}"
+
+        rechecked = self._canonical_state(canonical)
+        if rechecked is CanonicalBranchState.PRESENT:
+            return None, False, None, "Canonical branch appeared before fallback fetch"
+        if rechecked is CanonicalBranchState.INDETERMINATE:
+            return None, False, None, "Canonical branch recheck is indeterminate"
+        fallback_sha, fallback_error = self._fetch_branch_tip(resolution.branch_name)
+        if fallback_sha is None:
+            return None, False, None, fallback_error
+        return resolution, False, fallback_sha, ""
+
     def _merge_task_branch(
         self, branch_name: str, source_sha: str
     ) -> tuple[bool, str | None, str]:
@@ -437,11 +520,10 @@ class IntegrationMerger:
         if not apply:
             merged.append(task.subtask_id)
             return None
-        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
-        fetched, already_merged, source_sha, reason = self._fetch_task_branch(
-            branch_name, base_branch
+        resolution, already_merged, source_sha, reason = (
+            self._resolve_and_fetch_task_branch(task, base_branch)
         )
-        if not fetched:
+        if resolution is None:
             self._record_fetch_failure(
                 task, reason, apply, failed, failed_reasons, unavailable
             )
@@ -449,7 +531,7 @@ class IntegrationMerger:
         if already_merged:
             self._record_already_merged_task(
                 task,
-                branch_name,
+                resolution,
                 source_sha,
                 apply,
                 merged,
@@ -460,7 +542,7 @@ class IntegrationMerger:
             return None
         return self._merge_fetched_task(
             task,
-            branch_name,
+            resolution,
             source_sha,
             apply,
             merged,
@@ -472,7 +554,7 @@ class IntegrationMerger:
     def _merge_fetched_task(
         self,
         task: Task,
-        branch_name: str,
+        resolution: TaskBranchResolution,
         source_sha: str | None,
         apply: bool,
         merged: list[str],
@@ -495,7 +577,7 @@ class IntegrationMerger:
         if is_ancestor_commit(self.repository_root, source_sha):
             self._record_already_merged_task(
                 task,
-                branch_name,
+                resolution,
                 source_sha,
                 apply,
                 merged,
@@ -506,7 +588,7 @@ class IntegrationMerger:
             return None
         return self._merge_verified_task(
             task,
-            branch_name,
+            resolution,
             source_sha,
             apply,
             merged,
@@ -546,7 +628,7 @@ class IntegrationMerger:
     def _record_already_merged_task(
         self,
         task: Task,
-        branch_name: str,
+        resolution: TaskBranchResolution,
         source_sha: str | None,
         apply: bool,
         merged: list[str],
@@ -565,17 +647,18 @@ class IntegrationMerger:
             )
             return
         merged.append(task.subtask_id)
-        self.merged_task_proofs[task.subtask_id] = TaskIntegrationProof(
+        self.merged_task_proofs[task.issue_number] = TaskIntegrationProof(
             issue_number=task.issue_number,
             subtask_id=task.subtask_id,
-            branch_name=branch_name,
+            branch_name=resolution.branch_name,
             source_sha=source_sha,
+            source=resolution.source,
         )
 
     def _merge_verified_task(
         self,
         task: Task,
-        branch_name: str,
+        resolution: TaskBranchResolution,
         source_sha: str,
         apply: bool,
         merged: list[str],
@@ -584,7 +667,7 @@ class IntegrationMerger:
         unavailable: set[str],
     ) -> str | None:
         merged_ok, pre_merge_sha, reason = self._merge_task_branch(
-            branch_name, source_sha
+            resolution.branch_name, source_sha
         )
         if not merged_ok or pre_merge_sha is None:
             self._record_failure(
@@ -603,11 +686,12 @@ class IntegrationMerger:
             )
             return pre_merge_sha
         merged.append(task.subtask_id)
-        self.merged_task_proofs[task.subtask_id] = TaskIntegrationProof(
+        self.merged_task_proofs[task.issue_number] = TaskIntegrationProof(
             issue_number=task.issue_number,
             subtask_id=task.subtask_id,
-            branch_name=branch_name,
+            branch_name=resolution.branch_name,
             source_sha=source_sha,
+            source=resolution.source,
         )
         return pre_merge_sha
 

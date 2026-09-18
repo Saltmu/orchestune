@@ -740,6 +740,7 @@ class IntegratorEnv:
     remove_label: MagicMock
     add_comment: MagicMock
     is_current_branch_tip_merged_into: MagicMock
+    is_merge_commit_reachable_from: MagicMock
     current_branch_tip_sha_if_merged_into: MagicMock
     delete_branch: MagicMock
     branch_exists: MagicMock
@@ -840,6 +841,7 @@ def integrator_env(
         remove_label = fake_forge.remove_label
         add_comment = fake_forge.add_comment
         tip = fake_forge.is_current_branch_tip_merged_into
+        reachable = fake_forge.is_merge_commit_reachable_from
         tip_sha = fake_forge.get_current_branch_tip_sha_if_merged_into
         delete_branch = fake_forge.delete_branch
         branch_exists = fake_forge.branch_exists
@@ -850,6 +852,7 @@ def integrator_env(
         list_open_prs.return_value = []
         create_pr.return_value = 999
         tip.return_value = False
+        reachable.return_value = False
         tip_sha.return_value = None
         branch_exists.return_value = True
         get_issue_labels.return_value = ()
@@ -865,6 +868,7 @@ def integrator_env(
             remove_label=remove_label,
             add_comment=add_comment,
             is_current_branch_tip_merged_into=tip,
+            is_merge_commit_reachable_from=reachable,
             current_branch_tip_sha_if_merged_into=tip_sha,
             delete_branch=delete_branch,
             branch_exists=branch_exists,

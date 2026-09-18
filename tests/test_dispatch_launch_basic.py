@@ -2,6 +2,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 
+from orchestune.branch_naming import build_task_branch_name, parse_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.launch import (
@@ -14,6 +15,10 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import CompletedWorktree, RunState
 from orchestune.models import PrRecord
+from orchestune.task_branch_resolution import (
+    CanonicalBranchState,
+    TaskBranchResolver,
+)
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -37,6 +42,24 @@ def _ctx(**overrides):
         ),
     )
     defaults.update(overrides)
+    prs = defaults["prs"]
+    if prs and not defaults["tasks_by_issue"]:
+        parsed = parse_task_branch_name(prs[0].head_ref)
+        if parsed is not None:
+            task = _task(parsed.issue_number, subtask_id=parsed.subtask_id)
+            defaults["tasks_by_issue"] = {task.issue_number: task}
+            resolver = TaskBranchResolver(prs)
+            canonical = build_task_branch_name(task.issue_number, task.subtask_id)
+            state = (
+                CanonicalBranchState.PRESENT
+                if any(pr.head_ref == canonical for pr in prs)
+                else CanonicalBranchState.ABSENT
+            )
+            defaults["branch_resolutions_by_issue"] = {
+                task.issue_number: resolver.resolve(
+                    task.issue_number, task.subtask_id, state
+                )
+            }
     return CycleContext(**defaults)
 
 
@@ -189,6 +212,7 @@ class TestDecideDuplicateCandidates:
             head_ref="claude/issue-1-task-1",
             changed_files=(),
             closes_issue_numbers=(1,),
+            is_cross_repository=False,
         )
         ctx = _ctx(
             run_state=RunState(active_worktrees={}, completed_worktrees=[]),
@@ -220,9 +244,10 @@ class TestDecideDuplicateCandidates:
         task = _task(1)
         pr = PrRecord(
             number=7,
-            head_ref="claude/issue-1-retry",
+            head_ref="claude/issue-1-task-1",
             changed_files=(),
             closes_issue_numbers=(1,),
+            is_cross_repository=False,
         )
         ctx = _ctx(
             run_state=RunState(active_worktrees={}, completed_worktrees=[]),
@@ -240,9 +265,10 @@ class TestDecideDuplicateCandidates:
         task = _task(1)
         pr = PrRecord(
             number=7,
-            head_ref="codex/issue-1-retry",
+            head_ref="codex/issue-1-task-1",
             changed_files=(),
             closes_issue_numbers=(1,),
+            is_cross_repository=False,
         )
         ctx = _ctx(
             run_state=RunState(active_worktrees={}, completed_worktrees=[]),
@@ -264,6 +290,7 @@ class TestDecideDuplicateCandidates:
             head_ref="some-completely-unrelated-branch",
             changed_files=(),
             closes_issue_numbers=(1,),
+            is_cross_repository=False,
         )
         ctx = _ctx(
             run_state=RunState(active_worktrees={}, completed_worktrees=[]),
@@ -281,6 +308,7 @@ class TestDecideDuplicateCandidates:
             head_ref="claude/issue-1-task-1",
             changed_files=(),
             closes_issue_numbers=(1,),
+            is_cross_repository=False,
         )
         run_state = RunState(
             active_worktrees={},

@@ -21,6 +21,7 @@ from orchestune.integrator.steps import (
     RetryChildIssueCloseStep,
 )
 from orchestune.integrator.types import IntegrationContext, IntegratorConfig
+from orchestune.task_branch_resolution import ResolutionSource
 from tests.conftest import make_task
 
 
@@ -128,7 +129,7 @@ def test_moved_child_tip_is_not_labeled_or_closed(fake_forge, tmp_path: Path):
         base_branch="origin/parent/issue-100",
         temp_branch="integration/temp-parent-issue-100-test",
         merged_tasks=[task.subtask_id],
-        merged_task_proofs={task.subtask_id: proof},
+        merged_task_proofs={task.issue_number: proof},
         active_done_tasks=[task],
         integration_pr_number=123,
     )
@@ -149,6 +150,79 @@ def test_moved_child_tip_is_not_labeled_or_closed(fake_forge, tmp_path: Path):
     )
     fake_forge.add_label.assert_not_called()
     fake_forge.close_issue.assert_not_called()
+
+
+def test_fallback_receipt_finalizes_without_deleting_either_branch(
+    fake_forge, tmp_path: Path
+):
+    task = make_task(1, subtask_id="task-1", status_labels=("status:done",))
+    proof = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="feat/issue-1-task-1",
+        source_sha="a" * 40,
+        source=ResolutionSource.PR_FALLBACK,
+    )
+    config = IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
+    ctx = IntegrationContext(
+        config=config,
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="origin/parent/issue-100",
+        temp_branch="integration/temp-parent-issue-100-test",
+        merged_tasks=[task.subtask_id],
+        merged_task_proofs={task.issue_number: proof},
+        task_merge_receipts={task.issue_number: proof.merge_receipt},
+        active_done_tasks=[task],
+    )
+
+    with (
+        patch(
+            "orchestune.integrator.steps.ensure_integration_receipt",
+            autospec=True,
+            return_value=True,
+        ),
+        patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
+        ) as conditional_delete,
+    ):
+        finalized = AutoMergeChildIntegrationStep()._finalize_merged_child_tasks(ctx)
+
+    assert finalized == {"task-1"}
+    conditional_delete.assert_not_called()
+
+
+def test_already_integrated_verification_uses_receipt_oid_not_branch_tip(
+    fake_forge, tmp_path: Path
+):
+    task = make_task(1, subtask_id="task-1", status_labels=("status:done",))
+    proof = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="feat/issue-1-task-1",
+        source_sha="a" * 40,
+        source=ResolutionSource.PR_FALLBACK,
+    )
+    fake_forge.is_merge_commit_reachable_from.return_value = True
+    config = IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
+    ctx = IntegrationContext(
+        config=config,
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="origin/parent/issue-100",
+        temp_branch="integration/temp-parent-issue-100-test",
+        merged_tasks=[task.subtask_id],
+        merged_task_proofs={task.issue_number: proof},
+        task_merge_receipts={task.issue_number: proof.merge_receipt},
+        active_done_tasks=[task],
+    )
+
+    assert AutoMergeChildIntegrationStep()._verify_already_integrated(ctx) is True
+    fake_forge.is_merge_commit_reachable_from.assert_called_once_with(
+        "a" * 40, "parent/issue-100"
+    )
+    fake_forge.is_current_branch_tip_merged_into.assert_not_called()
 
 
 def test_receipt_recovers_after_delete_before_label(fake_forge, tmp_path: Path):

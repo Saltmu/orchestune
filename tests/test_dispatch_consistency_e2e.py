@@ -70,6 +70,7 @@ def test_recovery_boundary_restores_missing_run_state_and_reobserves(
             755,
             head_ref="claude/issue-744-recovery-cutover",
             closes_issue_numbers=(744,),
+            is_cross_repository=False,
         )
     )
     run_state = RunState()

@@ -20,7 +20,12 @@ from unittest.mock import patch
 
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.integrator.git_ops import IntegrationMerger
-from orchestune.models import Task
+from orchestune.models import PrRecord, Task
+from orchestune.task_branch_resolution import (
+    CanonicalBranchState,
+    ResolutionSource,
+    TaskBranchResolver,
+)
 from tests.conftest import IntegratorEnv, make_done_issue
 
 _TASK_1_BRANCH = "claude/issue-1-task-1"
@@ -410,23 +415,38 @@ class TestFetchTaskBranch:
     def test_already_merged_fallback_records_proof_for_finalization(
         self, tmp_path: Path
     ):
-        merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
+        fallback = PrRecord(
+            number=10,
+            head_ref="feat/issue-42-task-42",
+            changed_files=(),
+            closes_issue_numbers=(42,),
+            is_cross_repository=False,
+        )
+        resolver = TaskBranchResolver((fallback,))
+        merger = IntegrationMerger(
+            tmp_path,
+            tmp_path,
+            ["echo", "1"],
+            branch_resolver=resolver,
+        )
         task = _task(issue_number=42, subtask_id="task-42")
+        resolution = resolver.resolve(42, "task-42", CanonicalBranchState.ABSENT)
         with (
             patch.object(merger, "ensure_git_identity", autospec=True),
             patch.object(merger, "ensure_full_history", autospec=True),
             patch.object(
                 merger,
-                "_fetch_task_branch",
+                "_resolve_and_fetch_task_branch",
                 autospec=True,
-                return_value=(True, True, "a" * 40, ""),
+                return_value=(resolution, True, "a" * 40, ""),
             ),
         ):
             merged, failed, *_ = merger.merge_and_test_tasks([task], "main", apply=True)
 
         assert merged == ["task-42"]
         assert failed == []
-        assert merger.merged_task_proofs["task-42"].source_sha == "a" * 40
+        assert merger.merged_task_proofs[42].source_sha == "a" * 40
+        assert merger.merged_task_proofs[42].source is ResolutionSource.PR_FALLBACK
 
     def test_fetch_failure_not_merged(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
@@ -449,6 +469,127 @@ class TestFetchTaskBranch:
         assert already_merged is False
         assert source_sha is None
         assert "fetch error" in err
+
+
+class TestResolveAndFetchTaskBranch:
+    def _merger(self, tmp_path: Path, forge, prs: tuple[PrRecord, ...]):
+        return IntegrationMerger(
+            tmp_path,
+            tmp_path,
+            ["echo", "1"],
+            forge,
+            branch_resolver=TaskBranchResolver(prs),
+        )
+
+    def test_falls_back_only_after_two_confirmed_canonical_absence_checks(
+        self, tmp_path: Path, fake_forge
+    ):
+        fallback = PrRecord(
+            number=10,
+            head_ref="feat/issue-42-task-42",
+            changed_files=(),
+            closes_issue_numbers=(42,),
+            is_cross_repository=False,
+        )
+        merger = self._merger(tmp_path, fake_forge, (fallback,))
+        fake_forge.branch_exists.side_effect = [False, False]
+
+        def fetch(_root: Path, branch: str) -> str:
+            if branch.startswith("claude/"):
+                raise subprocess.CalledProcessError(1, ["fetch"], stderr=b"missing")
+            return f"origin/{branch}"
+
+        with (
+            patch(
+                "orchestune.integrator.git_ops.fetch_remote_branch",
+                autospec=True,
+                side_effect=fetch,
+            ) as fetch_branch,
+            patch(
+                "orchestune.integrator.git_ops.resolve_commit_sha",
+                autospec=True,
+                return_value="a" * 40,
+            ),
+        ):
+            resolution, already_merged, source_sha, error = (
+                merger._resolve_and_fetch_task_branch(
+                    _task(issue_number=42, subtask_id="task-42"), "main"
+                )
+            )
+
+        assert resolution is not None
+        assert resolution.source is ResolutionSource.PR_FALLBACK
+        assert resolution.branch_name == fallback.head_ref
+        assert already_merged is False
+        assert source_sha == "a" * 40
+        assert error == ""
+        assert fake_forge.branch_exists.call_count == 2
+        assert [call.args[1] for call in fetch_branch.call_args_list] == [
+            "claude/issue-42-task-42",
+            fallback.head_ref,
+        ]
+
+    def test_auth_or_network_error_is_indeterminate_and_never_fetches_fallback(
+        self, tmp_path: Path, fake_forge
+    ):
+        fallback = PrRecord(
+            number=10,
+            head_ref="feat/issue-42-task-42",
+            changed_files=(),
+            closes_issue_numbers=(42,),
+            is_cross_repository=False,
+        )
+        merger = self._merger(tmp_path, fake_forge, (fallback,))
+        fake_forge.branch_exists.side_effect = RuntimeError("rate limited")
+
+        with patch(
+            "orchestune.integrator.git_ops.fetch_remote_branch",
+            autospec=True,
+            side_effect=subprocess.CalledProcessError(
+                1, ["fetch"], stderr=b"authentication failed"
+            ),
+        ) as fetch_branch:
+            resolution, already_merged, source_sha, error = (
+                merger._resolve_and_fetch_task_branch(
+                    _task(issue_number=42, subtask_id="task-42"), "main"
+                )
+            )
+
+        assert resolution is None
+        assert already_merged is False
+        assert source_sha is None
+        assert "indeterminate" in error.lower()
+        assert fetch_branch.call_count == 1
+
+    def test_canonical_appearing_before_fallback_fetch_fails_closed(
+        self, tmp_path: Path, fake_forge
+    ):
+        fallback = PrRecord(
+            number=10,
+            head_ref="feat/issue-42-task-42",
+            changed_files=(),
+            closes_issue_numbers=(42,),
+            is_cross_repository=False,
+        )
+        merger = self._merger(tmp_path, fake_forge, (fallback,))
+        fake_forge.branch_exists.side_effect = [False, True]
+
+        with patch(
+            "orchestune.integrator.git_ops.fetch_remote_branch",
+            autospec=True,
+            side_effect=subprocess.CalledProcessError(1, ["fetch"], stderr=b"missing"),
+        ) as fetch_branch:
+            resolution, already_merged, source_sha, error = (
+                merger._resolve_and_fetch_task_branch(
+                    _task(issue_number=42, subtask_id="task-42"), "main"
+                )
+            )
+
+        assert resolution is None
+        assert already_merged is False
+        assert source_sha is None
+        assert "appeared" in error.lower()
+        assert fetch_branch.call_count == 1
 
 
 class TestMergeTaskBranch:

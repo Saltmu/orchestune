@@ -54,6 +54,7 @@ from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.status_repair_dependencies import task_lifecycle
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import CycleTask
 
 # record_*が返す競合理由の固定文字列（Issue本文セクションD/E）。
@@ -366,6 +367,7 @@ class _CycleState:
     _ci_passed: set[int] = field(default_factory=set)
     _changes_requested: set[int] = field(default_factory=set)
     _branch_by_issue: dict[int, str] = field(default_factory=dict)
+    _branch_resolutions: dict[int, TaskBranchResolution] = field(default_factory=dict)
     _prior_completed: frozenset[int] = frozenset()
     _prior_held: frozenset[int] = frozenset()
     _issue_records: tuple[IssueRecord, ...] = ()
@@ -388,6 +390,7 @@ class _CycleState:
         prior_parent_merge_hold_issue_numbers: frozenset[int],
         issue_records_by_number: Mapping[int, IssueRecord],
         prs: Iterable[PrRecord],
+        branch_resolutions_by_issue: Mapping[int, TaskBranchResolution],
     ) -> _CycleState:
         return cls(
             _tasks={
@@ -400,6 +403,7 @@ class _CycleState:
             _ci_passed=set(ci_passed_pr_issue_numbers),
             _changes_requested=set(changes_requested_issue_numbers),
             _branch_by_issue=dict(branch_by_issue_number),
+            _branch_resolutions=dict(branch_resolutions_by_issue),
             _prior_completed=frozenset(prior_parent_merge_completed_issue_numbers),
             _prior_held=frozenset(prior_parent_merge_hold_issue_numbers),
             _issue_records=tuple(
@@ -482,6 +486,11 @@ class _CycleState:
         if launch_state is not None and launch_state.fact is not None:
             return launch_state.fact.branch
         return self._branch_by_issue.get(issue_number)
+
+    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None:
+        if issue_number not in self._tasks:
+            return None
+        return self._branch_resolutions.get(issue_number)
 
     def launch_fact(self, issue_number: int) -> LaunchFact | None:
         if issue_number not in self._tasks:

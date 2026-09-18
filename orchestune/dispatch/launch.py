@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from orchestune.branch_naming import branch_matches_task, build_task_branch_name
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.cost_model import build_cost_model
 from orchestune.dispatch.cycle_action_contracts import CycleQueries
 from orchestune.dispatch.dependency_policy import (
@@ -41,6 +41,7 @@ from orchestune.issue_parsing import (
 )
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord
+from orchestune.task_branch_resolution import BranchCapability
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
@@ -86,31 +87,13 @@ class DuplicateCandidateDecision(Generic[TTask]):
     existing_pr: PrRecord | None = None
 
 
-def _is_orchestune_issue_branch(head_ref: str, issue_number: int) -> bool:
-    """PR本文のCloses一致フォールバックをOrchestune由来らしいブランチに限定する。
-
-    #777: 特定ツール名（`claude/`）に固定せず、`issue-{N}-{subtask_id}`の正規
-    形状に一致するかどうかで判定する。安全弁としての絞り込み自体は維持したまま
-    （無関係な`Closes #N`だけのPRは形状不一致で弾かれる）、プレフィックスのみ
-    エージェント中立化する。
-    """
-    return branch_matches_task(head_ref, issue_number)
-
-
 def _find_existing_pr_for_task(
     task: TaskMetadata, view: CycleQueries
 ) -> PrRecord | None:
-    expected_branch = build_task_branch_name(task.issue_number, task.subtask_id)
-    prs = view.pull_requests()
-    existing_pr = next((pr for pr in prs if pr.head_ref == expected_branch), None)
-    if not existing_pr:
-        for pr in prs:
-            if (
-                task.issue_number in pr.closes_issue_numbers
-                and _is_orchestune_issue_branch(pr.head_ref, task.issue_number)
-            ):
-                return pr
-    return existing_pr
+    resolution = view.branch_resolution(task.issue_number)
+    if resolution is None or not resolution.allows(BranchCapability.LINK_PR):
+        return None
+    return resolution.pr
 
 
 def _is_pr_duplicate_update(

@@ -33,6 +33,7 @@ def _seed_resumable_task(forge) -> None:
             755,
             head_ref="codex/issue-744-recovery-cutover",
             closes_issue_numbers=(744,),
+            is_cross_repository=False,
         )
     )
 
