@@ -46,7 +46,8 @@ graph TD
     IG -->|専用一時worktreeでマージ前CI| PB
     IG -->|CI通過後に自動マージ| PB
     IG -->|子Issueを自動クローズ| GI
-    PB -->|上流マージ検知 → 下流をリベース| DP
+    GP -->|CI通過済み・未完了の依存先ブランチを検知| DP
+    DP -->|下流の仕掛かり中ブランチを依存先ブランチへリベース| GP
     IG -->|全子Issue完了 → 最終PR作成| MB
     HU2 -->|レビューしてマージ| MB
 ```
@@ -152,7 +153,7 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 詳細: [統合パイプライン・二層モデル・自動リベース (integration.md)](architecture/integration.md)
 
 * **親ブランチによる二層モデル**: `parent/issue-{N}` による長命ブランチを活用し、子タスクの統合はCI通過後に完全自動でマージ・クローズ。
-* **自動リベース**: 先行タスクのマージを検知し、下流の仕掛かり中ブランチへ最新変更を自動反映。
+* **自動リベース（stack）**: [共通stack target policy](architecture/integration.md#dependency-target-fallback)が**CI通過済みでまだ実効完了していない単一の依存先タスクのブランチ**をtargetとして返したときにだけ、下流の仕掛かり中ブランチをそのブランチへリベース。targetが無ければ見送り、起動時のbaseは`parent/issue-{N}`（親Issue未設定なら`origin/main`）へfallbackする。targetがある場合の起動baseはその依存先ブランチになるため、`parent/issue-{N}`へマージ済みの成果物を引き継ぐかはそのブランチ次第。
 * **検収ゲート**: 全子タスク完了後にIntegratorが作成する `parent/issue-{N}` → `main` の最終PRを人間がレビュー・マージ（唯一の人間クリック）。
 * **排他制御と設計前提**: 同一マシンファイルロック前提（#377）、GitHub Actionsでの `concurrency` グループ推奨、およびCAS多層防御（#435）。
 

@@ -15,20 +15,24 @@ sequenceDiagram
     participant AG as Agent (Subtask B)
     participant IG as Orchestune Integrator
     participant DP as Orchestune Dispatcher
+    participant CB as GitHub (子ブランチ B / C)
     participant PB as GitHub (parent/issue-{N})
     participant GH as GitHub (main)
     participant HU as Human
 
+    AG->>CB: Subtask B のブランチをpush・PRを作成
+    Note over DP: B はCI通過済みだがまだ実効完了していない（CI_PASSED_UNMERGED）
+    DP->>CB: 下流 Subtask C を B のブランチへ自動リベース（stack）
     Note over IG: 子Issue #B が status:done に
+    Note over DP: この時点で B は実効完了（COMPLETED）扱いとなりstack targetが消えるため<br/>C への自動リベースは以後行わない（マージの成否とは独立）
     IG->>PB: Create temporary integration branch off parent/issue-{N}
     IG->>IG: Run CI Verification
     alt CI Passes
         IG->>PB: Auto-merge integration PR into parent/issue-{N}
         IG->>GH: 子Issue #B を自動クローズ（completed）
-        Note over DP: 上流ブランチのマージを検知
-        DP->>PB: Rebase downstream tasks (Subtask C) on parent/issue-{N}
     else CI Fails
         IG->>PB: Reset temp branch & report CI logs to Issue #B
+        Note over DP: 差し戻しで B は status:queued へ戻り実効完了ではなくなるため<br/>BのPRがCI通過のままなら stack target として復活し得る
     end
     Note over IG: 親Issue配下の全子Issueがクローズ済みになったら
     IG->>GH: 最終PR (parent/issue-{N} -> main) を作成
@@ -47,8 +51,9 @@ sequenceDiagram
    `status:done`の子Issueを検知すると、`orchestune/integrator/`が一時統合ブランチを`parent/issue-{N}`から作成してローカルCIを走らせます。
 3. **子レベルの自動マージ・自動クローズ（Integratorの責務、人間の確認なし）**:
    CI通過後、Integratorは一時統合ブランチのPRを**人間の確認を待たずに**`parent/issue-{N}`へ自動マージし、対象の子Issueを`completed`理由で自動的にクローズします。このレベルには人間のレビューゲートは存在せず、CIそのものが品質ゲートとして機能します（詳細は [アーキテクチャと設計思想 §0.2](../architecture.md#02-人間の承認ポイント)）。
-4. **自動リベース（Dispatcherの責務）**:
-   先行タスクのブランチが`parent/issue-{N}`へマージされると、その成果物に依存している（または関連ファイルに触れる）下流の仕掛かり中ブランチに対し、`orchestune/dispatch/rebase.py`が自動的に`git rebase`またはマージを行い、最新の`parent/issue-{N}`の変更を取り込ませます。
+4. **自動リベース（Dispatcherの責務、統合パイプラインとは別系統）**:
+   このフェーズはIntegratorのマージ列の一部ではなく、`parent/issue-{N}`へのマージを起点ともしません。Dispatcherは毎サイクル、プロセスが生存し、かつ先行するactive worktree rule（`status:not-needed`検知・stale entryのhold・完了検知・`CHANGES_REQUESTED`エスカレーション）で終端しなかったworktreeについてだけ[共通stack target policy](#dependency-target-fallback)へ問い合わせ、**CIを通過済みでまだ実効完了していない単一の依存先タスクのブランチ**がtargetとして返った場合にだけ、`orchestune/dispatch/rebase.py`が下流の仕掛かり中ブランチをそのtargetへ`git rebase`します（マージは行いません）。targetが返らない場合——依存先がまだCI未通過（`WAITING`）、CI通過済みで未完了の依存先が複数、依存先自身の依存が未完了、branch名が不明、あるいは依存先が実効完了して`COMPLETED`——は自動リベースを見送ります。依存先が`CHANGES_REQUESTED`と**分類された**ときは、この問い合わせ自体に到達しません（分類はCOMPLETED優先の短絡評価なので、`status:done`等で実効完了した依存先はPRがCHANGES_REQUESTEDでも`COMPLETED`となり、この経路には入らず`no-stack-dependency`としてpolicyに拒否されます）。先行ruleの`_rule_changes_requested`（`orchestune/dispatch/escalation.py`）が当該worktreeを人間レビューへエスカレーションして終端するため、「rebaseの見送り」ではなくそちらが適用されます。ここでの実効完了は`status:done`（`status:queued`との併記時を除く）や`status:not-needed`、および同一サイクルで確定した完了を含み、`parent/issue-{N}`への実マージを条件としません。そのため、子Issueが`status:done`になった時点でstack targetは消えます。統合が単に遅延しているだけ（`status:done`のまま未マージ）の間もtargetは戻りません。一方、仮マージCIが失敗してIntegratorが`status:queued`を付与し`status:done`を外す（`orchestune/integrator/pr.py`の`handle_merge_failure`）と、その依存先は実効完了ではなくなるため、自身のPRがCIを通過したままであれば次サイクル以降に再び`CI_PASSED_UNMERGED`と分類され、stack targetとして復活し得ます。リベース後はそのworktreeでローカルCIを実行し、成功すればtargetをbaseブランチとしてエージェントを再起動、コンフリクトまたはCI失敗なら`status:manual-merge-required`へ遷移させて人間に引き渡します。
+   なお、依存先が`parent/issue-{N}`へマージされた後にその成果物を取り込むのは、この自動リベースではなく**後続タスク起動時のbase選択**の役割です。ただしそれが本節1の`parent/issue-{N}`からの分岐（親Issue未設定なら`origin/main`）になるのは、共通policyがtargetを返さなかった場合に限られます。targetが返った場合、起動時のbaseはその依存先ブランチになるため（`orchestune/dispatch/launch.py`の`_decide_task_launch_plan`）、`parent/issue-{N}`へマージ済みの成果物が引き継がれるかどうかは、そのstack先ブランチがそれを含んでいるかに依存します。例えばCが「マージ済みのB」と「CI通過済みで未完了のD」に依存する場合、Cのbaseは`parent/issue-{N}`ではなくDとなり、DがBのマージ前に分岐していてB自体に依存していなければ、CはBの成果物を取り込みません。この使い分けは[§4の共通stack target policy](#dependency-target-fallback)が正本です。
 5. **親Issue配下の全完了検知と最終PR作成（Integratorの責務）**:
    親Issue配下の全子Issueがクローズされたことを検知すると、`orchestune/integrator/parent_completion.py`が`parent/issue-{N}` → `main`の最終PRを作成します。このPRは自動マージされません。
 6. **検収マージと親Issueクローズ**:

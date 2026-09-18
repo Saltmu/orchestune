@@ -46,7 +46,8 @@ graph TD
     IG -->|pre-merge CI in its own temp worktree| PB
     IG -->|auto-merge once CI passes| PB
     IG -->|auto-close child Issue| GI
-    PB -->|detect upstream merge, rebase downstream| DP
+    GP -->|detect a CI-passed, not-yet-complete dependency branch| DP
+    DP -->|rebase the downstream in-flight branch onto that dependency branch| GP
     IG -->|all children done, open final PR| MB
     HU2 -->|review and merge| MB
 ```
@@ -150,7 +151,7 @@ Details: [Stateless CI & Self-Healing State Recovery (state-recovery.md)](archit
 Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration.md)](architecture/integration.md)
 
 * **Two-Tier Branch Model**: Long-lived `parent/issue-{N}` branches isolate child merges; child PRs are verified with pre-merge CI and merged/closed automatically.
-* **Auto-Rebase**: Dispatcher detects upstream merges into `parent/issue-{N}` and automatically rebases downstream in-flight worktrees.
+* **Auto-Rebase (stacking)**: the dispatcher rebases a downstream in-flight branch only when the [shared stack-target policy](architecture/integration.md#dependency-target-fallback) returns **the branch of a single dependency that has passed CI but is not yet effectively complete**. With no target it skips the rebase and launch falls back to `parent/issue-{N}` (or `origin/main` without a parent Issue); when a target does exist, the launch base is that dependency branch instead, so whether work already merged into `parent/issue-{N}` comes along depends on that branch.
 * **Acceptance Gate**: Final PR from `parent/issue-{N}` to `main` reviewed and merged by a human (the only human click).
 * **Concurrency Control**: Same-machine file lock assumptions (#377), recommended `concurrency` group configurations for GitHub Actions, and CAS defense-in-depth (#435).
 
