@@ -314,14 +314,12 @@ def _build_pr_mappings(
         if not task.subtask_id:
             continue
         canonical = build_task_branch_name(task.issue_number, task.subtask_id)
-        state = (
-            probe_canonical_state(canonical, canonical_state)
-            if resolver.has_verified_candidate(task.issue_number, task.subtask_id)
-            and canonical_state is not None
-            else CanonicalBranchState.PRESENT
-            if resolver.has_verified_candidate(task.issue_number, task.subtask_id)
-            else CanonicalBranchState.INDETERMINATE
+        has_candidate = resolver.has_verified_candidate(
+            task.issue_number, task.subtask_id
         )
+        state = CanonicalBranchState.INDETERMINATE
+        if has_candidate and canonical_state is not None:
+            state = probe_canonical_state(canonical, canonical_state)
         resolution = resolver.resolve(task.issue_number, task.subtask_id, state)
         resolutions[task.issue_number] = resolution
         branch_by_issue_number[task.issue_number] = resolution.branch_name

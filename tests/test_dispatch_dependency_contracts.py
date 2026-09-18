@@ -25,7 +25,11 @@ from orchestune.dispatch.phase_reconciliation import _MAIN_ACTIVE_WORKTREE_RULES
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.models import IssueRecord, PrRecord, Task
-from orchestune.task_branch_resolution import ResolutionSource
+from orchestune.task_branch_resolution import (
+    BranchCapability,
+    CanonicalBranchState,
+    ResolutionSource,
+)
 from tests.conftest import make_issue, make_pr, make_task
 
 
@@ -322,7 +326,9 @@ def test_status_priority_is_derived_from_issue_and_pr_inputs() -> None:
         ),
     ]
 
-    ci_passed, changes_requested, _, _ = _build_pr_mappings(tasks, prs)
+    ci_passed, changes_requested, _, _ = _build_pr_mappings(
+        tasks, prs, canonical_state=lambda _branch: True
+    )
 
     assert done == {1}
     assert changes_requested == {1, 2}
@@ -365,3 +371,26 @@ def test_pr_mapping_uses_one_verified_fallback_resolution() -> None:
     assert changes_requested == set()
     assert resolutions[42].source is ResolutionSource.PR_FALLBACK
     assert resolutions[42].pr is fallback
+
+
+def test_pr_mapping_without_canonical_probe_fails_closed() -> None:
+    tasks, _, _ = _build_task_mappings(
+        [_issue(42, "task-a", labels=("status:in-progress",))]
+    )
+    fallback = make_pr(
+        10,
+        head_ref="feat/issue-42-task-a",
+        closes_issue_numbers=(42,),
+        is_cross_repository=False,
+        is_ci_passing=True,
+    )
+
+    ci_passed, changes_requested, branches, resolutions = _build_pr_mappings(
+        tasks, [fallback]
+    )
+
+    assert branches == {42: "claude/issue-42-task-a"}
+    assert ci_passed == set()
+    assert changes_requested == set()
+    assert resolutions[42].canonical_state is CanonicalBranchState.INDETERMINATE
+    assert not resolutions[42].allows(BranchCapability.FETCH_MERGE)

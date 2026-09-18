@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TypeGuard
 
 from orchestune.branch_naming import (
     branch_matches_task,
@@ -14,6 +15,11 @@ from orchestune.branch_naming import (
 from orchestune.models import PrRecord
 
 _COMMIT_OID = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def is_commit_oid(value: object) -> TypeGuard[str]:
+    """Return whether *value* is a complete SHA-1 object identifier."""
+    return isinstance(value, str) and _COMMIT_OID.fullmatch(value) is not None
 
 
 class ResolutionSource(StrEnum):
@@ -82,14 +88,19 @@ class TaskMergeReceipt:
     fetched_commit_oid: str
     source: ResolutionSource
 
+    def __post_init__(self) -> None:
+        # Receipts are also reconstructed from durable integration proofs after
+        # restart, so enforce the immutable-OID invariant at the value boundary
+        # rather than only in the live-resolution factory.
+        if not is_commit_oid(self.fetched_commit_oid):
+            raise ValueError(f"invalid fetched commit OID: {self.fetched_commit_oid!r}")
+
     @classmethod
     def from_resolution(
         cls, resolution: TaskBranchResolution, fetched_commit_oid: str
     ) -> TaskMergeReceipt:
         if not resolution.allows(BranchCapability.FETCH_MERGE):
             raise ValueError("branch resolution does not permit fetch/merge")
-        if not _COMMIT_OID.fullmatch(fetched_commit_oid):
-            raise ValueError(f"invalid fetched commit OID: {fetched_commit_oid!r}")
         return cls(
             issue_number=resolution.issue_number,
             branch_name=resolution.branch_name,
@@ -191,5 +202,6 @@ __all__ = [
     "TaskBranchResolution",
     "TaskBranchResolver",
     "TaskMergeReceipt",
+    "is_commit_oid",
     "probe_canonical_state",
 ]

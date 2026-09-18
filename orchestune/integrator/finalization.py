@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from orchestune.forge import Forge
 from orchestune.integrator.proofs import TaskIntegrationProof
-from orchestune.task_branch_resolution import ResolutionSource
+from orchestune.task_branch_resolution import ResolutionSource, is_commit_oid
 
 RECEIPT_MARKER = "<!-- orchestune:task-integration-proof -->"
-_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 def ensure_integration_receipt(
@@ -80,7 +78,7 @@ def find_integration_receipt(
         ):
             continue
         source_sha = payload.get("source_sha")
-        if isinstance(source_sha, str) and _SHA_PATTERN.fullmatch(source_sha):
+        if is_commit_oid(source_sha):
             stored_branch = payload.get("branch_name")
             if not isinstance(stored_branch, str) or not stored_branch:
                 continue

@@ -185,3 +185,13 @@ def test_merge_receipt_uses_issue_identity_and_immutable_fetched_oid() -> None:
     assert receipt.source is ResolutionSource.PR_FALLBACK
     assert receipt.allows(BranchCapability.VERIFY_MERGED)
     assert not receipt.allows(BranchCapability.DELETE)
+
+
+def test_merge_receipt_rejects_invalid_oid_on_every_construction_path() -> None:
+    with pytest.raises(ValueError, match="invalid fetched commit OID"):
+        TaskMergeReceipt(
+            issue_number=42,
+            branch_name="feat/issue-42-task-a",
+            fetched_commit_oid="not-an-oid",
+            source=ResolutionSource.PR_FALLBACK,
+        )
