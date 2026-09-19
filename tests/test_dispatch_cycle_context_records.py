@@ -67,14 +67,11 @@ def _ctx(**overrides):
     defaults = dict(
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
-        issue_number_by_subtask_id={},
         dependency_resolution={},
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={},
         prs=[],
-        pr_by_branch={},
         config=DispatcherConfig(
             events_log_path=_TMP / "events.jsonl",
             run_state_path=_TMP / "run_state.json",

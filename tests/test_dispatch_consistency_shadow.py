@@ -50,14 +50,11 @@ def _ctx(config: DispatcherConfig, run_state: RunState, task) -> CycleContext:
     return CycleContext(
         run_state=run_state,
         tasks_by_issue={task.issue_number: task},
-        issue_number_by_subtask_id={task.subtask_id: task.issue_number},
         dependency_resolution={},
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={task.issue_number: f"codex/issue-{task.issue_number}"},
         prs=[],
-        pr_by_branch={},
         config=config,
     )
 
