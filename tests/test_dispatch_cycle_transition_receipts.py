@@ -1,4 +1,11 @@
-"""#883: apply_verified_transition and its status-executor/recovery wiring.
+"""#883: `apply_verified_transition` と `_authoritative_execution_active` の単体契約。
+
+#922: status executor と blocked-recompute recovery の「接続確認」はここから外した。
+前者は port 境界（`test_dispatch_cycle_consistency_port.py::TestExecuteRepair`）が、
+後者は `_handle_blocked_recompute_recovery` の責務を所有する
+`test_dispatch_reconciliation_promotions.py::TestHandleBlockedRecomputeRecovery` が
+同じ保証を持つ。
+
 
 `apply_verified_transition(ctx, receipt, *, execution_active)` is a thin
 bridge over #868's already-tested `CycleContext.record_transition`:
@@ -11,11 +18,8 @@ CONFLICT/NOOP/APPLIED outcome comes straight from `record_transition`.
 from __future__ import annotations
 
 import dataclasses
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from orchestune.consistency.intents import IntentJournal
-from orchestune.consistency.models import RepairStatus
-from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context_state import (
     REASON_STALE_OBSERVATION,
     REASON_TERMINAL_STATE,
@@ -23,60 +27,27 @@ from orchestune.dispatch.cycle_context_state import (
 )
 from orchestune.dispatch.cycle_records import (
     _authoritative_execution_active,
-    _on_status_transition_verified,
     apply_verified_transition,
 )
-from orchestune.dispatch.dependency_resolution import TaskDependencies
-from orchestune.dispatch.reconciliation import (
-    _handle_blocked_recompute_recovery,
-)
-from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.status_repair import (
     VerifiedStatusTransition,
     execute_status_repair_command,
 )
-from orchestune.labels import StatusLabel
-from orchestune.models import Task
-from tests.conftest import make_issue, make_task
-from tests.test_consistency_status_repair import _config, _plan
-
-_DEFAULTS = dict(
-    run_state=RunState(active_worktrees={}),
-    tasks_by_issue={},
-    dependency_resolution={},
-    ci_passed_pr_issue_numbers=set(),
-    changes_requested_issue_numbers=set(),
-    branch_by_issue_number={},
-    prs=[],
-)
+from tests.dispatch_test_support import make_test_cycle_context, make_test_task
+from tests.test_consistency_status_repair import _plan
 
 
 def _ctx(tmp_path, **overrides):
-    defaults = dict(_DEFAULTS)
-    defaults["config"] = DispatcherConfig(
-        events_log_path=tmp_path / "events.jsonl",
-        run_state_path=tmp_path / "run_state.json",
-        worktree_root=tmp_path / "worktrees",
-    )
-    defaults.update(overrides)
-    return CycleContext(**defaults)
+    """テストごとの`tmp_path`に状態ファイルを置くCycleContext。"""
+    return make_test_cycle_context(state_root=tmp_path, **overrides)
 
 
 def _task(**overrides):
-    defaults = dict(
-        issue_number=280,
-        subtask_id="task-a",
-        footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:blocked",),
-        created_at="2026-01-01T00:00:00+00:00",
-    )
+    """`apply_verified_transition`の入口となる`status:blocked`なTask。"""
+    defaults = {"status_labels": ("status:blocked",)}
     defaults.update(overrides)
-    return Task(**defaults)
+    return make_test_task(defaults.pop("issue_number", 280), **defaults)
 
 
 class TestApplyVerifiedTransition:
@@ -297,193 +268,3 @@ def _evidence():
             return False
 
     return _CompletionEvidence()
-
-
-class TestStatusExecutorWiring:
-    """`_on_status_transition_verified` bridges the real typed executor."""
-
-    def test_verified_transition_reaches_context(self, tmp_path, in_memory_forge):
-        before = (StatusLabel.DONE, StatusLabel.QUEUED)
-        task = make_task(1, status_labels=before, parent_number=None)
-        in_memory_forge.seed_issue(make_issue(1, labels=before))
-        ctx = _ctx(tmp_path, tasks_by_issue={1: task})
-
-        result = _execute(
-            _remove_done_command(task),
-            {1: task},
-            _config(tmp_path, in_memory_forge),
-            _on_status_transition_verified(ctx),
-        )
-
-        assert result.status is RepairStatus.APPLIED
-        assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
-
-    def test_conflict_becomes_failed_diagnostic_without_forge_rollback(
-        self, tmp_path, in_memory_forge
-    ):
-        before = (StatusLabel.DONE, StatusLabel.QUEUED)
-        task = make_task(1, status_labels=before, parent_number=None)
-        in_memory_forge.seed_issue(make_issue(1, labels=before))
-        # A ctx that does not know issue #1 forces `record_transition` to
-        # CONFLICT (`unknown-issue`) once the callback runs.
-        ctx = _ctx(tmp_path, tasks_by_issue={})
-
-        result = _execute(
-            _remove_done_command(task),
-            {1: task},
-            _config(tmp_path, in_memory_forge),
-            _on_status_transition_verified(ctx),
-        )
-
-        assert result.status is RepairStatus.FAILED
-        assert "unknown-issue" in result.diagnostics[0]
-        # Forge already committed the label change; the conflict must not
-        # roll it back.
-        assert in_memory_forge.get_issue_labels(1) == (StatusLabel.QUEUED,)
-
-    def test_journal_failure_leaves_context_untouched(self, tmp_path, in_memory_forge):
-        before = (StatusLabel.DONE, StatusLabel.QUEUED)
-        task = make_task(1, status_labels=before, parent_number=None)
-        in_memory_forge.seed_issue(make_issue(1, labels=before))
-        ctx = _ctx(tmp_path, tasks_by_issue={1: task})
-
-        with patch.object(
-            IntentJournal,
-            "mark_verified",
-            autospec=True,
-            side_effect=OSError("journal verification failed"),
-        ):
-            result = _execute(
-                _remove_done_command(task),
-                {1: task},
-                _config(tmp_path, in_memory_forge),
-                _on_status_transition_verified(ctx),
-            )
-
-        assert result.status is RepairStatus.FAILED
-        # Forge succeeded, but the callback was never invoked -> ctx keeps
-        # its original (pre-repair) view rather than the live Forge state.
-        assert ctx.task(1).status_labels == before
-        assert in_memory_forge.get_issue_labels(1) == (StatusLabel.QUEUED,)
-
-
-class TestRecomputeRecoveryWiring:
-    def test_blocked_recompute_recovery_confirms_queued_transition(self, tmp_path):
-        fake_forge = MagicMock()
-        fake_forge.get_issue_state.return_value = "OPEN"
-        fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tmp_path,
-            tasks_by_issue={
-                1: _task(
-                    issue_number=1,
-                    status_labels=(StatusLabel.BLOCKED,),
-                    depends_on=(),
-                )
-            },
-            dependency_resolution={1: TaskDependencies()},
-            run_state=run_state,
-        )
-        ctx.config.apply = True
-        ctx.config.forge = fake_forge
-
-        class _Issues:
-            def all(self):
-                return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
-
-        events = _handle_blocked_recompute_recovery(
-            _Issues(), run_state, ctx, ctx.config
-        )
-
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
-        assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
-
-    def test_transient_forge_read_failure_does_not_abort_the_recovery(self, tmp_path):
-        """Codex #899 review: a live-verify read failure must fail closed
-        (no receipt) rather than propagate and abort the whole recovery/cycle.
-        """
-        fake_forge = MagicMock()
-        fake_forge.get_issue_state.side_effect = RuntimeError("transient API error")
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tmp_path,
-            tasks_by_issue={
-                1: _task(
-                    issue_number=1,
-                    status_labels=(StatusLabel.BLOCKED,),
-                    depends_on=(),
-                )
-            },
-            dependency_resolution={1: TaskDependencies()},
-            run_state=run_state,
-        )
-        ctx.config.apply = True
-        ctx.config.forge = fake_forge
-
-        class _Issues:
-            def all(self):
-                return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
-
-        events = _handle_blocked_recompute_recovery(
-            _Issues(), run_state, ctx, ctx.config
-        )
-
-        # The label mutation and promotion event still happen; only the
-        # ctx-side confirmation is withheld.
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
-        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
-
-    def test_active_worktree_entry_holds_instead_of_reclaiming(self, tmp_path):
-        """Codex #899 review (round 4): the recovery must not hard-code
-        `execution_active=False` -- an Issue can still have a live
-        `run_state.active_worktrees` entry (e.g. its footprint deviation was
-        independently resolved without the worktree itself stopping), and
-        unconditionally asserting `False` would let `record_transition`
-        retire that launch, exposing it to `queued_tasks()`/scheduling again.
-        """
-        fake_forge = MagicMock()
-        fake_forge.get_issue_state.return_value = "OPEN"
-        fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
-        active = ActiveWorktree(
-            issue_number=1,
-            branch="claude/issue-1-task-a",
-            worktree_path="worktrees/w1",
-            pid=111,
-            started_at=1_699_999_000.0,
-            declared_footprint=(),
-        )
-        run_state = RunState(active_worktrees={"1": active})
-        ctx = _ctx(
-            tmp_path,
-            tasks_by_issue={
-                1: _task(
-                    issue_number=1,
-                    status_labels=(StatusLabel.BLOCKED,),
-                    depends_on=(),
-                )
-            },
-            dependency_resolution={1: TaskDependencies()},
-            run_state=run_state,
-        )
-        ctx.config.apply = True
-        ctx.config.forge = fake_forge
-
-        class _Issues:
-            def all(self):
-                return [make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]
-
-        with patch(
-            "orchestune.dispatch.reconciliation.check_footprint_deviation",
-            autospec=True,
-            return_value=(),
-        ):
-            events = _handle_blocked_recompute_recovery(
-                _Issues(), run_state, ctx, ctx.config
-            )
-
-        # The label mutation and promotion event still happen; only the
-        # ctx-side confirmation is withheld, preserving the launch fact.
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
-        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
-        assert ctx.launch_fact(1) is not None
