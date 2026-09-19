@@ -1,13 +1,8 @@
-"""L3 implementation of the `CycleActions` port (#823 v3 / #873).
+"""`CycleActions` portのL3実装。
 
-The live cycle binds one adapter to one `CycleContext` and invokes all seven
-ports through that context.
-
-The adapter owns exactly one `RunState`, loaded once at construction
-(`RunStateは起動時にloadした1個だけをadapterが所有する`); it exposes no
-getter that returns it to callers. `bind_context` may succeed only once --
-a second call, or using either port method before any `bind_context` call,
-raises `ValueError`.
+一つのdispatch cycleにつき一つのadapterが`RunState`を所有し、一つの
+`CycleContext`へ一度だけ束縛される。束縛前のport利用と二度目の束縛は
+`ValueError`にして、全phaseが同じ状態境界を使うことを保証する。
 """
 
 from __future__ import annotations
@@ -114,10 +109,9 @@ class _IssueRecordsView:
         return self._records
 
 
-# active worktreeごとの判定の優先順位(#86)。#884でphase_reconciliation.pyから
-# 移設(early: status:not-needed検知とSupervisor-owned GCへ委譲するstale entry
-# の非破壊hold、main: 完了検知・CHANGES_REQUESTEDエスカレーション・自動リベース
-# ・footprint逸脱検知)。順序は変更しない。
+# active worktreeごとの判定順序。early chainはnot-neededとstale entryを先に
+# 処理し、main chainは完了・レビュー差戻し・rebase・footprint逸脱を評価する。
+# この順序は状態遷移の優先順位であるため変更しない。
 _EARLY_ACTIVE_WORKTREE_RULES = RuleChain(
     rules=[
         _rule_not_needed,
@@ -138,18 +132,10 @@ _MAIN_ACTIVE_WORKTREE_RULES = RuleChain(
 def _run_active_worktree_rules(
     ctx: _RuleExecutionContext,
 ) -> tuple[list[dict], list[dict], bool]:
-    """#192/#193/#200/#884: active worktreeごとの完了検知・footprint逸脱処理。
+    """active worktreeを優先順位付きRuleChainで評価する。
 
-    `phase_reconciliation._process_active_worktrees`から移設。完了と判定した
-    エントリは（apply時）run_state.active_worktreesから除去してクオータを
-    解放し、以後のfootprint逸脱チェックはスキップする。
-
-    新しい判断パターンを追加する場合、このループ自体は変更せず、対応する
-    ruleを対応するact側モジュールに書いて、`_EARLY_ACTIVE_WORKTREE_RULES`/
-    `_MAIN_ACTIVE_WORKTREE_RULES`に追加するだけでよい（#86）。
-
-    完了receiptは`ctx.record_completion`/`is_completion_confirmed`が正本で、
-    戻り値ではイベントだけをレポート用途に返す。
+    完了したentryは以後の判定を行わず、完了receiptはcontextのrecord/queryが
+    所有する。戻り値はレポート用イベントだけであり、状態の正本ではない。
     """
     aggregates = _ActiveWorktreeAggregates()
 
@@ -268,12 +254,8 @@ def _scheduling_dag_inputs(
 class CycleActionAdapter:
     """L3 `CycleActions`の全port実装。
 
-    `run_state`/`config`/`now`をコンストラクタで1回だけ受け取り所有する。
-    `bind_context`で`CycleContext`を1回だけ接続してから各portを呼ぶ
-    （#886 Codex round 6: `bind_context`は#823の固定APIに無いadapter内部の
-    配線であり、`reconcile_recovery`/`execute_repair`が具象`CycleContext`
-    専用フィールドを要求する以上、型を`CycleQueries`まで緩めない——7 port
-    全部が同じ束縛契約に従う）。所有する`RunState`を返すgetterは公開しない。
+    `run_state`/`config`/`now`を構築時に受け取り、全portは一度束縛した
+    `CycleContext`を使う。adapterが所有する`RunState`を外部へ公開しない。
     """
 
     def __init__(
@@ -286,17 +268,10 @@ class CycleActionAdapter:
         self._completion_events: list[dict] = []
 
     def bind_context(self, view: CycleContext) -> None:
-        """#886 Codex review: `bind_context`は`CycleActions`Protocol（#823の
-        固定API）には無いadapter内部の配線であり、`view`の型を`CycleQueries`
-        まで緩める必要はない。`reconcile_recovery`/`execute_repair`は
-        `reconciliation.py`/`cycle_records.py`の既存関数（`ctx.tasks_by_issue`
-        /`ctx.run_state`のような具象`CycleContext`専用フィールドを使う）を
-        そのまま再利用するため、実際には全portが常に具象`CycleContext`で
-        束縛される（`cycle.py`側の唯一の実インスタンスも常にこれ）。型を
-        `CycleQueries`のままにして2 portだけ実行時に`TypeError`で弾く設計は、
-        「5 portは成功するのに残り2 portだけ失敗する」という一貫しない契約に
-        なる（#886 Codex round 6指摘）。`CycleContext`は`CycleQueries`を構造的に
-        満たすため、7 port全てにとってこの型で何も失わない。
+        """全portで共有する具体的な`CycleContext`を一度だけ束縛する。
+
+        recoveryとrepairを含む全portが同じcontextの確認済み状態を読むため、
+        部分的に弱いquery viewへ差し替えることは許可しない。
         """
         if self._view is not None:
             raise ValueError("CycleActionAdapter.bind_context called more than once")
@@ -322,11 +297,7 @@ class CycleActionAdapter:
             dag_inputs=view.dag_inputs(
                 tuple(task.issue_number for task in view.tasks())
             ),
-            # #884 Codex review: not display-only -- `notify_recompute`
-            # (rebase.py) uses this to look up the blocked issue and actually
-            # transition it to status:blocked/status:blocked-recompute, not
-            # just to word a comment. Reconstructed the same way
-            # `cycle_context.py` builds it for `CycleContext`.
+            # footprint逸脱時に対象Issueを遷移させるための逆引き。表示用ではない。
             issue_number_by_subtask_id={
                 task.subtask_id: task.issue_number
                 for task in view.tasks()
@@ -359,12 +330,7 @@ class CycleActionAdapter:
         return result
 
     def scan_external_locks(self) -> ExternalLockScanResult:
-        """#885: `phase_rebase._sync_external_locks`のact/portラッパー。
-
-        `view`(=`CycleQueries`)は`LockDependencyView`
-        (`task`/`assess_dependencies`/`canonical_branch`)を構造的に満たす
-        （`cycle.py`の既存呼出しが`view=ctx`とするのと同じ扱い）。
-        """
+        """外部lockを、束縛済みcontextの依存queryで評価する。"""
         view = self._bound_view()
         tasks_by_issue = {task.issue_number: task for task in view.tasks()}
         return _sync_external_locks(
@@ -376,13 +342,10 @@ class CycleActionAdapter:
         )
 
     def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
-        """#885: `scoring.select_tasks_with_decisions`のact/portラッパー。
+        """候補を一度選定し、派生DAG入力だけをscoringへ渡す。
 
-        `select_tasks_with_decisions`は既存selectorへの1回きりの呼出しで、
-        起動後の補充・再選定は行わない。quota/critical-path/conflictに
-        必要な全Task母集団は`view.tasks()`から得る（raw mapを再生成して
-        decisionへ渡さない）。個々のIssueに対する参照は`view.task(...)`を
-        使う。
+        起動後の補充・再選定は行わない。個別taskはcontext queryで取得し、
+        raw dependency declarationを選定処理へ渡さない。
         """
         view = self._bound_view()
         eligible, excluded = _filter_retry_backoffs(
@@ -437,13 +400,10 @@ class CycleActionAdapter:
         bases: tuple[StackBase, ...],
         candidates: tuple[TaskMetadata, ...],
     ) -> tuple[TaskMetadata, ...]:
-        """#885: `launch._launch_selected_tasks`のact/portラッパー。
+        """選定済みtaskを起動し、保存成功後だけ起動事実を記録する。
 
-        `bases`(選出済み実行計画のtuple、`Context`のbranch map公開ではない)
-        は、このメソッドの内部だけで`LaunchContext`が要求するローカルmapへ
-        変換する。入力tupleは変更しない。唯一のrecord地点は#871の保存成功
-        callback(`view.record_launch`)——`_launch_selected_tasks`自体は
-        1回だけ呼び、バッチ内の後続追加（再選定・追加起動）は行わない。
+        `bases`はこのメソッド内でlaunch用mapへ変換する。入力tupleは変更せず、
+        バッチ内で追加の選定・起動は行わない。
         """
         view = self._bound_view()
         if not self._config.apply:
@@ -482,14 +442,7 @@ class CycleActionAdapter:
         return tuple(launched)
 
     def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
-        """#886: post-GCの自動復帰（`status:blocked-recompute`/
-        `ci:base-branch-red`）。startup recovery（`CycleContext`が存在する前）
-        は別の`RecoveryBookkeepingAdapter`（recovery.py）が担当し、この
-        portとは無関係——ここで扱うのは既存`CycleContext`が存在する通常サイクル
-        中のpost-GC復帰だけ。
-
-        完了状態は束縛済みContextの確認済みfactだけを参照する。
-        """
+        """通常cycleのpost-GC復帰を、束縛済みcontextの確認済み事実で処理する。"""
         ctx = self._bound_view()
         issues = _IssueRecordsView(ctx.issue_records())
         events = _handle_blocked_recompute_recovery(
@@ -501,31 +454,16 @@ class CycleActionAdapter:
         return tuple(events)
 
     def execute_repair(self, command: RepairCommand) -> RepairResult:
-        """#886: fresh consistency executor。`status.*`以外のcommandは
-        `_DispatchRepairExecutor`と同じfail-closed実装（ハンドラ0件の
-        `DispatchRepairExecutorAdapter`）へ委ねる——任意commandへの汎用execや
-        独自retry loopは追加しない。
+        """repair commandを限定されたhandlerへ委譲する。
 
-        `status.*`の"fresh"は`cycle.py`の`_DispatchConsistencyAdapter`
-        （`fresh=True`）と同じ意味: 再取得したIssueから`tasks_by_issue`
-        （依存解決前提のTask母集団）だけを新しく作り直す
-        （`_DispatchConsistencyAdapter.observe()`が`_build_task_mappings`で
-        行うのと同じ処理）。`is_completion_confirmed`/`assess_dependencies`
-        （completion evidence）は再構築しない——`cycle.py`のcached/fresh
-        両adapterが常に*同一の*束縛済み`ctx`を参照するのと同じで、
-        #882/#883の`ctx.record_completion`/`record_transition`
-        が同一サイクル内で自己無矛盾に保つ状態を、独立した使い捨て
-        `CycleContext`で上書き・分岐させない。独立した完了集合のoverlayは作らない。
+        `status.*`は再取得したIssueからtask mappingだけを更新し、同一cycleの
+        completion evidenceとrecord状態は束縛済みcontextに保持する。その他の
+        commandは明示的なhandlerが無ければfail-closedとし、任意commandの実行や
+        独自retry loopは持たない。
 
-        `cycle.py`は`phase_reconciliation.py`経由でこのモジュール自身を
-        importする（#884の移設先）ため、`cycle.py`の`_DispatchConsistencyAdapter`
-        自体を再利用すると循環importになる（このモジュールの関数内importも
-        `test_internal_imports_are_not_hidden_inside_functions`が禁止する）。
-        代わりに`cycle_context.py`の`_fetch_issues`/`_build_task_mappings`
-        （どちらも循環しない）で同じ計算を自前で組み立てる。
-        `RecordStatus.CONFLICT`とexecution unknownの診断/保留は、recordの
-        宛先である*束縛済みの*`ctx`（`_on_status_transition_verified`経由）
-        がそのまま担う。
+        task mappingは`cycle_context`の`_fetch_issues`と`_build_task_mappings`で
+        再構築する。`cycle.py`は`phase_reconciliation`経由でこのモジュールをimport
+        するため、そこにあるconsistency adapterを再利用すると循環importになる。
         """
         ctx = self._bound_view()
         if command.code == COMMAND_RECLAIM:

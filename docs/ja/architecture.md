@@ -163,36 +163,22 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 ### 3.4 CycleContext Session / Unit of Workと依存状態の単一窓口
 
-`CycleContext`はraw依存宣言を含む`Task`観測・依存診断・Issue・PR・起動観測を
-privateに所有します。task queryはfrozenな`CycleTask` metadataだけを公開し、
-DAG consumerには`dag_inputs`経由で派生済み`SubTask`入力を明示的に渡します。
-これによりscoring/conflict policyはraw依存宣言を参照できません。consumerは
-意味付きqueryだけを通じて参照し、旧来の
-tasks/dependencies/CI/branch/RunState mutable属性は公開しません。`record_*`が
-記録するラベル差分は観測を上書きせず、queryが差分を優先します。サイクルが
-所有するaction adapterを1回だけbindし、7つのphase actionはすべてContext経由で
-呼び出します。phase間でraw state mapや同一サイクル完了overlayは渡しません。
+`CycleContext`は1 dispatch cycleの公開Session / Unit of Workです。初期観測と
+同一cycleで確認済みの差分を所有しますが、GitHubと`RunState`の永続データそのものは
+所有しません。`CycleQueries`は不変な`CycleTask` metadataと意味付きの依存・状態
+queryを公開し、raw依存宣言はDAG consumerへ派生済み`SubTask`入力としてだけ渡します。
+`CycleActions`はcycleの`RunState`を所有し、Contextへ一度だけbindされるため、全phaseは
+同じ境界で観測と記録を行います。
 
-起動の初期観測と`record_launch`は同じハンドル検証・正規化を使います。
-PIDは正の整数（boolを除く）、外部IDは非空文字列が有効で、無効な側は
-Noneにします。両方とも無効なら確定起動を公開しません。開始時刻の非数値・
-非有限値もNoneにし、再試行時の同一性を安定させます。起動履歴が残っていても、
-実効完了後の`execution_active=true`は拒否します。複数主状態に含まれる
-人手判断待ちラベルも、起動による自動解除の対象にはしません。
+record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だけを受け入れます。
+`record_transition`はIssue、遷移先状態、実行中の主張を再試行や遷移規則より先に
+検証します。確認済み完了には後から終端ラベルを付けられますが、古い非終端更新と
+完了後の実行中状態は拒否します。起動factはboolを除く正のPIDまたは非空の外部IDを
+必要とし、無効なhandle・時刻は`None`へ正規化します。不確定な起動を確定起動として
+公開しません。
 
-`record_transition`は未知Issue、遷移先の主状態、実行中の主張の整合性を
-NOOP判定より先に確認します。その後、同値再試行、expectedラベルの一致、
-終端規則・遷移表を順に検証します。先行完了に遅れて届いた確認済みDONE/
-NOT_NEEDEDラベルは反映できますが、古い非終端ラベルへの新しい更新は拒否します。
-完全同値かつ実行中でない再試行は状態を変えずNOOPになります。
-これらは外部I/Oを行わず、呼出側が成功を確認してから記録するAPIです。
-つまり`CycleContext`は1 dispatch cycleのSession / Unit of Workであり、開始時の
-観測、成功確認済みの確定済み差分（confirmed changes）、永続化済み`RunState`を
-意味付きqueryへ束ねる単一の公開窓口です。ただしGitHubと`RunState`の永続データを
-置き換えず、外部I/O、分散transaction、自動rollbackも担いません。取得済みの
-`CycleTask`、`DependencyAssessment`、viewは不変であり、更新後を読むには
-`record_*`後にContextへ再queryします。Dispatcher向けの公開`DispatchSnapshot`や
-サイクル凍結点は導入しません。
+更新後を読む呼出側は`record_*`後に再queryします。Dispatcherは公開`DispatchSnapshot`や
+サイクル凍結点は導入しません。分散transaction、自動rollbackも導入しません。
 
 依存契約の正本は次の詳細文書に分割しています。
 

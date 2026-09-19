@@ -1,9 +1,7 @@
-"""active worktreeごとの判定(Rule)と、優先順位付きで合成するComposite(RuleChain)。
+"""active worktreeのRuleと、それを評価する`CycleContext`境界。
 
-cycle側(dispatch_cycle.py)は、ここで定義される`CycleContext`で条件データを渡し、
-`RuleChain`にどのRuleをどの優先順位で並べるかだけを決める。個々のRuleの中身
-(条件判定そのもの)は、対応するact側モジュール(dispatch_gc/dispatch_escalation/
-dispatch_rebase)に定義される。
+Ruleは優先順位付きの`RuleChain`で合成する。`CycleContext`は意味付きqueryと
+action portを提供し、個々の判定・副作用は対応する責務モジュールが実装する。
 """
 
 from __future__ import annotations
@@ -42,8 +40,7 @@ class CycleContext(_CycleState):
     The constructor still accepts the observation containers produced by
     ``cycle_context.py`` so the ownership boundary stays explicit, but none of
     them is retained as a public attribute.  Phases can observe state only via
-    semantic queries and perform effects only through the seven delegated
-    action ports.
+    semantic queries and perform effects only through delegated action ports.
     """
 
     def __init__(
@@ -80,7 +77,7 @@ class CycleContext(_CycleState):
         self.not_needed_review_dispatcher = not_needed_review_dispatcher
         self._actions = actions
 
-    # ---- action API (#873) -------------------------------------------------
+    # ---- action API ---------------------------------------------------------
 
     def _action_port(self) -> CycleActions:
         if self._actions is None:
@@ -116,35 +113,16 @@ class CycleContext(_CycleState):
 
 @dataclass(frozen=True, slots=True)
 class _RuleExecutionContext:
-    """#884: private input adapter for the active-worktree Rules and GC acts.
+    """active-worktree RuleとGC actの非公開入力adapter。
 
-    Not a public state window (`CycleActionAdapter` never returns it, and
-    neither does anything else) -- it exists only to hand Rule
-    decisions/acts exactly the three things they need: `run_state` (acts
-    mutate this directly), `queries` (a `CycleQueries`-conforming view;
-    decisions read only through this), and `config`. `prs`,
-    `not_needed_review_dispatcher`, `issue_records_by_number`,
-    `tasks_by_issue`, and `issue_number_by_subtask_id` are narrowly-scoped
-    extras existing Rule bodies already read directly that `CycleQueries` has
-    no method for -- `not_needed_review_dispatcher` in particular is L3
-    behavior injected into L2 Rule code specifically to avoid an L2->L3
-    import, the same reason `CycleContext` already carries it as a plain
-    field rather than a method. `issue_number_by_subtask_id` is never used
-    for dependency resolution itself (per `CycleContext`'s own docstring),
-    but it is not display-only either (#884 Codex review): footprint-deviation
-    handling (`rebase.notify_recompute`) uses it to find and actually
-    transition the blocked issue to `status:blocked`/`status:blocked-recompute`,
-    not just to word a notification comment. `CycleQueries` has no equivalent
-    query, so `CycleActionAdapter` reconstructs it the same way
-    `cycle_context.py` builds it for `CycleContext` (from `view.tasks()`).
+    Ruleの判定は`queries`だけを通じて状態を読み、actは`run_state`を更新する。
+    追加fieldは既存Ruleの局所的な入力であり、公開query APIではない。
+    `issue_number_by_subtask_id`はfootprint逸脱時に対象Issueを遷移させるための
+    逆引きで、依存解決や表示のための値ではない。
 
-    Lives in `rules.py` rather than the new L3 `cycle_actions.py` because the
-    Rule functions that take it as `ctx` (`gc/__init__.py`, `rebase.py`,
-    `escalation.py`) are all L2 and cannot import from L3; `rules.py` is the
-    one L2 module all three already import `CycleContext` from without
-    creating an import cycle (`gc/__init__.py` already imports
-    `escalation.py`, so defining this in either of those, or in `rebase.py`,
-    would cycle back).
+    Rule実装がL2にあり、`gc`は`escalation`をimportするため、このadapterも
+    `rules.py`に置く。`gc`、`escalation`、`rebase`のいずれかへ置くと、Ruleが
+    importするadapterを通じてL2内の循環依存を作る。
     """
 
     run_state: RunState
@@ -213,9 +191,8 @@ class RuleChain:
     Trueを返す。`terminal=False`の場合は結果をaggregatesへ反映した上で次の
     ruleを試し続ける。どのruleも該当しなければFalseを返す。
 
-    新しい判断パターンを追加する場合、このクラス自体は変更せず、対応する
-    ruleを対応するact側モジュールに書いて、該当する`RuleChain`の`rules`に
-    追加するだけでよい（#86）。
+    新しい判断パターンは対応する責務モジュールにRuleとして実装し、該当する
+    `RuleChain`へ追加する。
     """
 
     rules: list[Rule]

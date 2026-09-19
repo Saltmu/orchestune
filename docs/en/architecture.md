@@ -161,40 +161,25 @@ Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration
 
 ### 3.4 CycleContext Session / Unit of Work and the single dependency-state port
 
-`CycleContext` privately owns raw `Task` observations (including dependency
-declarations), dependency diagnostics, Issues, PRs, and launch observations.
-Its task queries expose only frozen `CycleTask` metadata values. DAG consumers
-receive explicit derived `SubTask` inputs through `dag_inputs`, so scoring and
-conflict policy cannot read raw dependency declarations. Consumers otherwise read
-state only through semantic query methods;
-the former mutable tasks/dependencies/CI/branch/RunState attributes are not exposed.
-Labels recorded by `record_*` remain separate deltas that queries prefer over
-observations. One cycle-owned action adapter is bound exactly once, and all seven
-phase actions are invoked through the context without passing raw state maps or
-same-cycle completion overlays between phases.
+`CycleContext` is the public Session / Unit of Work for one dispatch cycle. It
+owns initial observations and confirmed in-cycle deltas, while durable GitHub and
+`RunState` data remain outside the context. `CycleQueries` exposes immutable
+`CycleTask` metadata and semantic dependency/state queries; raw dependency
+declarations are supplied to DAG consumers only as derived `SubTask` inputs.
+`CycleActions` owns the cycle's `RunState` and is bound to the context once, so
+every phase observes and records through the same boundary.
 
-Initial launch observations and `record_launch` share handle validation and
-normalization. A usable PID is a positive integer excluding bool; an external ID
-is a nonempty string. Each unusable handle becomes None, and no definite launch
-is exposed when both are unusable. Nonnumeric and nonfinite start times also become
-None so retry identity remains stable. Effective completion rejects
-`execution_active=true` even when launch history remains. Launch recording cannot
-automatically clear human-review holds contained in conflicting primary labels.
+The record APIs perform no external I/O and accept only facts confirmed by a
+successful caller action. `record_transition` validates the issue, target status,
+and execution claim before it accepts a retry or applies transition rules. A
+confirmed completion may receive its terminal label later, but stale nonterminal
+updates and active execution after completion are rejected. Launch facts require a
+positive non-bool PID or a nonempty external ID; invalid handles and times are
+normalized to `None`, and an indeterminate launch is not exposed as definite.
 
-`record_transition` validates the issue, target primary status, and active-execution
-claim before considering NOOP. It then checks an identical retry, expected labels,
-and terminal/transition rules, in that order. Verified DONE/NOT_NEEDED labels may
-catch up with prior completion; a new update to stale nonterminal labels is rejected.
-An identical retry with no active execution returns NOOP without changing state.
-These APIs perform no external I/O; callers record only confirmed successful actions.
-`CycleContext` is therefore the Session / Unit of Work for one dispatch cycle: it
-combines initial observations, confirmed changes, and persisted `RunState` behind
-one semantic public query port. It does not replace durable GitHub or `RunState`
-data and performs no external I/O, distributed transaction, or automatic rollback.
-Previously returned `CycleTask`, `DependencyAssessment`, and view values are
-immutable; consumers re-query the context after `record_*` to observe a confirmed
-change. The dispatcher introduces neither a public `DispatchSnapshot` nor a cycle
-freeze point.
+Callers re-query after `record_*` to observe a change. The dispatcher introduces
+neither a public `DispatchSnapshot` nor a cycle freeze point, distributed
+transaction, or automatic rollback.
 
 The canonical dependency contracts are split across these detail documents:
 
