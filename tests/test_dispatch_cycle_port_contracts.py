@@ -8,6 +8,9 @@
    型付き代入をCIの`mypy orchestune tests`が検証し、method欠落と戻り値誤りは
    別プロセスのnegative fixtureでmypy失敗を確認する
 3. 全件query `tasks` / `issue_records` / `pull_requests` / `is_prior_merge_held`
+4. `CycleActionAdapter`のbindライフサイクル——**全7ポート共通**の契約なので、
+   #916時点でポート追加のステップごとに3ファイルへ分かれていた個別pinを
+   ここへ集約した（#922）
 
 配線（phaseからportを呼ぶ）と旧raw属性の撤去は#873以降の担当であり、ここでは
 署名と観測の区別だけを固定する。
@@ -37,6 +40,7 @@ from orchestune.dispatch.cycle_action_contracts import (
     GcPhaseResult,
     StackBase,
 )
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
@@ -108,17 +112,19 @@ class _FakeCycleActions:
 class TestPortValueTypes:
     """`ActivePhaseResult` / `StackBase` / 移設した`GcPhaseResult`。"""
 
-    def test_active_phase_result_declares_exactly_three_fields(self):
+    def test_port_value_types_expose_their_documented_fields(self):
         assert [f.name for f in dataclasses.fields(ActivePhaseResult)] == [
             "completion_events",
             "deviation_events",
             "any_forced_serial",
         ]
-
-    def test_stack_base_declares_exactly_two_fields(self):
         assert [f.name for f in dataclasses.fields(StackBase)] == [
             "issue_number",
             "branch",
+        ]
+        assert [f.name for f in dataclasses.fields(GcPhaseResult)] == [
+            "completion_events",
+            "consistency",
         ]
 
     def test_port_value_types_are_frozen(self):
@@ -140,11 +146,61 @@ class TestPortValueTypes:
         assert phase_gc.GcPhaseResult is GcPhaseResult
         assert "GcPhaseResult" in phase_gc.__all__
 
-    def test_gc_phase_result_keeps_its_fields(self):
-        assert [f.name for f in dataclasses.fields(GcPhaseResult)] == [
-            "completion_events",
-            "consistency",
-        ]
+
+class TestBindContext:
+    """全7ポートに共通するbindライフサイクル（#922でここへ集約）。
+
+    移行中はポートを追加したステップごとに
+    `test_dispatch_cycle_{active,scheduling,consistency}_port.py`へ
+    「このステップで増えたポートもbind前に落ちる」pinが置かれていた。
+    ポートが出揃った現在は「どのポートもbindなしでは使えない」という
+    単一の契約なので、1テストで全ポートを走査する。
+    """
+
+    def _adapter(self):
+        return CycleActionAdapter(RunState(active_worktrees={}), _ctx().config, 0.0)
+
+    def test_every_action_port_raises_before_bind_context(self):
+        repair = RepairCommand(
+            code="status.primary-status-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="1",
+            idempotency_key="k",
+        )
+        ports = {
+            "process_active_worktrees": lambda a: a.process_active_worktrees(),
+            "run_gc": lambda a: a.run_gc(()),
+            "scan_external_locks": lambda a: a.scan_external_locks(),
+            "select_tasks": lambda a: a.select_tasks(()),
+            "launch_tasks": lambda a: a.launch_tasks((), (), ()),
+            "reconcile_recovery": lambda a: a.reconcile_recovery(),
+            "execute_repair": lambda a: a.execute_repair(repair),
+        }
+        # `CycleActions` Protocolのmethodを取りこぼしていないことも同時に固定する。
+        assert set(ports) == {
+            name
+            for name in dir(CycleActions)
+            if not name.startswith("_") and callable(getattr(CycleActions, name))
+        }
+
+        guarded = {}
+        for name, call in ports.items():
+            try:
+                call(self._adapter())
+            except ValueError:
+                guarded[name] = True
+            else:
+                guarded[name] = False
+        assert guarded == dict.fromkeys(ports, True)
+
+    def test_binding_twice_raises(self):
+        adapter = self._adapter()
+        view = _ctx()
+
+        adapter.bind_context(view)
+
+        with pytest.raises(ValueError):
+            adapter.bind_context(view)
 
 
 class TestPortProtocols:

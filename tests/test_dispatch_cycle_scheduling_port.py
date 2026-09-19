@@ -18,18 +18,6 @@ from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _ctx, _task
 
 
-class TestBindContextContractExtendsToNewPorts:
-    def test_using_any_of_the_three_ports_before_bind_raises(self):
-        adapter = CycleActionAdapter(RunState(active_worktrees={}), _ctx().config, 0.0)
-
-        with pytest.raises(ValueError):
-            adapter.scan_external_locks()
-        with pytest.raises(ValueError):
-            adapter.select_tasks(())
-        with pytest.raises(ValueError):
-            adapter.launch_tasks((), (), ())
-
-
 class TestScanExternalLocks:
     def test_delegates_to_the_existing_sync_with_adapter_state(self):
         run_state = RunState(active_worktrees={})

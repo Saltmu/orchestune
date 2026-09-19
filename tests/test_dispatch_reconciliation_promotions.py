@@ -21,12 +21,15 @@ from orchestune.dag.models import (
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
+from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.reconciliation import (
     _collect_active_conflict_subtask_ids,
     _handle_blocked_recompute_recovery,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.labels import StatusLabel
+from tests.conftest import make_issue
 from tests.dispatch_test_support import make_plain_issue as _issue
 from tests.dispatch_test_support import make_test_active_worktree as _active
 from tests.dispatch_test_support import make_test_cycle_context
@@ -655,3 +658,93 @@ class TestHandleBlockedRecomputeRecovery:
         ]
         mock_add.assert_called_once_with(1, "status:queued")
         assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+
+    def test_transient_forge_read_failure_does_not_abort_the_recovery(self):
+        """Codex #899 review: a live-verify read failure must fail closed
+        (no receipt) rather than propagate and abort the whole recovery/cycle.
+
+        #922: `test_dispatch_cycle_transition_receipts.py`から、
+        `_handle_blocked_recompute_recovery`の責務を所有する本suiteへ移設。
+        """
+        fake_forge = MagicMock()
+        fake_forge.get_issue_state.side_effect = RuntimeError("transient API error")
+        run_state = RunState(active_worktrees={})
+        ctx = _ctx(
+            tasks_by_issue={
+                1: _task(
+                    issue_number=1,
+                    status_labels=(StatusLabel.BLOCKED,),
+                    depends_on=(),
+                )
+            },
+            dependency_resolution={1: TaskDependencies()},
+            run_state=run_state,
+        )
+        ctx.config.apply = True
+        ctx.config.forge = fake_forge
+
+        events = _handle_blocked_recompute_recovery(
+            _IssuesStub([make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]),
+            run_state,
+            ctx,
+            ctx.config,
+        )
+
+        # The label mutation and promotion event still happen; only the
+        # ctx-side confirmation is withheld.
+        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
+
+    def test_active_worktree_entry_holds_instead_of_reclaiming(self):
+        """Codex #899 review (round 4): the recovery must not hard-code
+        `execution_active=False` -- an Issue can still have a live
+        `run_state.active_worktrees` entry (e.g. its footprint deviation was
+        independently resolved without the worktree itself stopping), and
+        unconditionally asserting `False` would let `record_transition`
+        retire that launch, exposing it to `queued_tasks()`/scheduling again.
+
+        #922: 上と同じ理由で本suiteへ移設。
+        """
+        fake_forge = MagicMock()
+        fake_forge.get_issue_state.return_value = "OPEN"
+        fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
+        active = ActiveWorktree(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path="worktrees/w1",
+            pid=111,
+            started_at=1_699_999_000.0,
+            declared_footprint=(),
+        )
+        run_state = RunState(active_worktrees={"1": active})
+        ctx = _ctx(
+            tasks_by_issue={
+                1: _task(
+                    issue_number=1,
+                    status_labels=(StatusLabel.BLOCKED,),
+                    depends_on=(),
+                )
+            },
+            dependency_resolution={1: TaskDependencies()},
+            run_state=run_state,
+        )
+        ctx.config.apply = True
+        ctx.config.forge = fake_forge
+
+        with patch(
+            "orchestune.dispatch.reconciliation.check_footprint_deviation",
+            autospec=True,
+            return_value=(),
+        ):
+            events = _handle_blocked_recompute_recovery(
+                _IssuesStub([make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]),
+                run_state,
+                ctx,
+                ctx.config,
+            )
+
+        # The label mutation and promotion event still happen; only the
+        # ctx-side confirmation is withheld, preserving the launch fact.
+        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
+        assert ctx.launch_fact(1) is not None

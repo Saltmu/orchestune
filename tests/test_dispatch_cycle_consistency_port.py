@@ -16,33 +16,14 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
+from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
-from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
 from tests.conftest import make_issue, make_task
 from tests.dispatch_gc_test_support import _ctx, _task
 from tests.test_consistency_status_repair import _config, _plan
-
-
-class TestBindContextContractExtendsToConsistencyPorts:
-    def test_using_either_port_before_bind_raises(self):
-        adapter = CycleActionAdapter(RunState(active_worktrees={}), _ctx().config, 0.0)
-
-        with pytest.raises(ValueError):
-            adapter.reconcile_recovery()
-        with pytest.raises(ValueError):
-            adapter.execute_repair(
-                RepairCommand(
-                    code=COMMAND_BOOKKEEPING,
-                    scope=ConsistencyScope.TASK,
-                    subject_id="1",
-                    idempotency_key="k",
-                )
-            )
 
 
 class TestExecuteRepair:
@@ -157,6 +138,36 @@ class TestExecuteRepair:
         # roll it back.
         assert in_memory_forge.get_issue_labels(1) == (StatusLabel.QUEUED,)
 
+    def test_journal_failure_leaves_the_bound_context_untouched(
+        self, tmp_path, in_memory_forge
+    ):
+        """#922: `transition_receipts`が`_on_status_transition_verified`へ直接
+        注入していた失敗経路を、port境界（`execute_repair`）へ移設した。
+        Forgeへの書き込みは確定済みでも、journalの確定記録に失敗した回は
+        ctxへ反映しない（コールバックが呼ばれない）。
+        """
+        before = (StatusLabel.DONE, StatusLabel.QUEUED)
+        task = make_task(1, status_labels=before, parent_number=None)
+        in_memory_forge.seed_issue(make_issue(1, labels=before))
+        run_state = RunState(active_worktrees={})
+        config = _config(tmp_path, in_memory_forge)
+        ctx = _ctx(tasks_by_issue={1: task}, run_state=run_state, config=config)
+        adapter = CycleActionAdapter(run_state, config, now=0.0)
+        adapter.bind_context(ctx)
+        command = _plan({1: task})[1][0]
+
+        with patch.object(
+            IntentJournal,
+            "mark_verified",
+            autospec=True,
+            side_effect=OSError("journal verification failed"),
+        ):
+            result = adapter.execute_repair(command)
+
+        assert result.status.value == "failed"
+        assert ctx.task(1).status_labels == before
+        assert in_memory_forge.get_issue_labels(1) == (StatusLabel.QUEUED,)
+
 
 class TestReconcileRecovery:
     def test_blocked_recompute_recovery_reaches_the_bound_context(self, tmp_path):
@@ -208,44 +219,3 @@ class TestReconcileRecovery:
         events = adapter.reconcile_recovery()
 
         assert events == ()
-
-    def test_recovery_reads_confirmed_completions_from_the_bound_context(
-        self,
-    ):
-        """No raw completion set is threaded into recovery helpers."""
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={}, run_state=run_state)
-        adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
-        adapter.bind_context(ctx)
-
-        with patch(
-            "orchestune.dispatch.cycle_actions._run_active_worktree_rules",
-            return_value=([], [], False),
-        ):
-            adapter.process_active_worktrees()
-
-        with (
-            patch.object(ctx, "issue_records", return_value=()),
-            patch(
-                "orchestune.dispatch.cycle_actions._handle_blocked_recompute_recovery",
-                return_value=[],
-            ) as blocked_recompute,
-            patch(
-                "orchestune.dispatch.cycle_actions._handle_base_branch_red_recovery",
-                return_value=[],
-            ) as base_branch_red,
-        ):
-            adapter.reconcile_recovery()
-
-        assert blocked_recompute.call_args.args == (
-            blocked_recompute.call_args.args[0],
-            run_state,
-            ctx,
-            ctx.config,
-        )
-        assert base_branch_red.call_args.args == (
-            base_branch_red.call_args.args[0],
-            ctx,
-            run_state,
-            ctx.config,
-        )

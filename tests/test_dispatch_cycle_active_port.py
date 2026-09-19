@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.gc.completion import is_completion_hold_event
 from orchestune.dispatch.state import RunState
@@ -14,43 +12,7 @@ from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _active, _ctx, _task
 
 
-class TestBindContext:
-    def test_using_either_port_before_bind_raises(self, tmp_path):
-        adapter = CycleActionAdapter(RunState(active_worktrees={}), _ctx().config, 0.0)
-
-        with pytest.raises(ValueError):
-            adapter.process_active_worktrees()
-        with pytest.raises(ValueError):
-            adapter.run_gc(())
-
-    def test_binding_twice_raises(self):
-        adapter = CycleActionAdapter(RunState(active_worktrees={}), _ctx().config, 0.0)
-        view = _ctx()
-
-        adapter.bind_context(view)
-
-        with pytest.raises(ValueError):
-            adapter.bind_context(view)
-
-
 class TestProcessActiveWorktrees:
-    def test_returns_immutable_tuples(self, fake_forge):
-        active = _active(pid=123, started_at=1_699_999_000.0)
-        task = _task(status_labels=("status:in-progress",))
-        run_state = RunState(active_worktrees={"1": active})
-        ctx = _ctx(forge=fake_forge, tasks_by_issue={280: task}, run_state=run_state)
-        ctx.config.apply = True
-        adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
-        adapter.bind_context(ctx)
-
-        with patch(
-            "orchestune.dispatch.gc.is_process_alive", autospec=True, return_value=True
-        ):
-            result = adapter.process_active_worktrees()
-
-        assert isinstance(result.completion_events, tuple)
-        assert isinstance(result.deviation_events, tuple)
-
     def test_completion_reaches_the_adapters_own_run_state(self, fake_forge):
         active = _active(pid=123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))

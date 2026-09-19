@@ -15,8 +15,6 @@ record系（`record_completion` / `record_launch` / `record_transition`）は
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from orchestune.dispatch.dependency_assessment import DependencyState
@@ -25,27 +23,10 @@ from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
     UnresolvedDependency,
 )
-from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
 from orchestune.task_metadata import CycleTask
 from tests.dispatch_cycle_context_test_support import _active, _ctx, _task
-
-
-class TestConstructorCleanup:
-    """Issue #915: CycleContext.__init__ から不要な互換引数が撤去されていること。"""
-
-    def test_obsolete_compatibility_arguments_are_removed_from_signature(self):
-        sig = inspect.signature(CycleContext.__init__)
-        params = sig.parameters
-        for removed in (
-            "issue_number_by_subtask_id",
-            "done_issue_numbers",
-            "pr_by_branch",
-        ):
-            assert (
-                removed not in params
-            ), f"{removed} should be removed from CycleContext.__init__"
 
 
 class TestOwnership:
