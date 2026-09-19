@@ -147,60 +147,38 @@ class TestRecordLaunch:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_LAUNCH_MISMATCH
 
-    def test_invalid_launch_missing_branch_is_conflict(self):
+    @pytest.mark.parametrize(
+        "active",
+        [
+            pytest.param(_active(1, branch=""), id="missing_branch"),
+            pytest.param(
+                _active(1, pid=None, external_id=None),
+                id="no_pid_and_no_external_id",
+            ),
+            # 空文字列はpid欠如と同じ「照会不能」として扱う(#868レビュー対応)。
+            pytest.param(
+                _active(1, pid=None, external_id=""),
+                id="empty_string_external_id",
+            ),
+            # 0・負数・boolは有効なプロセスIDではない(#868レビュー対応)。
+            pytest.param(_active(1, pid=0, external_id=None), id="zero_pid"),
+            pytest.param(_active(1, pid=-1, external_id=None), id="negative_pid"),
+            pytest.param(_active(1, pid=True, external_id=None), id="bool_pid"),
+            # 非文字列の真値(例: true)は有効なプロバイダIDではない(#868レビュー対応)。
+            pytest.param(_active(1, pid=None, external_id=True), id="bool_external_id"),
+            pytest.param(_active(1, pid=None, external_id=12345), id="int_external_id"),
+            # セルフチェックで発見(#868): branch/worktree_pathも非文字列の真値を受け付けてはならない。
+            pytest.param(_active(1, branch=123), id="int_branch"),
+            pytest.param(_active(1, branch=True), id="bool_branch"),
+            pytest.param(_active(1, worktree_path=999), id="int_worktree_path"),
+            pytest.param(
+                _active(1, launch_phase="prepared"), id="prepared_launch_phase"
+            ),
+        ],
+    )
+    def test_invalid_launch_inputs_are_rejected(self, active):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        result = ctx.record_launch(_active(1, branch=""))
-        assert result.status == RecordStatus.CONFLICT
-        assert result.reason == REASON_INVALID_LAUNCH
-
-    def test_invalid_launch_no_pid_and_no_external_id_is_conflict(self):
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        result = ctx.record_launch(_active(1, pid=None, external_id=None))
-        assert result.status == RecordStatus.CONFLICT
-        assert result.reason == REASON_INVALID_LAUNCH
-
-    def test_invalid_launch_empty_string_external_id_is_conflict(self):
-        # 空文字列はpid欠如と同じ「照会不能」として扱う(#868レビュー対応)。
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        result = ctx.record_launch(_active(1, pid=None, external_id=""))
-        assert result.status == RecordStatus.CONFLICT
-        assert result.reason == REASON_INVALID_LAUNCH
-
-    def test_invalid_launch_non_positive_or_bool_pid_is_conflict(self):
-        # 0・負数・boolは有効なプロセスIDではない(#868レビュー対応)。
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        for bad_pid in (0, -1, True):
-            result = ctx.record_launch(_active(1, pid=bad_pid, external_id=None))
-            assert result.status == RecordStatus.CONFLICT, bad_pid
-            assert result.reason == REASON_INVALID_LAUNCH, bad_pid
-
-    def test_invalid_launch_non_string_external_id_is_conflict(self):
-        # 非文字列の真値(例: true)は有効なプロバイダIDではない
-        # (#868レビュー対応)。
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        for bad_external_id in (True, 12345):
-            result = ctx.record_launch(
-                _active(1, pid=None, external_id=bad_external_id)
-            )
-            assert result.status == RecordStatus.CONFLICT, bad_external_id
-            assert result.reason == REASON_INVALID_LAUNCH, bad_external_id
-
-    def test_invalid_launch_non_string_branch_or_worktree_path_is_conflict(self):
-        # セルフチェックで発見(#868): branch/worktree_pathも非文字列の真値を
-        # 受け付けてはならない。
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        for field, bad_value in (
-            ("branch", 123),
-            ("branch", True),
-            ("worktree_path", 999),
-        ):
-            result = ctx.record_launch(_active(1, **{field: bad_value}))
-            assert result.status == RecordStatus.CONFLICT, (field, bad_value)
-            assert result.reason == REASON_INVALID_LAUNCH, (field, bad_value)
-
-    def test_invalid_launch_phase_prepared_is_conflict(self):
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        result = ctx.record_launch(_active(1, launch_phase="prepared"))
+        result = ctx.record_launch(active)
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_INVALID_LAUNCH
 
@@ -554,23 +532,22 @@ class TestRecordTransition:
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_INVALID_TRANSITION
 
-    def test_multiple_primary_labels_in_verified_is_invalid_transition(self):
+    @pytest.mark.parametrize(
+        "verified_labels",
+        [
+            pytest.param(
+                (StatusLabel.QUEUED, StatusLabel.BLOCKED),
+                id="multiple_primary_labels",
+            ),
+            pytest.param(("priority:high",), id="zero_primary_labels"),
+        ],
+    )
+    def test_invalid_primary_labels_in_verified_are_rejected(self, verified_labels):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         result = ctx.record_transition(
             1,
             expected_labels=(StatusLabel.QUEUED,),
-            verified_labels=(StatusLabel.QUEUED, StatusLabel.BLOCKED),
-            execution_active=False,
-        )
-        assert result.status == RecordStatus.CONFLICT
-        assert result.reason == REASON_INVALID_TRANSITION
-
-    def test_zero_primary_labels_in_verified_is_invalid_transition(self):
-        ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        result = ctx.record_transition(
-            1,
-            expected_labels=(StatusLabel.QUEUED,),
-            verified_labels=("priority:high",),
+            verified_labels=verified_labels,
             execution_active=False,
         )
         assert result.status == RecordStatus.CONFLICT
