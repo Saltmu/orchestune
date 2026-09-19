@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from scripts.wait_for_review import (
+    EXIT_NO_FINDINGS,
     StalledReviewError,
     _build_snapshot,
     _extract_review_result,
@@ -707,6 +708,60 @@ def test_wait_for_review_detects_codex_review_and_inlines(mock_post, mock_get_da
     assert "💡 Codex Review" in result["review_body"]
     assert len(result["inline_comments"]) == 1
     assert result["inline_comments"][0]["path"] == "test.py"
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_excludes_inline_comments_from_earlier_rounds(
+    mock_post, mock_get_data
+):
+    # Regression for a live issue found while running this very review loop on
+    # PR #927 round 3: `pulls/{pr}/comments` returns every inline comment ever
+    # posted on the PR, so an earlier round's already-addressed findings kept
+    # being reported as "current" every subsequent round even after the bot
+    # posted a clean summary this round -- the loop could never reach Exit 0.
+    mock_post.return_value = {
+        "id": 300,
+        "created_at": "2026-09-19T10:04:00Z",
+        "body": "@codex review",
+    }
+    stale_inline_from_round_1 = {
+        "id": 4052816762,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "created_at": "2026-09-19T09:55:52Z",
+        "path": "scripts/wait_for_review.py",
+        "line": 592,
+        "body": "Scope stall detection to the latest trigger (already fixed)",
+    }
+    clean_summary_this_round = {
+        "id": 301,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "submitted_at": "2026-09-19T10:07:50Z",
+        "body": "Codex Review: Didn't find any major issues.",
+    }
+    mock_get_data.side_effect = [
+        {
+            "issue_comments": [],
+            "reviews": [],
+            "inline_comments": [stale_inline_from_round_1],
+        },
+        {
+            "issue_comments": [],
+            "reviews": [clean_summary_this_round],
+            "inline_comments": [stale_inline_from_round_1],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=927,
+        timeout=10,
+        interval=0,
+        bot_name="codex",
+        post_trigger=True,
+    )
+
+    assert result["inline_comments"] == []
+    assert result["verdict"] == EXIT_NO_FINDINGS
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)

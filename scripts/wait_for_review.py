@@ -324,9 +324,25 @@ def _extract_review_result(
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
     latest_item: dict[str, Any] | None = None,
+    latest_trigger_time: str = "",
 ) -> dict[str, Any] | None:
+    # Scope inline comments to the current round, same as the summary/tracker
+    # gating above: `pulls/{pr}/comments` returns every inline comment ever
+    # posted on the PR, so an unfiltered fetch would keep resurfacing a prior
+    # round's already-addressed findings as "current" forever, even after the
+    # bot reports a clean pass this round (see Issue #926 PR #927 round 3).
+    scoped_data = current_data
+    if latest_trigger_time:
+        scoped_data = {
+            **current_data,
+            "inline_comments": [
+                item
+                for item in current_data.get("inline_comments", [])
+                if _get_item_created_timestamp(item) >= latest_trigger_time
+            ],
+        }
     result = extract_review_result(
-        normalize_review_state(current_data),
+        normalize_review_state(scoped_data),
         bot_name,
         exclude_ids=exclude_ids,
         latest_item=latest_item,
@@ -434,7 +450,10 @@ def _check_immediate_review_result(
         )
     ):
         result = _extract_review_result(
-            initial_data, bot_name, latest_item=latest_bot_item
+            initial_data,
+            bot_name,
+            latest_item=latest_bot_item,
+            latest_trigger_time=latest_trigger_time,
         )
         if result is not None:
             result["verdict"] = evaluate_review_verdict(
@@ -629,6 +648,7 @@ def wait_for_review(
                                 bot_name,
                                 exclude_ids=excluded_ids,
                                 latest_item=latest_bot_item,
+                                latest_trigger_time=latest_trigger_time,
                             )
                             if result is not None:
                                 result["verdict"] = evaluate_review_verdict(
