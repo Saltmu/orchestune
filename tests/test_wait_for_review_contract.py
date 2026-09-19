@@ -81,6 +81,36 @@ def test_main_cli_timeout():
             assert exc.value.code == 20
 
 
+def test_main_cli_stalled():
+    from scripts.wait_for_review import StalledReviewError, main
+
+    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+        with patch(
+            "scripts.wait_for_review.wait_for_review",
+            autospec=True,
+            side_effect=StalledReviewError("Tracker comment stopped changing"),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                main()
+            assert exc.value.code == 21
+
+
+def test_main_cli_stall_grace_argument_parsing():
+    from scripts.wait_for_review import main
+
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--pr", "540", "--no-post", "--stall-grace", "120"],
+    ):
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
+            mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
+            with pytest.raises(SystemExit):
+                main()
+            assert mock_wait.call_args.kwargs["stall_grace_seconds"] == 120
+
+
 def test_main_cli_max_rounds():
     from scripts.wait_for_review import main
 
@@ -135,7 +165,7 @@ def test_main_cli_arguments_parsing():
             assert exc.value.code == 0
             mock_wait.assert_called_once_with(
                 540,
-                timeout=300,
+                timeout=1800,
                 interval=5,
                 bot_name="claude",
                 post_trigger=True,
@@ -144,6 +174,7 @@ def test_main_cli_arguments_parsing():
                 max_rounds=3,
                 max_retries=2,
                 round_num=2,
+                stall_grace_seconds=600,
             )
 
 

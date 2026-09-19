@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from scripts.wait_for_review import (
+    StalledReviewError,
     _build_snapshot,
     _extract_review_result,
     _filter_bot_items,
@@ -725,6 +726,141 @@ def test_wait_for_review_times_out(mock_post, mock_get_data):
             bot_name="claude",
             post_trigger=True,
         )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_detects_stalled_in_progress_tracker(mock_post, mock_get_data):
+    # Reproduces PR #923 round 4 (workflow run 35411499375): the action posts an
+    # in-progress tracker comment, then the job ends without ever editing it again.
+    # A live job keeps editing the same comment as it ticks off checklist items, so
+    # an unchanged tracker signature that persists past the stall grace window means
+    # the owning job most likely already ended.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-09-19T01:05:00Z",
+        "body": "@claude review",
+    }
+    in_progress = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": (
+            "### Review in progress\n"
+            "- [x] Kick off review\n"
+            "- [ ] Verify findings\n"
+            "- [ ] Post findings"
+        ),
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+    ]
+
+    with pytest.raises(StalledReviewError, match="923"):
+        wait_for_review(
+            pr_number=923,
+            timeout=10,
+            interval=0,
+            bot_name="claude",
+            post_trigger=True,
+            stall_grace_seconds=0,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_unchanged_in_progress_within_grace_keeps_waiting(
+    mock_post, mock_get_data
+):
+    # Same tracker signature observed twice in a row, but still within the
+    # (generously large) stall grace window: this must NOT raise, and must
+    # keep waiting for the eventual completed comment.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-09-19T01:05:00Z",
+        "body": "@claude review",
+    }
+    in_progress = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": "### Review in progress\n- [ ] Working...",
+    }
+    completed = {
+        **in_progress,
+        "updated_at": "2026-09-19T01:08:00Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [completed], "reviews": [], "inline_comments": []},
+    ]
+
+    result = wait_for_review(
+        pr_number=923,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+        stall_grace_seconds=1000,
+    )
+
+    assert "### Review complete" in result["review_body"]
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_in_progress_edits_reset_stall_tracking(
+    mock_post, mock_get_data
+):
+    # A live job keeps editing the tracker comment (checklist items ticking off);
+    # each edit must reset the stall clock so it never fires while genuinely working.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-09-19T01:05:00Z",
+        "body": "@claude review",
+    }
+    step1 = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": "### Review in progress\n- [ ] Step 1",
+    }
+    step2 = {
+        **step1,
+        "updated_at": "2026-09-19T01:06:05Z",
+        "body": "### Review in progress\n- [x] Step 1\n- [ ] Step 2",
+    }
+    completed = {
+        **step1,
+        "updated_at": "2026-09-19T01:07:05Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [step1], "reviews": [], "inline_comments": []},
+        {"issue_comments": [step2], "reviews": [], "inline_comments": []},
+        {"issue_comments": [completed], "reviews": [], "inline_comments": []},
+    ]
+
+    result = wait_for_review(
+        pr_number=923,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+        stall_grace_seconds=0,
+    )
+
+    assert "### Review complete" in result["review_body"]
 
 
 def test_wait_for_review_polling_catches_exception_and_continues():
